@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>P51｜神经网络压缩 1：剪枝与大乐透假说</title>
+  <style>
+    :root{--bg:#f4f6f9;--paper:#fff;--ink:#1a1a1a;--muted:#58606d;--line:#d8dee8;--navy:#1b2a4a;--cyan:#00a9f4;--green:#216d5d;--red:#c14f3e;--code:#1e1e1e;--codeText:#d4d4d4;--sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif;--serif:"Songti SC","Noto Serif CJK SC","STSong","SimSun",serif;--mono:"Cascadia Mono","Cascadia Code","Consolas","SFMono-Regular",monospace}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:linear-gradient(90deg,rgba(27,42,74,.045) 1px,transparent 1px) 0 0/60px 60px,linear-gradient(rgba(27,42,74,.035) 1px,transparent 1px) 0 0/60px 60px,var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.72}.progress{position:fixed;left:0;top:0;height:4px;width:0;background:linear-gradient(90deg,var(--cyan),var(--navy));z-index:20}.layout{display:grid;grid-template-columns:308px minmax(0,1fr);min-height:100vh}
+    aside{position:sticky;top:0;height:100vh;overflow:auto;background:var(--navy);color:#fff;padding:30px 22px;background-image:repeating-linear-gradient(90deg,transparent,transparent 59px,rgba(255,255,255,.045) 59px,rgba(255,255,255,.045) 60px),repeating-linear-gradient(0deg,transparent,transparent 59px,rgba(255,255,255,.035) 59px,rgba(255,255,255,.035) 60px)}.brand{border-bottom:1px solid rgba(255,255,255,.36);padding-bottom:22px;margin-bottom:18px}.brand strong{display:block;font-size:27px;line-height:1.18;font-family:var(--serif);font-weight:800}.brand span{display:block;color:rgba(255,255,255,.68);font-size:13px;margin-top:8px}nav{display:grid}nav a{display:flex;gap:10px;align-items:center;color:rgba(255,255,255,.82);text-decoration:none;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.13);font-size:13.5px}nav a:hover,nav a.active{color:#fff;border-color:rgba(255,255,255,.42);font-weight:800}.dot{width:6px;height:6px;background:var(--cyan);opacity:.55;flex:0 0 auto}.side-note{margin-top:22px;padding:13px;font-size:13px;color:rgba(255,255,255,.72);background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22)}
+    main{width:100%;max-width:1420px;padding:34px 44px}.hero,section{position:relative;background:var(--paper);border:1px solid var(--line);box-shadow:0 14px 28px rgba(27,42,74,.08)}.hero{padding:38px 42px;display:grid;grid-template-columns:minmax(0,1fr) 392px;gap:24px;border-top:6px solid var(--navy)}.hero:before{content:"NETWORK PRUNING";position:absolute;right:42px;top:16px;color:#9aa4b2;font-family:var(--mono);font-size:11px;letter-spacing:.12em}.kicker{color:#8a96a8;font-family:var(--mono);font-weight:900;font-size:12px;margin-bottom:14px;letter-spacing:.12em;text-transform:uppercase}
+    h1{margin:0;font-size:48px;line-height:1.16;letter-spacing:0;font-family:var(--serif);font-weight:800;max-width:20ch}h2{margin:0;font-size:28px;line-height:1.25;font-family:var(--serif);font-weight:800}h3{margin:0 0 7px;font-size:17px}p{margin:8px 0}.muted,.hero p{color:var(--muted)}section{padding:28px 34px;margin-top:18px}.head{display:flex;justify-content:space-between;gap:16px;align-items:start;margin-bottom:18px;padding-bottom:12px;border-bottom:2px solid #000}.tag{color:#8a96a8;font-family:var(--mono);font-size:11px;letter-spacing:.12em;white-space:nowrap}
+    .grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,.88fr);gap:1px;background:var(--line);border:1px solid var(--line)}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}.box,.q,.route{background:#fff;border:0;padding:16px}.soft{border-top:4px solid #4caf50}.warn{border-top:4px solid #ffc107}.info{border-top:4px solid var(--cyan)}.redsoft{border-top:4px solid #e53935}.route{border:1px solid var(--line);background:#f8fafc;padding:22px}.route h3:before{content:"Learning Outcomes";display:block;margin-bottom:8px;color:var(--cyan);font-family:var(--mono);font-size:11px;letter-spacing:.12em}
+    .map{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0;border:1px solid var(--line);margin:18px 0}.node{background:#f8fafc;border-right:1px solid var(--line);padding:13px 10px;text-align:center;font-weight:900}.node:last-child{border-right:0}code{background:#eef1f5;color:#17202a;padding:2px 5px;border-radius:4px;font-family:var(--mono);font-size:.92em}
+    .codebar{margin-top:14px;background:#111;color:#cbd5e1;border:1px solid #111;border-bottom:0;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:13px}.codebar:before{content:"";width:34px;height:10px;margin-right:10px;flex:0 0 auto;background:radial-gradient(circle at 5px 5px,#f87171 0 4px,transparent 4.5px),radial-gradient(circle at 17px 5px,#fbbf24 0 4px,transparent 4.5px),radial-gradient(circle at 29px 5px,#34d399 0 4px,transparent 4.5px)}.codebar .label{color:#93c5fd;margin-right:auto}.codebar .kind{color:#9ca3af}.codebar.error{background:#3a1f1b;border-color:#7f3327}.codebar.error .label{color:#fca5a5}
+    pre{margin:0 0 12px;background:var(--code);color:var(--codeText);border:1px solid #111;padding:15px 16px;overflow:auto;font-family:var(--mono);font-size:14px;line-height:1.62}pre code{background:transparent;color:inherit;padding:0}.kw{color:#c586c0}.fn{color:#dcdcaa}.num{color:#b5cea8}.str{color:#ce9178}.cmt{color:#6a9955}.formula{background:#f8fafc;border:1px solid var(--line);border-left:6px solid var(--cyan);padding:16px 18px;overflow:auto;font-family:"Cambria Math","Latin Modern Math","Times New Roman",var(--serif);font-size:18px;line-height:1.72;margin:12px 0;color:#111}.formula .big{font-size:22px;font-weight:700}.formula small{display:block;color:#58606d;font-family:var(--sans);font-size:14px;margin-top:6px}
+    .viz-panel{background:#fff;border:1px solid var(--line);padding:16px;margin:14px 0}.viz-grid{display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:14px;align-items:start}.viz-note{background:#f8fafc;border-left:5px solid var(--cyan);padding:12px;color:#3f4652}.stage{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:14px 0}.stage div{background:#f8fafc;padding:14px}.stage strong{display:block;font-family:var(--serif);font-size:18px;margin-bottom:5px}.slider-row{display:grid;grid-template-columns:134px 1fr 72px;gap:10px;align-items:center;margin:10px 0}.slider-row input{width:100%}button{border:0;padding:9px 12px;background:var(--navy);color:#fff;font:inherit;cursor:pointer;margin:3px}.ghost{background:#fff;color:var(--ink);border:1px solid #111}.metric-table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}.metric-table th,.metric-table td{border:1px solid var(--line);padding:9px;text-align:left;vertical-align:top}.metric-table th{background:#f1f4f8}.barrow{display:grid;grid-template-columns:122px 1fr 72px;gap:10px;align-items:center;margin:8px 0}.bar{height:14px;background:#e9edf3}.fill{height:100%;background:var(--cyan)}.fill.red{background:#e53935}.fill.green{background:#4caf50}.fill.amber{background:#f59e0b}.compare{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line)}.compare>div{background:#fff;padding:14px}.calc{border:1px solid var(--line);background:#f8fafc;padding:12px}.row{display:grid;grid-template-columns:150px 1fr 88px;gap:10px;align-items:center;margin:8px 0}.score{font-family:var(--mono);font-weight:900}.pos{color:#216d5d}.neg{color:#c14f3e}.diagram{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);margin:14px 0}.diagram div{background:#fff;padding:14px;text-align:center}.diagram b{display:block;color:var(--navy);font-family:var(--serif);font-size:20px}.matrix{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin:10px 0}.cell{height:34px;background:#dbeafe;border:1px solid #bfdbfe;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px}.cell.zero{background:#f1f5f9;color:#94a3b8}.cell.cut{background:#fee2e2;color:#991b1b;border-color:#fecaca}
+    .practice-intro{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:14px}.review-card{background:#fff;padding:18px}.review-card strong{display:block;margin-bottom:7px;font-family:var(--serif);font-size:19px}.practice-group{margin-top:18px;border:1px solid var(--line);background:#fff}.group-head{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:14px;align-items:start;padding:18px 20px;border-bottom:1px solid var(--line)}.group-head h3{font-family:var(--serif);font-size:24px}.group-head p{margin:6px 0 0;color:var(--muted)}.quick-review{border-left:3px solid #111;padding-left:14px;font-size:13.5px;color:var(--muted)}.quick-review b{display:block;margin-bottom:5px;color:#111}.drill-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line)}.q{min-height:190px}.q.full{grid-column:1/-1}.q h3{font-size:16px;line-height:1.55}.q-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}.pill{display:inline-flex;color:#8a96a8;font-family:var(--mono);font-size:11px;letter-spacing:.08em}.solve-note{margin:8px 0 0;padding:9px 12px;background:#f4efe6;border-left:4px solid #111;color:#555;font-size:13px}
+    input[type=radio],input[type=checkbox]{accent-color:var(--green);margin-right:7px}textarea,input[type=text],select{width:100%;border:1px solid var(--line);background:#f8fafc;color:var(--ink);padding:10px;font:inherit;resize:vertical;margin-top:8px}textarea{min-height:74px}.answer{white-space:pre-wrap;background:#f8fafc;border:1px dashed #8a96a8;padding:14px;max-height:360px;overflow:auto}.quality{display:none;white-space:pre-wrap;background:#fff4d7;border:1px solid #d9b86a;color:#574322;padding:12px;margin:12px 0}.actions{position:sticky;bottom:0;display:flex;gap:10px;justify-content:flex-end;padding-top:14px;margin-top:18px;background:linear-gradient(transparent,var(--bg) 42%)}ul,ol{padding-left:21px}li{margin:4px 0}
+    @media(max-width:940px){.layout{grid-template-columns:minmax(0,1fr);overflow:hidden}aside{position:static;height:auto;padding:18px;overflow:hidden}nav{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 12px}main{padding:18px;max-width:100%;overflow:hidden}.hero,section{max-width:100%;min-width:0}.hero{grid-template-columns:minmax(0,1fr);padding:26px 20px}.hero:before{display:none}.grid2,.grid3,.viz-grid,.practice-intro,.group-head,.drill-grid,.map,.stage,.compare,.diagram{grid-template-columns:minmax(0,1fr)}h1{font-size:31px;overflow-wrap:anywhere}h2{font-size:23px}.head{display:block}.tag{display:inline-block;margin-top:8px}.slider-row,.barrow,.row{grid-template-columns:1fr}pre,.formula{max-width:100%;font-size:13.5px}}
+  </style>
+</head>
+<body data-feynman-keywords="network compression,pruning,sparsity,structured pruning,unstructured pruning,lottery ticket hypothesis,initialization">
+<div class="progress" id="readProgress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand"><strong>剪枝与大乐透假说</strong><span>P51。把大模型剪小，但别只数参数。</span></div>
+    <nav>
+      <a href="#goals"><span class="dot"></span>目标与地图</a>
+      <a href="#why"><span class="dot"></span>为什么压缩</a>
+      <a href="#pruning"><span class="dot"></span>剪枝流程</a>
+      <a href="#importance"><span class="dot"></span>重要性</a>
+      <a href="#unit"><span class="dot"></span>剪什么</a>
+      <a href="#speed"><span class="dot"></span>少参数不等于快</a>
+      <a href="#iterative"><span class="dot"></span>迭代剪枝</a>
+      <a href="#lottery"><span class="dot"></span>大乐透假说</a>
+      <a href="#evidence"><span class="dot"></span>实验证据</a>
+      <a href="#debate"><span class="dot"></span>争议边界</a>
+      <a href="#code"><span class="dot"></span>最小代码</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>练习记录</a>
+    </nav>
+    <div class="side-note">本节判断句：剪枝是否成功，要同时看准确率、内存、延迟和硬体/框架是否真的能利用稀疏结构。</div>
+  </aside>
+
+  <main>
+    <div class="hero" id="top">
+      <div>
+        <div class="kicker">Lee ML 2025 / P51</div>
+        <h1>模型变小这件事，不只是删掉几个权重</h1>
+        <p>大型模型效果好，但不一定适合部署在手表、手机、车载传感器和其他边缘设备上。设备内存有限，算力有限，还可能要求低延迟和本地隐私保护。Network Compression 的目标，是让模型更小、更快、更省资源，同时尽量保持原本效果。</p>
+        <p>P51 介绍第一类方法：Pruning，也就是剪枝。直觉是大网络里有很多“没做事”的参数或神经元，把它们剪掉，再微调剩下的部分。可是参数少不等于真的加速，剪枝单位、实现方式和硬体支持都会影响最终收益。</p>
+      </div>
+      <div class="route">
+        <h3>学完你应该能做什么</h3>
+        <ol>
+          <li>解释模型压缩的动机：资源、延迟、隐私。</li>
+          <li>复述剪枝的基本流程：训练、评估、剪掉、微调、重复。</li>
+          <li>区分 weight pruning 和 neuron pruning 的实作差异。</li>
+          <li>说明为什么高 sparsity 不一定带来 speed-up。</li>
+          <li>用自己的话讲清大乐透假说和它的争议。</li>
+        </ol>
+      </div>
+    </div>
+
+    <section id="goals">
+      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
+      <p>这一节从部署问题开始：为什么我们需要把模型变小？答案不是“模型大不好”，而是模型要进入资源受限环境。云端计算可以很强，但把资料传到云端会有延迟，也会带来隐私问题。边缘设备需要本地计算时，大模型就可能太慢或放不下。</p>
+      <p>剪枝的主线是：先训练一个大网络，然后估计每个参数或神经元的重要性，剪掉不重要的部分，再微调剩余网络恢复准确率。这个过程可以多轮进行。最后我们讨论一个有趣问题：既然剪完后小网络也能表现不错，为什么不一开始就训练小网络？大乐透假说给出一种解释：大网络里包含很多子网络，其中可能有“中奖”的初始化子网络。</p>
+      <div class="map">
+        <span class="node">部署限制</span>
+        <span class="node">训练大模型</span>
+        <span class="node">评估重要性</span>
+        <span class="node">剪掉冗余</span>
+        <span class="node">微调恢复</span>
+        <span class="node">解释为何先大</span>
+      </div>
+      <div class="box soft"><h3>现在你应该能做什么</h3><p>把本节说成一句话：剪枝是用大网络找到有用子结构，再删掉多余部分，但真正收益要看实现是否能利用这个结构。</p></div>
+    </section>
+
+    <section id="why">
+      <div class="head"><h2>为什么要做 Network Compression</h2><span class="tag">MOTIVATION</span></div>
+      <p>Network Compression 是把神经网络变小、变快、变省资源的一组方法。课程强调的是软件层面的压缩，不讨论专门硬体加速。它的典型使用场景是 resource-constrained environment，也就是资源受限环境，例如智能手表、手机、IoT 设备、车载传感器。</p>
+      <p>有人会问：为什么不把数据上传云端，让云端模型计算完再回传？第一个理由是 latency，延迟。自驾车传感器需要立刻反应，网络往返时间可能无法接受。第二个理由是 privacy，隐私。用户的声音、位置、健康数据或图像不一定适合传到云端。本地推理可以减少数据外泄。</p>
+      <div class="grid3">
+        <div class="box info"><h3>Memory</h3><p>模型参数太多，设备放不下，或占用太多存储。</p></div>
+        <div class="box warn"><h3>Computing Power</h3><p>设备算力有限，大模型推理太慢或耗电。</p></div>
+        <div class="box redsoft"><h3>Latency / Privacy</h3><p>不能总靠云端，因为传输有延迟，也可能暴露数据。</p></div>
+      </div>
+      <p><strong>现在你应该能做什么：</strong>看到“模型压缩”时，不只想到参数少，也能说出部署侧的真实动机。</p>
+    </section>
+
+    <section id="pruning">
+      <div class="head"><h2>Pruning 基本流程：先长大，再修剪</h2><span class="tag">PRUNING</span></div>
+      <p>Pruning 的直觉来自修剪树枝：大网络里不是每个参数都重要，有些参数可能绝对值很小，或者对应神经元很少激活，对任务贡献不大。剪枝就是找到这些冗余部分，把它们移除或置零，让网络更小。</p>
+      <p>典型流程不是训练完后一次性砍掉很多，而是：训练大网络，计算重要性，剪掉一部分，微调剩下参数，重新评估，再剪下一轮。原因很实际：一次剪太多可能造成准确率大幅下降，后续微调也救不回来；逐步剪枝能让网络有时间适应结构变化。</p>
+      <div class="stage">
+        <div><strong>1. Train</strong><p>先训练一个表现好的大网络。</p></div>
+        <div><strong>2. Score</strong><p>估计参数或神经元的重要性。</p></div>
+        <div><strong>3. Prune</strong><p>剪掉低重要性的部分。</p></div>
+        <div><strong>4. Fine-tune</strong><p>用训练资料微调，恢复效果。</p></div>
+      </div>
+      <p><strong>判断句：</strong>剪枝不是“删完就交付”，删完后的微调和评估同样是方法的一部分。</p>
+      <p><strong>现在你应该能做什么：</strong>按顺序复述剪枝流程，并解释为什么常常要多轮进行。</p>
+    </section>
+
+    <section id="importance">
+      <div class="head"><h2>如何判断谁不重要</h2><span class="tag">IMPORTANCE</span></div>
+      <p>最简单的重要性指标是权重绝对值。若一个权重接近 0，它对矩阵乘法输出的影响也可能较小，因此可以优先剪掉。这个方法简单、便宜、常见，但不是唯一方法。也可以用梯度、二阶信息、参数改变幅度、神经元激活频率等指标评估重要性。</p>
+      <p>如果剪枝单位是神经元，可以观察它在数据上的输出。一个 ReLU 神经元若大多数时候输出 0，就可能是低活跃神经元；一个通道若对后续层贡献很小，也可能被剪掉。但要注意，神经网络有组合效应，单个参数小不一定绝对没用；两个小参数一起可能构成某个路径。因此剪枝后必须验证。</p>
+      <table class="metric-table">
+        <tr><th>指标</th><th>直觉</th><th>限制</th></tr>
+        <tr><td>绝对值大小</td><td>权重越接近 0，单步影响越小。</td><td>忽略数据分布和组合关系。</td></tr>
+        <tr><td>激活频率</td><td>神经元很少输出非零，可能没参与任务。</td><td>不同数据集上活跃度可能不同。</td></tr>
+        <tr><td>梯度或敏感度</td><td>删除后 loss 变化小，说明影响小。</td><td>计算成本更高，也可能依赖近似。</td></tr>
+      </table>
+      <p><strong>现在你应该能做什么：</strong>说出至少三种重要性估计方法，并知道它们只是剪枝候选，不是最终证明。</p>
+    </section>
+
+    <section id="unit">
+      <div class="head"><h2>剪什么：参数级与神经元级</h2><span class="tag">UNIT</span></div>
+      <p>剪枝可以以参数为单位，也可以以神经元、通道或整个结构为单位。参数级剪枝也叫 unstructured pruning：每个权重单独判断，可能剪掉矩阵中的任意元素。这样 sparsity 很高，理论上参数少很多，但网络结构会变得不规则。</p>
+      <p>神经元级或通道级剪枝更接近 structured pruning：一次删掉整个神经元、整行、整列或整组通道。这样压缩比例可能没那么极端，但结构仍然规则。对 PyTorch 这类框架来说，规则结构更容易直接改 layer 的输入输出维度，也更容易被 GPU 的矩阵乘法利用。</p>
+      <div class="grid2">
+        <div class="box info"><h3>参数级剪枝</h3><p>优点：可以剪很多，sparsity 高。缺点：结构不规则，实际加速难。</p></div>
+        <div class="box warn"><h3>神经元级剪枝</h3><p>优点：结构规则，容易改维度和加速。缺点：剪枝粒度粗，可能更影响准确率。</p></div>
+      </div>
+      <p><strong>现在你应该能做什么：</strong>区分“把矩阵里零散元素置零”和“把整个神经元/通道删掉”的差别。</p>
+    </section>
+
+    <section id="speed">
+      <div class="head"><h2>动手观察：少参数不等于真的快</h2><span class="tag">SPARSITY</span></div>
+      <p>课程中特别强调：如果你把 95% 的 weight 设为 0，模型参数看起来稀疏，但不一定真的加速。原因是通用 GPU 擅长规则矩阵乘法；不规则稀疏结构需要额外索引和特殊 kernel。如果框架没有有效支持，甚至可能比原来更慢。</p>
+      <div class="viz-panel">
+        <div class="viz-grid">
+          <div>
+            <div class="matrix" id="matrixViz"></div>
+            <div class="compare">
+              <div><h3>理论参数减少</h3><p class="score" id="paramDrop">0%</p></div>
+              <div><h3>预期速度收益</h3><p class="score" id="speedGain">1.00x</p></div>
+            </div>
+          </div>
+          <div>
+            <div class="slider-row"><label for="sparsitySlider">稀疏率</label><input id="sparsitySlider" type="range" min="0" max="0.98" step="0.02" value="0.60"><span id="sparsityVal">0.60</span></div>
+            <div class="slider-row"><label for="supportSlider">框架支持</label><input id="supportSlider" type="range" min="0" max="1" step="0.05" value="0.35"><span id="supportVal">0.35</span></div>
+            <div class="slider-row"><label for="structureSlider">结构规则</label><input id="structureSlider" type="range" min="0" max="1" step="0.05" value="0.20"><span id="structureVal">0.20</span></div>
+            <p class="viz-note" id="speedNote">稀疏率高，但结构不规则、支持不足时，加速有限。</p>
+          </div>
+        </div>
+      </div>
+      <p>如果被剪掉的权重只是用 mask 乘 0，参数仍可能存在内存里，计算仍可能走密集矩阵乘法。这时你只是“逻辑上觉得模型小了”，实际部署可能没有减少内存或延迟。要得到真实收益，需要结构化剪枝、稀疏计算库，或专门硬体/框架支持。</p>
+      <p><strong>错误示例：</strong>“95% 参数为 0，所以推理一定快 20 倍”。错因是把数学稀疏率等同于硬体加速；后果是部署时延迟不降反升；修法是实际测量 latency、memory、throughput，并确认框架能利用稀疏结构。</p>
+      <p><strong>现在你应该能做什么：</strong>看到 sparsity 数字时，会追问是否有真实 speed-up，而不是直接相信参数比例。</p>
+    </section>
+
+    <section id="iterative">
+      <div class="head"><h2>为什么不一次剪完：损伤和恢复</h2><span class="tag">ITERATIVE</span></div>
+      <p>剪枝会造成损伤。即使被剪的是低重要性参数，删除很多连接后，网络的函数也会变化，准确率通常会下降。Fine-tuning 的作用是让剩下的参数重新适应，弥补被剪掉的部分。小幅剪枝后微调，网络还有机会恢复；大幅剪枝后，功能路径可能被破坏，恢复就困难。</p>
+      <p>迭代剪枝的思路是控制每次损伤程度。比如每轮剪掉 10% 最不重要的参数，微调若干 epoch，再重新计算重要性。重新计算很重要，因为剪掉一部分后，剩余参数的角色会变化；原来不重要的参数可能变得重要，原来重要的路径可能被替代。</p>
+      <div class="formula">
+        <span class="big">Train → Prune p% → Fine-tune → Re-score → Prune p% → ...</span>
+        <small>每轮剪一点，给网络恢复机会，也让重要性评估跟着新结构更新。</small>
+      </div>
+      <p><strong>现在你应该能做什么：</strong>解释为什么剪枝比例、微调轮数和重新评估都是关键超参数。</p>
+    </section>
+
+    <section id="lottery">
+      <div class="head"><h2>大乐透假说：大网络像买了很多张彩票</h2><span class="tag">LOTTERY</span></div>
+      <p>剪枝带来一个自然问题：既然剪完后的小网络也能表现很好，为什么不一开始就训练同样大小的小网络？常见观察是，直接训练小网络往往不如“先训练大网络再剪小”的结果。大乐透假说试图解释这一点。</p>
+      <p>大乐透假说的直觉是：一个大网络可以看成包含很多子网络。随机初始化就像抽彩票，不是每个子网络都能被训练好；但大网络里子网络数量多，出现“中奖子网络”的概率更高。训练大网络再剪枝，可能是在把那个幸运子网络找出来。这个子网络如果保留它原来的初始化，重新训练时也能成功。</p>
+      <div class="diagram">
+        <div><b>直接训练小网络</b><p>只买一张彩票。若初始化不好，可能训练不起来。</p></div>
+        <div><b>先大后剪</b><p>大网络里有很多子网络，相当于买了很多张彩票。</p></div>
+      </div>
+      <p><strong>现在你应该能做什么：</strong>用“中奖子网络”解释为什么大网络剪出来的小网络可能比随机小网络更好。</p>
+    </section>
+
+    <section id="evidence">
+      <div class="head"><h2>实验思路：保留哪一种初始化</h2><span class="tag">EVIDENCE</span></div>
+      <p>大乐透假说的经典实验流程是：先随机初始化大网络，训练它；然后剪枝得到一个小子网络。接下来比较两种重新训练方式。第一种是给这个小结构重新随机初始化；第二种是把它在大网络初始时对应的那些初始权重拿回来。观察结果通常是：保留原始初始化的子网络更容易训练好。</p>
+      <p>这个结果说明，重要的不只是“结构小不小”，还包括“这组子网络的初始化是不是幸运”。后续研究甚至发现，在某些实验里，初始权重的正负号可能比具体绝对值更关键：只保留正负号，用固定大小替代数值，也能训练出不错结果。这也是课程提到的 sign 双关。</p>
+      <div class="stage">
+        <div><strong>1. 初始大网络</strong><p>记录随机初始化 <code>w0</code>。</p></div>
+        <div><strong>2. 训练并剪枝</strong><p>得到 surviving mask。</p></div>
+        <div><strong>3. 随机小网络</strong><p>同结构但新随机初始化，可能较差。</p></div>
+        <div><strong>4. 中奖小网络</strong><p>同结构且取回原初始值，可能较好。</p></div>
+      </div>
+      <p><strong>现在你应该能做什么：</strong>说清楚“重新随机初始化小网络”和“用大网络原始初始化的小网络”为什么不是同一件事。</p>
+    </section>
+
+    <section id="debate">
+      <div class="head"><h2>争议边界：大乐透假说不是万能解释</h2><span class="tag">DEBATE</span></div>
+      <p>课程也提醒：大乐透假说是 hypothesis，不是完全定论。另一些研究指出，直接训练小网络如果给更多 epoch、调整 learning rate，也可能达到或超过剪枝网络的表现。也就是说，“小网络训练不起来”有时可能只是训练设置不公平，而不是小网络本身不行。</p>
+      <p>还有研究认为，大乐透现象可能只在某些条件下明显，例如学习率较小、非结构化剪枝、特定数据集或模型规模。结构化剪枝、较大学习率或更充分训练时，结论可能变化。因此你在读剪枝论文或做实验时，不能只看最终 accuracy，还要看训练预算、学习率、剪枝单位、初始化方式、硬体加速和实验对照是否公平。</p>
+      <table class="metric-table">
+        <tr><th>结论</th><th>要追问什么</th><th>原因</th></tr>
+        <tr><td>剪枝后小网络很好</td><td>直接小网络训练了多久？学习率一样吗？</td><td>训练预算不公平会制造假象。</td></tr>
+        <tr><td>95% sparsity</td><td>是否真正减少 latency 和 memory？</td><td>不规则稀疏可能无法加速。</td></tr>
+        <tr><td>找到中奖子网络</td><td>是否依赖某种初始化和剪枝策略？</td><td>现象可能有条件，不是普遍定律。</td></tr>
+      </table>
+      <p><strong>现在你应该能做什么：</strong>对大乐透假说保持准确态度：它是重要解释，但需要看实验条件和对照。</p>
+    </section>
+
+    <section id="code">
+      <div class="head"><h2>最小代码：非结构化剪枝与结构化剪枝</h2><span class="tag">CODE</span></div>
+      <p>下面是最简单的 magnitude pruning：按权重绝对值选阈值，把小权重置零。它容易实现，但如果只是 mask 掉权重，模型形状没有改变，部署时不一定变快。</p>
+      <div class="codebar"><span class="label">正确示例：按权重绝对值剪枝</span><span class="kind">Python-like</span></div>
+      <pre><code><span class="kw">def</span> <span class="fn">unstructured_prune</span>(weight, sparsity):
+    scores = abs(weight)
+    threshold = quantile(scores, sparsity)
+    mask = scores &gt; threshold
+    pruned_weight = weight * mask
+    <span class="kw">return</span> pruned_weight, mask</code></pre>
+      <p>结构化剪枝会删掉整个神经元或通道。下面以线性层为例：保留部分输出神经元后，下一层的输入维度也要同步调整。这更麻烦，但更可能带来实际速度收益。</p>
+      <div class="codebar"><span class="label">正确示例：按神经元保留输出维度</span><span class="kind">Python-like</span></div>
+      <pre><code><span class="kw">def</span> <span class="fn">structured_prune_linear</span>(linear, keep_indices):
+    new_out = len(keep_indices)
+    new_layer = Linear(linear.in_features, new_out)
+    new_layer.weight = linear.weight[keep_indices, :]
+    new_layer.bias = linear.bias[keep_indices]
+    <span class="kw">return</span> new_layer</code></pre>
+      <div class="codebar error"><span class="label">错误示例：只置零就宣称模型变小</span><span class="kind">Deployment bug</span></div>
+      <pre><code><span class="cmt"># 错误示例：参数仍保存在 dense tensor 中，推理仍走密集矩阵乘法。</span>
+weight = weight * mask
+print(<span class="str">"模型已经压缩 95%，一定快很多"</span>)
+
+<span class="cmt"># 正确检查：保存大小、内存占用、真实延迟、硬体支持。</span></code></pre>
+      <p><strong>现在你应该能做什么：</strong>读懂剪枝代码里的 mask，并指出 mask 不等于真实部署压缩。</p>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+      <div class="practice-intro">
+        <div class="review-card"><strong>作答建议</strong><p>每题先说目标指标：准确率、参数量、内存、延迟，别只说“变小”。</p></div>
+        <div class="review-card"><strong>自检标准</strong><p>你能解释为什么 95% sparsity 不一定加速，就掌握了本节关键。</p></div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、压缩动机</h3><p>理解为什么需要让模型小。</p></div>
+          <div class="quick-review"><b>快速回顾</b>边缘设备限制来自内存、算力、延迟和隐私。</div>
+        </div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-qid="q01" data-title="压缩定义">
+            <div class="q-meta"><span class="pill">Q01</span><span class="pill">解释</span></div>
+            <h3>Network Compression 想解决什么问题？为什么不是所有模型都适合直接放到边缘设备？</h3>
+            <textarea placeholder="参数多、算力高、内存大、耗电和延迟。"></textarea>
+          </div>
+          <div class="q" data-role="homework" data-qid="q02" data-title="云端限制">
+            <div class="q-meta"><span class="pill">Q02</span><span class="pill">推理</span></div>
+            <h3>为什么不能总把数据传到云端计算？请分别从 latency 和 privacy 解释。</h3>
+            <textarea placeholder="传输往返有延迟；数据上传有隐私风险。"></textarea>
+          </div>
+          <div class="q" data-role="homework" data-qid="q03" data-title="软件压缩">
+            <div class="q-meta"><span class="pill">Q03</span><span class="pill">辨析</span></div>
+            <h3>本节讨论的软件压缩和硬体加速有什么区别？</h3>
+            <textarea placeholder="软件层面改模型；硬体层面改计算平台或加速器。"></textarea>
+          </div>
+          <div class="q" data-role="homework" data-qid="q04" data-title="评估指标">
+            <div class="q-meta"><span class="pill">Q04</span><span class="pill">应用</span></div>
+            <h3>评估一个压缩模型时，除了准确率，还应该测哪些指标？为什么？</h3>
+            <textarea placeholder="内存、模型大小、延迟、吞吐、耗电、硬体兼容。"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、剪枝流程</h3><p>掌握 train-prune-fine-tune。</p></div>
+          <div class="quick-review"><b>快速回顾</b>剪枝后要微调，且常常多轮剪。</div>
+        </div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-qid="q05" data-title="基本流程">
+            <div class="q-meta"><span class="pill">Q05</span><span class="pill">流程</span></div>
+            <h3>按顺序写出 pruning 的基本流程，并说明每一步的目的。</h3>
+            <textarea placeholder="训练大模型、评估重要性、剪掉、微调、重复。"></textarea>
+          </div>
+          <div class="q" data-role="homework" data-qid="q06" data-title="重要性估计">
+            <div class="q-meta"><span class="pill">Q06</span><span class="pill">概念</span></div>
+            <h3>列出三种判断参数或神经元重要性的方法，并说明直觉。</h3>
+            <textarea placeholder="绝对值、激活频率、梯度/敏感度。"></textarea>
+          </div>
+          <div class="q" data-role="homework" data-qid="q07" data-title="为什么微调">
+            <div class="q-meta"><span class="pill">Q07</span><span class="pill">解释</span></div>
+            <h3>为什么剪枝后通常准确率会下降？fine-tuning 在修什么？</h3>
+            <textarea placeholder="网络函数被改变；剩余参数要重新适应。"></textarea>
+          </div>
+          <div class="q" data-role="homework" data-qid="q08" data-title="迭代剪枝">
+            <div class="q-meta"><span class="pill">Q08</span><span class="pill">推理</span></div>
+            <h3>为什么一般不建议一次剪掉大量参数？迭代剪枝有什么好处？</h3>
+            <textarea placeholder="损伤太大难恢复；多轮让网络逐步适应。"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、剪枝单位与部署</h3><p>区分参数少和真的快。</p></div>
+          <div class="quick-review"><b>快速回顾</b>结构规则才更容易被框架和 GPU 利用。</div>
+        </div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-qid="q09" data-title="参数级剪枝">
+            <div class="q-meta"><span class="pill">Q09</span><span class="pill">辨析</span></div>
+            <h3>Weight pruning / unstructured pruning 的优点和实作问题是什么？</h3>
+            <textarea placeholder="可高稀疏；结构不规则，GPU/框架难加速。"></textarea>
+          </div>
+          <div class="q" data-role="homework" data-qid="q10" data-title="神经元级剪枝">
+            <div class="q-meta"><span class="pill">Q10</span><span class="pill">解释</span></div>
+            <h3>为什么 neuron pruning / structured pruning 更容易带来实际速度收益？</h3>
+            <textarea placeholder="删整行/通道，layer 维度变小，矩阵乘法仍规则。"></textarea>
+          </div>
+          <div class="q" data-role="homework" data-qid="q11" data-title="高稀疏不加速">
+            <div class="q-meta"><span class="pill">Q11</span><span class="pill">诊断</span></div>
+            <h3>为什么 95% sparsity 可能仍然没有 speed-up，甚至变慢？</h3>
+            <textarea placeholder="索引开销、稀疏 kernel 支持不足、仍用 dense tensor。"></textarea>
+          </div>
+          <div class="q" data-role="homework" data-qid="q12" data-title="错误示例">
+            <div class="q-meta"><span class="pill">Q12</span><span class="pill">错误示例</span></div>
+            <h3>错误示例：把权重乘上 mask 后，就宣称模型已经真实变小。这个说法哪里错？</h3>
+            <textarea placeholder="参数仍存储，计算仍可能是 dense；要测真实内存和延迟。"></textarea>
+          </div>
+          <div class="q" data-role="homework" data-qid="q13" data-title="部署检查">
+            <div class="q-meta"><span class="pill">Q13</span><span class="pill">应用</span></div>
+            <h3>你要把剪枝模型部署到手机上，会设计哪些检查来确认它真的有收益？</h3>
+            <textarea placeholder="模型大小、峰值内存、推理延迟、耗电、准确率、框架兼容。"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、大乐透假说与争议</h3><p>解释先大后小的可能原因。</p></div>
+          <div class="quick-review"><b>快速回顾</b>大网络中可能包含幸运初始化的子网络。</div>
+        </div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-qid="q14" data-title="为什么不直接小">
+            <div class="q-meta"><span class="pill">Q14</span><span class="pill">推理</span></div>
+            <h3>既然剪枝后得到小网络，为什么不一开始就训练同样大小的小网络？常见观察是什么？</h3>
+            <textarea placeholder="直接小网络可能较难训练到同等效果；先大后剪常更好。"></textarea>
+          </div>
+          <div class="q" data-role="homework" data-qid="q15" data-title="大乐透假说">
+            <div class="q-meta"><span class="pill">Q15</span><span class="pill">解释</span></div>
+            <h3>用“买很多张彩票”的直觉解释 Lottery Ticket Hypothesis。</h3>
+            <textarea placeholder="大网络含很多子网络，增加抽到好初始化子网络的机会。"></textarea>
+          </div>
+          <div class="q" data-role="homework" data-qid="q16" data-title="初始化差别">
+            <div class="q-meta"><span class="pill">Q16</span><span class="pill">辨析</span></div>
+            <h3>为什么“重新随机初始化小网络”和“保留大网络原始初始化中的对应权重”不是同一件事？</h3>
+            <textarea placeholder="后者保留中奖初始化；前者重新抽，可能抽不到。"></textarea>
+          </div>
+          <div class="q full" data-role="homework" data-qid="q17" data-title="费曼题">
+            <div class="q-meta"><span class="pill">Q17</span><span class="pill">费曼题</span></div>
+            <h3>请用 8-12 句话向同学讲清楚：剪枝为什么能压缩模型，为什么参数少不一定快，以及大乐透假说想解释什么。</h3>
+            <textarea placeholder="要求串起：部署动机、剪枝流程、剪枝单位、sparsity vs speed-up、先大后剪、中奖子网络、争议。"></textarea>
+            <div class="solve-note">提示：最后强调实际部署要测 latency。</div>
+          </div>
+          <div class="q full" data-role="homework" data-qid="q18" data-title="完整实验方案">
+            <div class="q-meta"><span class="pill">Q18</span><span class="pill">综合</span></div>
+            <h3>设计一个验证剪枝效果的实验。请说明模型、剪枝单位、剪枝比例、微调策略、直接小网络对照、指标，以及如何判断大乐透假说是否被支持。</h3>
+            <textarea placeholder="写成实验计划：控制训练预算、初始化方式、准确率和部署指标。"></textarea>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
+      <p>完成练习后，生成一份 Markdown 记录。它会保留题干摘要和你的回答，方便后续复盘。</p>
+      <div class="actions">
+        <button type="button" onclick="generateRecord()">生成记录</button>
+        <button type="button" class="ghost" onclick="copyRecord()">复制记录</button>
+      </div>
+      <div class="quality" id="qualityBox"></div>
+      <pre class="answer" id="recordOutput">还没有生成记录。</pre>
+    </section>
+  </main>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function updateProgress(){
+    const doc = document.documentElement;
+    const max = doc.scrollHeight - doc.clientHeight;
+    const pct = max > 0 ? (doc.scrollTop / max) * 100 : 0;
+    $('readProgress').style.width = pct + '%';
+  }
+  document.addEventListener('scroll', updateProgress);
+  updateProgress();
+
+  const navLinks = Array.from(document.querySelectorAll('nav a'));
+  const sections = navLinks.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if(entry.isIntersecting){
+        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id));
+      }
+    });
+  }, {rootMargin:'-30% 0px -65% 0px'});
+  sections.forEach(sec => observer.observe(sec));
+
+  function updateSpeed(){
+    const sparsity = parseFloat($('sparsitySlider').value);
+    const support = parseFloat($('supportSlider').value);
+    const structure = parseFloat($('structureSlider').value);
+    $('sparsityVal').textContent = sparsity.toFixed(2);
+    $('supportVal').textContent = support.toFixed(2);
+    $('structureVal').textContent = structure.toFixed(2);
+    $('paramDrop').textContent = (sparsity * 100).toFixed(0) + '%';
+    const overhead = (1 - structure) * (1 - support) * 0.65;
+    const gain = Math.max(0.45, 1 + sparsity * (0.35 + 1.8 * structure * support) - overhead);
+    $('speedGain').textContent = gain.toFixed(2) + 'x';
+    $('speedGain').className = 'score ' + (gain > 1.2 ? 'pos' : gain < 1 ? 'neg' : '');
+    $('speedNote').textContent = structure < 0.35 && support < 0.5
+      ? '稀疏率高，但结构不规则、支持不足时，加速有限。'
+      : structure > 0.7 && support > 0.7
+        ? '结构规则且框架支持较好，剪枝更可能带来真实加速。'
+        : '参数减少只是第一步，还要看结构和运行库支持。';
+    const cells = [];
+    const total = 36;
+    const cut = Math.round(total * sparsity);
+    for(let i=0;i<total;i++){
+      const cls = i < cut ? 'cell zero' : 'cell';
+      cells.push('<span class="' + cls + '">' + (i < cut ? '0' : 'w') + '</span>');
+    }
+    $('matrixViz').innerHTML = cells.join('');
+  }
+  ['sparsitySlider','supportSlider','structureSlider'].forEach(id => $(id).addEventListener('input', updateSpeed));
+  updateSpeed();
+
+  function collectAnswer(card){
+    const parts = [];
+    const checked = Array.from(card.querySelectorAll('input:checked')).map(input => input.value);
+    if(checked.length) parts.push('选择：' + checked.join('；'));
+    const texts = Array.from(card.querySelectorAll('textarea,input[type="text"]')).map(el => el.value.trim()).filter(Boolean);
+    if(texts.length) parts.push(texts.join('\n'));
+    return parts.join('\n').trim();
+  }
+
+  function generateRecord(){
+    const cards = Array.from(document.querySelectorAll(".q[data-role='homework']"));
+    const lines = [];
+    let answered = 0;
+    lines.push('# P51 神经网络压缩 1：剪枝与大乐透假说 - 练习记录');
+    lines.push('');
+    lines.push('## 完成情况');
+    cards.forEach((card, idx) => {
+      const title = card.dataset.title || ('题目 ' + (idx + 1));
+      const question = card.querySelector('h3')?.innerText.trim() || title;
+      const answer = collectAnswer(card);
+      if(answer) answered += 1;
+      lines.push('');
+      lines.push('### Q' + String(idx + 1).padStart(2, '0') + ' ' + title);
+      lines.push('');
+      lines.push('题干摘要：' + question);
+      lines.push('');
+      lines.push(answer ? answer : '（未作答）');
+    });
+    const missing = cards.length - answered;
+    const quality = [];
+    quality.push('已作答：' + answered + ' / ' + cards.length);
+    if(missing > 0) quality.push('还有 ' + missing + ' 题未作答。');
+    if(answered === cards.length) quality.push('已完成全部题目。请重点复查：你是否把 sparsity 和真实 speed-up 区分开了。');
+    $('qualityBox').style.display = 'block';
+    $('qualityBox').textContent = quality.join('\n');
+    $('recordOutput').textContent = lines.join('\n');
+  }
+
+  async function copyRecord(){
+    const text = $('recordOutput').textContent;
+    if(!text || text.includes('还没有生成记录')) generateRecord();
+    const finalText = $('recordOutput').textContent;
+    try{
+      await navigator.clipboard.writeText(finalText);
+      $('qualityBox').style.display = 'block';
+      $('qualityBox').textContent = '已复制练习记录。';
+    }catch(err){
+      $('qualityBox').style.display = 'block';
+      $('qualityBox').textContent = '复制失败，请手动选择下方记录。';
+    }
+  }
+</script>
+</body>
+</html>

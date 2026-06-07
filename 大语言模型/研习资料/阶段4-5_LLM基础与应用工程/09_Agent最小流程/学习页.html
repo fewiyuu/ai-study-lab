@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM 应用工程 09｜Agent 最小流程</title>
+  <style>
+    :root{
+      --bg:#f4f6f9;--paper:#fff;--ink:#1a1a1a;--muted:#5f6875;--quiet:#8a95a4;--line:#d8dee8;
+      --navy:#1b2a4a;--cyan:#00a9f4;--soft:#eef8fc;--warn:#fff4d8;--redsoft:#fff0ed;--greenbox:#edf8f3;
+      --red:#c14f3e;--gold:#a37122;--code:#1e1e1e;--codeText:#d4d4d4;
+      --sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif;
+      --serif:"Songti SC","Noto Serif CJK SC","STSong","SimSun",serif;
+      --mono:"Cascadia Mono","Cascadia Code","Consolas","SFMono-Regular",monospace;
+    }
+    *{box-sizing:border-box}html{scroll-behavior:smooth}
+    body{margin:0;background:linear-gradient(90deg,rgba(27,42,74,.045) 1px,transparent 1px) 0 0/60px 60px,linear-gradient(rgba(27,42,74,.035) 1px,transparent 1px) 0 0/60px 60px,var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.72;-webkit-font-smoothing:antialiased}
+    .progress{position:fixed;left:0;top:0;height:4px;width:0;background:linear-gradient(90deg,var(--cyan),var(--navy));z-index:10}
+    .layout{display:grid;grid-template-columns:308px minmax(0,1fr);min-height:100vh}
+    aside{position:sticky;top:0;height:100vh;overflow:auto;background:var(--navy);color:#fff;padding:30px 22px;background-image:repeating-linear-gradient(90deg,transparent,transparent 59px,rgba(255,255,255,.045) 59px,rgba(255,255,255,.045) 60px),repeating-linear-gradient(0deg,transparent,transparent 59px,rgba(255,255,255,.035) 59px,rgba(255,255,255,.035) 60px)}
+    .brand{border-bottom:1px solid rgba(255,255,255,.36);padding-bottom:22px;margin-bottom:20px}.brand strong{display:block;font-size:27px;line-height:1.18;font-family:var(--serif);font-weight:700}.brand span{display:block;color:rgba(255,255,255,.68);font-size:13px;margin-top:8px;line-height:1.7}
+    nav a{display:flex;gap:10px;align-items:center;color:rgba(255,255,255,.82);text-decoration:none;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.13);font-size:13px;letter-spacing:.04em}nav a:hover,nav a.active{color:#fff;border-color:rgba(255,255,255,.42);font-weight:700}.dot{width:5px;height:5px;background:var(--cyan);opacity:.55;flex:0 0 auto}.active .dot{opacity:1;transform:scale(1.35)}
+    .side-note{margin-top:24px;padding:14px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:rgba(255,255,255,.72);font-size:13px;line-height:1.8}
+    main{max-width:1420px;width:100%;padding:34px 44px}.hero,section{position:relative;background:var(--paper);border:1px solid var(--line);box-shadow:0 14px 28px rgba(27,42,74,.08)}.hero{display:grid;grid-template-columns:minmax(0,1fr) 392px;gap:24px;padding:38px 42px;border-top:6px solid var(--navy)}section{padding:30px 34px;margin-top:18px}
+    .kicker{font-family:var(--mono);font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.18em;margin-bottom:16px}h1{margin:0;font-family:var(--serif);font-size:48px;line-height:1.12;letter-spacing:0;color:#111}h2{margin:0;font-family:var(--serif);font-size:31px;line-height:1.22;color:#111}h3{margin:0 0 8px;font-size:17px;line-height:1.45;color:#111}p{margin:8px 0}.muted,.hero p{color:var(--muted)}
+    .head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--line)}.tag,.pill{display:inline-flex;align-items:center;border:0;background:transparent;color:#8390a0;font-family:var(--mono);font-size:11px;letter-spacing:.14em;padding:0;text-transform:uppercase}
+    .grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(310px,.88fr);gap:1px;background:var(--line);border:1px solid var(--line)}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}.box,.q,.review-card,.check-item,.chart,.answer,.quality{background:rgba(255,255,255,.72);border:0;padding:16px}.box h3,.review-card strong,.check-item b{font-family:var(--serif);font-weight:900}.soft{background:var(--soft)}.warn{background:var(--warn)}.redsoft{background:var(--redsoft)}.greenbox{background:var(--greenbox)}
+    .route{background:#fff;border:1px solid var(--line);padding:22px}.route h3{font-family:var(--serif);font-size:21px}.map{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0;align-items:center;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:14px 0}.node{background:#f7f9fc;border:1px solid var(--line);color:#20304d;padding:8px 12px;font-weight:900}.arrow{color:#a7b0bd}
+    code{background:#e9eef6;color:#17202a;padding:2px 5px;font-family:var(--mono);font-size:.92em}.codebar{margin-top:14px;background:#252526;color:#cbd5e1;border:1px solid #3c3c3c;border-bottom:0;padding:8px 12px;display:flex;align-items:center;font-family:var(--mono);font-size:13px}.codebar:before{content:"";width:34px;height:10px;margin-right:10px;flex:0 0 auto;background:radial-gradient(circle at 5px 5px,#f87171 0 4px,transparent 4.5px),radial-gradient(circle at 17px 5px,#fbbf24 0 4px,transparent 4.5px),radial-gradient(circle at 29px 5px,#34d399 0 4px,transparent 4.5px)}.codebar .label{color:#93c5fd;margin-right:auto}.codebar .kind{color:#9ca3af}.copy-code{margin-left:12px;border:1px solid #3c3c3c;background:#2d2d30;color:#dbeafe;padding:3px 7px;font-family:var(--mono);font-size:12px;cursor:pointer}
+    pre{margin:0 0 12px;background:var(--code);color:var(--codeText);border:1px solid #3c3c3c;padding:15px 16px;overflow:auto;font-family:var(--mono);font-size:14px;line-height:1.64}pre code{background:transparent;color:inherit;padding:0}.bad .codebar{border-color:#7f1d1d;background:#3b1d1d}.bad pre{border-color:#7f1d1d}.comment{color:#6a9955}.kw{color:#c586c0}.str{color:#ce9178}.num{color:#b5cea8}.var{color:#9cdcfe}
+    .viz-panel{background:#fff;border:1px solid var(--line);padding:16px;margin:12px 0}.viz-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.viz-cell{background:#f7f9fc;border:1px solid var(--line);padding:14px}.metric-table{width:100%;border-collapse:collapse;margin:10px 0;background:#fff}.metric-table th,.metric-table td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}.metric-table th{background:#f0f4fa}.viz-note,.checkpoint{margin:12px 0 0;padding:10px 12px;background:#f3f7fb;border-left:4px solid var(--cyan);color:#39465a}
+    button{border:0;background:var(--navy);color:#fff;padding:9px 12px;font:inherit;cursor:pointer}.ghost{background:#fff;color:var(--navy);border:1px solid var(--navy)}.seg{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.seg button{background:#edf2f7;color:#23324a;border:1px solid #d8dee8}.seg button.active{background:var(--navy);color:#fff}.flow-svg{width:100%;height:auto;display:block;background:#fff;border:1px solid var(--line)}.stepbox{padding:10px;border:1px solid var(--line);background:#fff;margin:8px 0}.stepbox.active{border-color:var(--cyan);background:#eef8fc;font-weight:700}
+    .practice-intro{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:14px}.practice-check{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:12px 0}.practice-group{border:1px solid var(--line);background:#fff;margin-top:20px}.group-head{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px;padding:20px 22px;border-bottom:1px solid var(--line)}.group-head h3{font-family:var(--serif);font-size:25px}.quick-review{border-left:2px solid var(--navy);padding-left:14px;font-size:13.5px;color:var(--muted)}.quick-review b{display:block;font-family:var(--mono);font-size:11px;color:#8390a0;letter-spacing:.16em;margin-bottom:5px}.drill-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line)}.q{min-height:148px}.q.full{grid-column:1/-1}.q h3{font-size:16px;line-height:1.55}.q-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}.solve-note{margin:8px 0 0;padding:9px 12px;background:#f4f7fb;border-left:4px solid var(--navy);color:#566273;font-size:13px}.choices label{display:block;margin:7px 0}input[type=radio],input[type=checkbox]{accent-color:var(--navy);margin-right:7px}textarea,input[type=text]{width:100%;border:1px solid var(--line);background:#fff;color:var(--ink);padding:10px;font:inherit;resize:vertical}textarea{min-height:74px}.short textarea{min-height:58px}.answer{white-space:pre-wrap;background:#fff;border:1px dashed #9aa7b6;max-height:380px;overflow:auto}.quality{display:none;white-space:pre-wrap;background:#fff7df;border:1px solid #e5c569;color:#574322;margin:12px 0}.actions{position:sticky;bottom:0;display:flex;gap:10px;justify-content:flex-end;padding-top:14px;margin-top:18px;background:linear-gradient(transparent,var(--bg) 42%)}ul,ol{padding-left:21px}li{margin:4px 0}
+    @media(max-width:980px){.layout{grid-template-columns:minmax(0,1fr)}aside{position:static;height:auto}main{padding:18px}.hero,section{padding:22px 18px}.hero,.grid2,.grid3,.viz-grid,.practice-intro,.group-head,.drill-grid{grid-template-columns:minmax(0,1fr)}h1{font-size:34px;overflow-wrap:anywhere}.practice-check{grid-template-columns:minmax(0,1fr)}pre{font-size:13.5px}.metric-table,.metric-table thead,.metric-table tbody,.metric-table tr,.metric-table th,.metric-table td{display:block;width:100%}.metric-table thead{display:none}.metric-table tr{border:1px solid var(--line);margin:0 0 10px}.metric-table th,.metric-table td{border:0;border-bottom:1px solid var(--line)}}
+  </style>
+</head>
+<body data-feynman-keywords="目标,计划,工具,观察,状态,停止条件,权限,日志,人工确认">
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <strong>LLM 应用工程</strong>
+      <span>09｜Agent 最小流程<br>从一个可控循环开始</span>
+    </div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>学习目标</a>
+      <a href="#concept"><span class="dot"></span>Agent 是什么</a>
+      <a href="#loop"><span class="dot"></span>最小循环</a>
+      <a href="#tools"><span class="dot"></span>工具与状态</a>
+      <a href="#examples"><span class="dot"></span>渐进例子</a>
+      <a href="#workflow"><span class="dot"></span>工程动作</a>
+      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+      <a href="#confusion"><span class="dot"></span>易混概念</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>练习记录</a>
+    </nav>
+    <div class="side-note">最小 Agent 不是“让模型随便干活”。它是目标、工具、观察、状态和停止条件组成的受控循环。</div>
+  </aside>
+
+  <main>
+    <section class="hero" id="goal">
+      <div>
+        <div class="kicker">Agent · Minimal Loop</div>
+        <h1>Agent 先从能停下来的循环开始</h1>
+        <p>很多人一听 Agent 就想到复杂框架、多智能体和自动执行。工程上更稳的入口，是一个最小流程：给目标，模型选择下一步动作；程序执行允许的工具；工具返回观察结果；模型根据观察继续或停止。这个循环一旦没有状态、权限和停止条件，就会从“自动化”变成“不可控”。</p>
+        <div class="map">
+          <span class="node">目标</span><span class="arrow">→</span>
+          <span class="node">计划</span><span class="arrow">→</span>
+          <span class="node">工具调用</span><span class="arrow">→</span>
+          <span class="node">观察</span><span class="arrow">→</span>
+          <span class="node">状态更新</span><span class="arrow">→</span>
+          <span class="node">停止</span>
+        </div>
+      </div>
+      <div class="route">
+        <h3>学完后要能做三件事</h3>
+        <ol>
+          <li>说清 workflow、tool use 和 agent 的边界，不把所有模型调用都叫 Agent。</li>
+          <li>设计一个只含 2-3 个工具的最小 Agent 循环，并写出停止条件。</li>
+          <li>诊断 Agent 卡住、乱调用工具、越权执行或反复重试的原因。</li>
+        </ol>
+        <p class="muted">本页只讲最小流程，不追框架。能把循环管住，再谈复杂协作。</p>
+      </div>
+    </section>
+
+    <section id="concept">
+      <div class="head"><h2>一、Agent 是什么：模型参与决策的执行循环</h2><span class="tag">CONCEPT</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>概念：Agent 不只是“会调用工具”</h3>
+          <p>一个普通 LLM 调用通常是输入 prompt，得到答案。Tool use 是模型根据需要请求某个工具，例如搜索、查数据库、运行计算。Agent 在此基础上多了一层循环：它会根据目标和当前状态决定下一步，调用工具，观察结果，再决定是否继续。核心变化是模型参与“下一步做什么”的选择。</p>
+          <p>这不等于模型可以随便执行动作。工具列表、参数 schema、权限、最大步数、预算、日志和人工确认都在程序侧。模型只是在这些边界内提出下一步。越靠近外部世界的动作，越需要程序侧确认。例如读取知识库和计算价格可以自动，发送邮件、退款、删除文件就不应该只靠模型一句话直接执行。</p>
+          <p>判断句是：如果流程每一步都由程序固定安排，模型只负责填字段，它更像 workflow；如果模型能基于观察选择下一步工具，并且循环可能走不同路径，它才接近 Agent。</p>
+          <div class="checkpoint">到这里，应该能把 Agent 的直觉说清：它是受控工具循环，不是自由行动的聊天模型。</div>
+        </div>
+        <div class="box soft">
+          <h3>最小结构图</h3>
+          <svg class="flow-svg" viewBox="0 0 860 320" role="img" aria-label="Agent 最小循环">
+            <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#1b2a4a"/></marker></defs>
+            <rect x="60" y="48" width="150" height="70" fill="#eef8fc" stroke="#d8dee8"/><text x="135" y="78" text-anchor="middle" font-size="15" font-weight="700">目标与状态</text><text x="135" y="101" text-anchor="middle" font-size="12" fill="#5f6875">任务、历史、约束</text>
+            <line x1="210" y1="83" x2="285" y2="83" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/>
+            <rect x="285" y="48" width="150" height="70" fill="#fff" stroke="#d8dee8"/><text x="360" y="78" text-anchor="middle" font-size="15" font-weight="700">模型决策</text><text x="360" y="101" text-anchor="middle" font-size="12" fill="#5f6875">下一步动作</text>
+            <line x1="435" y1="83" x2="510" y2="83" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/>
+            <rect x="510" y="48" width="150" height="70" fill="#fff6dc" stroke="#d8dee8"/><text x="585" y="78" text-anchor="middle" font-size="15" font-weight="700">工具执行</text><text x="585" y="101" text-anchor="middle" font-size="12" fill="#5f6875">程序侧调用</text>
+            <line x1="585" y1="118" x2="585" y2="182" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/>
+            <rect x="510" y="182" width="150" height="70" fill="#edf8f3" stroke="#d8dee8"/><text x="585" y="212" text-anchor="middle" font-size="15" font-weight="700">观察结果</text><text x="585" y="235" text-anchor="middle" font-size="12" fill="#5f6875">返回状态</text>
+            <path d="M510 217 C360 285 160 255 135 118" fill="none" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/>
+            <rect x="688" y="48" width="120" height="204" fill="#fff0ed" stroke="#d8dee8"/><text x="748" y="91" text-anchor="middle" font-size="14" font-weight="700">护栏</text><text x="748" y="124" text-anchor="middle" font-size="12" fill="#5f6875">权限</text><text x="748" y="151" text-anchor="middle" font-size="12" fill="#5f6875">最大步数</text><text x="748" y="178" text-anchor="middle" font-size="12" fill="#5f6875">预算</text><text x="748" y="205" text-anchor="middle" font-size="12" fill="#5f6875">人工确认</text>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <section id="loop">
+      <div class="head"><h2>二、最小循环：计划、行动、观察、停止</h2><span class="tag">LOOP</span></div>
+      <div class="grid3">
+        <div class="box">
+          <h3>计划：下一步要具体</h3>
+          <p>计划不是长篇战略，而是当前一步的可执行动作。比如“搜索订单状态”“查询退款政策”“向用户提一个澄清问题”。计划要能映射到工具或最终回复。如果模型写“进一步分析情况”，但没有具体动作，循环就会空转。</p>
+          <p>工程判断：每一步计划都应该能被日志记录成一个动作类型和参数。</p>
+        </div>
+        <div class="box">
+          <h3>行动：只能调用允许的工具</h3>
+          <p>工具是程序暴露给模型的能力。工具描述要写清用途、参数和限制。模型不能自己发 HTTP、读文件、下单或发邮件；它只能请求程序提供的工具。程序接到请求后还要校验参数和权限。工具越强，护栏越硬。</p>
+          <p>工程判断：没有 schema、权限和日志的工具，不应该放进 Agent。</p>
+        </div>
+        <div class="box">
+          <h3>观察：工具结果要回到状态</h3>
+          <p>观察是工具执行后的返回值。模型下一步应该基于观察，而不是重新猜。观察要短而准，保留结果、错误码、是否需要重试。工具失败时不要只返回“失败”，要说明失败类型，例如超时、无权限、没查到、参数不合法。</p>
+          <p>工程判断：如果观察结果不能解释下一步为什么这么走，日志就不够用。</p>
+        </div>
+      </div>
+      <div class="viz-panel">
+        <h3>小交互：一步步看循环状态</h3>
+        <div class="seg">
+          <button data-step="0" class="active">目标</button>
+          <button data-step="1">计划</button>
+          <button data-step="2">工具</button>
+          <button data-step="3">观察</button>
+          <button data-step="4">停止</button>
+        </div>
+        <div id="step0" class="stepbox active">目标：帮用户查询订单为什么还没发货。</div>
+        <div id="step1" class="stepbox">计划：先用订单号查询订单状态，不直接猜物流原因。</div>
+        <div id="step2" class="stepbox">工具：调用 get_order_status(order_id)，程序校验用户是否有权查看该订单。</div>
+        <div id="step3" class="stepbox">观察：订单已付款，仓库缺货，预计明天补货。</div>
+        <div id="step4" class="stepbox">停止：信息足够，生成回复；如果缺订单号，则停止并向用户澄清。</div>
+        <div class="viz-note">观察点：循环每一步都要能解释“为什么继续”或“为什么停下”。停止条件不清，Agent 很容易反复调用工具。</div>
+      </div>
+    </section>
+
+    <section id="tools">
+      <div class="head"><h2>三、工具、状态和停止条件</h2><span class="tag">TOOLS</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>工具描述要让模型知道何时不用</h3>
+          <p>工具描述常见错误是只写“这个工具可以做什么”，不写“什么时候不该用”。例如搜索工具不应该用于用户已经提供的事实确认；退款工具不能在没有人工确认时执行；数据库查询工具不能查询非当前用户的数据。好的工具描述会包含用途、参数、返回、限制和失败处理。</p>
+          <p>状态是 Agent 的记忆，但这里先讲短期状态：用户目标、已知事实、已调用工具、观察结果、剩余步数、预算和待确认事项。没有状态，模型会重复问同一个问题或反复调用同一个工具。状态不需要全量聊天记录，应该保留对决策有用的摘要和结构化字段。</p>
+          <p>停止条件要提前定义。常见停止条件包括：已得到足够信息、需要用户澄清、达到最大步数、遇到权限限制、工具连续失败、需要人工确认。没有停止条件的 Agent，不是更智能，而是更难控。</p>
+        </div>
+        <div class="box soft">
+          <h3>工具规格表</h3>
+          <table class="metric-table">
+            <thead><tr><th>字段</th><th>写法</th><th>为什么重要</th></tr></thead>
+            <tbody>
+              <tr><td>name</td><td><code>get_order_status</code></td><td>稳定动作名，方便日志和权限控制</td></tr>
+              <tr><td>description</td><td>查询当前用户指定订单的发货状态</td><td>告诉模型何时使用，也要写限制</td></tr>
+              <tr><td>parameters</td><td><code>order_id: string</code></td><td>程序校验参数，不让模型自由拼</td></tr>
+              <tr><td>returns</td><td>状态、预计时间、错误码</td><td>观察结果要能支持下一步决策</td></tr>
+              <tr><td>guardrail</td><td>只能查当前用户订单</td><td>权限不能靠模型自觉</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="examples">
+      <div class="head"><h2>四、三个渐进例子</h2><span class="tag">EXAMPLES</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>例子 1：固定 workflow 不是 Agent</h3>
+          <p>如果程序固定执行“检索知识库 → 生成答案 → 记录日志”，模型只负责在固定位置生成文本，这更像 workflow。它很好，也更可控，但不要因为用了 LLM 就叫 Agent。叫准名字有用，因为不同结构的风险不同。workflow 的主要风险在每一步质量；Agent 还多了路径选择和停止问题。</p>
+          <div class="codebar"><span class="label">固定流程：模型不选择下一步</span><span class="kind">pseudo</span></div>
+          <pre><code>context = retrieve(user_question)
+answer = generate_answer(user_question, context)
+save_log(user_question, context, answer)
+return answer</code></pre>
+        </div>
+        <div class="box">
+          <h3>例子 2：最小工具 Agent</h3>
+          <p>现在让模型选择是否需要工具。如果用户已经给出足够信息，可以直接回答；如果缺订单号，就问用户；如果有订单号，就请求查询工具。模型的选择空间很小，但已经有 Agent 的雏形：它根据状态决定下一步。</p>
+          <div class="codebar"><span class="label">最小代码：受控 Agent 循环</span><span class="kind">python</span></div>
+          <pre><code><span class="kw">def</span> <span class="var">run_agent</span>(goal, state, model, tools, max_steps=3):
+    <span class="kw">for</span> step <span class="kw">in</span> range(max_steps):
+        action = model.decide(goal=goal, state=state, tools=list(tools))
+
+        <span class="kw">if</span> action[<span class="str">"type"</span>] == <span class="str">"final"</span>:
+            <span class="kw">return</span> action[<span class="str">"message"</span>]
+
+        <span class="kw">if</span> action[<span class="str">"type"</span>] == <span class="str">"ask_user"</span>:
+            <span class="kw">return</span> action[<span class="str">"question"</span>]
+
+        tool = tools.get(action[<span class="str">"tool"</span>])
+        <span class="kw">if</span> tool <span class="kw">is None</span>:
+            state[<span class="str">"observations"</span>].append({<span class="str">"error"</span>: <span class="str">"unknown_tool"</span>})
+            <span class="kw">continue</span>
+
+        observation = tool.call(action[<span class="str">"args"</span>])
+        state[<span class="str">"observations"</span>].append(observation)
+
+    <span class="kw">return</span> <span class="str">"信息还不够，我先停止处理。"</span></code></pre>
+          <p><code>max_steps</code> 是停止条件，不是装饰。<code>unknown_tool</code> 的错误观察会回到状态，让模型知道刚才请求的工具不存在。工具执行由程序完成，模型只提出请求。删掉工具白名单，系统就会变成模型随口说什么工具都能用。</p>
+        </div>
+      </div>
+      <div class="box">
+        <h3>例子 3：错误示例，缺少停止和权限</h3>
+        <p>下面这段伪代码看起来像自动化，实际风险很大。它没有最大步数，没有工具白名单，没有权限检查，也没有人工确认。模型如果决定反复搜索，循环就停不下来；如果决定发邮件，程序会直接执行。</p>
+        <div class="bad">
+          <div class="codebar"><span class="label">错误示例：把模型文本当可执行命令</span><span class="kind">pseudo</span></div>
+          <pre><code>while True:
+    command = llm("下一步做什么？")
+    result = execute(command)
+    llm("结果是：" + result)</code></pre>
+        </div>
+        <p>修法不是把 prompt 写严一点，而是改架构：限定工具、解析 action schema、校验参数、记录每一步、设置最大步数，高风险动作需要确认。prompt 可以提醒模型谨慎，但不能替代这些硬边界。</p>
+      </div>
+    </section>
+
+    <section id="workflow">
+      <div class="head"><h2>五、构建最小 Agent 的工程动作</h2><span class="tag">WORKFLOW</span></div>
+      <div class="grid3">
+        <div class="box"><h3>1. 明确目标和不做事项</h3><p>把 Agent 的职责压小。比如“帮助用户查询订单状态并生成解释”，不包括退款审批、修改地址、承诺补偿。目标越含糊，模型越容易扩权。</p></div>
+        <div class="box"><h3>2. 只给必要工具</h3><p>工具越多，选择空间越大，错误也越多。第一版可以只给查询订单、查询政策、请求澄清三个动作。没有用到的工具不要提前暴露。</p></div>
+        <div class="box"><h3>3. 写 action schema</h3><p>让模型输出结构化动作：<code>final</code>、<code>ask_user</code>、<code>call_tool</code>。每种动作有固定字段。程序只执行合法 action。</p></div>
+        <div class="box"><h3>4. 记录状态和日志</h3><p>每一步记录目标、动作、工具参数、观察结果、错误码和耗时。调试 Agent 时，日志就是现场记录。没有日志，只能猜模型为什么这么走。</p></div>
+        <div class="box"><h3>5. 设置停止条件</h3><p>最大步数、最大成本、工具连续失败、需要澄清、需要人工确认，都可以成为停止条件。停止不是失败，它是控制系统风险的一部分。</p></div>
+        <div class="box"><h3>6. 用 Eval 覆盖路径</h3><p>Agent 的评测不只看最终答案，还要看工具选择、步数、是否越权、是否该停不停。复杂路径要用样本覆盖。</p></div>
+      </div>
+    </section>
+
+    <section id="diagnosis">
+      <div class="head"><h2>六、常见误区和错误诊断</h2><span class="tag">PITFALLS</span></div>
+      <div class="grid2">
+        <div class="box redsoft"><h3>误区 1：所有 LLM 流程都叫 Agent</h3><p>错因：把生成文本、工具调用和自主循环混在一起。后果是风险估计不准。修法是先判断模型是否能选择下一步路径。</p></div>
+        <div class="box redsoft"><h3>误区 2：工具越多越聪明</h3><p>错因：工具增加会扩大动作空间。后果是误调用、参数错、成本高。修法是只暴露当前任务必要工具，并写清何时不用。</p></div>
+        <div class="box redsoft"><h3>误区 3：没有停止条件</h3><p>错因：误以为模型会自己判断够了。后果是反复搜索、反复重试、成本失控。修法是最大步数、失败次数、预算和澄清条件。</p></div>
+        <div class="box redsoft"><h3>误区 4：把权限交给模型判断</h3><p>错因：模型不是权限系统。后果是越权查询、误执行外部动作。修法是程序侧校验用户身份、资源范围和动作权限。</p></div>
+        <div class="box redsoft"><h3>误区 5：只看最终答案，不看路径</h3><p>错因：最终答案可能碰巧正确。后果是错误工具调用被隐藏。修法是记录并评估每一步工具选择和观察。</p></div>
+        <div class="box redsoft"><h3>误区 6：失败时只加一句“请谨慎”</h3><p>错因：提示语不能修复架构缺口。后果是同类错误复发。修法是缩小工具、补 schema、加校验、加停止条件或人工确认。</p></div>
+      </div>
+    </section>
+
+    <section id="confusion">
+      <div class="head"><h2>七、三组易混概念</h2><span class="tag">COMPARE</span></div>
+      <table class="metric-table">
+        <thead><tr><th>概念组</th><th>容易混的地方</th><th>准确区分</th><th>工程判断</th></tr></thead>
+        <tbody>
+          <tr><td>Workflow / Agent</td><td>都可能包含多个步骤</td><td>Workflow 路径由程序固定；Agent 可根据观察选择下一步</td><td>路径固定优先用 workflow，路径需要动态选择才考虑 Agent</td></tr>
+          <tr><td>Tool use / Agent</td><td>都会调用工具</td><td>Tool use 可以是单次工具调用；Agent 是多步决策循环</td><td>单次查资料不用上复杂 Agent</td></tr>
+          <tr><td>状态 / 记忆</td><td>都保存历史信息</td><td>状态是当前任务决策所需信息；长期记忆跨任务保存偏好或事实</td><td>先做好短期状态，再谈长期记忆</td></tr>
+          <tr><td>停止 / 失败</td><td>停止看起来像没完成</td><td>停止可以是风险控制：信息不足、需要确认、达到预算</td><td>能安全停下来的 Agent 才适合上线</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">PRACTICE</span></div>
+      <div class="practice-intro">
+        <div class="review-card"><strong>练习目标</strong><p>这组题检查你能不能画出最小 Agent 循环，并诊断工具、状态、权限和停止条件问题。</p></div>
+        <div class="review-card"><strong>作答提醒</strong><p>开放题按“错因、后果、修法”回答。费曼题要串起目标、计划、工具、观察、状态、停止条件和权限。</p></div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>先区分 Agent 和普通模型调用。</p></div><div class="quick-review"><b>复习</b>Agent 的核心是模型参与下一步选择，并在工具观察后继续或停止。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. Agent 的核心特征"><div class="q-meta"><span class="pill">选择</span></div><h3>1. 最能体现 Agent 的特征是什么？</h3><div class="choices"><label><input type="radio" name="q1" value="回答很长">回答很长</label><label><input type="radio" name="q1" value="模型能根据观察选择下一步工具或停止">模型能根据观察选择下一步工具或停止</label><label><input type="radio" name="q1" value="prompt 里写了 Agent 两个字">prompt 里写了 Agent 两个字</label></div></div>
+          <div class="q" data-role="homework" data-title="2. 固定 RAG 流程一定是 Agent。"><div class="q-meta"><span class="pill">判断</span></div><h3>2. 固定的“检索 → 生成 → 返回”流程一定是 Agent。</h3><div class="choices"><label><input type="radio" name="q2" value="对">对</label><label><input type="radio" name="q2" value="错">错</label></div></div>
+          <div class="q short" data-role="homework" data-title="3. 循环四步"><div class="q-meta"><span class="pill">填空</span></div><h3>3. Agent 最小循环常见链路是计划、行动、______、停止。</h3><input type="text" name="q3"></div>
+          <div class="q short" data-role="homework" data-title="4. 停止条件意义"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 为什么停止条件是 Agent 的必要部分？</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、工具和状态设计</h3><p>这组题看你能不能把工具暴露得足够小、足够清楚。</p></div><div class="quick-review"><b>复习</b>工具要有名称、用途、参数、返回、限制和权限。状态只保留决策需要的信息。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="5. 工具描述字段"><div class="q-meta"><span class="pill">清单</span></div><h3>5. 一个工具描述至少应包含哪些字段？</h3><textarea name="q5"></textarea></div>
+          <div class="q short" data-role="homework" data-title="6. 工具限制"><div class="q-meta"><span class="pill">解释</span></div><h3>6. 为什么工具描述要写“什么时候不该用”？</h3><textarea name="q6"></textarea></div>
+          <div class="q short" data-role="homework" data-title="7. 短期状态"><div class="q-meta"><span class="pill">应用</span></div><h3>7. 订单查询 Agent 的短期状态应保存哪些信息？</h3><textarea name="q7"></textarea></div>
+          <div class="q short" data-role="homework" data-title="8. 权限校验"><div class="q-meta"><span class="pill">判断</span></div><h3>8. 用户给了订单号，Agent 就可以直接查任何订单吗？为什么？</h3><textarea name="q8"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、代码和流程阅读</h3><p>读懂最小循环里每个保护点。</p></div><div class="quick-review"><b>复习</b>程序执行工具，模型只提出结构化动作请求。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="9. max_steps 的作用"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>9. 上面代码里的 <code>max_steps</code> 解决什么问题？</h3><textarea name="q9"></textarea></div>
+          <div class="q short" data-role="homework" data-title="10. unknown_tool 观察"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>10. 为什么未知工具不应该直接执行，而是记录为观察结果？</h3><textarea name="q10"></textarea></div>
+          <div class="q short" data-role="homework" data-title="11. 流程排序"><div class="q-meta"><span class="pill">排序</span></div><h3>11. 排序：A 工具返回观察，B 模型决定 action，C 程序校验 action，D 更新状态，E 判断是否停止。</h3><input type="text" name="q11" placeholder="例如：B-C-A-D-E"></div>
+          <div class="q short" data-role="homework" data-title="12. 删除工具白名单"><div class="q-meta"><span class="pill">代码诊断</span></div><h3>12. 如果删除 <code>tools.get(...)</code> 的白名单检查，会有什么风险？</h3><textarea name="q12"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、错误诊断</h3><p>这些题要求说清错因、后果和修法。</p></div><div class="quick-review"><b>复习</b>Agent 坏掉常见原因是工具过多、状态缺失、停止条件不清、权限交给模型。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="13. 错误诊断：循环不停"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. Agent 反复调用搜索工具，始终不回答。可能哪里设计错了？</h3><textarea name="q13"></textarea></div>
+          <div class="q short" data-role="homework" data-title="14. 错误诊断：重复提问"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. Agent 已经问过用户订单号，下一轮又问同样问题。错因可能是什么？</h3><textarea name="q14"></textarea></div>
+          <div class="q short" data-role="homework" data-title="15. 错误诊断：越权查询"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. Agent 用用户提供的订单号查到了别人的订单。错在哪里？怎么修？</h3><textarea name="q15"></textarea></div>
+          <div class="q short" data-role="homework" data-title="16. 错误诊断：高风险动作"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. Agent 自动给用户发了补偿承诺邮件。为什么危险？应该加什么护栏？</h3><textarea name="q16"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>五、迁移和表达</h3><p>把最小 Agent 方法迁移到真实任务。</p></div><div class="quick-review"><b>复习</b>先做小工具、小循环、强停止，再逐步扩展。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="17. 设计最小工具集"><div class="q-meta"><span class="pill">场景</span></div><h3>17. 为“会议纪要整理助手”设计 3 个以内工具，并说明哪些动作需要人工确认。</h3><textarea name="q17"></textarea></div>
+          <div class="q short" data-role="homework" data-title="18. 面试短答：Workflow vs Agent"><div class="q-meta"><span class="pill">面试</span></div><h3>18. 用 2-3 句话区分 workflow 和 agent。</h3><textarea name="q18"></textarea></div>
+          <div class="q short" data-role="homework" data-title="19. 日志字段"><div class="q-meta"><span class="pill">清单</span></div><h3>19. Agent 每一步日志至少应记录哪些字段？</h3><textarea name="q19"></textarea></div>
+          <div class="q short" data-role="homework" data-title="20. Eval 设计"><div class="q-meta"><span class="pill">应用</span></div><h3>20. Agent 的 Eval 除了最终答案，还应该评估什么？</h3><textarea name="q20"></textarea></div>
+          <div class="q full" data-role="homework" data-title="21. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>21. 用 6-9 句话解释：什么是 Agent 的最小流程，为什么它必须有工具边界和停止条件。</h3><div class="solve-note">请串联目标、计划、工具、观察、状态、停止条件、权限、日志和人工确认。</div><textarea name="q21"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>生成练习记录</h2><span class="tag">RECORD</span></div>
+      <p class="muted">完成后生成一份练习记录。记录会保留题干和你的回答，方便复盘。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){
+  const max=document.documentElement.scrollHeight-innerHeight;
+  progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";
+  let current=sections[0]?.id;
+  for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id;}
+  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`));
+}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+function renderStep(step){
+  document.querySelectorAll("[data-step]").forEach(btn=>btn.classList.toggle("active",btn.dataset.step===String(step)));
+  document.querySelectorAll(".stepbox").forEach((box,idx)=>box.classList.toggle("active",idx===Number(step)));
+}
+document.querySelectorAll("[data-step]").forEach(btn=>btn.addEventListener("click",()=>renderStep(btn.dataset.step)));renderStep(0);
+document.querySelectorAll(".codebar").forEach(bar=>{
+  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
+  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";navigator.clipboard.writeText(code).then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});
+  bar.appendChild(btn);
+});
+const questionNodes=[...document.querySelectorAll('[data-role="homework"]')];
+function answerOf(node){
+  const checked=[...node.querySelectorAll("input[type=radio]:checked,input[type=checkbox]:checked")].map(i=>i.value);
+  const text=[...node.querySelectorAll("textarea,input[type=text]")].map(i=>i.value.trim()).filter(Boolean);
+  return [...checked,...text].join("；");
+}
+function generateRecord(){
+  let out="# Agent 最小流程｜练习记录\n\n";
+  const missing=[];
+  questionNodes.forEach((node,idx)=>{const title=node.dataset.title||`第 ${idx+1} 题`;const answer=answerOf(node);if(!answer)missing.push(title);out+=`## ${idx+1}. ${title}\n${answer||"（未填写）"}\n\n`;});
+  document.getElementById("record").textContent=out;
+  const feynman=answerOf(questionNodes[questionNodes.length-1]||document.createElement("div"));
+  const keys=(document.body.dataset.feynmanKeywords||"").split(",").filter(Boolean);
+  const lack=keys.filter(k=>feynman&&!feynman.includes(k));
+  const notes=[];if(missing.length)notes.push(`还有 ${missing.length} 题未填写。`);if(feynman&&feynman.length<140)notes.push("费曼解释偏短，建议把 Agent 循环和护栏讲完整。");if(lack.length)notes.push(`费曼解释可能缺少：${lack.join("、")}。`);
+  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=notes.length?notes.join("\n"):"练习记录已生成，题目填写完整。";
+}
+function copyRecord(){
+  const text=document.getElementById("record").textContent;
+  navigator.clipboard.writeText(text).then(()=>{document.getElementById("quality").style.display="block";document.getElementById("quality").textContent="已复制练习记录。"}).catch(()=>{document.getElementById("quality").style.display="block";document.getElementById("quality").textContent="复制失败，请手动选中记录文本复制。"});
+}
+</script>
+</body>
+</html>

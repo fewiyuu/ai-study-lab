@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM 基础 01｜tokenizer、embedding 与 context window</title>
+  <style>
+    :root{
+      --bg:#f4f6f9;--paper:#fff;--ink:#1a1a1a;--muted:#5f6875;--quiet:#8a95a4;--line:#d8dee8;
+      --navy:#1b2a4a;--cyan:#00a9f4;--soft:#eef8fc;--warn:#fff4d8;--redsoft:#fff0ed;--greenbox:#edf8f3;
+      --green:#1f7a5f;--red:#c14f3e;--gold:#a37122;--code:#1e1e1e;--codeText:#d4d4d4;
+      --sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif;
+      --serif:"Songti SC","Noto Serif CJK SC","STSong","SimSun",serif;
+      --mono:"Cascadia Mono","Cascadia Code","Consolas","SFMono-Regular",monospace;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{margin:0;background:
+      linear-gradient(90deg,rgba(27,42,74,.045) 1px,transparent 1px) 0 0/60px 60px,
+      linear-gradient(rgba(27,42,74,.035) 1px,transparent 1px) 0 0/60px 60px,
+      var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.72;-webkit-font-smoothing:antialiased}
+    .progress{position:fixed;left:0;top:0;height:4px;width:0;background:linear-gradient(90deg,var(--cyan),var(--navy));z-index:10}
+    .layout{display:grid;grid-template-columns:308px minmax(0,1fr);min-height:100vh}
+    aside{position:sticky;top:0;height:100vh;overflow:auto;background:var(--navy);color:#fff;padding:30px 22px;background-image:
+      repeating-linear-gradient(90deg,transparent,transparent 59px,rgba(255,255,255,.045) 59px,rgba(255,255,255,.045) 60px),
+      repeating-linear-gradient(0deg,transparent,transparent 59px,rgba(255,255,255,.035) 59px,rgba(255,255,255,.035) 60px)}
+    .brand{border-bottom:1px solid rgba(255,255,255,.36);padding-bottom:22px;margin-bottom:20px}
+    .brand strong{display:block;font-size:27px;line-height:1.18;font-family:var(--serif);font-weight:700;color:#fff}
+    .brand span{display:block;color:rgba(255,255,255,.68);font-size:13px;margin-top:8px;line-height:1.7}
+    nav{display:grid;gap:0}
+    nav a{display:flex;gap:10px;align-items:center;color:rgba(255,255,255,.82);text-decoration:none;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.13);font-size:13px;letter-spacing:.04em}
+    nav a:hover,nav a.active{color:#fff;border-color:rgba(255,255,255,.42);font-weight:700}
+    .dot{width:5px;height:5px;background:var(--cyan);opacity:.55;flex:0 0 auto}
+    nav a.active .dot{opacity:1;transform:scale(1.35)}
+    .side-note{margin-top:24px;padding:14px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:rgba(255,255,255,.72);font-size:13px;line-height:1.8}
+    main{max-width:1420px;width:100%;padding:34px 44px}
+    .hero,section{position:relative;background:var(--paper);border:1px solid var(--line);box-shadow:0 14px 28px rgba(27,42,74,.08)}
+    .hero{display:grid;grid-template-columns:minmax(0,1fr) 392px;gap:24px;padding:38px 42px;border-top:6px solid var(--navy)}
+    section{padding:30px 34px;margin-top:18px}
+    .kicker{font-family:var(--mono);font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.18em;margin-bottom:16px}
+    h1{margin:0;font-family:var(--serif);font-size:48px;line-height:1.12;letter-spacing:0;color:#111}
+    h2{margin:0;font-family:var(--serif);font-size:31px;line-height:1.22;color:#111}
+    h3{margin:0 0 8px;font-size:17px;line-height:1.45;color:#111}
+    p{margin:8px 0}.muted,.hero p{color:var(--muted)}a{color:#146fb2}
+    .head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+    .tag,.pill{display:inline-flex;align-items:center;border:0;background:transparent;color:#8390a0;font-family:var(--mono);font-size:11px;letter-spacing:.14em;padding:0;text-transform:uppercase}
+    .grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(310px,.88fr);gap:1px;background:var(--line);border:1px solid var(--line)}
+    .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+    .box,.q,.review-card,.check-item,.chart,.formula,.answer,.quality{background:rgba(255,255,255,.72);border:0;padding:16px}
+    .box h3,.review-card strong,.check-item b{font-family:var(--serif);font-weight:900}
+    .soft{background:var(--soft)}.warn{background:var(--warn)}.redsoft{background:var(--redsoft)}.greenbox{background:var(--greenbox)}
+    .route{background:#fff;border:1px solid var(--line);padding:22px}
+    .route h3{font-family:var(--serif);font-size:21px}
+    .map{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0;align-items:center;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:14px 0}
+    .node{background:#f7f9fc;border:1px solid var(--line);color:#20304d;padding:8px 12px;font-weight:900}.arrow{color:#a7b0bd}
+    code{background:#e9eef6;color:#17202a;padding:2px 5px;font-family:var(--mono);font-size:.92em}
+    .formula{background:#fff;border:1px solid var(--line);border-left:8px solid var(--navy);font-family:"Cambria Math","Latin Modern Math","Times New Roman",var(--serif);font-size:18px;line-height:1.7;overflow:auto;margin:12px 0;color:#111}
+    .codebar{margin-top:14px;background:#252526;color:#cbd5e1;border:1px solid #3c3c3c;border-bottom:0;padding:8px 12px;display:flex;align-items:center;font-family:var(--mono);font-size:13px}
+    .codebar:before{content:"";width:34px;height:10px;margin-right:10px;flex:0 0 auto;background:radial-gradient(circle at 5px 5px,#f87171 0 4px,transparent 4.5px),radial-gradient(circle at 17px 5px,#fbbf24 0 4px,transparent 4.5px),radial-gradient(circle at 29px 5px,#34d399 0 4px,transparent 4.5px)}
+    .codebar .label{color:#93c5fd;margin-right:auto}.codebar .kind{color:#9ca3af}.copy-code{margin-left:12px;border:1px solid #3c3c3c;background:#2d2d30;color:#dbeafe;padding:3px 7px;font-family:var(--mono);font-size:12px;cursor:pointer}
+    pre{margin:0 0 12px;background:var(--code);color:var(--codeText);border:1px solid #3c3c3c;padding:15px 16px;overflow:auto;font-family:var(--mono);font-size:14px;line-height:1.64}
+    pre code{background:transparent;color:inherit;padding:0}.comment{color:#6a9955}.kw{color:#c586c0}.fn{color:#dcdcaa}.str{color:#ce9178}.num{color:#b5cea8}.var{color:#9cdcfe}
+    .viz-panel{background:#fff;border:1px solid var(--line);padding:16px;margin:12px 0}.viz-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.viz-cell{background:#f7f9fc;border:1px solid var(--line);padding:14px}
+    .metric-table{width:100%;border-collapse:collapse;margin:10px 0;background:#fff}.metric-table th,.metric-table td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}.metric-table th{background:#f0f4fa}
+    .slider-row{display:grid;grid-template-columns:150px minmax(0,1fr) 92px;gap:10px;align-items:center;margin:10px 0}
+    input[type=range]{width:100%;accent-color:var(--cyan)}button{border:0;background:var(--navy);color:#fff;padding:9px 12px;font:inherit;cursor:pointer}.ghost{background:#fff;color:var(--navy);border:1px solid var(--navy)}
+    .seg{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.seg button{background:#edf2f7;color:#23324a;border:1px solid #d8dee8}.seg button.active{background:var(--navy);color:#fff}
+    .token-row{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.token{border:1px solid var(--line);background:#f7f9fc;padding:8px 10px;font-family:var(--mono);font-weight:700}
+    .barrow{display:grid;grid-template-columns:120px 1fr 70px;gap:10px;align-items:center;margin:8px 0}.bar{height:14px;background:#e8eef6}.fill{height:100%;background:linear-gradient(90deg,var(--cyan),var(--navy))}
+    .flow-svg{width:100%;height:auto;display:block;background:#fff;border:1px solid var(--line)}
+    .checkpoint{margin:12px 0 0;padding:10px 12px;background:#f3f7fb;border-left:4px solid var(--cyan);color:#39465a}
+    .practice-intro{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:14px}
+    .practice-check{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:12px 0}
+    .practice-group{border:1px solid var(--line);background:#fff;margin-top:20px}
+    .group-head{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px;padding:20px 22px;border-bottom:1px solid var(--line)}
+    .group-head h3{font-family:var(--serif);font-size:25px}.quick-review{border-left:2px solid var(--navy);padding-left:14px;font-size:13.5px;color:var(--muted)}.quick-review b{display:block;font-family:var(--mono);font-size:11px;color:#8390a0;letter-spacing:.16em;margin-bottom:5px}
+    .drill-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line)}.q{min-height:148px}.q.full{grid-column:1/-1}.q h3{font-size:16px;line-height:1.55}.q-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+    .solve-note{margin:8px 0 0;padding:9px 12px;background:#f4f7fb;border-left:4px solid var(--navy);color:#566273;font-size:13px}
+    .choices label{display:block;margin:7px 0}input[type=radio],input[type=checkbox]{accent-color:var(--navy);margin-right:7px}
+    textarea,input[type=text],select{width:100%;border:1px solid var(--line);background:#fff;color:var(--ink);padding:10px;font:inherit;resize:vertical}textarea{min-height:74px}.short textarea{min-height:58px}
+    .answer{white-space:pre-wrap;background:#fff;border:1px dashed #9aa7b6;max-height:380px;overflow:auto}.quality{display:none;white-space:pre-wrap;background:#fff7df;border:1px solid #e5c569;color:#574322;margin:12px 0}
+    .actions{position:sticky;bottom:0;display:flex;gap:10px;justify-content:flex-end;padding-top:14px;margin-top:18px;background:linear-gradient(transparent,var(--bg) 42%)}
+    ul,ol{padding-left:21px}li{margin:4px 0}
+    @media(max-width:980px){
+      .layout{grid-template-columns:minmax(0,1fr)}aside{position:static;height:auto}main{padding:18px}.hero,section{padding:22px 18px}.hero,.grid2,.grid3,.viz-grid,.practice-intro,.group-head,.drill-grid{grid-template-columns:minmax(0,1fr)}h1{font-size:34px;overflow-wrap:anywhere}.practice-check{grid-template-columns:minmax(0,1fr)}.slider-row,.barrow{grid-template-columns:minmax(0,1fr)}pre,.formula{font-size:13.5px}.metric-table,.metric-table tbody,.metric-table tr,.metric-table th,.metric-table td{display:block;width:100%}.metric-table tr{border:1px solid var(--line);margin-bottom:10px}.metric-table th,.metric-table td{border:0;border-bottom:1px solid var(--line)}
+    }
+  </style>
+</head>
+<body data-feynman-keywords="tokenizer、token id、embedding、context window、截断、位置、输入长度、向量">
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <strong>LLM 基础</strong>
+      <span>01｜tokenizer、embedding 与 context window<br>先把文本如何进入模型讲清楚</span>
+    </div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>学习目标</a>
+      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
+      <a href="#tokenizer"><span class="dot"></span>tokenizer</a>
+      <a href="#ids"><span class="dot"></span>token id</a>
+      <a href="#embedding"><span class="dot"></span>embedding</a>
+      <a href="#context"><span class="dot"></span>context window</a>
+      <a href="#pipeline"><span class="dot"></span>最小流程</a>
+      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>导出记录</a>
+    </nav>
+    <div class="side-note">读大模型代码时，先追输入链路：字符串不会直接进模型。它先变成 token，再变成编号，编号查表得到向量，向量再进入 Transformer。</div>
+  </aside>
+
+  <main>
+    <section class="hero" id="goal">
+      <div>
+        <div class="kicker">LLM FOUNDATION · BLOCK 01</div>
+        <h1>文本进入大模型前，先经历了什么</h1>
+        <p>大语言模型并不直接处理"一句话"。它看到的是一串整数编号，再通过 embedding 表变成一串向量。context window 决定这串输入最多能有多长，也决定模型这次推理最多能同时参考多少上下文。</p>
+        <p>这页只打牢第一条输入链路：tokenizer 负责切分和编号，embedding 负责把编号映射成可计算的向量，context window 负责限制这次输入能装下多少 token。把这三件事分清，后面看 attention、RAG、长上下文、微调数据格式都会顺很多。</p>
+        <div class="map">
+          <span class="node">原始文本</span><span class="arrow">→</span>
+          <span class="node">token</span><span class="arrow">→</span>
+          <span class="node">token id</span><span class="arrow">→</span>
+          <span class="node">embedding 向量</span><span class="arrow">→</span>
+          <span class="node">带位置的输入序列</span>
+        </div>
+      </div>
+      <div class="route">
+        <h3>学完后要能做四件事</h3>
+        <ol>
+          <li>看到一段文本，能判断它会先被拆成 token，而不是按字或按词固定处理。</li>
+          <li>能解释 token id 和 embedding 向量的关系：编号不是语义，向量才进入计算。</li>
+          <li>能说清 context window 的边界：超出窗口会被截断、压缩或分块，不会被模型完整看见。</li>
+          <li>能检查最小工程流程里的 padding、truncation、attention mask 和长度预算。</li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="skeleton">
+      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
+      <svg class="flow-svg" viewBox="0 0 940 280" role="img" aria-label="LLM 输入链路图">
+        <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#1b2a4a"/></marker></defs>
+        <rect x="28" y="54" width="142" height="74" fill="#eef8fc" stroke="#d8dee8"/><text x="99" y="84" text-anchor="middle" font-size="16" font-weight="700">字符串</text><text x="99" y="108" text-anchor="middle" font-size="13" fill="#5f6875">人写的文本</text>
+        <line x1="170" y1="91" x2="248" y2="91" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/>
+        <rect x="248" y="42" width="158" height="98" fill="#fff" stroke="#d8dee8"/><text x="327" y="76" text-anchor="middle" font-size="16" font-weight="700">tokenizer</text><text x="327" y="102" text-anchor="middle" font-size="13" fill="#5f6875">切分 + 查词表</text><text x="327" y="124" text-anchor="middle" font-size="13" fill="#5f6875">输出 token id</text>
+        <line x1="406" y1="91" x2="486" y2="91" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/>
+        <rect x="486" y="42" width="158" height="98" fill="#fff6dc" stroke="#d8dee8"/><text x="565" y="76" text-anchor="middle" font-size="16" font-weight="700">embedding 表</text><text x="565" y="102" text-anchor="middle" font-size="13" fill="#5f6875">用 id 查一行向量</text><text x="565" y="124" text-anchor="middle" font-size="13" fill="#5f6875">形状 [N, D]</text>
+        <line x1="644" y1="91" x2="724" y2="91" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/>
+        <rect x="724" y="42" width="168" height="98" fill="#edf8f3" stroke="#d8dee8"/><text x="808" y="76" text-anchor="middle" font-size="16" font-weight="700">Transformer 输入</text><text x="808" y="102" text-anchor="middle" font-size="13" fill="#5f6875">token 向量 + 位置信息</text><text x="808" y="124" text-anchor="middle" font-size="13" fill="#5f6875">长度受窗口限制</text>
+        <rect x="248" y="178" width="644" height="48" fill="#f7f9fc" stroke="#d8dee8"/><text x="570" y="207" text-anchor="middle" font-size="14" fill="#5f6875">context window 限制的是整条输入序列长度：系统提示、用户问题、检索片段、历史对话、待生成 token 都会占预算。</text>
+      </svg>
+      <div class="grid3" style="margin-top:14px">
+        <div class="box">
+          <h3>概念：token 是模型的输入单位</h3>
+          <p>token 不是固定的汉字、英文单词或标点。它是 tokenizer 根据词表和切分规则得到的片段。一个中文词可能被切成一个 token，也可能被切成多个；一个英文长词也可能被拆成词根和后缀。</p>
+          <p>判断句：看到"这段话有多少 token"时，不要用字数直接代替，要用同一个模型的 tokenizer 计算。</p>
+        </div>
+        <div class="box">
+          <h3>边界：编号本身没有语义距离</h3>
+          <p>token id 只是词表里的序号。编号 100 和编号 101 并不一定比编号 100 和编号 900 更接近。模型真正拿去计算的是 embedding 向量，向量在训练中被调整，才会逐渐带上语义和用法信息。</p>
+          <p>判断句：不要从 token id 的大小推断语义相似度。</p>
+        </div>
+        <div class="box">
+          <h3>工程动作：先做长度预算</h3>
+          <p>一次调用模型前，先估算输入 token 数。系统提示、few-shot 示例、历史消息、检索文本和用户问题都要算进去。预留给输出的 token 也会占模型服务的预算。</p>
+          <p>判断句：如果模型答非所问，先查是否截断了关键上下文。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="tokenizer">
+      <div class="head"><h2>tokenizer：把文本切成模型认识的片段</h2><span class="tag">TOKENIZE</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>它解决什么问题</h3>
+          <p>神经网络只能处理数字张量。tokenizer 的第一份工作，是把自然语言文本变成有限词表中的片段。这个词表可以包含常见汉字、英文词、词缀、标点、空格模式、代码符号，也可以包含特殊标记，例如句子开始、句子结束、填充、未知片段。</p>
+          <p>为什么不直接按词切？因为真实文本里有新词、拼写变化、代码、URL、emoji、多语言混写。按完整词建词表会爆炸，按单个字符又会让序列太长。很多现代 tokenizer 会用 BPE、WordPiece 或 SentencePiece 一类的子词方法，在"词表大小"和"序列长度"之间折中。</p>
+          <p>常见错法是拿肉眼看到的词数估算 token 数。中文里，一个看起来短的专业词可能被拆成多个片段；英文里，空格也常常影响 token 形态。模型不同，tokenizer 也可能不同，同一句话在两个模型里 token 数未必一样。</p>
+          <div class="checkpoint">你读到这里，应能解释：tokenizer 不是翻译器，也不是 embedding。它只负责把文本映射到词表片段和编号。</div>
+        </div>
+        <div class="box soft">
+          <h3>试一试：三种文本的切分差异</h3>
+          <div class="seg">
+            <button data-tokencase="zh" class="active">中文短句</button>
+            <button data-tokencase="en">英文长词</button>
+            <button data-tokencase="code">代码片段</button>
+          </div>
+          <div id="tokenText" class="muted"></div>
+          <div class="token-row" id="tokenRow"></div>
+          <p id="tokenExplain" class="checkpoint"></p>
+        </div>
+      </div>
+      <table class="metric-table">
+        <tr><th>术语</th><th>直觉解释</th><th>准确边界</th><th>常见误解</th></tr>
+        <tr><td>token</td><td>模型一次处理的文本片段</td><td>由 tokenizer 和词表决定，不等同于字、词或字符</td><td>把 token 数当成字数</td></tr>
+        <tr><td>vocabulary</td><td>token 到编号的登记表</td><td>通常在训练 tokenizer 时固定；模型训练时使用同一套词表</td><td>以为词表越大模型越聪明</td></tr>
+        <tr><td>special token</td><td>有控制含义的特殊标记</td><td>如开始、结束、填充、角色分隔；不同模型约定不同</td><td>随便删掉特殊标记，导致输入格式变坏</td></tr>
+      </table>
+    </section>
+
+    <section id="ids">
+      <div class="head"><h2>token id：编号只是查表钥匙</h2><span class="tag">IDS</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>从 token 到整数</h3>
+          <p>tokenizer 切出 token 后，会把每个 token 查成一个整数编号。比如某个模型里，"猫"可能是 1325，"喜欢"可能是 7788。这些数字方便程序组成张量，也方便 embedding 表按行索引。</p>
+          <p>这里最容易误会的是"编号大小有含义"。实际不是。编号更像数据库主键：它告诉系统去 embedding 表的哪一行取向量。主键相邻，不代表两条记录含义相邻。语义关系来自训练后的向量空间，而不是编号顺序。</p>
+          <p>最小工程动作是打印编码结果。遇到模型输出奇怪、截断异常、特殊标记错位时，先把 token、id、attention mask 一起打印出来看。很多输入 bug 不在模型，而在前处理。</p>
+        </div>
+        <div class="box warn">
+          <h3>例子：同一句话的三层表示</h3>
+          <table class="metric-table">
+            <tr><th>层级</th><th>样子</th><th>用途</th></tr>
+            <tr><td>文本</td><td>请解释 RAG</td><td>人能读懂，模型不能直接计算</td></tr>
+            <tr><td>token</td><td>请｜解释｜R｜AG</td><td>tokenizer 切出的片段，实际切法由模型决定</td></tr>
+            <tr><td>token id</td><td>421｜9182｜51｜337</td><td>整数序列，可输入 embedding 层</td></tr>
+            <tr><td>embedding</td><td>[0.12, -0.03, ...]</td><td>连续向量，进入后续神经网络计算</td></tr>
+          </table>
+          <p class="muted">这里的 token 和编号是示意，不对应某个真实模型。学习时关注链路，不背数字。</p>
+        </div>
+      </div>
+      <div class="codebar"><span class="label">逐行拆解：查看 token、id 和长度</span><span class="kind">python</span></div>
+      <pre><code><span class="comment"># 示例展示的是检查思路。不同模型的 tokenizer 名称和输出会不同。</span>
+text = <span class="str">"请解释 RAG 和长上下文的区别。"</span>
+tokens = tokenizer.tokenize(text)
+ids = tokenizer.encode(text, add_special_tokens=True)
+
+print(tokens)        <span class="comment"># 看文本被切成哪些片段</span>
+print(ids)           <span class="comment"># 看每个片段对应哪个 token id</span>
+print(len(ids))      <span class="comment"># 估算这段输入占多少 context window</span>
+</code></pre>
+      <p>第一行原始文本仍是字符串。第二行调用切分接口，是为了看 tokenizer 的真实切法。第三行编码成 id，并加入模型需要的特殊标记。最后打印长度，这一步常用于检查是否接近窗口上限。删掉长度检查，短文本通常没事；一旦把历史对话、检索文本和长问题拼在一起，问题就会变得隐蔽。</p>
+    </section>
+
+    <section id="embedding">
+      <div class="head"><h2>embedding：把离散编号变成连续向量</h2><span class="tag">EMBED</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>embedding 表是什么</h3>
+          <p>embedding 层可以看成一张大表。行数通常等于词表大小，列数等于模型隐藏维度。输入 token id 后，程序按 id 取出对应行，得到一个向量。一个长度为 N 的输入序列，会变成 N 行向量，每行宽度是 D。</p>
+          <p>这一步没有读上下文。也就是说，同一个 token id 在进入 Transformer 前查到的是同一行基础向量。后续 attention 会让它和上下文里的其他 token 混合，才得到具体语境中的表示。比如"苹果"在水果句子和公司句子里的初始 embedding 一样，但经过上下文层后会走向不同表示。</p>
+          <p>工程上常见动作是检查形状：<code>input_ids</code> 通常是 <code>[batch, seq_len]</code>，embedding 后变成 <code>[batch, seq_len, hidden_size]</code>。如果 seq_len 过长，后续 attention 的计算和显存压力都会上升。</p>
+        </div>
+        <div class="box soft">
+          <h3>最小形状读法</h3>
+          <div class="formula">
+            input_ids ∈ ℤ<sup>B×N</sup><br>
+            embedding(input_ids) → X ∈ ℝ<sup>B×N×D</sup>
+          </div>
+          <p><code>B</code> 是 batch size，表示一次送几条样本。<code>N</code> 是序列长度，也就是 token 数。<code>D</code> 是每个 token 向量的宽度。后面看 attention 时，最重要的是把 <code>N</code> 和 <code>D</code> 分开：一个是有多少位置，一个是每个位置有多少特征。</p>
+          <div class="barrow"><span>词表行数</span><div class="bar"><div class="fill" style="width:86%"></div></div><span>Vocab</span></div>
+          <div class="barrow"><span>序列长度</span><div class="bar"><div class="fill" style="width:42%"></div></div><span>N</span></div>
+          <div class="barrow"><span>向量宽度</span><div class="bar"><div class="fill" style="width:68%"></div></div><span>D</span></div>
+        </div>
+      </div>
+      <div class="codebar"><span class="label">最小例子：embedding 查表不是 one-hot 进模型</span><span class="kind">python</span></div>
+      <pre><code><span class="kw">import</span> torch
+embedding_table = torch.nn.Embedding(num_embeddings=<span class="num">50000</span>, embedding_dim=<span class="num">768</span>)
+input_ids = torch.tensor([[<span class="num">421</span>, <span class="num">9182</span>, <span class="num">51</span>, <span class="num">337</span>]])
+
+x = embedding_table(input_ids)
+print(input_ids.shape)  <span class="comment"># [1, 4]</span>
+print(x.shape)          <span class="comment"># [1, 4, 768]</span>
+</code></pre>
+      <p>这段代码的关键是 <code>Embedding</code> 的输入和输出形状。输入是一串整数，不是 768 维向量。调用 embedding 表后，每个整数被替换成对应行向量，序列长度不变，最后多出隐藏维度。把 token id 直接喂给 attention 是错的，因为 attention 做的是向量间的点积、线性变换和加权求和。</p>
+    </section>
+
+    <section id="context">
+      <div class="head"><h2>context window：模型这次能看见的长度上限</h2><span class="tag">CONTEXT</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>窗口限制的不是知识总量</h3>
+          <p>context window 指一次输入和输出共同可使用的 token 长度上限。它不是模型训练时学过多少知识，也不是模型记忆容量。一个模型训练时看过很多资料，但单次推理时只能读取当前窗口里的文本和已生成内容。</p>
+          <p>如果输入超过窗口，系统通常会截断、拒绝、压缩、分块，或者只保留一部分历史。具体行为取决于调用框架和模型服务。错误诊断时，不能只问"模型为什么不懂"，要先查关键证据有没有被放进窗口。</p>
+          <p>长窗口也不是免费午餐。更长的上下文会提高输入成本，增加延迟，也可能让模型在大量无关文本中找不到重点。工程上常见做法是先检索、筛选、重排，再把最有用的片段放进窗口。</p>
+        </div>
+        <div class="box soft">
+          <h3>试一试：窗口预算</h3>
+          <div class="slider-row"><label>系统提示</label><input id="sysTok" type="range" min="100" max="3000" value="800" step="100"><span id="sysOut"></span></div>
+          <div class="slider-row"><label>历史对话</label><input id="histTok" type="range" min="0" max="12000" value="3000" step="200"><span id="histOut"></span></div>
+          <div class="slider-row"><label>检索片段</label><input id="ragTok" type="range" min="0" max="20000" value="6000" step="500"><span id="ragOut"></span></div>
+          <div class="slider-row"><label>预留输出</label><input id="outTok" type="range" min="256" max="8000" value="2048" step="256"><span id="outOut"></span></div>
+          <table class="metric-table">
+            <tr><th>窗口上限</th><th>当前占用</th><th>剩余</th><th>判断</th></tr>
+            <tr><td>32,000</td><td id="totalOut"></td><td id="remainOut"></td><td id="budgetExplain"></td></tr>
+          </table>
+          <p class="checkpoint">观察点：一段检索文本过长，会挤掉历史对话或输出空间。长上下文应用先做预算，再谈效果。</p>
+        </div>
+      </div>
+      <table class="metric-table">
+        <tr><th>场景</th><th>容易出错的位置</th><th>检查动作</th></tr>
+        <tr><td>多轮对话</td><td>早期关键信息被截断</td><td>打印实际传入消息列表和 token 数</td></tr>
+        <tr><td>RAG 问答</td><td>检索片段太多，相关片段被挤掉</td><td>限制每段长度，先重排再拼接</td></tr>
+        <tr><td>代码生成</td><td>仓库上下文太长，关键文件没进窗口</td><td>只放接口、报错、相关函数和约束</td></tr>
+        <tr><td>摘要任务</td><td>原文超过窗口后被静默截断</td><td>分块摘要，再做合并摘要</td></tr>
+      </table>
+    </section>
+
+    <section id="pipeline">
+      <div class="head"><h2>最小工程流程：从输入到可检查张量</h2><span class="tag">PIPELINE</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>正确流程</h3>
+          <p>最小输入流程可以按四步检查：准备文本，调用 tokenizer，得到 <code>input_ids</code> 和 <code>attention_mask</code>，再送入模型。padding 用来把同一个 batch 的样本补到一样长，attention mask 用来告诉模型哪些位置是真 token，哪些位置只是补齐。</p>
+          <p>truncation 的作用是超长时截断。它不是修复理解能力，而是防止输入长度超过上限。生产代码里不能只写 <code>truncation=True</code> 就放心，还要知道截断方向、最大长度、关键证据是否在保留部分。</p>
+          <p>一个稳妥习惯是把"最小工程动作"写成清单：打印 token 数，打印前后几个 token，检查特殊标记，检查 mask，确认预留输出长度。这些动作看起来朴素，但能抓住很多真实 bug。</p>
+        </div>
+        <div class="box warn">
+          <h3>错误诊断：静默截断</h3>
+          <div class="codebar"><span class="label">错误示例：没有检查关键证据是否被截掉</span><span class="kind">python</span></div>
+          <pre><code>encoded = tokenizer(
+    long_prompt,
+    max_length=<span class="num">4096</span>,
+    truncation=<span class="kw">True</span>,
+    return_tensors=<span class="str">"pt"</span>
+)
+answer = model.generate(**encoded)
+</code></pre>
+          <p>这段代码可能能跑，但不稳。它没有检查 <code>long_prompt</code> 被截掉了哪一段。如果答案依赖末尾的证据，而 tokenizer 从右侧截断，模型就根本没看见关键内容。修法是先统计长度，再明确截断策略；对长文档任务，优先分块、筛选和重排。</p>
+        </div>
+      </div>
+      <div class="codebar"><span class="label">正确示例：编码后做基础验收</span><span class="kind">python</span></div>
+      <pre><code>encoded = tokenizer(
+    prompt,
+    max_length=<span class="num">8192</span>,
+    padding=<span class="str">"longest"</span>,
+    truncation=<span class="kw">True</span>,
+    return_tensors=<span class="str">"pt"</span>
+)
+
+print(encoded[<span class="str">"input_ids"</span>].shape)
+print(encoded[<span class="str">"attention_mask"</span>].sum(dim=<span class="num">1</span>))
+print(tokenizer.decode(encoded[<span class="str">"input_ids"</span>][<span class="num">0</span>][-<span class="num">80</span>:]))
+</code></pre>
+      <p>第一行形状告诉你 batch 和序列长度。第二行统计每条样本的真实 token 数，padding 不应算进去。第三行解码最后一段 token，用来检查尾部是否保留了你以为保留的内容。删掉这三步，代码仍能运行，但你无法判断模型到底看见了什么。</p>
+    </section>
+
+    <section id="diagnosis">
+      <div class="head"><h2>误区、边界和易混概念</h2><span class="tag">DIAGNOSIS</span></div>
+      <div class="grid2">
+        <div class="box redsoft">
+          <h3>五个常见误区</h3>
+          <ol>
+            <li>把 token 当成汉字数。错因是用肉眼长度代替 tokenizer 结果；后果是窗口预算失真；修法是用目标模型 tokenizer 统计。</li>
+            <li>把 token id 当成语义向量。错因是看到数字就以为可比较大小；后果是误读模型输入；修法是区分 id 查表和 embedding 计算。</li>
+            <li>以为 embedding 会读取上下文。错因是把静态查表和 Transformer 层混在一起；后果是解释"苹果"这类词时说不清；修法是说明上下文混合发生在后续层。</li>
+            <li>以为长窗口一定更好。错因是忽略成本和噪声；后果是延迟高、费用高、相关信息被淹没；修法是先检索筛选，再放入窗口。</li>
+            <li>只开 truncation 不检查截断内容。错因是把能运行当成输入正确；后果是关键证据消失；修法是打印长度和解码片段。</li>
+          </ol>
+        </div>
+        <div class="box">
+          <h3>三组易混概念</h3>
+          <table class="metric-table">
+            <tr><th>概念</th><th>准确区别</th><th>判断方法</th></tr>
+            <tr><td>token / word</td><td>word 是语言里的词；token 是 tokenizer 产生的模型输入片段。</td><td>用 tokenizer 输出验证，不用肉眼猜。</td></tr>
+            <tr><td>token id / embedding</td><td>id 是离散编号；embedding 是查表得到的连续向量。</td><td>看形状：id 多是整数矩阵，embedding 多一维 hidden size。</td></tr>
+            <tr><td>context window / 模型知识</td><td>窗口是单次输入长度；知识来自训练参数和当前输入。</td><td>问自己：这条证据是否真的放进本次输入。</td></tr>
+            <tr><td>padding / truncation</td><td>padding 是补齐短样本；truncation 是裁掉长样本。</td><td>padding 配 mask，truncation 查保留内容。</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
+      <div class="practice-intro">
+        <div class="review-card"><strong>作答前先抓主线</strong><p>文本先经 tokenizer 变成 token 和 token id；id 查 embedding 表得到向量；向量带着位置信息进入 Transformer；context window 限制本次能放入多少 token。</p></div>
+        <div class="review-card"><strong>检查答案的方式</strong><p>开放题尽量写出"错因、后果、修法"。代码题先写对象和形状，再写为什么这一步必要。</p></div>
+      </div>
+      <div class="practice-check">
+        <div class="check-item"><b>概念</b>token、id、embedding、窗口分别做什么。</div>
+        <div class="check-item"><b>边界</b>窗口限制的是单次输入，不是模型知识总量。</div>
+        <div class="check-item"><b>工程</b>padding、truncation、mask 和长度预算。</div>
+        <div class="check-item"><b>诊断</b>能从奇怪输出反查输入是否被截断。</div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>这一组检查你能否把文本输入链路按顺序讲清楚。</p></div><div class="quick-review"><b>REMIND</b>字符串不会直接进入 Transformer。先变成 token id，再查 embedding。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. token 的定义"><div class="q-meta"><span class="pill">判断</span></div><h3>1. token 一定等于中文里的一个字或英文里的一个单词。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
+          <div class="q" data-role="homework" data-title="2. tokenizer 的工作"><div class="q-meta"><span class="pill">选择</span></div><h3>2. tokenizer 的主要输出是什么？</h3><div class="choices"><label><input type="radio" name="q2" value="token 和 token id">token 和 token id</label><label><input type="radio" name="q2" value="训练后的模型参数">训练后的模型参数</label><label><input type="radio" name="q2" value="最终回答文本">最终回答文本</label></div></div>
+          <div class="q short" data-role="homework" data-title="3. 输入顺序"><div class="q-meta"><span class="pill">排序</span></div><h3>3. 请把这四步按顺序写出来：embedding 向量、原始文本、token id、token。</h3><textarea name="q3"></textarea></div>
+          <div class="q short" data-role="homework" data-title="4. token id 边界"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 为什么不能根据 token id 的大小判断两个 token 语义是否接近？</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、形状和代码阅读</h3><p>这一组检查你能不能从张量形状读出每一步的含义。</p></div><div class="quick-review"><b>REMIND</b><code>[B, N]</code> 进入 embedding 后常变成 <code>[B, N, D]</code>。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="5. embedding 输出形状"><div class="q-meta"><span class="pill">填空</span></div><h3>5. <code>input_ids</code> 形状是 <code>[2, 128]</code>，hidden size 是 768，embedding 输出形状通常是 ______。</h3><input type="text" name="q5"></div>
+          <div class="q short" data-role="homework" data-title="6. attention mask"><div class="q-meta"><span class="pill">解释</span></div><h3>6. padding 后为什么还需要 attention mask？</h3><div class="solve-note">从"哪些位置是真 token，哪些位置只是补齐"作答。</div><textarea name="q6"></textarea></div>
+          <div class="q short" data-role="homework" data-title="7. 代码阅读：长度"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>7. <code>attention_mask.sum(dim=1)</code> 常用来检查什么？</h3><textarea name="q7"></textarea></div>
+          <div class="q short" data-role="homework" data-title="8. 特殊标记"><div class="q-meta"><span class="pill">边界</span></div><h3>8. 为什么不同模型的特殊标记不能随便混用？</h3><textarea name="q8"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、context window 与长度预算</h3><p>这一组把窗口限制放到真实任务里判断。</p></div><div class="quick-review"><b>REMIND</b>窗口里装的是本次输入和生成过程，不是模型学过的全部知识。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="9. 窗口定义"><div class="q-meta"><span class="pill">简答</span></div><h3>9. 用一句话解释 context window。</h3><textarea name="q9"></textarea></div>
+          <div class="q short" data-role="homework" data-title="10. 长窗口边界"><div class="q-meta"><span class="pill">判断</span></div><h3>10. context window 越长，回答质量一定越好。</h3><div class="choices"><label><input type="radio" name="q10" value="对">对</label><label><input type="radio" name="q10" value="错">错</label></div></div>
+          <div class="q short" data-role="homework" data-title="11. 预算场景"><div class="q-meta"><span class="pill">场景</span></div><h3>11. 你要把系统提示、历史对话、5 段检索文本放入模型。应该先检查哪三件事？</h3><textarea name="q11"></textarea></div>
+          <div class="q short" data-role="homework" data-title="12. 截断风险"><div class="q-meta"><span class="pill">诊断</span></div><h3>12. 模型忽略了文档末尾的关键条件，可能和 context window 有什么关系？</h3><textarea name="q12"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、错误诊断</h3><p>这一组要求你定位错因、说明后果，并给出修法。</p></div><div class="quick-review"><b>REMIND</b>输入问题常常比模型问题更早出现。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="13. 错误诊断：只看字数" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 有人说"这段只有 2000 个汉字，所以肯定不到 2000 token"。错在哪、后果是什么、怎么修？</h3><textarea name="q13"></textarea></div>
+          <div class="q short" data-role="homework" data-title="14. 错误诊断：id 当语义" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. 有人用 token id 的差值衡量两个词相似度。错因和修法是什么？</h3><textarea name="q14"></textarea></div>
+          <div class="q short" data-role="homework" data-title="15. 错误诊断：静默截断" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 代码设置 <code>truncation=True</code> 后不再检查解码片段。风险是什么？</h3><textarea name="q15"></textarea></div>
+          <div class="q short" data-role="homework" data-title="16. 错误诊断：mask 缺失" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. batch 里做了 padding，但没有传 attention mask。可能造成什么问题？</h3><textarea name="q16"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>五、概念区分和迁移</h3><p>这一组检查你能不能把概念迁移到 RAG、聊天和代码任务。</p></div><div class="quick-review"><b>REMIND</b>判断真实系统时，要问"模型实际看到了什么"。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="17. token 与词"><div class="q-meta"><span class="pill">对照</span></div><h3>17. 用一句话区分 token 和 word。</h3><textarea name="q17"></textarea></div>
+          <div class="q short" data-role="homework" data-title="18. embedding 与上下文表示"><div class="q-meta"><span class="pill">对照</span></div><h3>18. embedding 向量和经过 Transformer 后的上下文表示有什么区别？</h3><textarea name="q18"></textarea></div>
+          <div class="q short" data-role="homework" data-title="19. RAG 场景"><div class="q-meta"><span class="pill">应用</span></div><h3>19. RAG 系统把 20 段文档全塞进 prompt，结果回答变差。你会怎么改？</h3><textarea name="q19"></textarea></div>
+          <div class="q short" data-role="homework" data-title="20. 聊天历史"><div class="q-meta"><span class="pill">应用</span></div><h3>20. 多轮聊天里，为什么要管理历史消息，而不是无限追加？</h3><textarea name="q20"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>六、表达输出</h3><p>最后两题检查你能不能完整讲清输入链路，并写出验收清单。</p></div><div class="quick-review"><b>REMIND</b>请串联 tokenizer、token id、embedding、context window、截断和 attention mask。</div></div>
+        <div class="drill-grid">
+          <div class="q full" data-role="homework" data-title="21. 费曼解释" data-type="feynman" data-keywords="tokenizer、token id、embedding、context window、截断、attention mask、向量"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>21. 用 6-9 句话解释：一段文本是怎样变成大模型可处理输入的。</h3><div class="solve-note">请至少包含 tokenizer、token id、embedding、context window、截断和 attention mask。</div><textarea name="q21"></textarea></div>
+          <div class="q full" data-role="homework" data-title="22. 最小验收清单"><div class="q-meta"><span class="pill">验收</span></div><h3>22. 如果让别人写一个 prompt 编码函数，你会用哪 6 条清单验收它？</h3><textarea name="q22"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>导出练习记录</h2><span class="tag">EXPORT</span></div>
+      <p class="muted">完成练习后生成记录，方便后续复盘。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){
+  const max=document.documentElement.scrollHeight-innerHeight;
+  progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";
+  let current=sections[0]?.id;
+  for(const section of sections){if(section.getBoundingClientRect().top<innerHeight*.36) current=section.id;}
+  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`));
+}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+
+document.querySelectorAll(".codebar").forEach(bar=>{
+  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
+  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});
+  bar.appendChild(btn);
+});
+
+const tokenCases={
+  zh:{text:"请解释大语言模型的上下文窗口。",tokens:["请","解释","大","语言","模型","的","上下文","窗口","。"],explain:"中文不一定按词稳定切分。专业词、常见短语和标点都可能成为不同粒度的 token。"},
+  en:{text:"unbelievably helpful tokenizer",tokens:["un","believ","ably"," helpful"," token","izer"],explain:"英文长词可能被拆成子词。注意空格常常和后面的片段绑定在一起。"},
+  code:{text:"def read_json(path):",tokens:["def"," read","_json","(","path",")",":"],explain:"代码里的下划线、括号和缩进也会影响切分。代码任务尤其要用真实 tokenizer 估算长度。"}
+};
+function renderTokenCase(name){
+  const item=tokenCases[name]||tokenCases.zh;
+  document.getElementById("tokenText").textContent=`原文：${item.text}`;
+  document.getElementById("tokenRow").innerHTML=item.tokens.map(t=>`<span class="token">${t}</span>`).join("");
+  document.getElementById("tokenExplain").textContent=item.explain;
+  document.querySelectorAll("[data-tokencase]").forEach(b=>b.classList.toggle("active",b.dataset.tokencase===name));
+}
+document.querySelectorAll("[data-tokencase]").forEach(b=>b.addEventListener("click",()=>renderTokenCase(b.dataset.tokencase)));renderTokenCase("zh");
+
+function updateBudget(){
+  const ids=["sysTok","histTok","ragTok","outTok"];const vals=ids.map(id=>Number(document.getElementById(id).value));
+  ["sysOut","histOut","ragOut","outOut"].forEach((id,i)=>document.getElementById(id).textContent=`${vals[i].toLocaleString()} token`);
+  const total=vals.reduce((a,b)=>a+b,0), limit=32000, remain=limit-total;
+  document.getElementById("totalOut").textContent=total.toLocaleString();
+  document.getElementById("remainOut").textContent=remain.toLocaleString();
+  document.getElementById("budgetExplain").textContent=remain<0?"超出窗口，需要删减、分块或压缩。":remain<3000?"很接近上限，输出和后续补充会受挤压。":"预算还够，可以继续检查相关性。";
+}
+["sysTok","histTok","ragTok","outTok"].forEach(id=>document.getElementById(id).addEventListener("input",updateBudget));updateBudget();
+
+function valueOfQuestion(q){
+  const checks=[...q.querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value);
+  if(checks.length) return checks.join("、");
+  const radio=q.querySelector('input[type=radio]:checked'); if(radio) return radio.value;
+  const text=q.querySelector('textarea,input[type=text],select'); return text?text.value.trim():"";
+}
+function questionGroup(q){return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";}
+function generateRecord(){
+  const qs=[...document.querySelectorAll('[data-role="homework"]')],groups={},warnings=[];
+  qs.forEach((q,i)=>{
+    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||`第 ${i+1} 题`;
+    const hint=q.querySelector(".solve-note,.hint")?.innerText.trim()||"";
+    const answer=valueOfQuestion(q);
+    if(!answer) warnings.push(`第 ${i+1} 题未填写：${title}`);
+    const typeText=`${q.dataset.type||""} ${title} ${q.innerText}`;
+    if(/诊断|错误/.test(typeText)&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))) warnings.push(`第 ${i+1} 题建议补齐“错因 / 后果 / 修法”。`);
+    if(/费曼/.test(typeText)){
+      const keys=(q.dataset.keywords||document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
+      if(answer&&answer.length<120) warnings.push(`第 ${i+1} 题解释偏短，建议写到 6-9 句话。`);
+      const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):[];
+      if(lack.length) warnings.push(`第 ${i+1} 题可能缺少关键词：${lack.join("、")}。`);
+    }
+    const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
+  });
+  const pageTitle=document.title.replace(/\s+/g," ").trim();
+  let out=`# ${pageTitle}｜练习记录\n\n`;
+  Object.keys(groups).forEach(group=>{out+=`## ${group}\n\n`;groups[group].forEach(item=>{out+=`### ${item.title}\n`;if(item.hint) out+=`提示摘要：${item.hint}\n\n`;out+=`${item.answer}\n\n`;});});
+  document.getElementById("record").textContent=out;
+  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以用于复盘。";
+}
+function copyText(text,onOk,onFail){
+  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
+  else fallbackCopy(text,onOk,onFail);
+}
+function fallbackCopy(text,onOk,onFail){
+  const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";document.body.appendChild(ta);ta.focus();ta.select();
+  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
+}
+function copyRecord(){
+  const text=document.getElementById("record").textContent;
+  copyText(text,()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";},()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";});
+}
+</script>
+</body>
+</html>

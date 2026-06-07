@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>P38｜作业五：LLM Fine-tuning</title>
+  <style>
+    :root{
+      --bg:#f5f6f8;--paper:#fff;--ink:#182033;--muted:#5d6678;--line:#d8dee8;
+      --navy:#1b2a4a;--dark:#151f35;--cyan:#00a9f4;--teal:#227c70;--gold:#b7791f;
+      --soft:#eef8fe;--warn:#fff6df;--redsoft:#fff0ee;--code:#111827;--codeText:#e5e7eb;
+      --sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif;
+      --serif:"Songti SC","Noto Serif CJK SC","STSong","SimSun",serif;
+      --mono:"Cascadia Mono","Cascadia Code","Consolas","SFMono-Regular",monospace;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;color:var(--ink);font-family:var(--sans);line-height:1.72;background:
+      linear-gradient(90deg,rgba(27,42,74,.04) 1px,transparent 1px) 0 0/60px 60px,
+      linear-gradient(rgba(27,42,74,.03) 1px,transparent 1px) 0 0/60px 60px,
+      var(--bg);
+    }
+    a{color:var(--navy)}
+    .progress{position:fixed;left:0;top:0;height:4px;width:0;background:linear-gradient(90deg,var(--cyan),var(--navy));z-index:20}
+    .layout{display:grid;grid-template-columns:308px minmax(0,1fr);min-height:100vh;max-width:100vw;overflow-x:hidden}
+    aside{
+      position:sticky;top:0;height:100vh;overflow:auto;background:var(--navy);color:#fff;padding:30px 22px;
+      background-image:repeating-linear-gradient(90deg,transparent,transparent 59px,rgba(255,255,255,.045) 59px,rgba(255,255,255,.045) 60px),
+      repeating-linear-gradient(0deg,transparent,transparent 59px,rgba(255,255,255,.035) 59px,rgba(255,255,255,.035) 60px);
+    }
+    .brand{border-bottom:1px solid rgba(255,255,255,.36);padding-bottom:22px;margin-bottom:18px}
+    .brand strong{display:block;font-family:var(--serif);font-size:27px;line-height:1.18;font-weight:800;color:#fff}
+    .brand span{display:block;margin-top:10px;color:rgba(255,255,255,.72);font-size:13px;line-height:1.7}
+    nav{display:grid}
+    nav a{display:flex;gap:10px;align-items:center;color:rgba(255,255,255,.82);text-decoration:none;border-bottom:1px solid rgba(255,255,255,.13);padding:10px 0;font-size:13.5px}
+    nav a:hover,nav a.active{color:#fff;border-color:rgba(255,255,255,.42);font-weight:800}
+    .dot{width:5px;height:5px;background:var(--cyan);opacity:.55;flex:0 0 auto}
+    nav a.active .dot{opacity:1;transform:scale(1.35)}
+    .side-note{margin-top:24px;padding:14px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:rgba(255,255,255,.76);font-size:13px;line-height:1.8}
+    main{min-width:0;max-width:1420px;width:100%;padding:34px 44px;overflow-x:hidden}
+    .hero,section{background:var(--paper);border:1px solid var(--line);box-shadow:0 14px 28px rgba(27,42,74,.08)}
+    .hero{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 398px;gap:28px;padding:38px 42px;border-top:6px solid var(--teal)}
+    .hero:before{content:"FINE-TUNING ASSIGNMENT REPORT";position:absolute;right:42px;top:16px;color:#9aa4b2;font-family:var(--mono);font-size:11px;letter-spacing:.12em}
+    section{padding:28px 34px;margin-top:18px}
+    section.in-view,.hero.in-view{outline:2px solid rgba(0,169,244,.14)}
+    .kicker{font-family:var(--mono);font-size:11px;color:#7b879a;letter-spacing:.12em;text-transform:uppercase;margin-bottom:16px}
+    h1{margin:0;font-family:var(--serif);font-size:46px;line-height:1.18;color:#05070d;font-weight:800;letter-spacing:0;max-width:18ch}
+    h2{margin:0;font-family:var(--serif);font-size:28px;line-height:1.25;color:#05070d;font-weight:800;letter-spacing:0}
+    h3{margin:0 0 8px;font-size:17px;color:#05070d;line-height:1.4}
+    p{margin:8px 0}.muted,.hero p{color:var(--muted)}
+    .head{display:flex;justify-content:space-between;gap:16px;align-items:start;border-bottom:2px solid #05070d;padding-bottom:12px;margin-bottom:18px}
+    .tag,.pill{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:#31546c;background:#eef8fe;border:1px solid #cfe3f5;padding:2px 8px}
+    .route,.box,.q,.review-card,.check-item,.chart,.viz-cell,.quick-review{background:#fff;border:1px solid var(--line);padding:16px}
+    .route{background:#f8fafc}.route h3:before{content:"Practical Outcomes";display:block;margin-bottom:8px;color:var(--cyan);font-family:var(--mono);font-size:11px;letter-spacing:.12em}
+    .grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.9fr);gap:1px;background:var(--line);border:1px solid var(--line)}
+    .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+    .grid2>.box,.grid3>.box{border:0}.soft{border-top:4px solid var(--cyan)}.warn{border-top:4px solid #ffc107}.redsoft{border-top:4px solid #d83b35}.greenbox{border-top:4px solid var(--teal)}
+    .map{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border:1px solid var(--line);margin:18px 0;background:#f8fafc}
+    .node{padding:13px 10px;text-align:center;border-right:1px solid var(--line);font-weight:800;line-height:1.35}.node:last-child{border-right:0}
+    table{width:100%;border-collapse:collapse}.metric-table{font-size:14px}.metric-table th,.metric-table td{border:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:top}.metric-table th{background:#f8fafc;color:var(--navy);font-family:var(--mono);font-size:12px;letter-spacing:.05em}
+    .formula{background:#f8fafc;border:1px solid var(--line);border-left:6px solid var(--cyan);padding:14px 16px;margin:12px 0;font-family:Georgia,"Times New Roman",var(--serif);font-size:18px;overflow:auto}
+    .checkpoint,.viz-note{border-left:4px solid var(--cyan);background:var(--soft);padding:10px 12px;color:#27364a}
+    .codebar{margin-top:14px;background:var(--dark);color:#cbd5e1;border:1px solid var(--dark);border-bottom:0;padding:8px 12px;display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:13px}
+    .codebar:before{content:"";width:34px;height:10px;flex:0 0 auto;background:radial-gradient(circle at 5px 5px,#f87171 0 4px,transparent 4.5px),radial-gradient(circle at 17px 5px,#fbbf24 0 4px,transparent 4.5px),radial-gradient(circle at 29px 5px,#34d399 0 4px,transparent 4.5px)}
+    .codebar .label{color:#93c5fd;margin-right:auto}.codebar .kind{color:#9ca3af}
+    .copy-code{border:1px solid #3c3c3c;background:#243044;color:#dbeafe;padding:3px 7px;font-family:var(--mono);font-size:12px;cursor:pointer}
+    pre{margin:0 0 12px;background:var(--code);color:var(--codeText);border:1px solid var(--dark);padding:15px 16px;overflow:auto;font-family:var(--mono);font-size:14px;line-height:1.62}
+    pre code{background:transparent;color:inherit;padding:0}code{font-family:var(--mono);background:#edf1f7;color:#10203b;padding:2px 5px}
+    .timeline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:12px 0}.timeline .box{border:0}
+    .viz-panel{border:1px solid var(--line);background:#fff;margin:16px 0}.viz-head{display:flex;justify-content:space-between;gap:16px;align-items:start;padding:16px 18px;background:#f8fafc;border-bottom:1px solid var(--line)}.viz-head h3{font-family:var(--serif);font-size:21px}
+    .viz-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}.viz-actions button{background:#fff;color:var(--navy);border:1px solid #cfe3f5;padding:7px 10px}.viz-actions button.active{background:var(--navy);color:#fff;border-color:var(--navy)}
+    .viz-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,.82fr);gap:1px;background:var(--line)}
+    .viz-cell{border:0}.barrow{display:grid;grid-template-columns:104px minmax(0,1fr) 64px;gap:10px;align-items:center;margin:9px 0}.bar{height:13px;background:#e8eef6;overflow:hidden}.fill{height:100%;background:linear-gradient(90deg,var(--teal),var(--cyan));transition:width .18s}
+    .slider-row{display:grid;grid-template-columns:116px minmax(0,1fr) 58px;gap:10px;align-items:center;margin:12px 0}.slider-row output,.barrow b{font-family:var(--mono);color:var(--navy);text-align:right}input[type=range]{width:100%;accent-color:var(--cyan)}
+    .practice-intro,.practice-check{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:14px}.review-card,.check-item{border:0}
+    .practice-check{grid-template-columns:repeat(4,minmax(0,1fr))}
+    .practice-group{border:1px solid var(--line);background:#fff;margin-top:20px}
+    .group-head{display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:18px;background:#f8fafc;border-bottom:1px solid var(--line);padding:18px 20px}.group-head h3{font-family:var(--serif);font-size:23px}
+    .quick-review{border-left:4px solid var(--cyan);background:#fff}.quick-review b{display:block;color:var(--navy);font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase}
+    .drill-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line)}.q{border:0}.q h3{font-size:15.5px}.q-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}.q.full{grid-column:1/-1}.choices label{display:block;margin:6px 0}
+    .solve-note{margin:8px 0 0;padding:9px 11px;background:#fff8e1;border-left:4px solid #ffc107;color:#5f4b12;font-size:13.5px}
+    textarea,input[type=text],select{width:100%;margin-top:8px;border:1px solid var(--line);background:#fff;padding:10px;font:inherit;resize:vertical}textarea{min-height:76px}.short textarea{min-height:58px}
+    input[type=radio],input[type=checkbox]{accent-color:var(--navy);margin-right:7px}
+    button{border:0;background:var(--navy);color:#fff;padding:9px 12px;font:inherit;cursor:pointer}.ghost{background:#fff;color:var(--navy);border:1px solid var(--navy)}
+    .answer{white-space:pre-wrap;background:#fff;border:1px dashed #aeb8c8;padding:14px;max-height:360px;overflow:auto}.quality{display:none;white-space:pre-wrap;background:#fff8e1;border:1px solid #e4c46a;color:#574322;padding:12px;margin:12px 0}
+    .actions{position:sticky;bottom:0;display:flex;gap:10px;justify-content:flex-end;padding-top:14px;margin-top:18px;background:linear-gradient(transparent,var(--bg) 42%)}
+    ul,ol{padding-left:21px}li{margin:4px 0}
+    h1,h2,h3,p,li,td,th{overflow-wrap:anywhere}pre,.formula,.metric-table{max-width:100%;overflow-x:auto}
+    @media(max-width:980px){
+      .layout{grid-template-columns:minmax(0,1fr)}aside{position:static;height:auto}.hero,.grid2,.grid3,.viz-grid,.group-head,.drill-grid,.practice-intro,.practice-check,.timeline{grid-template-columns:minmax(0,1fr)}
+      main{padding:18px}.hero{padding:30px 22px}.hero:before{display:none}h1{font-size:32px}.map{grid-template-columns:minmax(0,1fr)}.node{border-right:0;border-bottom:1px solid var(--line)}
+    }
+  </style>
+</head>
+<body data-feynman-keywords="LLM Fine-tuning, 唐诗, training data, temperature, top_k, top_p, max_length, checkpoint, Colab, GPU, 格式评分, 内容评分">
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <strong>37_P38</strong>
+      <span>作业五：LLM Fine-tuning<br>核心讲义 · 李宏毅生成式 AI 课程</span>
+    </div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>学习目标</a>
+      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
+      <a href="#terms"><span class="dot"></span>术语表</a>
+      <a href="#lecture"><span class="dot"></span>讲义主线</a>
+      <a href="#source"><span class="dot"></span>材料熔炼</a>
+      <a href="#example"><span class="dot"></span>最小例子</a>
+      <a href="#viz"><span class="dot"></span>交互观察</a>
+      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>导出记录</a>
+    </nav>
+    <div class="side-note">这一节不是“照着 Colab 跑一次”就结束。你要知道每个可调参数在改变什么，结果不好时该先改训练资料、解码参数还是运行流程。</div>
+  </aside>
+
+  <main>
+    <section class="hero" id="goal">
+      <div>
+        <div class="kicker">LLM FINE-TUNING · TANG POETRY TASK</div>
+        <h1>用微调教模型续写唐诗</h1>
+        <p>作业五要做的是一个小型 LLM Fine-tuning 实验：给模型唐诗前两句，让它续写后面的诗句。原始模型可能会解释诗句、答非所问，或输出不像诗的文字；微调的目标是让模型看过唐诗资料集后，更稳定地完成“续写唐诗”这个任务。</p>
+        <p>这节课的价值不只在交作业。你会看到一个完整的微调闭环：准备 data set，选择基础模型，在 Colab 开 GPU，调整训练资料量，保存 checkpoint，用 temperature、top_k、top_p、max_length 控制生成，再把 15 首测试诗提交给评测系统检查 content 和 format。</p>
+        <div class="map">
+          <span class="node">模型<br>台德 7B / Breeze</span>
+          <span class="node">资料<br>唐诗前两句到完整诗</span>
+          <span class="node">训练<br>fine-tuning</span>
+          <span class="node">生成<br>15 首测试诗</span>
+          <span class="node">评测<br>内容与格式</span>
+        </div>
+        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=38">Bilibili P38：作业五 LLM Fine-tuning</a></p>
+      </div>
+      <div class="route">
+        <h3>学完后要能做四件事</h3>
+        <ol>
+          <li>能说清作业五从 Colab 到提交 JSON 的完整流程。</li>
+          <li>能读懂唐诗 fine-tuning dataset 的 input、instruction、output。</li>
+          <li>能解释 training data 数量、checkpoint、temperature、top_k、top_p、max_length 的影响。</li>
+          <li>能诊断结果不好、格式错误、GPU OOM、重复实验失败等常见问题。</li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="skeleton">
+      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
+      <div class="grid3">
+        <div class="box soft">
+          <h3>任务定义</h3>
+          <p>输入是唐诗前两句，输出是续完后面的诗句。模型要学的不是“解释唐诗”，而是按给定开头完成一首格式像唐诗、内容有连贯性的作品。</p>
+          <p>判断句：如果模型开始解释前两句的意思，它可能懂中文，但没有按作业任务行动。</p>
+        </div>
+        <div class="box">
+          <h3>训练闭环</h3>
+          <p>先加载基础 LLM，再让它看很多“前两句，后续诗句”的样本。训练结束会得到 fine-tuned model，也会留下 checkpoint 供选择。</p>
+          <p>训练资料越多，通常越有机会学到格式和用词，但时间、GPU memory 和 Colab 稳定性成本也会上升。</p>
+        </div>
+        <div class="box warn">
+          <h3>生成与评分</h3>
+          <p>训练后的模型还要通过 decoding 参数生成 15 首测试诗。评分看两个方向：content 关心内容丰富度和诗意，format 关心字数、格律、格式是否像任务要求。</p>
+          <p>判断句：训练分数低和生成参数不合适都可能让结果差，不能只盯一个环节。</p>
+        </div>
+      </div>
+      <div class="timeline">
+        <div class="box"><h3>1. 准备</h3><p>复制 Colab、开启 GPU、安装套件、下载模型与数据。</p></div>
+        <div class="box"><h3>2. 微调</h3><p>设置训练资料量，开始 fine-tuning，观察 loss 与 checkpoint。</p></div>
+        <div class="box"><h3>3. 生成</h3><p>选择 checkpoint，调 decoding 参数，产生 15 首测试诗。</p></div>
+        <div class="box"><h3>4. 提交</h3><p>把输出交给平台助教评分，下载 JSON，改名后上传。</p></div>
+      </div>
+    </section>
+
+    <section id="terms">
+      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
+      <table class="metric-table">
+        <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>容易误解的地方</th></tr>
+        <tr><td>LLM Fine-tuning</td><td>让现有大模型学会一个更具体的任务。</td><td>以预训练语言模型为基础，在任务数据上继续优化参数或 adapter 参数。</td><td>不是从零训练模型，也不是只改 prompt。</td></tr>
+        <tr><td>唐诗 dataset</td><td>给模型看的参考书。</td><td>由 instruction、input、output 组成，input 常是前两句，output 是应续写的部分。</td><td>资料格式错了，模型会学到错误任务。</td></tr>
+        <tr><td>training data 数量</td><td>模型读多少首唐诗。</td><td>Colab 中可调的训练样本数，默认约 1040，资料总量约 5000。</td><td>越多不一定立即越高分，还要付出时间和显存成本。</td></tr>
+        <tr><td>checkpoint</td><td>训练过程中的存档点。</td><td>fine-tuning 期间保存的中间模型状态，可用于比较不同训练步数的输出。</td><td>最后一个 checkpoint 通常可先试，但不是理论上永远最好。</td></tr>
+        <tr><td>temperature</td><td>控制生成随机程度。</td><td>改变下一个 token 概率分布的尖锐或平坦程度，越高通常越多样。</td><td>高 temperature 不是“更有创意”的保证，也可能破坏格式。</td></tr>
+        <tr><td>top_k</td><td>只从概率最高的 K 个候选里选。</td><td>截断候选 token 集合，再在前 K 个候选中采样。</td><td>top_k 太小会单调，太大可能引入奇怪字词。</td></tr>
+        <tr><td>top_p</td><td>只保留累计概率到 p 的候选集合。</td><td>也叫 nucleus sampling，按概率从高到低累加，保留累计概率不超过阈值的一组候选。</td><td>top_p 和 top_k 都是限制候选，但一个看数量，一个看累计概率。</td></tr>
+        <tr><td>max_length</td><td>最多生成多长。</td><td>限制生成 token 的最大长度，避免无限生成，也可能造成截断。</td><td>设太短会断句，设太长会慢、占显存、甚至 OOM。</td></tr>
+        <tr><td>content score</td><td>内容好不好。</td><td>评测系统根据诗意、丰富度、用词等判断内容分数。</td><td>内容分高不代表格式一定对。</td></tr>
+        <tr><td>format score</td><td>格式像不像。</td><td>评测系统检查字数、句式、格律或作业要求的输出格式。</td><td>格式分高不代表诗句内容一定自然。</td></tr>
+      </table>
+      <p class="checkpoint">读完这一段，你应该能看懂 Colab 里的可调参数，而不是把它们当成黑盒按钮。</p>
+    </section>
+
+    <section id="lecture">
+      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>1. 这次 fine-tuning 到底在教什么</h3>
+          <p>基础模型已经会说中文，也可能知道唐诗，但它不一定知道你给它前两句时要做“续写”。它可能解释诗意、聊天、补充背景，或接出格式不对的内容。作业五要把这个行为改过来：看到前两句，就生成后续诗句。</p>
+          <p>这个训练目标来自数据格式。每笔资料告诉模型：instruction 是任务说明，input 是前两句，output 是目标续写。模型反复看到这样的样本，就会把“前两句唐诗”这个输入和“继续写诗”这个输出形式连起来。</p>
+          <p>你现在应该能做的事：看到模型输出解释文字时，判断它不是“完全不会中文”，而是没有对准这次任务。</p>
+        </div>
+        <div class="box">
+          <h3>2. 为什么要在 Colab 里开 GPU</h3>
+          <p>fine-tuning 会计算大量矩阵运算。CPU 也能算，但速度通常慢到不适合作业实验。GPU 擅长并行矩阵运算，所以 Colab 里要切换到 GPU runtime。</p>
+          <p>打开 GPU 不代表一定顺利。模型大小、batch、max_length、训练资料量都会影响显存。如果出现 out of memory，优先降低生成长度、训练规模或重新启动 runtime 清掉旧状态。</p>
+          <p>判断句：跑不动时先问“显存被谁占住”，不要只重复点运行。</p>
+        </div>
+      </div>
+      <div class="grid3" style="margin-top:12px">
+        <div class="box soft">
+          <h3>3. 训练资料量的取舍</h3>
+          <p>字幕提到资料集总共有约 5000 首，默认使用约 1040 首。直觉上，读更多唐诗能学到更多词汇和格式，但也会花更多训练时间。</p>
+          <p>学习上要把它看成一个可调资源：资料少，模型可能学不稳；资料多，实验成本上升。你应该记录每次尝试的 data_num、checkpoint 和生成参数，否则很难知道分数变化来自哪里。</p>
+        </div>
+        <div class="box warn">
+          <h3>4. checkpoint 不是摆设</h3>
+          <p>训练过程中会留下 checkpoint。它像读书中途的测验存档，可以让你选择某个训练步数的模型来生成测试诗。</p>
+          <p>默认用最后模型通常合理，因为它看过更多训练资料。但如果后期过拟合、格式变怪或输出退化，也可以比较中间 checkpoint。判断句：checkpoint 是实验变量，不是只给系统看的临时文件。</p>
+        </div>
+        <div class="box">
+          <h3>5. decoding 参数控制输出风格</h3>
+          <p>语言模型生成下一个字时，会得到一个概率分布。temperature、top_k、top_p 都在改“从哪些候选里选，以及选得多随机”。</p>
+          <p>唐诗任务里，太保守可能总是接出重复、平淡的句子；太随机可能破坏格式或语义。好结果通常来自训练质量和生成参数共同作用。</p>
+        </div>
+        <div class="box">
+          <h3>6. max_length 控制截断风险</h3>
+          <p>max_length 太短，诗句可能在半句处被切断。太长，模型可能生成多余解释，运行也更慢，显存压力更高。</p>
+          <p>调这个参数时，先根据目标诗句长度估算需要的 token，再看实际输出有没有截断或拖尾。不要只为了“更完整”无限拉长。</p>
+        </div>
+        <div class="box soft">
+          <h3>7. 评分看 content 和 format</h3>
+          <p>content 更像“诗的内容好不好”，会看用词、意境、丰富度。format 更像“是否符合唐诗格式”，会看字数、句式和作业格式。</p>
+          <p>这两个分数可能不一致。一首诗可能内容有趣但格式不合，也可能格式整齐但内容空。调参时要看哪个分数拖后腿。</p>
+        </div>
+        <div class="box warn">
+          <h3>8. 重跑实验要先重启 runtime</h3>
+          <p>字幕特别提醒，直接重跑 fine-tuning block 可能出错，比如显存残留、输出怪异、环境状态混乱。正确做法是重新启动工作阶段，再按必要 block 顺序运行。</p>
+          <p>你现在应该能做的事：实验失败时，不乱点所有格子，而是按“重启，改参数，跑 import / seed / functions / hyperparameters / training”的顺序恢复。</p>
+        </div>
+      </div>
+      <div class="box greenbox" style="margin-top:12px">
+        <h3>完整知识链路</h3>
+        <p>作业五把 P37 的 instruction fine-tuning 落成一个可操作实验。你先复制 Colab 并开启 GPU，加载台德 7B 或可替代的基础模型，再把唐诗资料整理成 instruction、input、output 的训练样本。fine-tuning 后得到一个更会续写唐诗的模型，并保存 checkpoint。生成阶段不是简单“按运行”，而是用 temperature、top_k、top_p 和 max_length 控制随机性、候选范围和输出长度。最后你生成 15 首测试诗，把结果交给评测系统，分别看 content 和 format 分数。结果不好时，要能判断问题来自训练资料、checkpoint、解码参数、格式提交还是运行环境。</p>
+      </div>
+    </section>
+
+    <section id="source">
+      <div class="head"><h2>材料熔炼</h2><span class="tag">SOURCE</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>课程线索一：任务不是泛泛写诗</h3>
+          <p>助教反复强调输入是唐诗前两句，输出是后续诗句。这说明任务边界很窄：模型要补完整首诗，而不是解释、翻译或赏析。</p>
+          <p>你现在应该能做的事：验收模型输出时，第一眼先看它是否在“续写”，再看内容好不好。</p>
+        </div>
+        <div class="box">
+          <h3>课程线索二：默认参数只是起点</h3>
+          <p>默认训练资料量约 1040，是助教为保存 checkpoint 和运行时间折中的设置。它不是唯一正确值。你可以改资料量，但要承担更长训练时间和 Colab 限制。</p>
+          <p>你现在应该能做的事：把每次实验记录成“资料量，checkpoint，temperature，top_p，top_k，max_length，得分”。</p>
+        </div>
+        <div class="box">
+          <h3>课程线索三：生成不是取最高概率就好</h3>
+          <p>字幕用候选字概率说明，模型下一个字有多个可能。temperature、top_k、top_p 会改变候选分布，让输出更稳定或更多样。</p>
+          <p>你现在应该能做的事：看到诗句太死板或太乱时，想到先检查 decoding 参数，而不是立刻重训。</p>
+        </div>
+        <div class="box">
+          <h3>课程线索四：提交格式也是作业能力</h3>
+          <p>最后要提交平台下载的 JSON，并按学号改名。不能改 JSON 内容，不能提交别人结果，也不能直接贴原唐诗答案。</p>
+          <p>你现在应该能做的事：区分“模型输出文字”和“最终提交档案”，避免跑出了结果却因格式零分。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="example">
+      <div class="head"><h2>最小例子</h2><span class="tag">EXAMPLE</span></div>
+      <p>下面把作业五拆成三个最小对象：资料样本、训练参数、生成参数。读懂这三块，Colab 就不再只是按钮集合。</p>
+      <div class="codebar"><span class="label">资料样本：前两句到后续诗句</span><span class="kind">json</span></div>
+      <pre><code>{
+  "instruction": "以下是唐诗的前两句，请续写完成这首诗。",
+  "input": "床前明月光，疑是地上霜。",
+  "output": "举头望明月，低头思故乡。"
+}</code></pre>
+      <div class="grid2">
+        <div class="box soft">
+          <h3>逐项理解</h3>
+          <p><code>instruction</code> 定义任务，告诉模型要续写。<code>input</code> 是条件，也就是测试时会给出的前两句。<code>output</code> 是训练目标，模型要学习生成的部分。</p>
+          <p>如果你想把同一套流程改成写专利或摘要，核心也是换掉 instruction、input、output 的内容，而不是只改标题。</p>
+        </div>
+        <div class="box warn">
+          <h3>错误样本会教错任务</h3>
+          <p>如果 output 写成诗句解释，模型就会学会解释；如果 input / output 边界乱掉，模型会不知道该续写哪一段。</p>
+          <p>判断句：微调数据决定模型要模仿的行为。数据不是附属材料，它就是老师。</p>
+        </div>
+      </div>
+      <div class="codebar"><span class="label">训练参数：先记录可重复实验条件</span><span class="kind">python</span></div>
+      <pre><code>model_name = "TAIDE-7B"
+num_train_data = 1040
+checkpoint_to_use = "last"
+
+train(
+    model=model_name,
+    dataset=tang_poem_dataset[:num_train_data],
+    save_checkpoints=True
+)</code></pre>
+      <div class="codebar"><span class="label">生成参数：控制续写时的候选分布</span><span class="kind">python</span></div>
+      <pre><code>generation_config = {
+    "temperature": 0.7,
+    "top_p": 0.9,
+    # "top_k": 50,
+    "max_length": 96
+}
+
+poems = fine_tuned_model.generate(test_inputs, generation_config)
+assert len(poems) == 15</code></pre>
+      <p class="checkpoint">读完例子，你应该能解释：训练参数决定模型学了什么，生成参数决定它在学到的分布里怎么抽样。</p>
+    </section>
+
+    <section id="viz">
+      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
+      <div class="viz-panel">
+        <div class="viz-head">
+          <div>
+            <h3>训练资料量与实验成本</h3>
+            <p>调节训练资料量，观察格式稳定、内容丰富和运行成本的取舍。</p>
+          </div>
+        </div>
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <div class="slider-row"><span>资料量</span><input id="dataSlider" type="range" min="200" max="5000" step="100" value="1040"><output id="dataOut">1040</output></div>
+            <div class="barrow"><span>格式稳定</span><div class="bar"><div class="fill" id="formatBar"></div></div><b id="formatVal">0</b></div>
+            <div class="barrow"><span>内容变化</span><div class="bar"><div class="fill" id="contentBar"></div></div><b id="contentVal">0</b></div>
+            <div class="barrow"><span>训练成本</span><div class="bar"><div class="fill" id="costBar"></div></div><b id="costVal">0</b></div>
+          </div>
+          <div class="viz-cell">
+            <h3>观察提示</h3>
+            <p id="dataText"></p>
+            <p class="viz-note">这不是精确分数预测，而是帮助你形成实验直觉：资料量提高会带来收益，也会带来时间和显存压力。</p>
+          </div>
+        </div>
+      </div>
+      <div class="viz-panel">
+        <div class="viz-head">
+          <div>
+            <h3>decoding 参数怎么改候选分布</h3>
+            <p>调整 temperature、top_p，并切换 top_k。观察下一个字候选是否更集中或更分散。</p>
+          </div>
+          <div class="viz-actions">
+            <button type="button" data-k="1" class="active">top_k=1</button>
+            <button type="button" data-k="3">top_k=3</button>
+            <button type="button" data-k="5">top_k=5</button>
+          </div>
+        </div>
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <div class="slider-row"><span>temperature</span><input id="tempSlider" type="range" min="20" max="140" value="70"><output id="tempOut">0.70</output></div>
+            <div class="slider-row"><span>top_p</span><input id="topPSlider" type="range" min="30" max="100" value="90"><output id="topPOut">0.90</output></div>
+            <div id="candidateBars"></div>
+          </div>
+          <div class="viz-cell">
+            <h3 id="decodeTitle">较保守的抽样</h3>
+            <p id="decodeText"></p>
+            <p class="viz-note">唐诗任务里，输出太单调时可以略微提高随机性；格式乱掉时先降低随机性或收紧候选范围。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="diagnosis">
+      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
+      <div class="grid2">
+        <div class="box redsoft">
+          <h3>六个常见坑</h3>
+          <ol>
+            <li>只跑一次默认 Colab 就交。错因是把实验当流程打卡；后果是分数不稳；修法是记录参数并至少比较一两组输出。</li>
+            <li>忘记复制到自己的云端。错因是直接编辑只读 notebook；后果是修改不保存；修法是先储存副本再改参数。</li>
+            <li>没开 GPU 就开始训练。错因是忽略 runtime；后果是训练极慢或失败；修法是检查执行阶段的硬件加速器。</li>
+            <li>把 max_length 拉很大。错因是以为更长更完整；后果是慢、OOM 或输出拖尾；修法是按目标诗句长度估算。</li>
+            <li>重跑时不重启 runtime。错因是忽略显存和变量残留；后果是 OOM 或结果怪；修法是按重启流程重新跑必要 block。</li>
+            <li>提交了错误 JSON 或改了 JSON。错因是混淆输出文本和提交文件；后果可能零分；修法是用平台下载结果、按学号改名、不改内容。</li>
+          </ol>
+        </div>
+        <div class="box">
+          <h3>易混概念对照</h3>
+          <table class="metric-table">
+            <tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr>
+            <tr><td>fine-tuning</td><td>generation</td><td>前者更新模型或 adapter 参数；后者用训练好的模型生成文字。</td></tr>
+            <tr><td>training data</td><td>test inputs</td><td>训练资料用于教模型；测试输入用于生成提交的 15 首诗。</td></tr>
+            <tr><td>temperature</td><td>top_p / top_k</td><td>temperature 改分布形状；top_p / top_k 限制候选集合。</td></tr>
+            <tr><td>content score</td><td>format score</td><td>内容分看诗意和丰富度；格式分看字数、句式和输出格式。</td></tr>
+            <tr><td>checkpoint</td><td>final result JSON</td><td>checkpoint 是模型存档；JSON 是评分后要提交的结果档。</td></tr>
+          </table>
+        </div>
+      </div>
+      <p class="checkpoint">读完这一节，你应该能在作业出错时先定位环节：环境、训练、生成、评测、提交，而不是把所有问题都归咎于模型。</p>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
+      <div class="practice-intro">
+        <div class="review-card"><strong>作答前先抓主线</strong><p>按“任务，资料，训练，生成，评测，提交”六步组织答案。</p></div>
+        <div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起 LLM Fine-tuning、唐诗 dataset、training data、temperature、top_k、top_p、max_length、checkpoint、Colab、GPU。</p></div>
+      </div>
+      <div class="practice-check">
+        <div class="check-item"><b>任务</b>是否明确输入前两句，输出续写。</div>
+        <div class="check-item"><b>参数</b>是否能解释每个可调项的作用。</div>
+        <div class="check-item"><b>评测</b>是否区分 content 和 format。</div>
+        <div class="check-item"><b>提交</b>是否知道 JSON 不可乱改。</div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>这一组检查任务定义和术语边界。</p></div><div class="quick-review"><b>REMIND</b><span>先说这一步在流程里的位置。</span></div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. 作业五的目标是让模型看到唐诗前两句后续写后面的诗句。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. 作业五的目标是让模型看到唐诗前两句后续写后面的诗句。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
+          <div class="q" data-role="homework" data-title="2. LLM Fine-tuning 在本作业里主要改变什么？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. LLM Fine-tuning 在本作业里主要改变什么？</h3><div class="choices"><label><input type="radio" name="q2" value="让模型参数或 adapter 参数更贴近唐诗续写任务">让模型参数或 adapter 参数更贴近唐诗续写任务</label><label><input type="radio" name="q2" value="只把测试答案写进 prompt">只把测试答案写进 prompt</label><label><input type="radio" name="q2" value="把 Colab 变成评分平台">把 Colab 变成评分平台</label></div></div>
+          <div class="q short" data-role="homework" data-title="3. 填空：dataset 的 input 通常是 ______，output 是 ______。"><div class="q-meta"><span class="pill">填空</span></div><h3>3. 填空：dataset 的 input 通常是 ______，output 是 ______。</h3><input type="text" name="q3"></div>
+          <div class="q short" data-role="homework" data-title="4. 用 1-2 句话解释为什么原模型可能会解释诗句，而不是续写诗句。"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 用 1-2 句话解释为什么原模型可能会解释诗句，而不是续写诗句。</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、流程理解</h3><p>这一组检查你能不能把作业跑通。</p></div><div class="quick-review"><b>REMIND</b><span>写顺序时要包含 Colab、GPU、训练、生成、提交。</span></div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="5. 按顺序写出从打开 Colab 到提交 JSON 的最小流程。"><div class="q-meta"><span class="pill">排序</span></div><h3>5. 按顺序写出从打开 Colab 到提交 JSON 的最小流程。</h3><textarea name="q5"></textarea></div>
+          <div class="q short" data-role="homework" data-title="6. 为什么要先在云端储存副本，再修改 notebook？"><div class="q-meta"><span class="pill">解释</span></div><h3>6. 为什么要先在云端储存副本，再修改 notebook？</h3><textarea name="q6"></textarea></div>
+          <div class="q short" data-role="homework" data-title="7. 为什么 fine-tuning 时需要 GPU？如果没有 GPU 可能怎样？"><div class="q-meta"><span class="pill">解释</span></div><h3>7. 为什么 fine-tuning 时需要 GPU？如果没有 GPU 可能怎样？</h3><textarea name="q7"></textarea></div>
+          <div class="q short" data-role="homework" data-title="8. 重跑实验时为什么建议重新启动工作阶段？"><div class="q-meta"><span class="pill">解释</span></div><h3>8. 重跑实验时为什么建议重新启动工作阶段？</h3><textarea name="q8"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、参数阅读</h3><p>这一组检查训练参数和生成参数。</p></div><div class="quick-review"><b>REMIND</b><span>说明它改变什么，以及调太大或太小的后果。</span></div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="9. training data 数量从 1040 调到 3000，可能带来哪些收益和成本？"><div class="q-meta"><span class="pill">参数</span></div><h3>9. training data 数量从 1040 调到 3000，可能带来哪些收益和成本？</h3><textarea name="q9"></textarea></div>
+          <div class="q short" data-role="homework" data-title="10. checkpoint 在这次作业里有什么用？"><div class="q-meta"><span class="pill">参数</span></div><h3>10. checkpoint 在这次作业里有什么用？</h3><textarea name="q10"></textarea></div>
+          <div class="q short" data-role="homework" data-title="11. temperature 高低分别会怎样影响输出？"><div class="q-meta"><span class="pill">参数</span></div><h3>11. temperature 高低分别会怎样影响输出？</h3><textarea name="q11"></textarea></div>
+          <div class="q short" data-role="homework" data-title="12. 区分 top_k 和 top_p。"><div class="q-meta"><span class="pill">对照</span></div><h3>12. 区分 top_k 和 top_p。</h3><textarea name="q12"></textarea></div>
+          <div class="q short" data-role="homework" data-title="13. max_length 太短和太长分别可能造成什么问题？"><div class="q-meta"><span class="pill">参数</span></div><h3>13. max_length 太短和太长分别可能造成什么问题？</h3><textarea name="q13"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、错误诊断</h3><p>这一组按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b><span>别只说“重跑”，要说明重跑前该检查什么。</span></div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="14. 模型输出一段诗句解释，而不是续写。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. 模型输出一段诗句解释，而不是续写。错因、后果、修法是什么？</h3><div class="solve-note">从任务格式、训练资料和 instruction 角度回答。</div><textarea name="q14"></textarea></div>
+          <div class="q short" data-role="homework" data-title="15. 生成诗句总在半句处断掉。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 生成诗句总在半句处断掉。错因、后果、修法是什么？</h3><div class="solve-note">重点检查 max_length 和输出长度。</div><textarea name="q15"></textarea></div>
+          <div class="q short" data-role="homework" data-title="16. 重跑 fine-tuning 后出现 OOM。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 重跑 fine-tuning 后出现 OOM。错因、后果、修法是什么？</h3><div class="solve-note">从 GPU memory、runtime 残留和参数规模回答。</div><textarea name="q16"></textarea></div>
+          <div class="q short" data-role="homework" data-title="17. content 分不错，但 format 分很低。你会先查哪些地方？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>17. content 分不错，但 format 分很低。你会先查哪些地方？</h3><div class="solve-note">从字数、句式、max_length、temperature 和提交格式回答。</div><textarea name="q17"></textarea></div>
+          <div class="q short" data-role="homework" data-title="18. 同学把平台下载的 JSON 打开手动改内容后提交。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>18. 同学把平台下载的 JSON 打开手动改内容后提交。错因、后果、修法是什么？</h3><div class="solve-note">从作业规则和可验证性回答。</div><textarea name="q18"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>五、场景迁移</h3><p>这一组检查你能不能把作业思路迁移到别的任务。</p></div><div class="quick-review"><b>REMIND</b><span>迁移时先换 dataset，再考虑参数。</span></div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="19. 如果把任务改成写专利，instruction、input、output 应该怎样变化？"><div class="q-meta"><span class="pill">应用</span></div><h3>19. 如果把任务改成写专利，instruction、input、output 应该怎样变化？</h3><textarea name="q19"></textarea></div>
+          <div class="q short" data-role="homework" data-title="20. 如果诗句内容单调但格式稳定，你会尝试调哪些参数？为什么？"><div class="q-meta"><span class="pill">应用</span></div><h3>20. 如果诗句内容单调但格式稳定，你会尝试调哪些参数？为什么？</h3><textarea name="q20"></textarea></div>
+          <div class="q short" data-role="homework" data-title="21. 如果诗句很有变化但格式经常乱，你会怎样收紧生成？"><div class="q-meta"><span class="pill">应用</span></div><h3>21. 如果诗句很有变化但格式经常乱，你会怎样收紧生成？</h3><textarea name="q21"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>六、表达输出</h3><p>最后三题检查你能不能讲给别人听。</p></div><div class="quick-review"><b>REMIND</b><span>回答要能指导别人实际操作。</span></div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="22. 面试短答：为什么训练资料量和 decoding 参数都可能影响最终分数？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>22. 面试短答：为什么训练资料量和 decoding 参数都可能影响最终分数？</h3><textarea name="q22"></textarea></div>
+          <div class="q short" data-role="homework" data-title="23. 面试短答：你会怎样设计一次可复盘的调参记录？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>23. 面试短答：你会怎样设计一次可复盘的调参记录？</h3><textarea name="q23"></textarea></div>
+          <div class="q full" data-role="homework" data-title="24. 用 6-9 句话讲清楚作业五 LLM Fine-tuning 的完整流程。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>24. 用 6-9 句话讲清楚作业五 LLM Fine-tuning 的完整流程。请串联 LLM Fine-tuning、唐诗、training data、temperature、top_k、top_p、max_length、checkpoint、Colab、GPU、格式评分、内容评分。</h3><div class="solve-note">先说任务和数据，再说训练与生成，最后说评分、提交和常见风险。</div><textarea name="q24"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>导出练习记录</h2><span class="tag">EXPORT</span></div>
+      <p class="muted">完成练习后生成记录，方便复盘本节的操作流程、参数判断和错误诊断。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){
+  const max=document.documentElement.scrollHeight-innerHeight;
+  progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";
+  let current=sections[0]?.id;
+  for(const section of sections){
+    const rect=section.getBoundingClientRect();
+    if(rect.top<innerHeight*.36) current=section.id;
+    section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);
+  }
+  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));
+}
+addEventListener("scroll",updateReadingState,{passive:true});
+addEventListener("resize",updateReadingState);
+updateReadingState();
+
+function copyText(text,onOk,onFail){
+  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
+  else fallbackCopy(text,onOk,onFail);
+}
+function fallbackCopy(text,onOk,onFail){
+  const ta=document.createElement("textarea");
+  ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";
+  document.body.appendChild(ta);ta.focus();ta.select();
+  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
+}
+document.querySelectorAll(".codebar").forEach(bar=>{
+  const btn=document.createElement("button");
+  btn.type="button";btn.className="copy-code";btn.textContent="复制";
+  btn.addEventListener("click",()=>{
+    const code=bar.nextElementSibling?.innerText||"";
+    copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});
+  });
+  bar.appendChild(btn);
+});
+
+const dataSlider=document.getElementById("dataSlider");
+function clamp(v){return Math.max(0,Math.min(100,Math.round(v)));}
+function setBar(id,val){document.getElementById(id+"Bar").style.width=clamp(val)+"%";document.getElementById(id+"Val").textContent=clamp(val);}
+function updateDataViz(){
+  const n=Number(dataSlider.value);
+  document.getElementById("dataOut").textContent=n;
+  const ratio=(n-200)/(5000-200);
+  setBar("format",35+Math.sqrt(ratio)*50);
+  setBar("content",28+Math.sqrt(ratio)*56);
+  setBar("cost",18+ratio*82);
+  let text="默认 1040 左右适合先跑通流程。";
+  if(n<700) text="资料量很小，适合快速检查代码和格式，但模型可能还没学稳唐诗续写。";
+  else if(n>3000) text="资料量较大，可能改善格式和词汇，但训练时间、Colab 断线和显存压力也会上升。";
+  document.getElementById("dataText").textContent=text;
+}
+dataSlider.addEventListener("input",updateDataViz);
+updateDataViz();
+
+const baseCandidates=[
+  ["风",32],["月",24],["山",18],["花",12],["云",8],["酒",6]
+];
+let currentK=1;
+const tempSlider=document.getElementById("tempSlider");
+const topPSlider=document.getElementById("topPSlider");
+function updateDecodeViz(){
+  const temp=Number(tempSlider.value)/100;
+  const topP=Number(topPSlider.value)/100;
+  document.getElementById("tempOut").textContent=temp.toFixed(2);
+  document.getElementById("topPOut").textContent=topP.toFixed(2);
+  let adjusted=baseCandidates.map(([w,p])=>[w,Math.pow(p,1/temp)]);
+  const sum=adjusted.reduce((s,x)=>s+x[1],0);
+  adjusted=adjusted.map(([w,p])=>[w,p/sum*100]).sort((a,b)=>b[1]-a[1]);
+  let acc=0;
+  adjusted=adjusted.map((x,i)=>{
+    acc+=x[1];
+    return {word:x[0],prob:x[1],keep:i<currentK&&acc<=topP*120};
+  });
+  if(!adjusted.some(x=>x.keep)) adjusted[0].keep=true;
+  document.getElementById("candidateBars").innerHTML=adjusted.map(x=>{
+    const opacity=x.keep?1:.28;
+    return `<div class="barrow" style="opacity:${opacity}"><span>${x.word}</span><div class="bar"><div class="fill" style="width:${clamp(x.prob)}%"></div></div><b>${Math.round(x.prob)}%</b></div>`;
+  }).join("");
+  const kept=adjusted.filter(x=>x.keep).length;
+  document.getElementById("decodeTitle").textContent=kept<=1?"较保守的抽样":kept>=4?"较开放的抽样":"适中的抽样";
+  document.getElementById("decodeText").textContent=kept<=1?"候选很集中，格式更稳，但诗句容易重复。":kept>=4?"候选较多，内容变化更大，但格式和语义风险也上升。":"候选数量适中，适合在格式稳定和内容变化之间折中。";
+  document.querySelectorAll("[data-k]").forEach(btn=>btn.classList.toggle("active",Number(btn.dataset.k)===currentK));
+}
+document.querySelectorAll("[data-k]").forEach(btn=>btn.addEventListener("click",()=>{currentK=Number(btn.dataset.k);updateDecodeViz();}));
+tempSlider.addEventListener("input",updateDecodeViz);
+topPSlider.addEventListener("input",updateDecodeViz);
+updateDecodeViz();
+
+function valueOfQuestion(q){
+  const checked=q.querySelector("input[type=radio]:checked");
+  if(checked) return checked.value;
+  const field=q.querySelector("textarea,input[type=text],select");
+  return field?field.value.trim():"";
+}
+function questionGroup(q){
+  return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";
+}
+function generateRecord(){
+  const qs=[...document.querySelectorAll('[data-role="homework"]')];
+  const groups={},warnings=[];
+  qs.forEach((q,i)=>{
+    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";
+    const hint=q.querySelector(".solve-note")?.innerText.trim()||"";
+    const answer=valueOfQuestion(q);
+    if(!answer) warnings.push("第 "+(i+1)+" 题未填写："+title);
+    if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在|混淆/.test(answer)&&/后果|影响|风险|导致/.test(answer)&&/修法|修正|解决|改|检查/.test(answer))){
+      warnings.push("第 "+(i+1)+" 题建议补齐错因、后果和修法。");
+    }
+    if(q.dataset.type==="feynman"){
+      const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
+      if(answer&&answer.length<120) warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");
+      const lower=answer.toLowerCase();
+      const lack=answer?keys.filter(k=>!lower.includes(k.toLowerCase())):[];
+      if(lack.length) warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");
+    }
+    const group=questionGroup(q);
+    (groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
+  });
+  let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";
+  Object.keys(groups).forEach(group=>{
+    out+="## "+group+"\n\n";
+    groups[group].forEach(item=>{
+      out+="### "+item.title+"\n";
+      if(item.hint) out+="提示摘要："+item.hint+"\n\n";
+      out+=item.answer+"\n\n";
+    });
+  });
+  document.getElementById("record").textContent=out;
+  const quality=document.getElementById("quality");
+  quality.style.display="block";
+  quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以用于复盘。";
+}
+function copyRecord(){
+  copyText(document.getElementById("record").textContent,()=>{
+    const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";
+  },()=>{
+    const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";
+  });
+}
+</script>
+</body>
+</html>

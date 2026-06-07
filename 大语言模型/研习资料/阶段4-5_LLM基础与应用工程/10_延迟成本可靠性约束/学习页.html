@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM 应用工程 10｜延迟、成本、可靠性约束</title>
+  <style>
+    :root{
+      --bg:#f4f6f9;--paper:#fff;--ink:#1a1a1a;--muted:#5f6875;--quiet:#8a95a4;--line:#d8dee8;
+      --navy:#1b2a4a;--cyan:#00a9f4;--soft:#eef8fc;--warn:#fff4d8;--redsoft:#fff0ed;--greenbox:#edf8f3;
+      --red:#c14f3e;--gold:#a37122;--code:#1e1e1e;--codeText:#d4d4d4;
+      --sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif;
+      --serif:"Songti SC","Noto Serif CJK SC","STSong","SimSun",serif;
+      --mono:"Cascadia Mono","Cascadia Code","Consolas","SFMono-Regular",monospace;
+    }
+    *{box-sizing:border-box}html{scroll-behavior:smooth}
+    body{margin:0;background:linear-gradient(90deg,rgba(27,42,74,.045) 1px,transparent 1px) 0 0/60px 60px,linear-gradient(rgba(27,42,74,.035) 1px,transparent 1px) 0 0/60px 60px,var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.72;-webkit-font-smoothing:antialiased}
+    .progress{position:fixed;left:0;top:0;height:4px;width:0;background:linear-gradient(90deg,var(--cyan),var(--navy));z-index:10}
+    .layout{display:grid;grid-template-columns:308px minmax(0,1fr);min-height:100vh}
+    aside{position:sticky;top:0;height:100vh;overflow:auto;background:var(--navy);color:#fff;padding:30px 22px;background-image:repeating-linear-gradient(90deg,transparent,transparent 59px,rgba(255,255,255,.045) 59px,rgba(255,255,255,.045) 60px),repeating-linear-gradient(0deg,transparent,transparent 59px,rgba(255,255,255,.035) 59px,rgba(255,255,255,.035) 60px)}
+    .brand{border-bottom:1px solid rgba(255,255,255,.36);padding-bottom:22px;margin-bottom:20px}.brand strong{display:block;font-size:27px;line-height:1.18;font-family:var(--serif);font-weight:700}.brand span{display:block;color:rgba(255,255,255,.68);font-size:13px;margin-top:8px;line-height:1.7}
+    nav a{display:flex;gap:10px;align-items:center;color:rgba(255,255,255,.82);text-decoration:none;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.13);font-size:13px;letter-spacing:.04em}nav a:hover,nav a.active{color:#fff;border-color:rgba(255,255,255,.42);font-weight:700}.dot{width:5px;height:5px;background:var(--cyan);opacity:.55;flex:0 0 auto}.active .dot{opacity:1;transform:scale(1.35)}
+    .side-note{margin-top:24px;padding:14px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:rgba(255,255,255,.72);font-size:13px;line-height:1.8}
+    main{max-width:1420px;width:100%;padding:34px 44px}.hero,section{position:relative;background:var(--paper);border:1px solid var(--line);box-shadow:0 14px 28px rgba(27,42,74,.08)}.hero{display:grid;grid-template-columns:minmax(0,1fr) 392px;gap:24px;padding:38px 42px;border-top:6px solid var(--navy)}section{padding:30px 34px;margin-top:18px}
+    .kicker{font-family:var(--mono);font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.18em;margin-bottom:16px}h1{margin:0;font-family:var(--serif);font-size:48px;line-height:1.12;letter-spacing:0;color:#111}h2{margin:0;font-family:var(--serif);font-size:31px;line-height:1.22;color:#111}h3{margin:0 0 8px;font-size:17px;line-height:1.45;color:#111}p{margin:8px 0}.muted,.hero p{color:var(--muted)}
+    .head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--line)}.tag,.pill{display:inline-flex;align-items:center;border:0;background:transparent;color:#8390a0;font-family:var(--mono);font-size:11px;letter-spacing:.14em;padding:0;text-transform:uppercase}
+    .grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(310px,.88fr);gap:1px;background:var(--line);border:1px solid var(--line)}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}.box,.q,.review-card,.check-item,.chart,.answer,.quality{background:rgba(255,255,255,.72);border:0;padding:16px}.box h3,.review-card strong,.check-item b{font-family:var(--serif);font-weight:900}.soft{background:var(--soft)}.warn{background:var(--warn)}.redsoft{background:var(--redsoft)}.greenbox{background:var(--greenbox)}
+    .route{background:#fff;border:1px solid var(--line);padding:22px}.route h3{font-family:var(--serif);font-size:21px}.map{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0;align-items:center;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:14px 0}.node{background:#f7f9fc;border:1px solid var(--line);color:#20304d;padding:8px 12px;font-weight:900}.arrow{color:#a7b0bd}
+    code{background:#e9eef6;color:#17202a;padding:2px 5px;font-family:var(--mono);font-size:.92em}.codebar{margin-top:14px;background:#252526;color:#cbd5e1;border:1px solid #3c3c3c;border-bottom:0;padding:8px 12px;display:flex;align-items:center;font-family:var(--mono);font-size:13px}.codebar:before{content:"";width:34px;height:10px;margin-right:10px;flex:0 0 auto;background:radial-gradient(circle at 5px 5px,#f87171 0 4px,transparent 4.5px),radial-gradient(circle at 17px 5px,#fbbf24 0 4px,transparent 4.5px),radial-gradient(circle at 29px 5px,#34d399 0 4px,transparent 4.5px)}.codebar .label{color:#93c5fd;margin-right:auto}.codebar .kind{color:#9ca3af}.copy-code{margin-left:12px;border:1px solid #3c3c3c;background:#2d2d30;color:#dbeafe;padding:3px 7px;font-family:var(--mono);font-size:12px;cursor:pointer}
+    pre{margin:0 0 12px;background:var(--code);color:var(--codeText);border:1px solid #3c3c3c;padding:15px 16px;overflow:auto;font-family:var(--mono);font-size:14px;line-height:1.64}pre code{background:transparent;color:inherit;padding:0}.bad .codebar{border-color:#7f1d1d;background:#3b1d1d}.bad pre{border-color:#7f1d1d}.comment{color:#6a9955}.kw{color:#c586c0}.str{color:#ce9178}.num{color:#b5cea8}.var{color:#9cdcfe}
+    .viz-panel{background:#fff;border:1px solid var(--line);padding:16px;margin:12px 0}.viz-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.viz-cell{background:#f7f9fc;border:1px solid var(--line);padding:14px}.metric-table{width:100%;border-collapse:collapse;margin:10px 0;background:#fff}.metric-table th,.metric-table td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}.metric-table th{background:#f0f4fa}.viz-note,.checkpoint{margin:12px 0 0;padding:10px 12px;background:#f3f7fb;border-left:4px solid var(--cyan);color:#39465a}
+    button{border:0;background:var(--navy);color:#fff;padding:9px 12px;font:inherit;cursor:pointer}.ghost{background:#fff;color:var(--navy);border:1px solid var(--navy)}.seg{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.seg button{background:#edf2f7;color:#23324a;border:1px solid #d8dee8}.seg button.active{background:var(--navy);color:#fff}.flow-svg{width:100%;height:auto;display:block;background:#fff;border:1px solid var(--line)}.slider-row{display:grid;grid-template-columns:150px minmax(0,1fr) 78px;gap:10px;align-items:center;margin:10px 0}input[type=range]{width:100%;accent-color:var(--cyan)}
+    .practice-intro{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:14px}.practice-check{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:12px 0}.practice-group{border:1px solid var(--line);background:#fff;margin-top:20px}.group-head{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px;padding:20px 22px;border-bottom:1px solid var(--line)}.group-head h3{font-family:var(--serif);font-size:25px}.quick-review{border-left:2px solid var(--navy);padding-left:14px;font-size:13.5px;color:var(--muted)}.quick-review b{display:block;font-family:var(--mono);font-size:11px;color:#8390a0;letter-spacing:.16em;margin-bottom:5px}.drill-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line)}.q{min-height:148px}.q.full{grid-column:1/-1}.q h3{font-size:16px;line-height:1.55}.q-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}.solve-note{margin:8px 0 0;padding:9px 12px;background:#f4f7fb;border-left:4px solid var(--navy);color:#566273;font-size:13px}.choices label{display:block;margin:7px 0}input[type=radio],input[type=checkbox]{accent-color:var(--navy);margin-right:7px}textarea,input[type=text]{width:100%;border:1px solid var(--line);background:#fff;color:var(--ink);padding:10px;font:inherit;resize:vertical}textarea{min-height:74px}.short textarea{min-height:58px}.answer{white-space:pre-wrap;background:#fff;border:1px dashed #9aa7b6;max-height:380px;overflow:auto}.quality{display:none;white-space:pre-wrap;background:#fff7df;border:1px solid #e5c569;color:#574322;margin:12px 0}.actions{position:sticky;bottom:0;display:flex;gap:10px;justify-content:flex-end;padding-top:14px;margin-top:18px;background:linear-gradient(transparent,var(--bg) 42%)}ul,ol{padding-left:21px}li{margin:4px 0}
+    @media(max-width:980px){.layout{grid-template-columns:minmax(0,1fr)}aside{position:static;height:auto}main{padding:18px}.hero,section{padding:22px 18px}.hero,.grid2,.grid3,.viz-grid,.practice-intro,.group-head,.drill-grid{grid-template-columns:minmax(0,1fr)}h1{font-size:34px;overflow-wrap:anywhere}.practice-check{grid-template-columns:minmax(0,1fr)}pre{font-size:13.5px}.slider-row{grid-template-columns:minmax(0,1fr)}.metric-table,.metric-table thead,.metric-table tbody,.metric-table tr,.metric-table th,.metric-table td{display:block;width:100%}.metric-table thead{display:none}.metric-table tr{border:1px solid var(--line);margin:0 0 10px}.metric-table th,.metric-table td{border:0;border-bottom:1px solid var(--line)}}
+  </style>
+</head>
+<body data-feynman-keywords="延迟,成本,可靠性,token,超时,重试,降级,缓存,监控,预算">
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <strong>LLM 应用工程</strong>
+      <span>10｜延迟、成本、可靠性约束<br>把系统从能跑推到可用</span>
+    </div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>学习目标</a>
+      <a href="#triangle"><span class="dot"></span>三角约束</a>
+      <a href="#latency"><span class="dot"></span>延迟</a>
+      <a href="#cost"><span class="dot"></span>成本</a>
+      <a href="#reliability"><span class="dot"></span>可靠性</a>
+      <a href="#examples"><span class="dot"></span>渐进例子</a>
+      <a href="#workflow"><span class="dot"></span>工程动作</a>
+      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+      <a href="#confusion"><span class="dot"></span>易混概念</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>练习记录</a>
+    </nav>
+    <div class="side-note">LLM 功能“能回答”只是第一步。用户真正感受到的是等多久、花多少、失败时系统怎么处理。</div>
+  </aside>
+
+  <main>
+    <section class="hero" id="goal">
+      <div>
+        <div class="kicker">Production Constraints · Latency Cost Reliability</div>
+        <h1>LLM 应用上线前，要先算三笔账</h1>
+        <p>LLM 应用常见的工程问题，不是 demo 答不出来，而是上线后慢、贵、不稳定。延迟决定用户等多久，成本决定功能能不能规模化，可靠性决定失败时系统会不会把用户带进坏结果。三者互相牵制：更强模型可能更慢更贵；更多重试可能提高成功率也拉高延迟和成本；更长上下文可能提高回答质量，也会增加 token 和超时风险。</p>
+        <div class="map">
+          <span class="node">延迟</span><span class="arrow">↔</span>
+          <span class="node">成本</span><span class="arrow">↔</span>
+          <span class="node">可靠性</span><span class="arrow">↔</span>
+          <span class="node">用户体验</span>
+        </div>
+      </div>
+      <div class="route">
+        <h3>学完后要能做三件事</h3>
+        <ol>
+          <li>拆解一次 LLM 调用的延迟来源：排队、检索、输入 token、输出 token、工具调用。</li>
+          <li>估算 token 成本，并知道如何用缓存、路由和长度控制降低成本。</li>
+          <li>设计超时、重试、降级、幂等和监控，避免失败被用户直接承受。</li>
+        </ol>
+        <p class="muted">这页更偏工程验收。写出好 prompt 后，系统还要经得住真实流量。</p>
+      </div>
+    </section>
+
+    <section id="triangle">
+      <div class="head"><h2>一、三角约束：慢、贵、不稳通常连在一起</h2><span class="tag">TRADEOFF</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>概念：约束比模型能力更早决定可用性</h3>
+          <p>一个 LLM 功能在 demo 里可以等 20 秒，在线产品里可能 3 秒就让用户流失。一个内部工具每天调用 100 次时成本不明显，开放给所有用户后会迅速变成预算问题。一次请求失败在测试时只是刷新重试，线上可能让订单、客服、审批流程卡住。工程里要同时看延迟、成本和可靠性，而不是只看回答质量。</p>
+          <p>延迟是从用户发起请求到拿到可用结果的时间。成本不只是模型调用费，还包括检索、工具、日志、重试、人工复核和缓存存储。可靠性是系统在异常条件下仍能给出可控结果的能力，包括超时、限流、模型错误、解析失败、工具失败、网络波动、重复请求等。</p>
+          <p>边界要明确：不是所有功能都要追最低延迟和最高可靠性。离线批处理可以慢一点，客服自动回复要稳一点，聊天陪练可以接受偶发重试，支付相关动作必须强一致和人工确认。判断句是：先按业务后果定约束，再选模型和架构。</p>
+          <div class="checkpoint">到这里，应该能说清：LLM 应用的可用性由质量、延迟、成本和失败处理共同决定。</div>
+        </div>
+        <div class="box soft">
+          <h3>三角关系图</h3>
+          <svg class="flow-svg" viewBox="0 0 820 320" role="img" aria-label="延迟成本可靠性三角">
+            <polygon points="410,42 128,248 692,248" fill="#eef8fc" stroke="#1b2a4a" stroke-width="2"/>
+            <circle cx="410" cy="42" r="42" fill="#fff" stroke="#d8dee8"/><text x="410" y="48" text-anchor="middle" font-size="17" font-weight="700">可靠性</text>
+            <circle cx="128" cy="248" r="42" fill="#fff6dc" stroke="#d8dee8"/><text x="128" y="254" text-anchor="middle" font-size="17" font-weight="700">延迟</text>
+            <circle cx="692" cy="248" r="42" fill="#edf8f3" stroke="#d8dee8"/><text x="692" y="254" text-anchor="middle" font-size="17" font-weight="700">成本</text>
+            <text x="410" y="183" text-anchor="middle" font-size="14" fill="#5f6875">模型选择、上下文长度、重试、缓存、降级共同影响三边</text>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <section id="latency">
+      <div class="head"><h2>二、延迟：先拆来源，再决定优化</h2><span class="tag">LATENCY</span></div>
+      <div class="grid3">
+        <div class="box">
+          <h3>首 token 延迟和总延迟不同</h3>
+          <p>首 token 延迟是用户开始看到响应前的等待时间，总延迟是完整结果生成完的时间。聊天场景可以用流式输出降低等待感，但结构化 JSON、后台任务和工具调用不一定适合流式。不要只看“模型生成很快”，还要看请求排队、检索、网络、工具调用和后处理。</p>
+          <p>判断句：用户是否能边看边用，决定你优化首 token 还是总完成时间。</p>
+        </div>
+        <div class="box">
+          <h3>输出长度常常是主要变量</h3>
+          <p>输入 token 会影响模型处理时间，输出 token 也会明显增加总延迟。让模型“详细解释”会增加输出长度，进而增加等待和成本。很多业务任务不需要长回答，应该限制输出字段、字数或只返回结构化结果。</p>
+          <p>判断句：如果任务只需要分类或抽取，就不要让模型写长篇理由。</p>
+        </div>
+        <div class="box">
+          <h3>串行工具调用会拖慢系统</h3>
+          <p>Agent 和 RAG 常见慢点是多次串行调用：先改写查询，再检索，再重排，再生成，再调用工具。每一步都增加失败点。能并行的检索和计算尽量并行，能提前缓存的不要每次重算。复杂流程要设置总超时，而不是只给每个步骤单独超时。</p>
+          <p>判断句：一次请求的最慢路径，才是用户真实体验。</p>
+        </div>
+      </div>
+      <div class="viz-panel">
+        <h3>小交互：估算一次调用的延迟和成本</h3>
+        <div class="slider-row"><label for="inputTokens">输入 token</label><input id="inputTokens" type="range" min="500" max="12000" step="500" value="3000"><span id="inputOut"></span></div>
+        <div class="slider-row"><label for="outputTokens">输出 token</label><input id="outputTokens" type="range" min="100" max="3000" step="100" value="800"><span id="outputOut"></span></div>
+        <div class="slider-row"><label for="toolCalls">工具调用</label><input id="toolCalls" type="range" min="0" max="6" step="1" value="2"><span id="toolOut"></span></div>
+        <div class="viz-grid">
+          <div class="viz-cell"><strong>估算结果</strong><p id="estimateText" class="muted"></p></div>
+          <div class="viz-cell"><strong>优化方向</strong><p id="optText" class="muted"></p></div>
+        </div>
+        <div class="viz-note">观察点：输入越长、输出越长、工具越多，延迟和成本都会上升。先缩短不必要的上下文和输出，再考虑换模型。</div>
+      </div>
+    </section>
+
+    <section id="cost">
+      <div class="head"><h2>三、成本：按 token、请求和失败次数算</h2><span class="tag">COST</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>成本不只来自一次成功调用</h3>
+          <p>最直观的成本是输入 token 和输出 token。输入越长，模型处理材料越多；输出越长，生成时间和费用越高。但真实成本还包括重试、检索、重排、工具调用、日志存储、人工复核和缓存维护。系统失败率越高，重试越多，单次成功结果的真实成本就越高。</p>
+          <p>成本优化不等于总是用最便宜模型。便宜模型如果导致失败率高、重试多、人工复核多，综合成本可能更高。更常见的做法是路由：简单问题用小模型，复杂问题用强模型；高风险问题进入人工或更严格流程；重复问题走缓存。</p>
+          <p>边界是：不要为了省成本牺牲关键可靠性。比如医疗、金融、合规、退款承诺等场景，省掉人工确认或证据检查，可能把小成本变成大损失。</p>
+        </div>
+        <div class="box soft">
+          <h3>成本控制手段</h3>
+          <table class="metric-table">
+            <thead><tr><th>手段</th><th>适用场景</th><th>风险</th></tr></thead>
+            <tbody>
+              <tr><td>压缩输入</td><td>上下文里有大量无关文本</td><td>压掉关键证据</td></tr>
+              <tr><td>限制输出</td><td>分类、抽取、固定报告</td><td>解释不足，用户难理解</td></tr>
+              <tr><td>缓存</td><td>重复问题、稳定资料、相同参数</td><td>资料更新后返回旧答案</td></tr>
+              <tr><td>模型路由</td><td>请求难度差异大</td><td>路由错会影响质量</td></tr>
+              <tr><td>批处理</td><td>离线分析、低实时要求</td><td>不适合实时交互</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="reliability">
+      <div class="head"><h2>四、可靠性：失败要可预期、可恢复、可追踪</h2><span class="tag">RELIABILITY</span></div>
+      <div class="grid3">
+        <div class="box">
+          <h3>超时和重试</h3>
+          <p>超时是系统承认“这次等太久了”。没有超时，请求可能一直挂着，占用资源。重试适合临时网络错误、限流、模型服务波动，但不适合所有错误。解析失败可以带失败原因重试一次；权限错误、业务规则拒绝、明显无资料，不应该盲目重试。</p>
+          <p>判断句：重试前先区分错误类型，不然只是把失败变贵。</p>
+        </div>
+        <div class="box">
+          <h3>降级和兜底</h3>
+          <p>降级是失败时给出次优但可控的结果。比如模型超时时返回“已转人工处理”，RAG 无资料时给出无法回答并提示补充信息，摘要失败时展示原文和关键字段。兜底不是编一个答案，而是保护用户和系统不进入错误动作。</p>
+          <p>判断句：降级结果要诚实说明状态，不要伪装成成功。</p>
+        </div>
+        <div class="box">
+          <h3>幂等和重复请求</h3>
+          <p>幂等是重复执行不会造成额外副作用。LLM 系统里，用户刷新、网络重发、重试工具调用都可能重复触发动作。查询通常天然幂等，发送邮件、创建工单、扣费、退款不是。对有副作用的动作，要有请求 id、去重和确认机制。</p>
+          <p>判断句：只要动作会改变外部状态，就要考虑重复请求的后果。</p>
+        </div>
+      </div>
+      <div class="codebar"><span class="label">最小代码：超时、有限重试、降级</span><span class="kind">python</span></div>
+      <pre><code><span class="kw">def</span> <span class="var">call_with_guardrails</span>(request, llm_client, max_retries=1):
+    errors = []
+    <span class="kw">for</span> attempt <span class="kw">in</span> range(max_retries + 1):
+        <span class="kw">try</span>:
+            raw = llm_client.complete(request, timeout_seconds=8)
+            parsed = parse_json(raw)
+            validate(parsed)
+            <span class="kw">return</span> {<span class="str">"ok"</span>: True, <span class="str">"data"</span>: parsed}
+        <span class="kw">except</span> TimeoutError:
+            errors.append(<span class="str">"timeout"</span>)
+        <span class="kw">except</span> JsonParseError:
+            errors.append(<span class="str">"bad_json"</span>)
+        <span class="kw">except</span> ValidationError <span class="kw">as</span> exc:
+            <span class="kw">return</span> {<span class="str">"ok"</span>: False, <span class="str">"mode"</span>: <span class="str">"safe_stop"</span>, <span class="str">"reason"</span>: str(exc)}
+
+    <span class="kw">return</span> {
+        <span class="str">"ok"</span>: False,
+        <span class="str">"mode"</span>: <span class="str">"fallback"</span>,
+        <span class="str">"message"</span>: <span class="str">"暂时无法生成可靠结果，已保留原始请求。"</span>,
+        <span class="str">"errors"</span>: errors
+    }</code></pre>
+      <p>这段代码体现了三个边界：超时和 JSON 解析失败可以有限重试；验证失败直接安全停止，因为再试一次不一定解决业务违规；重试耗尽后走降级，不把半成品伪装成成功结果。</p>
+    </section>
+
+    <section id="examples">
+      <div class="head"><h2>五、三个渐进例子</h2><span class="tag">EXAMPLES</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>例子 1：客服摘要从慢到可用</h3>
+          <p>第一版客服摘要把整段历史聊天都塞给大模型，要求输出长总结、情绪、原因和回复建议。它能跑，但慢且贵。拆解后发现，大部分请求只需要最近 10 条消息和固定 JSON 字段。优化动作是截断无关历史、限制输出字段、把回复建议放到需要时再生成。</p>
+          <p>这里不是简单“少给上下文”。如果历史里有退款承诺或投诉升级，截断会出事故。所以要按业务规则保留关键事件，再压缩普通闲聊。</p>
+        </div>
+        <div class="box">
+          <h3>例子 2：RAG 问答的可靠降级</h3>
+          <p>RAG 问答最常见的失败不是模型不会说话，而是资料没检到或资料冲突。可靠做法是：检索分数低时不要强答；资料冲突时说明需要人工确认；模型生成答案后检查引用是否来自上下文。降级结果可以是“资料库中没有足够依据”，而不是编一个看起来合理的答案。</p>
+          <p>这会牺牲一部分回答率，但换来更低的幻觉风险。是否值得，要看业务后果。</p>
+        </div>
+      </div>
+      <div class="box">
+        <h3>例子 3：错误示例，只靠无限重试追成功</h3>
+        <div class="bad">
+          <div class="codebar"><span class="label">错误示例：无限重试让失败变贵</span><span class="kind">pseudo</span></div>
+          <pre><code>while result is None:
+    result = call_llm(prompt)
+return result</code></pre>
+        </div>
+        <p>这段逻辑没有超时、没有最大次数、没有错误类型，也没有降级。模型服务异常时，它会持续消耗资源；输入本身不合格时，它会重复失败；如果某次返回半成品，还可能直接进入业务。修法是设置总超时、有限重试、错误分类和安全停止。</p>
+      </div>
+    </section>
+
+    <section id="workflow">
+      <div class="head"><h2>六、最小工程动作：从第一天就记录约束</h2><span class="tag">WORKFLOW</span></div>
+      <div class="grid3">
+        <div class="box"><h3>1. 定 SLO</h3><p>SLO 是服务目标，例如 P95 延迟小于 5 秒、成功率大于 99%、单次请求成本低于某个阈值。没有目标，就无法判断优化是否足够。</p></div>
+        <div class="box"><h3>2. 记录 token 和耗时</h3><p>每次调用记录输入 token、输出 token、模型、耗时、是否重试、是否命中缓存。没有这些数据，成本和延迟只能靠猜。</p></div>
+        <div class="box"><h3>3. 设置超时和预算</h3><p>每个步骤和整条链路都要有时间预算。Agent 还要有最大步数和最大工具调用数。预算用完就降级或停止。</p></div>
+        <div class="box"><h3>4. 做错误分类</h3><p>把失败分成超时、限流、解析失败、验证失败、检索无结果、权限拒绝、工具异常。分类后才知道该重试、降级还是修业务规则。</p></div>
+        <div class="box"><h3>5. 设计降级路径</h3><p>失败时返回什么、转给谁、是否保存现场、是否提醒用户，都要提前设计。不要等线上失败后临时写一句道歉。</p></div>
+        <div class="box"><h3>6. 监控和告警</h3><p>监控 P50/P95 延迟、错误率、重试率、解析失败率、成本、缓存命中率。告警要连到可行动的错误类型。</p></div>
+      </div>
+    </section>
+
+    <section id="diagnosis">
+      <div class="head"><h2>七、常见误区和错误诊断</h2><span class="tag">PITFALLS</span></div>
+      <div class="grid2">
+        <div class="box redsoft"><h3>误区 1：只优化模型，不看链路</h3><p>错因：延迟可能来自检索、工具、网络和后处理。后果是换模型后仍然慢。修法是分段记录耗时，先找最大瓶颈。</p></div>
+        <div class="box redsoft"><h3>误区 2：上下文越长越好</h3><p>错因：长上下文会增加成本、延迟和噪声。后果是模型读到无关内容，回答反而不稳。修法是保留关键证据，压缩或过滤无关材料。</p></div>
+        <div class="box redsoft"><h3>误区 3：重试越多越可靠</h3><p>错因：重试只适合临时错误。后果是成本和延迟上升，确定性错误反复失败。修法是错误分类和有限重试。</p></div>
+        <div class="box redsoft"><h3>误区 4：缓存一定安全</h3><p>错因：资料、权限和用户上下文会变化。后果是返回旧答案或泄露不该复用的内容。修法是设置缓存 key、过期时间和权限边界。</p></div>
+        <div class="box redsoft"><h3>误区 5：降级就是随便回一句抱歉</h3><p>错因：降级需要保持状态和用户可行动。后果是用户不知道下一步怎么办。修法是说明当前状态、保留请求、提供人工或重试入口。</p></div>
+        <div class="box redsoft"><h3>误区 6：只看平均延迟</h3><p>错因：平均值会掩盖尾部慢请求。后果是少数用户体验很差却没被发现。修法是看 P95/P99、超时率和慢请求样本。</p></div>
+      </div>
+    </section>
+
+    <section id="confusion">
+      <div class="head"><h2>八、三组易混概念</h2><span class="tag">COMPARE</span></div>
+      <table class="metric-table">
+        <thead><tr><th>概念组</th><th>容易混的地方</th><th>准确区分</th><th>工程判断</th></tr></thead>
+        <tbody>
+          <tr><td>平均延迟 / P95 延迟</td><td>都描述请求速度</td><td>平均值看整体，P95 看最慢的 5% 用户体验</td><td>交互产品至少看 P95，不只看平均</td></tr>
+          <tr><td>重试 / 降级</td><td>都是失败处理</td><td>重试是再尝试成功，降级是接受次优但可控结果</td><td>临时错误可重试，确定性错误应安全停止或降级</td></tr>
+          <tr><td>缓存 / 记忆</td><td>都复用过去信息</td><td>缓存复用计算结果，记忆保存用户或任务相关事实</td><td>缓存要有 key 和过期规则，记忆要有权限和更新规则</td></tr>
+          <tr><td>可靠性 / 正确性</td><td>都和系统好坏有关</td><td>正确性看答案是否对，可靠性看异常时是否可控</td><td>两者都要评测；正确答案也可能来自不可靠链路</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">PRACTICE</span></div>
+      <div class="practice-intro">
+        <div class="review-card"><strong>练习目标</strong><p>这组题检查你能不能从延迟、成本和可靠性三条线验收一个 LLM 功能。</p></div>
+        <div class="review-card"><strong>作答提醒</strong><p>开放题按“指标、原因、动作”回答。错误诊断题要说清错因、后果和修法。</p></div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>先确认三类约束的含义。</p></div><div class="quick-review"><b>复习</b>延迟看用户等多久，成本看规模化代价，可靠性看失败时是否可控。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. 三角约束"><div class="q-meta"><span class="pill">选择</span></div><h3>1. LLM 应用上线前通常要同时看哪三类约束？</h3><div class="choices"><label><input type="radio" name="q1" value="颜色、字体、动画">颜色、字体、动画</label><label><input type="radio" name="q1" value="延迟、成本、可靠性">延迟、成本、可靠性</label><label><input type="radio" name="q1" value="标题、摘要、标签">标题、摘要、标签</label></div></div>
+          <div class="q" data-role="homework" data-title="2. 重试越多越可靠。"><div class="q-meta"><span class="pill">判断</span></div><h3>2. 重试次数越多，系统一定越可靠。</h3><div class="choices"><label><input type="radio" name="q2" value="对">对</label><label><input type="radio" name="q2" value="错">错</label></div></div>
+          <div class="q short" data-role="homework" data-title="3. P95 含义"><div class="q-meta"><span class="pill">填空</span></div><h3>3. P95 延迟关注的是最慢的约 ______ 用户体验。</h3><input type="text" name="q3"></div>
+          <div class="q short" data-role="homework" data-title="4. 降级含义"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 什么是降级？它和编造一个答案有什么区别？</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、延迟和成本估算</h3><p>这一组练习拆链路和算成本来源。</p></div><div class="quick-review"><b>复习</b>输入 token、输出 token、工具调用、重试和检索都会影响延迟与成本。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="5. 延迟来源"><div class="q-meta"><span class="pill">清单</span></div><h3>5. 一次 RAG 请求的延迟可能来自哪些环节？至少写 5 个。</h3><textarea name="q5"></textarea></div>
+          <div class="q short" data-role="homework" data-title="6. 输出长度"><div class="q-meta"><span class="pill">解释</span></div><h3>6. 为什么限制输出长度可以同时降低延迟和成本？</h3><textarea name="q6"></textarea></div>
+          <div class="q short" data-role="homework" data-title="7. 成本来源"><div class="q-meta"><span class="pill">场景</span></div><h3>7. 除了模型 token 费用，一个客服 LLM 功能还可能有哪些成本？</h3><textarea name="q7"></textarea></div>
+          <div class="q short" data-role="homework" data-title="8. 缓存风险"><div class="q-meta"><span class="pill">判断</span></div><h3>8. 哪些场景不适合简单复用缓存答案？为什么？</h3><textarea name="q8"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、代码和流程阅读</h3><p>读懂失败处理的顺序。</p></div><div class="quick-review"><b>复习</b>超时和解析失败可有限重试，验证失败通常应安全停止。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="9. timeout_seconds"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>9. 上面代码里 <code>timeout_seconds=8</code> 解决什么问题？</h3><textarea name="q9"></textarea></div>
+          <div class="q short" data-role="homework" data-title="10. ValidationError 分支"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>10. 为什么 <code>ValidationError</code> 直接返回 <code>safe_stop</code>，而不是继续重试？</h3><textarea name="q10"></textarea></div>
+          <div class="q short" data-role="homework" data-title="11. 流程排序"><div class="q-meta"><span class="pill">排序</span></div><h3>11. 排序：A 验证输出，B 调用模型，C 解析 JSON，D 降级，E 返回成功结果。</h3><input type="text" name="q11" placeholder="例如：B-C-A-E，失败则 D"></div>
+          <div class="q short" data-role="homework" data-title="12. 无限重试风险"><div class="q-meta"><span class="pill">代码诊断</span></div><h3>12. 无限重试会带来哪些延迟、成本和可靠性问题？</h3><textarea name="q12"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、错误诊断</h3><p>这些题要求说清错因、后果和修法。</p></div><div class="quick-review"><b>复习</b>慢、贵、不稳都要先定位来源，再决定压缩、缓存、路由、降级或监控。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="13. 错误诊断：只看平均延迟"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 团队只看平均延迟 2 秒，却不断收到用户投诉“很慢”。可能哪里漏看了？</h3><textarea name="q13"></textarea></div>
+          <div class="q short" data-role="homework" data-title="14. 错误诊断：上下文过长"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. 系统把整篇文档和全部历史都塞进 prompt，结果又慢又贵。怎么改？</h3><textarea name="q14"></textarea></div>
+          <div class="q short" data-role="homework" data-title="15. 错误诊断：缓存旧答案"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 用户看到的是旧政策答案，原因是缓存没更新。缓存设计少了什么？</h3><textarea name="q15"></textarea></div>
+          <div class="q short" data-role="homework" data-title="16. 错误诊断：降级不清楚"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 模型超时后页面只显示“失败”。用户不知道该怎么办。如何设计更好的降级？</h3><textarea name="q16"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>五、迁移和表达</h3><p>把约束思维放到真实功能验收里。</p></div><div class="quick-review"><b>复习</b>SLO、日志、错误分类和告警要在早期就设计。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="17. SLO 设计"><div class="q-meta"><span class="pill">应用</span></div><h3>17. 为“客服自动摘要”写 3 条 SLO 或监控指标。</h3><textarea name="q17"></textarea></div>
+          <div class="q short" data-role="homework" data-title="18. 面试短答：成本优化"><div class="q-meta"><span class="pill">面试</span></div><h3>18. 用 2-3 句话回答：LLM 应用常见成本优化手段有哪些？</h3><textarea name="q18"></textarea></div>
+          <div class="q short" data-role="homework" data-title="19. 高风险动作可靠性"><div class="q-meta"><span class="pill">场景</span></div><h3>19. 如果 LLM 输出会触发退款工单，你会加哪些可靠性保护？</h3><textarea name="q19"></textarea></div>
+          <div class="q short" data-role="homework" data-title="20. 监控字段"><div class="q-meta"><span class="pill">清单</span></div><h3>20. 每次 LLM 调用日志至少应记录哪些字段，才能排查慢、贵、不稳？</h3><textarea name="q20"></textarea></div>
+          <div class="q full" data-role="homework" data-title="21. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>21. 用 6-9 句话解释：为什么 LLM 应用必须同时考虑延迟、成本和可靠性。</h3><div class="solve-note">请串联 token、超时、重试、降级、缓存、监控、预算和业务后果。</div><textarea name="q21"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>生成练习记录</h2><span class="tag">RECORD</span></div>
+      <p class="muted">完成后生成一份练习记录。记录会保留题干和你的回答，方便复盘。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){
+  const max=document.documentElement.scrollHeight-innerHeight;
+  progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";
+  let current=sections[0]?.id;
+  for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id;}
+  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`));
+}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+function updateEstimate(){
+  const input=Number(document.getElementById("inputTokens").value);
+  const output=Number(document.getElementById("outputTokens").value);
+  const tools=Number(document.getElementById("toolCalls").value);
+  document.getElementById("inputOut").textContent=input.toLocaleString();
+  document.getElementById("outputOut").textContent=output.toLocaleString();
+  document.getElementById("toolOut").textContent=tools;
+  const latency=0.7+input/6000+output/900+tools*0.45;
+  const cost=input*0.000002+output*0.000006+tools*0.001;
+  document.getElementById("estimateText").textContent=`粗略估算：总延迟约 ${latency.toFixed(1)} 秒，单次请求变量成本约 $${cost.toFixed(4)}。这里只用于观察趋势，不代表任何具体供应商价格。`;
+  const tips=[];
+  if(input>6000)tips.push("先过滤或压缩输入上下文");
+  if(output>1200)tips.push("限制输出字段或字数");
+  if(tools>3)tips.push("减少串行工具调用或并行化");
+  if(!tips.length)tips.push("当前主要保持监控，先不要过度优化");
+  document.getElementById("optText").textContent=tips.join("；") + "。";
+}
+["inputTokens","outputTokens","toolCalls"].forEach(id=>document.getElementById(id).addEventListener("input",updateEstimate));updateEstimate();
+document.querySelectorAll(".codebar").forEach(bar=>{
+  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
+  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";navigator.clipboard.writeText(code).then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});
+  bar.appendChild(btn);
+});
+const questionNodes=[...document.querySelectorAll('[data-role="homework"]')];
+function answerOf(node){
+  const checked=[...node.querySelectorAll("input[type=radio]:checked,input[type=checkbox]:checked")].map(i=>i.value);
+  const text=[...node.querySelectorAll("textarea,input[type=text]")].map(i=>i.value.trim()).filter(Boolean);
+  return [...checked,...text].join("；");
+}
+function generateRecord(){
+  let out="# 延迟、成本、可靠性约束｜练习记录\n\n";
+  const missing=[];
+  questionNodes.forEach((node,idx)=>{const title=node.dataset.title||`第 ${idx+1} 题`;const answer=answerOf(node);if(!answer)missing.push(title);out+=`## ${idx+1}. ${title}\n${answer||"（未填写）"}\n\n`;});
+  document.getElementById("record").textContent=out;
+  const feynman=answerOf(questionNodes[questionNodes.length-1]||document.createElement("div"));
+  const keys=(document.body.dataset.feynmanKeywords||"").split(",").filter(Boolean);
+  const lack=keys.filter(k=>feynman&&!feynman.includes(k));
+  const notes=[];if(missing.length)notes.push(`还有 ${missing.length} 题未填写。`);if(feynman&&feynman.length<140)notes.push("费曼解释偏短，建议把三类约束和工程动作讲完整。");if(lack.length)notes.push(`费曼解释可能缺少：${lack.join("、")}。`);
+  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=notes.length?notes.join("\n"):"练习记录已生成，题目填写完整。";
+}
+function copyRecord(){
+  const text=document.getElementById("record").textContent;
+  navigator.clipboard.writeText(text).then(()=>{document.getElementById("quality").style.display="block";document.getElementById("quality").textContent="已复制练习记录。"}).catch(()=>{document.getElementById("quality").style.display="block";document.getElementById("quality").textContent="复制失败，请手动选中记录文本复制。"});
+}
+</script>
+</body>
+</html>

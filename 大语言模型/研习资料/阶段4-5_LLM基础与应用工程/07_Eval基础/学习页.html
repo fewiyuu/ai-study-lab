@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM 应用工程 07｜Eval 基础</title>
+  <style>
+    :root{
+      --bg:#f4f6f9;--paper:#fff;--ink:#1a1a1a;--muted:#5f6875;--quiet:#8a95a4;--line:#d8dee8;
+      --navy:#1b2a4a;--cyan:#00a9f4;--soft:#eef8fc;--warn:#fff4d8;--redsoft:#fff0ed;--greenbox:#edf8f3;
+      --red:#c14f3e;--gold:#a37122;--code:#1e1e1e;--codeText:#d4d4d4;
+      --sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif;
+      --serif:"Songti SC","Noto Serif CJK SC","STSong","SimSun",serif;
+      --mono:"Cascadia Mono","Cascadia Code","Consolas","SFMono-Regular",monospace;
+    }
+    *{box-sizing:border-box}html{scroll-behavior:smooth}
+    body{margin:0;background:linear-gradient(90deg,rgba(27,42,74,.045) 1px,transparent 1px) 0 0/60px 60px,linear-gradient(rgba(27,42,74,.035) 1px,transparent 1px) 0 0/60px 60px,var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.72;-webkit-font-smoothing:antialiased}
+    .progress{position:fixed;left:0;top:0;height:4px;width:0;background:linear-gradient(90deg,var(--cyan),var(--navy));z-index:10}
+    .layout{display:grid;grid-template-columns:308px minmax(0,1fr);min-height:100vh}
+    aside{position:sticky;top:0;height:100vh;overflow:auto;background:var(--navy);color:#fff;padding:30px 22px;background-image:repeating-linear-gradient(90deg,transparent,transparent 59px,rgba(255,255,255,.045) 59px,rgba(255,255,255,.045) 60px),repeating-linear-gradient(0deg,transparent,transparent 59px,rgba(255,255,255,.035) 59px,rgba(255,255,255,.035) 60px)}
+    .brand{border-bottom:1px solid rgba(255,255,255,.36);padding-bottom:22px;margin-bottom:20px}.brand strong{display:block;font-size:27px;line-height:1.18;font-family:var(--serif);font-weight:700}.brand span{display:block;color:rgba(255,255,255,.68);font-size:13px;margin-top:8px;line-height:1.7}
+    nav a{display:flex;gap:10px;align-items:center;color:rgba(255,255,255,.82);text-decoration:none;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.13);font-size:13px;letter-spacing:.04em}nav a:hover,nav a.active{color:#fff;border-color:rgba(255,255,255,.42);font-weight:700}.dot{width:5px;height:5px;background:var(--cyan);opacity:.55;flex:0 0 auto}.active .dot{opacity:1;transform:scale(1.35)}
+    .side-note{margin-top:24px;padding:14px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:rgba(255,255,255,.72);font-size:13px;line-height:1.8}
+    main{max-width:1420px;width:100%;padding:34px 44px}.hero,section{position:relative;background:var(--paper);border:1px solid var(--line);box-shadow:0 14px 28px rgba(27,42,74,.08)}.hero{display:grid;grid-template-columns:minmax(0,1fr) 392px;gap:24px;padding:38px 42px;border-top:6px solid var(--navy)}section{padding:30px 34px;margin-top:18px}
+    .kicker{font-family:var(--mono);font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.18em;margin-bottom:16px}h1{margin:0;font-family:var(--serif);font-size:48px;line-height:1.12;letter-spacing:0;color:#111}h2{margin:0;font-family:var(--serif);font-size:31px;line-height:1.22;color:#111}h3{margin:0 0 8px;font-size:17px;line-height:1.45;color:#111}p{margin:8px 0}.muted,.hero p{color:var(--muted)}
+    .head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--line)}.tag,.pill{display:inline-flex;align-items:center;border:0;background:transparent;color:#8390a0;font-family:var(--mono);font-size:11px;letter-spacing:.14em;padding:0;text-transform:uppercase}
+    .grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(310px,.88fr);gap:1px;background:var(--line);border:1px solid var(--line)}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}.box,.q,.review-card,.check-item,.chart,.answer,.quality{background:rgba(255,255,255,.72);border:0;padding:16px}.box h3,.review-card strong,.check-item b{font-family:var(--serif);font-weight:900}.soft{background:var(--soft)}.warn{background:var(--warn)}.redsoft{background:var(--redsoft)}.greenbox{background:var(--greenbox)}
+    .route{background:#fff;border:1px solid var(--line);padding:22px}.route h3{font-family:var(--serif);font-size:21px}.map{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0;align-items:center;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:14px 0}.node{background:#f7f9fc;border:1px solid var(--line);color:#20304d;padding:8px 12px;font-weight:900}.arrow{color:#a7b0bd}
+    code{background:#e9eef6;color:#17202a;padding:2px 5px;font-family:var(--mono);font-size:.92em}.codebar{margin-top:14px;background:#252526;color:#cbd5e1;border:1px solid #3c3c3c;border-bottom:0;padding:8px 12px;display:flex;align-items:center;font-family:var(--mono);font-size:13px}.codebar:before{content:"";width:34px;height:10px;margin-right:10px;flex:0 0 auto;background:radial-gradient(circle at 5px 5px,#f87171 0 4px,transparent 4.5px),radial-gradient(circle at 17px 5px,#fbbf24 0 4px,transparent 4.5px),radial-gradient(circle at 29px 5px,#34d399 0 4px,transparent 4.5px)}.codebar .label{color:#93c5fd;margin-right:auto}.codebar .kind{color:#9ca3af}.copy-code{margin-left:12px;border:1px solid #3c3c3c;background:#2d2d30;color:#dbeafe;padding:3px 7px;font-family:var(--mono);font-size:12px;cursor:pointer}
+    pre{margin:0 0 12px;background:var(--code);color:var(--codeText);border:1px solid #3c3c3c;padding:15px 16px;overflow:auto;font-family:var(--mono);font-size:14px;line-height:1.64}pre code{background:transparent;color:inherit;padding:0}.bad .codebar{border-color:#7f1d1d;background:#3b1d1d}.bad pre{border-color:#7f1d1d}.comment{color:#6a9955}.kw{color:#c586c0}.str{color:#ce9178}.num{color:#b5cea8}.var{color:#9cdcfe}
+    .viz-panel{background:#fff;border:1px solid var(--line);padding:16px;margin:12px 0}.viz-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.viz-cell{background:#f7f9fc;border:1px solid var(--line);padding:14px}.metric-table{width:100%;border-collapse:collapse;margin:10px 0;background:#fff}.metric-table th,.metric-table td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}.metric-table th{background:#f0f4fa}.viz-note,.checkpoint{margin:12px 0 0;padding:10px 12px;background:#f3f7fb;border-left:4px solid var(--cyan);color:#39465a}
+    button{border:0;background:var(--navy);color:#fff;padding:9px 12px;font:inherit;cursor:pointer}.ghost{background:#fff;color:var(--navy);border:1px solid var(--navy)}.seg{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.seg button{background:#edf2f7;color:#23324a;border:1px solid #d8dee8}.seg button.active{background:var(--navy);color:#fff}.flow-svg{width:100%;height:auto;display:block;background:#fff;border:1px solid var(--line)}.barrow{display:grid;grid-template-columns:110px 1fr 70px;gap:10px;align-items:center;margin:8px 0}.bar{height:15px;background:#e3e8f0;overflow:hidden}.fill{height:100%;background:linear-gradient(90deg,var(--cyan),var(--navy))}
+    .practice-intro{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:14px}.practice-check{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:12px 0}.practice-group{border:1px solid var(--line);background:#fff;margin-top:20px}.group-head{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px;padding:20px 22px;border-bottom:1px solid var(--line)}.group-head h3{font-family:var(--serif);font-size:25px}.quick-review{border-left:2px solid var(--navy);padding-left:14px;font-size:13.5px;color:var(--muted)}.quick-review b{display:block;font-family:var(--mono);font-size:11px;color:#8390a0;letter-spacing:.16em;margin-bottom:5px}.drill-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line)}.q{min-height:148px}.q.full{grid-column:1/-1}.q h3{font-size:16px;line-height:1.55}.q-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}.solve-note{margin:8px 0 0;padding:9px 12px;background:#f4f7fb;border-left:4px solid var(--navy);color:#566273;font-size:13px}.choices label{display:block;margin:7px 0}input[type=radio],input[type=checkbox]{accent-color:var(--navy);margin-right:7px}textarea,input[type=text]{width:100%;border:1px solid var(--line);background:#fff;color:var(--ink);padding:10px;font:inherit;resize:vertical}textarea{min-height:74px}.short textarea{min-height:58px}.answer{white-space:pre-wrap;background:#fff;border:1px dashed #9aa7b6;max-height:380px;overflow:auto}.quality{display:none;white-space:pre-wrap;background:#fff7df;border:1px solid #e5c569;color:#574322;margin:12px 0}.actions{position:sticky;bottom:0;display:flex;gap:10px;justify-content:flex-end;padding-top:14px;margin-top:18px;background:linear-gradient(transparent,var(--bg) 42%)}ul,ol{padding-left:21px}li{margin:4px 0}
+    @media(max-width:980px){.layout{grid-template-columns:minmax(0,1fr)}aside{position:static;height:auto}main{padding:18px}.hero,section{padding:22px 18px}.hero,.grid2,.grid3,.viz-grid,.practice-intro,.group-head,.drill-grid{grid-template-columns:minmax(0,1fr)}h1{font-size:34px;overflow-wrap:anywhere}.practice-check{grid-template-columns:minmax(0,1fr)}pre{font-size:13.5px}.barrow{grid-template-columns:80px 1fr 55px}.metric-table,.metric-table thead,.metric-table tbody,.metric-table tr,.metric-table th,.metric-table td{display:block;width:100%}.metric-table thead{display:none}.metric-table tr{border:1px solid var(--line);margin:0 0 10px}.metric-table th,.metric-table td{border:0;border-bottom:1px solid var(--line)}}
+  </style>
+</head>
+<body data-feynman-keywords="样本集,指标,判分规则,基线,回归,线上监控,人工复核,错误分析">
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <strong>LLM 应用工程</strong>
+      <span>07｜Eval 基础<br>让改动先过样本和规则</span>
+    </div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>学习目标</a>
+      <a href="#why"><span class="dot"></span>为什么要 Eval</a>
+      <a href="#dataset"><span class="dot"></span>样本集</a>
+      <a href="#metric"><span class="dot"></span>指标与判分</a>
+      <a href="#examples"><span class="dot"></span>渐进例子</a>
+      <a href="#workflow"><span class="dot"></span>最小流程</a>
+      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+      <a href="#confusion"><span class="dot"></span>易混概念</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>练习记录</a>
+    </nav>
+    <div class="side-note">Eval 不是为了证明系统完美，而是为了提前发现哪些输入会坏、坏到什么程度、改动有没有把旧能力弄丢。</div>
+  </aside>
+
+  <main>
+    <section class="hero" id="goal">
+      <div>
+        <div class="kicker">Evaluation · LLM Application</div>
+        <h1>Eval 是把感觉变成可复查的证据</h1>
+        <p>LLM 应用的改动很容易“肉眼看起来更好了”。换模型、改 prompt、加检索、调温度，都可能让几个样例变顺，却让另一批样例变差。Eval 的作用，是用固定样本、判分规则和错误分析把这种感觉压成证据。它不保证线上永远没问题，但能让每次改动先回答三个问题：哪里更好，哪里更坏，坏的问题能不能接受。</p>
+        <div class="map">
+          <span class="node">真实任务</span><span class="arrow">→</span>
+          <span class="node">样本集</span><span class="arrow">→</span>
+          <span class="node">输出</span><span class="arrow">→</span>
+          <span class="node">判分</span><span class="arrow">→</span>
+          <span class="node">错误分析</span><span class="arrow">→</span>
+          <span class="node">改动决策</span>
+        </div>
+      </div>
+      <div class="route">
+        <h3>学完后要能做三件事</h3>
+        <ol>
+          <li>为一个 LLM 功能设计 20-50 条最小评测样本，并覆盖常见失败类型。</li>
+          <li>区分确定性判分、规则判分、LLM-as-judge 和人工复核的边界。</li>
+          <li>看到分数变化时，能追到具体样本，而不是只盯平均分。</li>
+        </ol>
+        <p class="muted">Eval 是后面 RAG 和 Agent 的安全垫。没有它，系统越复杂，越难知道哪次改动真的变好了。</p>
+      </div>
+    </section>
+
+    <section id="why">
+      <div class="head"><h2>一、为什么 LLM 应用特别需要 Eval</h2><span class="tag">WHY</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>概念：Eval 是可重复的任务检查</h3>
+          <p>Eval 是 evaluation 的缩写，可以先理解成“用固定题目检查系统表现”。这里的题目不是考试题，而是从真实业务里抽出来的输入样本。每条样本包含输入、期望行为、判分规则，有时还会包含参考答案。系统每次改动后重新跑这些样本，就能看到能力是否变化。</p>
+          <p>LLM 应用比传统规则程序更需要 Eval，因为输出不是固定函数。模型版本、prompt 表述、采样温度、检索结果顺序都会影响回答。你不能只用一个 happy path 样例判断系统可以上线。一个客服分类器在普通问题上表现很好，也可能在退款、辱骂、合规风险、含糊输入上突然失稳。</p>
+          <p>边界也要记住：Eval 不是线上监控，不是安全审计，也不是一次性验收。Eval 覆盖的是你已经想到并收集到的样本。它能发现一批已知风险，不能覆盖未来所有输入。判断句是：当你准备改 prompt 或换模型时，如果没有一组固定样本对比前后表现，你其实是在凭感觉改系统。</p>
+          <div class="checkpoint">到这里，应该能说清：Eval 解决的是“改动前后怎么比较”和“错误怎么复现”。</div>
+        </div>
+        <div class="box soft">
+          <h3>评测链路</h3>
+          <svg class="flow-svg" viewBox="0 0 860 280" role="img" aria-label="Eval 流程图">
+            <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#1b2a4a"/></marker></defs>
+            <rect x="28" y="48" width="130" height="72" fill="#eef8fc" stroke="#d8dee8"/><text x="93" y="79" text-anchor="middle" font-size="15" font-weight="700">样本集</text><text x="93" y="101" text-anchor="middle" font-size="12" fill="#5f6875">输入 + 期望</text>
+            <line x1="158" y1="84" x2="220" y2="84" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/>
+            <rect x="220" y="48" width="140" height="72" fill="#fff" stroke="#d8dee8"/><text x="290" y="79" text-anchor="middle" font-size="15" font-weight="700">被测系统</text><text x="290" y="101" text-anchor="middle" font-size="12" fill="#5f6875">prompt / RAG / agent</text>
+            <line x1="360" y1="84" x2="422" y2="84" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/>
+            <rect x="422" y="48" width="130" height="72" fill="#fff6dc" stroke="#d8dee8"/><text x="487" y="79" text-anchor="middle" font-size="15" font-weight="700">输出</text><text x="487" y="101" text-anchor="middle" font-size="12" fill="#5f6875">答案 / JSON / 动作</text>
+            <line x1="552" y1="84" x2="614" y2="84" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/>
+            <rect x="614" y="36" width="200" height="96" fill="#edf8f3" stroke="#d8dee8"/><text x="714" y="69" text-anchor="middle" font-size="15" font-weight="700">判分与错误分析</text><text x="714" y="94" text-anchor="middle" font-size="12" fill="#5f6875">分数、标签、坏样本、原因</text>
+            <rect x="220" y="178" width="332" height="56" fill="#fff0ed" stroke="#d8dee8"/><text x="386" y="211" text-anchor="middle" font-size="14">平均分只能给方向，具体坏样本才给修法</text>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <section id="dataset">
+      <div class="head"><h2>二、样本集：先覆盖风险，再追求数量</h2><span class="tag">DATASET</span></div>
+      <div class="grid3">
+        <div class="box">
+          <h3>样本从真实任务来</h3>
+          <p>最小 Eval 不需要一开始就有几千条样本。更现实的做法，是先收集 20-50 条代表性输入：常见请求、边界请求、高风险请求、历史坏例、用户容易误写的请求。每条样本要写清楚期望行为。只保存输入，不写期望，后面就会变成“看起来还行”的人工浏览。</p>
+          <p>样本要分标签。比如客服分类可以标成普通咨询、账单、投诉、辱骂、退款、信息不足。RAG 问答可以标成可回答、资料缺失、资料冲突、需要引用、容易幻觉。标签让你知道分数变化发生在哪类问题上。</p>
+        </div>
+        <div class="box">
+          <h3>参考答案不一定只有一种</h3>
+          <p>分类、抽取、结构化输出通常可以有明确答案。总结、开放问答、改写、建议生成就很难只有一个标准答案。这时不要强行追 exact match，而要写判分规则：是否覆盖关键点，是否引用证据，是否避免未给出的事实，语气是否合适，是否拒绝不该回答的问题。</p>
+          <p>判断句是：如果两个人看同一条输出会给完全不同的分，说明你的 rubric 还太模糊。Rubric 是判分量表，写的是“什么情况下给满分、扣分、判失败”。</p>
+        </div>
+        <div class="box">
+          <h3>保留坏例比保留漂亮样例更有用</h3>
+          <p>Eval 不是展示系统能力的样例册。它应该包含会让系统犯错的样本。每发现一次线上坏例，就把它整理进回归样本集。回归的意思是：以后每次改动都要检查旧问题有没有重新出现。一个系统如果只在轻松样本上跑分，分数会很好看，但上线后仍然会在同样的难点上跌倒。</p>
+          <p>边界是样本集会过时。产品变化、用户变化、资料库变化后，样本也要更新。不要把旧 Eval 当永久真理。</p>
+        </div>
+      </div>
+      <table class="metric-table">
+        <thead><tr><th>样本类型</th><th>例子</th><th>它检查什么</th></tr></thead>
+        <tbody>
+          <tr><td>常见样本</td><td>“我想改绑定邮箱。”</td><td>主流程是否稳定</td></tr>
+          <tr><td>边界样本</td><td>“余额少了，但我也不确定是不是自己花了。”</td><td>信息不足时是否保守</td></tr>
+          <tr><td>高风险样本</td><td>“再不退款我就投诉到监管。”</td><td>升级、合规、人工处理</td></tr>
+          <tr><td>历史坏例</td><td>过去被错误自动回复的真实问题</td><td>旧问题是否复发</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="metric">
+      <div class="head"><h2>三、指标与判分：不同任务用不同尺子</h2><span class="tag">SCORING</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>确定性任务先用硬指标</h3>
+          <p>如果任务有明确答案，优先使用硬指标。分类任务可以算 accuracy、precision、recall；抽取任务可以检查字段是否相等、集合是否覆盖；JSON 任务可以检查解析率、字段缺失率、枚举错误率。硬指标的好处是可重复、便宜、争议少。它们也有盲区：用户可接受的表达变化，硬指标可能会误判。</p>
+          <p>LLM 生成任务常用 rubric 或 LLM-as-judge。LLM-as-judge 是让另一个模型按规则给分。它适合初步筛查开放文本，但不能盲信。判分 prompt 也会有偏差，可能偏爱长答案、礼貌答案或某种写法。重要任务要抽样人工复核，让自动判分和人工判断对齐。</p>
+          <p>不要只看平均分。平均分会掩盖严重错误。比如 100 条问答里 95 条很好，5 条会编造法律建议，平均分可能仍然漂亮。上线决策要看分布、失败类型和高风险样本表现。</p>
+        </div>
+        <div class="box soft">
+          <h3>小交互：选任务看该用什么判分</h3>
+          <div class="seg">
+            <button data-task="classify" class="active">分类</button>
+            <button data-task="extract">结构化抽取</button>
+            <button data-task="rag">RAG 问答</button>
+            <button data-task="rewrite">改写</button>
+          </div>
+          <div class="viz-grid">
+            <div class="viz-cell"><strong>适合的指标</strong><p id="metricText" class="muted"></p></div>
+            <div class="viz-cell"><strong>额外要看</strong><p id="riskText" class="muted"></p></div>
+          </div>
+          <div class="barrow"><span>解析/格式</span><div class="bar"><div class="fill" id="barFormat"></div></div><span id="barFormatOut"></span></div>
+          <div class="barrow"><span>语义判分</span><div class="bar"><div class="fill" id="barSemantic"></div></div><span id="barSemanticOut"></span></div>
+          <div class="barrow"><span>人工复核</span><div class="bar"><div class="fill" id="barHuman"></div></div><span id="barHumanOut"></span></div>
+          <div class="viz-note">观察点：越开放的任务，越不能只靠 exact match。越高风险的任务，越要抽样人工看具体失败。</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="examples">
+      <div class="head"><h2>四、三个渐进例子</h2><span class="tag">EXAMPLES</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>例子 1：客服分类的最小 Eval</h3>
+          <p>客服分类有明确类别，适合从硬指标开始。每条样本包含输入和期望类别。跑系统后比较预测类别和期望类别，再按类别统计错在哪里。如果 refund 类 recall 很低，说明该转人工的请求被漏掉；如果普通咨询经常被判 high，说明系统过于保守。</p>
+          <div class="codebar"><span class="label">样本示例：分类 Eval 数据</span><span class="kind">jsonl</span></div>
+          <pre><code>{"id":"c001","input":"充值后余额没到账，我要退款","expected":"billing_refund","risk":"high"}
+{"id":"c002","input":"怎么修改头像？","expected":"how_to","risk":"low"}
+{"id":"c003","input":"你们再不处理我就投诉","expected":"complaint","risk":"high"}</code></pre>
+          <p>这类 Eval 的关键不是只算总准确率，而是按风险标签看漏判。高风险样本少，也要单独看。</p>
+        </div>
+        <div class="box">
+          <h3>例子 2：RAG 问答要同时看答案和依据</h3>
+          <p>RAG 的输出看起来像问答，但评测不能只问“答案像不像”。还要看检索材料是否支持答案、引用是否正确、资料缺失时是否拒答。一个答案语气很好，但没有被上下文支持，就是幻觉风险。相反，一个答案不够华丽，但引用准确、边界清楚，可能更适合上线。</p>
+          <div class="codebar"><span class="label">判分规则：RAG 答案 rubric</span><span class="kind">text</span></div>
+          <pre><code>给每条回答打 0-2 分：
+2 分：答案直接回应问题，所有关键事实都能在 context 中找到，引用片段正确。
+1 分：大体回答正确，但遗漏一个关键限制，或引用不完整。
+0 分：答案包含 context 不支持的事实，或资料不足时仍然猜测。</code></pre>
+          <p>这段 rubric 的重点是“被材料支持”。RAG 系统最怕回答得像真的，但证据链断了。</p>
+        </div>
+      </div>
+      <div class="box">
+        <h3>例子 3：一个最小判分脚本</h3>
+        <p>下面的代码展示最小分类评测。它不调用模型，只说明评测结果应该怎样汇总。真实系统里 <code>predict</code> 会替换成模型调用或你的应用接口。关键是每条样本都保留 id、输入、期望、预测和是否通过。只输出一个总分，会让错误难追。</p>
+        <div class="codebar"><span class="label">最小代码：分类结果评测</span><span class="kind">python</span></div>
+        <pre><code><span class="kw">def</span> <span class="var">evaluate</span>(samples, predict):
+    rows = []
+    <span class="kw">for</span> sample <span class="kw">in</span> samples:
+        pred = predict(sample[<span class="str">"input"</span>])
+        passed = pred == sample[<span class="str">"expected"</span>]
+        rows.append({
+            <span class="str">"id"</span>: sample[<span class="str">"id"</span>],
+            <span class="str">"expected"</span>: sample[<span class="str">"expected"</span>],
+            <span class="str">"pred"</span>: pred,
+            <span class="str">"passed"</span>: passed,
+            <span class="str">"risk"</span>: sample.get(<span class="str">"risk"</span>, <span class="str">"normal"</span>)
+        })
+
+    total = len(rows)
+    passed = sum(row[<span class="str">"passed"</span>] <span class="kw">for</span> row <span class="kw">in</span> rows)
+    failures = [row <span class="kw">for</span> row <span class="kw">in</span> rows <span class="kw">if not</span> row[<span class="str">"passed"</span>]]
+    <span class="kw">return</span> {
+        <span class="str">"accuracy"</span>: passed / total <span class="kw">if</span> total <span class="kw">else</span> 0,
+        <span class="str">"failures"</span>: failures
+    }</code></pre>
+        <p><code>rows</code> 是诊断材料，不只是中间变量。它让你知道哪条样本错了。<code>failures</code> 保留坏例，后续才能分类查看错因。删掉它，只剩一个 accuracy，系统出了问题也很难修。</p>
+      </div>
+    </section>
+
+    <section id="workflow">
+      <div class="head"><h2>五、最小 Eval 流程</h2><span class="tag">WORKFLOW</span></div>
+      <div class="grid3">
+        <div class="box">
+          <h3>1. 写任务边界</h3>
+          <p>先写清系统要解决什么，不解决什么。比如“根据内部知识库回答产品使用问题”，就不包括法律意见、医疗建议、账号敏感操作。边界决定样本范围，也决定哪些失败必须拦截。</p>
+        </div>
+        <div class="box">
+          <h3>2. 建小样本集</h3>
+          <p>从真实输入、历史坏例和你担心的边界构建样本。每条样本加标签和期望行为。第一版不用大，但要有代表性。样本少时，更要覆盖风险，而不是全放简单题。</p>
+        </div>
+        <div class="box">
+          <h3>3. 定判分规则</h3>
+          <p>能硬判就硬判，不能硬判就写 rubric。Rubric 要能让不同人给出接近判断。高风险任务要抽样人工复核，不要完全交给自动分数。</p>
+        </div>
+        <div class="box">
+          <h3>4. 固定基线</h3>
+          <p>第一次跑出来的结果就是基线。之后改 prompt、模型、检索参数，都和基线比较。不要只看新版本绝对分，要看相对变化和失败样本迁移。</p>
+        </div>
+        <div class="box">
+          <h3>5. 做错误分析</h3>
+          <p>把失败样本按错因归类：检索不到、格式错误、理解错意图、证据不支持、拒答过度、拒答不足。错因比单个分数更能指导下一次改动。</p>
+        </div>
+        <div class="box">
+          <h3>6. 接入改动流程</h3>
+          <p>Eval 只有在改动前后都跑，才真的有用。上线前至少跑固定样本，线上再监控新失败。新坏例进入样本集，下一次改动继续检查。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="diagnosis">
+      <div class="head"><h2>六、常见误区和错误诊断</h2><span class="tag">PITFALLS</span></div>
+      <div class="grid2">
+        <div class="box redsoft"><h3>误区 1：只看几个好看的 demo</h3><p>错因：demo 常常是顺手挑的好例子。后果是系统在边界样本上坏得很隐蔽。修法是固定样本集，保留普通、边界和高风险输入。</p></div>
+        <div class="box redsoft"><h3>误区 2：把平均分当唯一结论</h3><p>错因：平均分会掩盖少量严重错误。后果是高风险样本失败被稀释。修法是按标签看分数，单独查看失败列表。</p></div>
+        <div class="box redsoft"><h3>误区 3：让判分模型无规则自由打分</h3><p>错因：LLM-as-judge 也需要 prompt 和 rubric。后果是分数偏爱长答案或漂亮话。修法是写明确扣分点，并抽样人工对齐。</p></div>
+        <div class="box redsoft"><h3>误区 4：样本集只收集常见问题</h3><p>错因：常见问题不等于重要问题。后果是低频高损害错误被漏掉。修法是加入投诉、合规、拒答、资料冲突等风险样本。</p></div>
+        <div class="box redsoft"><h3>误区 5：一次通过就不再跑</h3><p>错因：模型、prompt、检索库和用户输入都会变。后果是旧问题复发时没人发现。修法是把 Eval 作为回归检查，每次重要改动都跑。</p></div>
+        <div class="box redsoft"><h3>误区 6：离线 Eval 通过就等于线上稳定</h3><p>错因：离线样本覆盖有限，线上有新分布和真实用户行为。后果是上线后出现未覆盖失败。修法是离线 Eval 配合线上监控、反馈收集和坏例回流。</p></div>
+      </div>
+    </section>
+
+    <section id="confusion">
+      <div class="head"><h2>七、三组易混概念</h2><span class="tag">COMPARE</span></div>
+      <table class="metric-table">
+        <thead><tr><th>概念组</th><th>容易混的地方</th><th>准确区分</th><th>工程判断</th></tr></thead>
+        <tbody>
+          <tr><td>离线 Eval / 线上监控</td><td>都在看系统表现</td><td>离线 Eval 用固定样本比较改动；线上监控看真实流量中的表现和异常</td><td>上线前跑离线，上线后看监控，新坏例回流样本集</td></tr>
+          <tr><td>指标 / Rubric</td><td>都给结果打分</td><td>指标是计算规则，rubric 是人或判分模型使用的判分说明</td><td>确定性任务优先指标，开放任务需要 rubric</td></tr>
+          <tr><td>Golden set / 全量测试集</td><td>都包含样本和期望行为</td><td>Golden set 小而精，覆盖关键风险；全量测试集更大，适合统计稳定性</td><td>早期先做 golden set，产品稳定后逐步扩大</td></tr>
+          <tr><td>LLM-as-judge / 人工复核</td><td>都能评开放文本</td><td>判分模型便宜快速，人工复核更可信但成本高</td><td>自动判分用于筛查，高风险和抽样对齐仍要人工看</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">PRACTICE</span></div>
+      <div class="practice-intro">
+        <div class="review-card"><strong>练习目标</strong><p>这组题检查你能不能为 LLM 功能设计最小 Eval，并用分数和坏样本指导改动。</p></div>
+        <div class="review-card"><strong>作答提醒</strong><p>错误诊断题按“错因、后果、修法”回答。场景题要写具体样本、指标或判分规则，不要只说“多测一些”。</p></div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>先确认 Eval 的目标和边界。</p></div><div class="quick-review"><b>复习</b>Eval 用固定样本比较系统改动，不能覆盖未来所有线上输入。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. Eval 的核心作用"><div class="q-meta"><span class="pill">选择</span></div><h3>1. Eval 在 LLM 应用里的核心作用是什么？</h3><div class="choices"><label><input type="radio" name="q1" value="让系统永远不出错">让系统永远不出错</label><label><input type="radio" name="q1" value="用固定样本和规则比较系统表现">用固定样本和规则比较系统表现</label><label><input type="radio" name="q1" value="替代线上监控">替代线上监控</label></div></div>
+          <div class="q" data-role="homework" data-title="2. 线上监控可以被离线 Eval 完全替代。"><div class="q-meta"><span class="pill">判断</span></div><h3>2. 离线 Eval 通过后，线上监控就不重要了。</h3><div class="choices"><label><input type="radio" name="q2" value="对">对</label><label><input type="radio" name="q2" value="错">错</label></div></div>
+          <div class="q short" data-role="homework" data-title="3. Rubric 含义"><div class="q-meta"><span class="pill">填空</span></div><h3>3. Rubric 指的是用于开放任务判分的 ______。</h3><input type="text" name="q3"></div>
+          <div class="q short" data-role="homework" data-title="4. 为什么要保留失败样本"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 为什么失败样本要进入回归样本集？</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、样本和指标设计</h3><p>这一组看你能不能把任务转成可评测材料。</p></div><div class="quick-review"><b>复习</b>样本要有输入、期望行为和标签。指标要贴合任务。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="5. 客服分类样本字段"><div class="q-meta"><span class="pill">场景</span></div><h3>5. 为客服分类器设计一条 Eval 样本，至少应包含哪些字段？</h3><textarea name="q5"></textarea></div>
+          <div class="q short" data-role="homework" data-title="6. RAG 判分维度"><div class="q-meta"><span class="pill">场景</span></div><h3>6. RAG 问答除了答案是否正确，还要看哪两件事？</h3><textarea name="q6"></textarea></div>
+          <div class="q short" data-role="homework" data-title="7. 指标选择"><div class="q-meta"><span class="pill">选择</span></div><h3>7. JSON 抽取任务最先应该检查什么？</h3><div class="choices"><label><input type="radio" name="q7" value="回答是否有礼貌">回答是否有礼貌</label><label><input type="radio" name="q7" value="解析率、字段完整性、字段值正确性">解析率、字段完整性、字段值正确性</label><label><input type="radio" name="q7" value="回答是否足够长">回答是否足够长</label></div></div>
+          <div class="q short" data-role="homework" data-title="8. 高风险样本"><div class="q-meta"><span class="pill">应用</span></div><h3>8. 给一个你认为必须加入客服 Eval 的高风险样本，并说明检查点。</h3><textarea name="q8"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、代码和结果阅读</h3><p>读懂评测脚本输出，别只看一个总分。</p></div><div class="quick-review"><b>复习</b>失败列表和错因标签比平均分更能指导修复。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="9. failures 的作用"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>9. 上面代码里为什么要返回 <code>failures</code>，而不是只返回 accuracy？</h3><textarea name="q9"></textarea></div>
+          <div class="q short" data-role="homework" data-title="10. risk 字段"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>10. 样本里的 <code>risk</code> 字段有什么用？</h3><textarea name="q10"></textarea></div>
+          <div class="q short" data-role="homework" data-title="11. 分数解读"><div class="q-meta"><span class="pill">判断</span></div><h3>11. 新版本平均分从 0.82 涨到 0.86，但投诉类样本从 90% 降到 60%。你会直接上线吗？为什么？</h3><textarea name="q11"></textarea></div>
+          <div class="q short" data-role="homework" data-title="12. 基线对比"><div class="q-meta"><span class="pill">解释</span></div><h3>12. 为什么每次改动都要和固定基线比较？</h3><textarea name="q12"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、错误诊断</h3><p>这些题要求说清错因、后果和修法。</p></div><div class="quick-review"><b>复习</b>常见错因包括样本偏、规则模糊、只看均值、判分模型无约束。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="13. 错误诊断：只挑好例子"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 团队只用 5 条最好看的样例展示新 prompt。错在哪里？</h3><textarea name="q13"></textarea></div>
+          <div class="q short" data-role="homework" data-title="14. 错误诊断：判分规则模糊"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. Rubric 只写“答案好就给高分”。会导致什么问题？怎么改？</h3><textarea name="q14"></textarea></div>
+          <div class="q short" data-role="homework" data-title="15. 错误诊断：过度依赖判分模型"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 如果所有开放题都只让判分模型打分，不抽样人工看，风险是什么？</h3><textarea name="q15"></textarea></div>
+          <div class="q short" data-role="homework" data-title="16. 错误诊断：样本过时"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 产品规则变了，但 Eval 样本和期望答案没改，会产生什么后果？</h3><textarea name="q16"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>五、迁移和表达</h3><p>把 Eval 用到真实改动流程里。</p></div><div class="quick-review"><b>复习</b>上线前看离线样本，上线后收集真实失败。新坏例进入下一轮回归。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="17. Prompt 改动前后比较"><div class="q-meta"><span class="pill">应用</span></div><h3>17. 你改了客服总结 prompt。上线前至少要比较哪三类结果？</h3><textarea name="q17"></textarea></div>
+          <div class="q short" data-role="homework" data-title="18. 面试短答：Eval 和监控"><div class="q-meta"><span class="pill">面试</span></div><h3>18. 用 2-3 句话区分离线 Eval 和线上监控。</h3><textarea name="q18"></textarea></div>
+          <div class="q short" data-role="homework" data-title="19. 最小 Eval 计划"><div class="q-meta"><span class="pill">清单</span></div><h3>19. 为“知识库问答助手”写一个最小 Eval 计划，包含样本、判分和错误分析。</h3><textarea name="q19"></textarea></div>
+          <div class="q short" data-role="homework" data-title="20. 指标和业务风险"><div class="q-meta"><span class="pill">场景</span></div><h3>20. 为什么高风险样本可以单独设门槛，而不只服从总平均分？</h3><textarea name="q20"></textarea></div>
+          <div class="q full" data-role="homework" data-title="21. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>21. 用 6-9 句话解释：LLM 应用为什么需要 Eval，以及一个最小 Eval 应该怎么做。</h3><div class="solve-note">请串联样本集、指标、判分规则、基线、回归、线上监控、人工复核和错误分析。</div><textarea name="q21"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>生成练习记录</h2><span class="tag">RECORD</span></div>
+      <p class="muted">完成后生成一份练习记录。记录会保留题干和你的回答，方便复盘。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){
+  const max=document.documentElement.scrollHeight-innerHeight;
+  progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";
+  let current=sections[0]?.id;
+  for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id;}
+  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`));
+}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+
+const taskData={
+  classify:["accuracy、precision、recall、混淆矩阵。高风险类别要单独看召回率。","看漏判是否集中在投诉、退款、合规等类别。",[90,45,25]],
+  extract:["JSON 解析率、字段完整率、字段准确率、枚举越界率。","看字段缺失和非法格式是否会进入下游。",[95,55,20]],
+  rag:["答案正确性、faithfulness、引用准确率、拒答正确率。","看资料不足时是否猜测，引用是否真的支持答案。",[70,90,55]],
+  rewrite:["rubric 分数、人工偏好、禁用词命中、长度和语气约束。","看是否改丢事实，是否为了好看而添加原文没有的信息。",[45,85,65]]
+};
+function renderTask(task){
+  const data=taskData[task];
+  document.getElementById("metricText").textContent=data[0];
+  document.getElementById("riskText").textContent=data[1];
+  [["barFormat","barFormatOut",data[2][0]],["barSemantic","barSemanticOut",data[2][1]],["barHuman","barHumanOut",data[2][2]]].forEach(([bar,out,v])=>{document.getElementById(bar).style.width=v+"%";document.getElementById(out).textContent=v+"%";});
+  document.querySelectorAll("[data-task]").forEach(btn=>btn.classList.toggle("active",btn.dataset.task===task));
+}
+document.querySelectorAll("[data-task]").forEach(btn=>btn.addEventListener("click",()=>renderTask(btn.dataset.task)));renderTask("classify");
+
+document.querySelectorAll(".codebar").forEach(bar=>{
+  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
+  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";navigator.clipboard.writeText(code).then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});
+  bar.appendChild(btn);
+});
+const questionNodes=[...document.querySelectorAll('[data-role="homework"]')];
+function answerOf(node){
+  const checked=[...node.querySelectorAll("input[type=radio]:checked,input[type=checkbox]:checked")].map(i=>i.value);
+  const text=[...node.querySelectorAll("textarea,input[type=text]")].map(i=>i.value.trim()).filter(Boolean);
+  return [...checked,...text].join("；");
+}
+function generateRecord(){
+  let out="# Eval 基础｜练习记录\n\n";
+  const missing=[];
+  questionNodes.forEach((node,idx)=>{const title=node.dataset.title||`第 ${idx+1} 题`;const answer=answerOf(node);if(!answer)missing.push(title);out+=`## ${idx+1}. ${title}\n${answer||"（未填写）"}\n\n`;});
+  document.getElementById("record").textContent=out;
+  const feynman=answerOf(questionNodes[questionNodes.length-1]||document.createElement("div"));
+  const keys=(document.body.dataset.feynmanKeywords||"").split(",").filter(Boolean);
+  const lack=keys.filter(k=>feynman&&!feynman.includes(k));
+  const notes=[];if(missing.length)notes.push(`还有 ${missing.length} 题未填写。`);if(feynman&&feynman.length<140)notes.push("费曼解释偏短，建议把最小 Eval 的完整流程讲出来。");if(lack.length)notes.push(`费曼解释可能缺少：${lack.join("、")}。`);
+  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=notes.length?notes.join("\n"):"练习记录已生成，题目填写完整。";
+}
+function copyRecord(){
+  const text=document.getElementById("record").textContent;
+  navigator.clipboard.writeText(text).then(()=>{document.getElementById("quality").style.display="block";document.getElementById("quality").textContent="已复制练习记录。"}).catch(()=>{document.getElementById("quality").style.display="block";document.getElementById("quality").textContent="复制失败，请手动选中记录文本复制。"});
+}
+</script>
+</body>
+</html>

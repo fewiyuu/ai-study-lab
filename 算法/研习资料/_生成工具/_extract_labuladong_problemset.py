@@ -14,8 +14,8 @@ from bs4 import BeautifulSoup
 
 BASE = "https://labuladong.online"
 QUICK = f"{BASE}/zh/algo/intro/quick-learning-plan/"
-OUT_JSON = Path("30_研究/算法/labuladong速成目录题单.json")
-OUT_MD = Path("30_研究/算法/labuladong速成目录题单.md")
+OUT_JSON = Path("30_研究/算法/研习资料/_生成工具/labuladong速成目录题单.json")
+OUT_MD = Path("30_研究/算法/笔记/labuladong速成目录题单.md")
 
 
 @dataclass

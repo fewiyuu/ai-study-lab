@@ -54,20 +54,9 @@ PUBLIC_COURSES = [
         "tags": ["Agent", "Skills"],
     },
     {
-        "topic": "Context Engineering",
-        "root": "Context Engineering/研习资料",
-        "tags": ["Agent", "Context Engineering"],
-    },
-    {
         "topic": "Learn Claude Code",
         "root": "Learn claude code/研习资料",
         "tags": ["Claude Code", "Agent"],
-    },
-    {
-        "topic": "深度学习 / PyTorch 与大模型基础",
-        "root": "深度学习/研习资料",
-        "tags": ["深度学习", "PyTorch", "大模型基础"],
-        "include": "direct",
     },
     {
         "topic": "算法",
@@ -83,12 +72,6 @@ PUBLIC_COURSES = [
         "topic": "算法",
         "root": "算法/研习资料/03_回溯动态规划与综合题",
         "tags": ["算法", "回溯动态规划与综合题"],
-    },
-    {
-        "topic": "算法",
-        "root": "算法/研习资料",
-        "tags": ["算法", "哈希表补充"],
-        "include": "direct",
     },
     {
         "topic": "深度学习 / Transformer 论文精读",
@@ -358,10 +341,6 @@ LEARNING_PATHS = [
             {
                 "topic": "PyTorch 深度学习实践",
                 "goal": "跑通深度学习最小训练闭环，理解 Module、Loss、Optimizer 和数据管道。",
-            },
-            {
-                "topic": "深度学习 / PyTorch 与大模型基础",
-                "goal": "把训练循环、Transformer、HuggingFace、Eval、RAG 和 Agent 连成应用前置地图。",
             },
             {
                 "topic": "深度学习 / Transformer 论文精读",

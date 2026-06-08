@@ -1,6 +1,6 @@
 # AI Study Lab
 
-这是一个公开的 AI 学习资料库，主要整理大语言模型、Agent、深度学习、算法和工程实践相关的学习路径、课程笔记与自制学习页。
+这是一个公开的 AI 学习资料库，主要整理大语言模型、Agent、深度学习、算法和工程实践相关的学习路径、课程笔记与 HTML 学习页。
 
 站点入口：[AI Study Lab](https://fewiyuu.github.io/ai-study-lab/)
 
@@ -15,16 +15,21 @@
 
 ## 推荐入口
 
+- [AI Study Lab 网站首页](https://fewiyuu.github.io/ai-study-lab/)：提供学习路径、课程选读和全量目录检索
 - [AI 与算法学习资料索引](AI与算法学习资料索引.md)
-- [Agent 学习资料](Agent/研习资料/README.md)
-- [Agent Skills 研习资料](Agent%20Skills/研习资料/README.md)
-- [Context Engineering 研习资料](Context%20Engineering/研习资料/README.md)
-- [李宏毅机器学习](李宏毅%20%20机器学习/研习资料/README.md)
-- [李宏毅 LLM 大模型](李宏毅%20LLM大模型/研习资料/README.md)
+- [Agent 学习资料](Agent/研习资料/index.html)
+- [Agent Skills 研习资料](Agent%20Skills/研习资料/index.html)
+- [Context Engineering 研习资料](Context%20Engineering/研习资料/index.html)
+- [深度学习：PyTorch 与大模型基础](深度学习/研习资料/index.html)
+- [李宏毅机器学习](李宏毅%20%20机器学习/研习资料/index.html)
+- [李宏毅 LLM 大模型](李宏毅%20LLM大模型/研习资料/index.html)
 - [PyTorch 深度学习实践](PyTorch深度学习实践%20刘二大人/研习资料/index.html)
+
+各课程目录中的 `index.html` 是课程地图页，包含推荐路径和各节学习页入口。
 
 ## 使用说明
 
+- 如果不知道从哪里开始，优先打开网站首页的“学习路径”；如果已经有明确方向，直接在“课程选读”里挑一门课。
 - HTML 学习页建议通过 GitHub Pages 阅读，排版和交互体验更稳定。
 - Markdown 笔记可以直接在 GitHub 阅读，也可以下载后放入自己的笔记工具继续整理。
 - 仓库内容以中文为主；英文术语会尽量保留原文，方便继续查阅官方资料。

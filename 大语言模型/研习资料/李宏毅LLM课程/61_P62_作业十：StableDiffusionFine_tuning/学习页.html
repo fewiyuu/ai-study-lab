@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>61_P62｜作业十：Stable Diffusion Fine-tuning</title>
+  <link rel="stylesheet" href="../../../../assets/study-page.css">
+</head>
+<body data-study-kind="homework" data-feynman-keywords="Stable Diffusion、text-to-image、personalization、LoRA、learning rate、train steps、checkpoint、validation、testing、face distance、CLIP score、no-face、25张图片、zip">
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <strong>61_P62</strong>
+      <span>作业十：Stable Diffusion Fine-tuning<br>Personalization · LoRA · 评分机制</span>
+    </div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>学习目标</a>
+      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
+      <a href="#terms"><span class="dot"></span>术语表</a>
+      <a href="#lecture"><span class="dot"></span>讲义主线</a>
+      <a href="#workthrough"><span class="dot"></span>精讲例子</a>
+      <a href="#source"><span class="dot"></span>作业路径</a>
+      <a href="#example"><span class="dot"></span>最小例子</a>
+      <a href="#viz"><span class="dot"></span>交互观察</a>
+      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>练习记录</a>
+    </nav>
+    <div class="side-note">这一页按作业真实流程读：先理解为什么要个性化 Stable Diffusion，再看 LoRA 怎么省训练成本，最后用评分规则反推该怎样训练、生成和提交。</div>
+  </aside>
+  <main>
+    <section class="hero" id="goal">
+      <div>
+        <div class="kicker">LI HONGYI GENAI · HOMEWORK 10</div>
+        <h1>作业十：Stable Diffusion Fine-tuning</h1>
+        <p>这一节讲的是作业十的完整实作：把一个会根据文字画图的 Stable Diffusion 模型，调成更会画同一个人的个性化模型。课程里的例子使用 100 张 Brad Pitt 照片和对应文字描述，训练后希望模型既能维持同一张脸，又不能忘掉文字条件，比如白色 T 恤、护士服、牛仔裤这些 prompt 约束。</p>
+        <p>主线很清楚：用 LoRA 只训练少量新增参数，接着观察 checkpoint 里的图片变化，再用 testing 生成 25 张最终图片。评分不只看像不像人脸，还会检查图片和 prompt 的关系，以及有没有生成没有脸的图片。读完后，你应该能独立解释“怎样训练”“怎样选参数”“怎样看分数”“怎样避免无效提交”。</p>
+        <div class="map"><span class="node">100 张人脸 + captions</span><span class="arrow">→</span><span class="node">LoRA 微调</span><span class="arrow">→</span><span class="node">checkpoint</span><span class="arrow">→</span><span class="node">25 张测试图</span><span class="arrow">→</span><span class="node">face distance + CLIP</span></div>
+        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=62">https://www.bilibili.com/video/BV1JKoeBiEt4?p=62</a></p>
+      </div>
+      <div class="route">
+        <h3>学完后要能做四件事</h3>
+        <ol><li>说清 text-to-image、personalization 和 LoRA 在本作业里的关系。</li><li>解释 learning rate、train steps、validation ratio 会怎样影响图像结果和训练成本。</li><li>区分 validation checkpoint 分数和 testing 最终分数，不把三张验证图当成最后成绩。</li><li>根据 face distance、CLIP score、no-face 规则诊断一次提交为什么会失分或无效。</li></ol>
+      </div>
+    </section>
+
+    <section id="skeleton">
+      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
+      <div class="grid3">
+        <div class="box soft"><h3>先看任务</h3><p>基础 Stable Diffusion 已经会按照文字生成图片，但它不知道“固定生成某一个人”这件事。本作业要做 personalization：给模型一组目标人物照片，让它学会在不同 prompt 下保持同一个人的脸。</p><p>判断句：如果只说“模型会画 Brad Pitt”，还不够；还要说它是否继续听文字条件。</p></div>
+        <div class="box"><h3>再看方法</h3><p>完整微调整个 Stable Diffusion 成本高，作业改用 LoRA。LoRA 的做法是在大模型里加少量可训练层，只更新这些小层，让模型行为发生偏移，同时保留原模型的大部分能力。</p><p>判断句：LoRA 不是重新训练一个大模型，而是用小参数去调大模型的生成方向。</p></div>
+        <div class="box warn"><h3>最后看评分</h3><p>评分分三类风险：人脸是否像训练集、图片是否符合 prompt、图片里有没有可检测的人脸。face distance 越小越好，CLIP score 只要过门槛，no-face 超过 5 张会让提交无效。</p><p>判断句：只追求人脸相似会牺牲文字对齐；只看文字对齐又可能不像目标人物。</p></div>
+      </div>
+      <div class="mini-graph">
+        <div class="box"><h3>资料</h3><p>100 张目标人物图片、对应 captions、评分用 prompts。</p></div>
+        <div class="box"><h3>训练</h3><p>从约 1000 step 的预置 checkpoint 继续训练 LoRA。</p></div>
+        <div class="box"><h3>生成</h3><p>validation 看中途三张图，testing 生成 25 张最终图。</p></div>
+        <div class="box"><h3>提交</h3><p>确认图片目录，压成 zip，上传到 NTU Cool。</p></div>
+      </div>
+    </section>
+
+    <section id="terms">
+      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
+      <table class="metric-table">
+        <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
+        <tr><td>Stable Diffusion</td><td>给文字条件后生成图片的扩散模型。</td><td>它在潜空间中逐步去噪，并用文字编码条件引导图像生成。</td><td>以为它天然会稳定生成同一个人的脸。</td></tr>
+        <tr><td>text-to-image</td><td>输入一句文字，输出一张图片。</td><td>模型需要同时满足图像质量、文字条件和随机采样带来的多样性。</td><td>只看图片像不像，不看 prompt 说了什么。</td></tr>
+        <tr><td>personalization</td><td>让模型记住一个特定人物或风格。</td><td>用少量目标样本微调，让不同 prompt 下仍出现同一身份特征。</td><td>把它当成单纯复制训练照片。</td></tr>
+        <tr><td>LoRA</td><td>只训练小模块来影响大模型。</td><td>冻结原模型大部分权重，在部分层加入低秩可训练参数。</td><td>以为 LoRA 会完整重训 Stable Diffusion。</td></tr>
+        <tr><td>learning rate</td><td>每一步更新参数的幅度。</td><td>学习率越大，LoRA 参数变化越快，但过大容易覆盖原有 text-to-image 能力。</td><td>以为越大越像目标人物就一定越好。</td></tr>
+        <tr><td>train steps</td><td>继续训练多少步。</td><td>步数越多，训练越久，身份相似度可能上升，也更容易过拟合。</td><td>只追求最高步数，忽略一天能跑几次和模型退化。</td></tr>
+        <tr><td>validation ratio</td><td>每隔多少训练步生成验证图。</td><td>例如总训练 800 步、ratio 0.5，约每 400 步做一次 validation。</td><td>把 validation 的三张图分数当成最后成绩。</td></tr>
+        <tr><td>checkpoint</td><td>训练到某一步保存下来的模型状态。</td><td>作业会保存中途 checkpoint，也会记录 last 或 best 供 testing 使用。</td><td>不知道最后 testing 选择的是 last 还是 best。</td></tr>
+        <tr><td>face distance</td><td>生成脸和训练集脸之间的距离。</td><td>GhostFaceNet 抽取人脸特征，两两比较后取平均；越小越像。</td><td>以为分数越大越好。</td></tr>
+        <tr><td>CLIP score</td><td>文字和图片是否对得上的分数。</td><td>用 prompt 和生成图像计算相似度，本作业主要作为门槛，防止只交目标人物照片。</td><td>以为 CLIP score 会直接决定所有分段。</td></tr>
+        <tr><td>no-face</td><td>图片里没有可检测的人脸。</td><td>少量 no-face 可以容忍，超过 5 张提交会被判无效。</td><td>以为衣服或姿势对了就可以没有脸。</td></tr>
+      </table>
+      <p class="checkpoint">读完这一段，你应该能用“身份相似、文字对齐、有人脸”三条线解释本作业的全部评分压力。</p>
+    </section>
+
+    <section id="lecture">
+      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>1. 从 text-to-image 到 personalization</h3>
+          <p>普通 text-to-image 模型擅长把“一个有胡子的男人，穿白色 T 恤”这类文字变成图像，但它生成的是一个泛化出来的人，不会固定成某个具体身份。作业的目标是把这个泛化能力往一个人物身份上拉，让同一批 prompts 生成的脸都像训练集中同一个人。</p>
+          <p>这里的难点不是“让图片好看”这么简单。模型必须同时满足两个要求：脸要像目标人物，prompt 里的衣服、职业、姿态等文字条件也要尽量保留。如果训练把模型推得太狠，脸可能越来越像，但 prompt 对齐会变差，白色 T 恤可能被画成黑色西装。</p>
+          <p>你读到任何作业结果时，都可以先问一个判断问题：这张图是在“复制训练人物”，还是在“按照新的文字条件生成同一身份”？前者容易投机，后者才是本作业想要的能力。</p>
+        </div>
+        <div class="box">
+          <h3>2. LoRA 为什么适合这次作业</h3>
+          <p>完整微调整个 Stable Diffusion 很费时间、显存和钱。LoRA 的直觉是：不要动大模型的所有参数，只在若干层旁边加小的可训练参数，让这些小参数改变模型行为。大模型原本的 text-to-image 能力被保留下来，训练成本也降到学生能在 Colab 里完成的程度。</p>
+          <p>课程里提到，本作业大约 30 分钟可以继续训练出一个可用模型。这个时间并不是因为 Stable Diffusion 本身很小，而是因为训练范围被压缩到 LoRA。你以后看到“低成本微调”时，要追问它具体冻结了哪些参数、训练了哪些新增模块。</p>
+          <p>判断句：如果一个方案说要 fine-tune，但没有说明训练的是全模型、LoRA、adapter 还是别的参数高效方法，你还不能判断它的成本和风险。</p>
+        </div>
+      </div>
+      <div class="grid3" style="margin-top:12px">
+        <div class="box soft"><h3>3. 作业资料从哪里来</h3><p>Notebook 第一步会连接 Google Drive，并建立作业资料夹。里面有一个 dataset 资料夹，存放 100 张目标人物图片、对应文字描述，以及最后评分会用到的 prompts。</p><p>另一个以你命名的工作资料夹会放训练输出和 checkpoint。课程示例里还会预先下载约 1000 step 的模型，让你从这个点继续训练，而不是从零开始。</p><p>判断句：如果找不到 dataset、captions 或 prompts，后面训练和 testing 都会变成空跑。</p></div>
+        <div class="box warn"><h3>4. learning rate 的取舍</h3><p>learning rate 控制每一步更新有多大。调大之后，模型可能更快学到目标人物的脸，face distance 有机会下降。</p><p>代价是模型可能忘掉原本的文字生成能力。它仍然画同一张脸，却不再认真听 prompt，这会让 CLIP score 或人工观察变差。</p><p>判断句：learning rate 不是越大越好，它是在身份相似和文字对齐之间移动平衡点。</p></div>
+        <div class="box"><h3>5. train steps 的取舍</h3><p>train steps 决定继续训练多少步。步数少时，模型可能还不像目标人物；步数多时，可能更像，但训练时间更长，也更容易过拟合。</p><p>课程提醒：一般设置下一天大约能跑两次，若把 train steps 调到很高，一天可能只能跑一次。作业不是无限试错，参数选择也要考虑时间预算。</p><p>判断句：如果你没有时间再跑 testing，就算参数理论上更好，也可能交不出完整 25 张图。</p></div>
+        <div class="box soft"><h3>6. validation ratio 看的是中途样子</h3><p>validation ratio 用来决定训练过程中每隔多少步生成一次图片。例子里总训练 800 步、ratio 0.5，就会约每 400 步做一次 validation。</p><p>validation 会在 checkpoint report 里留下图片和分数，帮助你观察“同一个 prompt 在训练中怎样越来越像目标人物”。它很适合选方向，但不能直接替代最终 testing。</p><p>判断句：validation 通常样本少，只能做训练观察，不是最终成绩。</p></div>
+        <div class="box warn"><h3>7. last 与 best checkpoint</h3><p>训练结束后，代码可能保存最后一步 checkpoint，也可能根据验证分数保存 checkpoint-best。testing 时可以选择用 last 或 best。</p><p>last 的含义是训练走到最后的模型；best 的含义是验证过程中某个评分更好的模型。二者谁更适合提交，要看生成图是否既像目标人物，又没有破坏 prompt 对齐和人脸检测。</p><p>判断句：不要只凭文件名选模型，要看它在 validation 和最终 testing 中实际生成了什么。</p></div>
+        <div class="box"><h3>8. testing 才生成最终提交图片</h3><p>testing 或 inference 阶段会使用评分 prompts 生成 25 张图片。课程里说这一段大约 15 分钟，生成后会在 inference 资料夹里看到需要提交的图片。</p><p>最后提交时，不是交 checkpoint，也不是交 report，而是把这 25 张图片所在资料夹压成 zip。路径错、图片数量错、压错文件夹，都会让本来训练好的结果变成提交问题。</p><p>判断句：最终成绩看的是 testing 生成的完整 25 张图，不是你在中途随手看到的几张图。</p></div>
+      </div>
+      <div class="box info" style="margin-top:12px">
+        <h3>完整知识链路</h3>
+        <p>本作业可以串成一句话：给 Stable Diffusion 一个由 100 张目标人物照片和文字描述组成的数据集，用 LoRA 继续训练少量参数，使模型在新的 prompts 下生成同一身份的人脸；训练中用 validation 图片观察 checkpoint 变化，最终用 testing 生成 25 张图片，再由 face distance、CLIP score 和 no-face 数量判断成绩。这个链路里每一步都有常见错法：数据放错会跑不起来，learning rate 太大可能让文字对齐变差，train steps 太少可能不像目标人物，validation 分数不能代表最终分数，no-face 超过阈值会让提交无效。读到这里，你应该能从一张生成图反推它可能是哪一类问题。</p>
+      </div>
+    </section>
+
+    <section id="workthrough">
+      <div class="head"><h2>精讲例子</h2><span class="tag">WORKED</span></div>
+      <div class="grid2">
+        <div class="box soft">
+          <h3>直觉：个性化不是让模型背照片</h3>
+          <p>Stable Diffusion 原本会按照 prompt 画很多“泛化的人”。Fine-tuning 的目标不是把训练照片复制出来，而是让模型在新 prompt 下也保持同一个身份：同一张脸可以穿白色 T 恤、护士服、牛仔裤，也可以出现在不同背景里。</p>
+          <p>这就是 personalization 的核心张力：模型要更像目标人物，但仍要听 prompt。只追 face distance，容易变成复制或过拟合；只追 CLIP score，又可能生成一个符合文字但不像目标人物的普通人。</p>
+        </div>
+        <div class="box warn">
+          <h3>术语边界：fine-tuning、LoRA、checkpoint</h3>
+          <ul>
+            <li><b>fine-tuning</b> 是继续训练模型或部分参数，让模型行为改变。</li>
+            <li><b>LoRA</b> 是参数高效微调：冻结大部分基础模型，只训练新增的低秩参数。</li>
+            <li><b>checkpoint</b> 是某一步训练保存下来的状态，不等于最终提交物。</li>
+            <li><b>validation</b> 是中途观察，<b>testing</b> 才生成最终 25 张评分图。</li>
+          </ul>
+          <p class="checkpoint">最容易混的是“训练出 checkpoint”和“提交图片”：作业最后交的是 testing 生成图的 zip，不是模型文件。</p>
+        </div>
+      </div>
+      <div class="formula" style="margin-top:12px">
+        worked example：一次参数选择怎么想<br>
+        观察到生成脸不像目标人物，但衣服和背景基本符合 prompt：优先小幅增加 train steps；如果脸像了但白色 T 恤经常变成黑色西装，说明模型太偏身份，应该降低 learning rate 或减少额外训练步数。
+        <small>判断顺序建议固定为：是否有人脸 → 是否像目标身份 → 是否符合 prompt → 是否完整生成 25 张 → zip 是否压对目录。</small>
+      </div>
+      <div class="grid3" style="margin-top:12px">
+        <div class="box">
+          <h3>读一张 validation 图</h3>
+          <p>它能告诉你训练趋势：脸有没有逐步靠近目标人物，prompt 是否开始被覆盖。但它通常样本很少，不能代表最终 25 张图的稳定性。</p>
+        </div>
+        <div class="box info">
+          <h3>读一组 testing 图</h3>
+          <p>testing 才能检查最终提交压力：不同 prompts 下脸是否稳定、CLIP 门槛是否可能过、是否出现超过 5 张 no-face。单张好图不能代表整组可交。</p>
+        </div>
+        <div class="box redsoft">
+          <h3>错误答案长什么样</h3>
+          <p>“learning rate 越大越好”“train steps 越多越好”“best checkpoint 一定最好”都不稳。三者都要回到生成图判断：身份相似、文字对齐、人脸检测和时间预算是否一起过关。</p>
+        </div>
+      </div>
+      <p class="checkpoint">你现在应该能做什么：看到一次 LoRA 训练结果后，用参数、checkpoint、validation/testing 和三条评分线解释它为什么好或坏。</p>
+    </section>
+
+    <section id="source">
+      <div class="head"><h2>作业路径</h2><span class="tag">WORKFLOW</span></div>
+      <p class="muted">下面把 Notebook 中需要理解的步骤整理成可检查的路径。你不需要背每段代码，但要知道每段代码在准备、训练、观察还是提交。</p>
+      <div class="source-lines">
+        <div class="box"><h3>1. 连接 Google Drive</h3><p>先决定本次资料夹名称，Notebook 会在云端硬碟建立作业目录。这个目录既放 dataset，也放训练输出。Drive 至少要预留约 4GB，因为 checkpoint 可能一次接近 2GB，作业需要能存两次左右。</p><p class="checkpoint">你现在应该能检查：作业目录、dataset 目录、输出目录是否都存在。</p></div>
+        <div class="box"><h3>2. 下载资料和预置模型</h3><p>dataset 里有 100 张训练照片、对应 captions 和评分 prompts。工作目录里会放已经训练到约 1000 step 的 checkpoint，让学生从这里继续训练。中途生成的图片用于看同一 prompt 如何逐步靠近目标人物。</p><p class="checkpoint">你现在应该能判断：训练资料和评分 prompts 是两类不同文件，不能混在一起。</p></div>
+        <div class="box"><h3>3. 安装 package 并 import</h3><p>依赖安装大约 5 分钟。这里主要是让 Colab 环境具备训练和生成需要的库。安装阶段不是调参阶段，出错时先看环境、路径和版本，不要急着改 learning rate。</p><p class="checkpoint">你现在应该能区分：环境错误和模型效果错误不是同一类问题。</p></div>
+        <div class="box"><h3>4. 设置 learning rate 与 train steps</h3><p>课程希望学生主要调这两个参数。learning rate 决定每步更新幅度，train steps 决定总训练量。二者都能影响 face similarity，也都可能让 text-to-image 能力退化。</p><p class="checkpoint">你现在应该能说明：为什么“更像脸”和“更听 prompt”会互相拉扯。</p></div>
+        <div class="box"><h3>5. 训练与 validation report</h3><p>训练过程中会按 validation ratio 生成图片，并在 report 里留下 checkpoint 记录。这个阶段适合看趋势：脸有没有靠近目标人物，衣服和场景有没有开始偏离 prompt。</p><p class="checkpoint">你现在应该能判断：validation 分数小样本、可参考，但不是最后分数。</p></div>
+        <div class="box"><h3>6. testing、压缩和上传</h3><p>最后 testing 会生成完整 25 张评分图片，课程强调这个分数才是最终成绩依据。确认 inference 目录里的图片数量和内容后，把图片资料夹压成 zip，再上传到 NTU Cool。</p><p class="checkpoint">你现在应该能检查：提交物是 25 张生成图的 zip，不是 checkpoint 或 notebook。</p></div>
+      </div>
+    </section>
+
+    <section id="example">
+      <div class="head"><h2>最小例子</h2><span class="tag">EXAMPLE</span></div>
+      <p>例子只保留作业逻辑，不复刻 Notebook 里的长代码。你要看懂每一步读什么、写什么、最后会影响哪一类评分。</p>
+      <div class="codebar"><span class="label">最小示例：一次 LoRA 作业流程</span><span class="kind">python</span></div>
+      <pre><code>config = {
+    "base_model": "stable-diffusion",
+    "method": "LoRA",
+    "dataset": "100 target-face images + captions",
+    "learning_rate": 1e-4,
+    "extra_train_steps": 200,
+    "validation_ratio": 0.5,
+}
+
+checkpoint = continue_train(config)      # 只更新 LoRA 参数
+preview = validate(checkpoint, n_images=3)
+chosen = pick_checkpoint(preview, mode="last_or_best")
+
+final_images = testing(chosen, prompts="grading_prompts", n_images=25)
+submit_zip = zip_folder(final_images)</code></pre>
+      <div class="box soft"><h3>逐行理解</h3><p><code>config</code> 把作业设置集中在一起：基础模型、LoRA、数据集、学习率、训练步数和验证频率。<code>continue_train</code> 只更新 LoRA 参数；<code>validate</code> 生成少量中途图片；<code>testing</code> 才生成最终 25 张评分图。</p><p>你现在应该能做的事：看到一份训练结果时，先判断它来自 validation 还是 testing，再决定能不能拿来当提交依据。</p></div>
+      <div class="grid2" style="margin-top:12px">
+        <div class="box"><h3>这段代码在读什么</h3><p><code>dataset</code> 读的是目标人物照片和 captions。<code>prompts</code> 读的是评分用文字条件。两者不能混淆：训练资料负责让模型学身份，评分 prompts 负责检查模型能否把身份放进新文字条件。</p></div>
+        <div class="box warn"><h3>这段代码在写什么</h3><p><code>continue_train</code> 写出 checkpoint，<code>testing</code> 写出最终图片，<code>zip_folder</code> 写出提交压缩包。删掉 validation 还能生成结果，但你会失去中途观察；删掉 testing 就没有最终 25 张图。</p></div>
+      </div>
+    </section>
+
+    <section id="viz">
+      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
+      <div class="viz-panel">
+        <div class="viz-head">
+          <div><h3>参数取舍观察</h3><p>拖动 learning rate 和继续训练步数，观察身份相似、文字对齐和 no-face 风险的相对变化。数值不是官方评分，只用于建立直觉。</p></div>
+          <div class="viz-actions">
+            <button data-mode="balanced" class="active">平衡</button>
+            <button data-mode="identity">追身份</button>
+            <button data-mode="prompt">保 prompt</button>
+          </div>
+        </div>
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <div class="slider-row"><label for="lrLevel">learning rate</label><input id="lrLevel" type="range" min="1" max="100" value="45"><output id="lrOut">45</output></div>
+            <div class="slider-row"><label for="stepLevel">train steps</label><input id="stepLevel" type="range" min="0" max="1000" step="50" value="200"><output id="stepOut">200</output></div>
+            <div class="prob-demo">
+              <div class="prob-row"><span>身份相似</span><div class="prob-track"><div class="prob-fill" id="identityFill"></div></div><b id="identityText">0</b></div>
+              <div class="prob-row"><span>文字对齐</span><div class="prob-track"><div class="prob-fill" id="promptFill"></div></div><b id="promptText">0</b></div>
+              <div class="prob-row"><span>no-face 风险</span><div class="prob-track"><div class="prob-fill" id="nofaceFill"></div></div><b id="nofaceText">0</b></div>
+            </div>
+          </div>
+          <div class="viz-cell soft-bg">
+            <h3 id="vizTitle">当前判断</h3>
+            <p id="vizText" class="viz-note"></p>
+            <div class="calc-card">
+              <div><b>VALIDATE</b><strong id="valEvery">400</strong><span>约每多少步看一次图</span></div>
+              <div><b>FINAL</b><strong>25</strong><span>testing 生成图片数</span></div>
+              <div><b>LIMIT</b><strong>5</strong><span>可容忍 no-face 张数</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p>观察重点：参数不是为了把某个单项推满，而是让目标脸、prompt 对齐和人脸检测同时过关。你以后看到训练结果时，先用这三条线做判断。</p>
+    </section>
+
+    <section id="diagnosis">
+      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
+      <div class="grid2">
+        <div class="box redsoft">
+          <h3>常见坑</h3>
+          <ol><li>只追求脸像。错因是把 personalization 当成复制照片；后果是 prompt 对齐下降；修法是同时看 CLIP score 和不同 prompts 下的图片。</li><li>learning rate 调太大。错因是把更新幅度当成提升速度；后果是模型忘掉原本 text-to-image 能力；修法是降低学习率或减少训练步数。</li><li>train steps 调太少。错因是为了省时间忽略身份学习；后果是生成图仍像普通陌生人；修法是增加步数并看 validation 趋势。</li><li>把 validation 当最终成绩。错因是没区分三张中途图和 25 张 testing 图；后果是提交前误判；修法是以 testing 输出和最终评分为准。</li><li>没检查 no-face。错因是只看衣服或姿势；后果是超过 5 张无脸图会无效；修法是提交前逐张确认有人脸。</li><li>压错资料夹。错因是不知道提交物是 inference 生成图片；后果是 zip 内没有 25 张有效图；修法是先数图，再压缩正确目录。</li></ol>
+        </div>
+        <div class="box">
+          <h3>易混概念</h3>
+          <table class="metric-table">
+            <tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr>
+            <tr><td>validation</td><td>testing</td><td>validation 看中途少量图片；testing 生成最终 25 张提交图。</td></tr>
+            <tr><td>face distance</td><td>CLIP score</td><td>face distance 看脸像不像；CLIP score 看图和 prompt 是否相关。</td></tr>
+            <tr><td>last checkpoint</td><td>best checkpoint</td><td>last 是最后一步；best 是验证中评分较好的保存点。</td></tr>
+            <tr><td>LoRA 参数</td><td>基础模型参数</td><td>LoRA 只训练新增小模块；基础模型大部分被冻结。</td></tr>
+            <tr><td>训练照片</td><td>评分 prompts</td><td>训练照片让模型学身份；评分 prompts 检查新条件下能否生成。</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
+      <div class="practice-intro">
+        <div class="review-card"><strong>作答前先抓主线</strong><p>先写目标人物和 prompt，再写 LoRA 如何训练，最后写 face distance、CLIP score、no-face 和 zip 提交。开放题不要写空话，尽量落到本作业的文件、参数和图片数量。</p></div>
+        <div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起 Stable Diffusion、text-to-image、personalization、LoRA、learning rate、train steps、checkpoint、testing 和评分。</p></div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>这一组先检查术语和边界。答案短一点也可以，但要说准。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. 本作业的目标是让 Stable Diffusion 在不同 prompts 下尽量生成同一身份的人脸。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. 本作业的目标是让 Stable Diffusion 在不同 prompts 下尽量生成同一身份的人脸。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
+          <div class="q" data-role="homework" data-title="2. LoRA 在本作业中主要解决什么问题？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. LoRA 在本作业中主要解决什么问题？</h3><div class="choices"><label><input type="radio" name="q2" value="降低微调整个 Stable Diffusion 的成本">降低微调整个 Stable Diffusion 的成本</label><label><input type="radio" name="q2" value="自动删除所有无脸图片">自动删除所有无脸图片</label><label><input type="radio" name="q2" value="替代 testing 生成图片">替代 testing 生成图片</label></div></div>
+          <div class="q short" data-role="homework" data-title="3. 填空：作业提供约 ______ 张目标人物照片，最终 testing 生成 ______ 张评分图片。"><div class="q-meta"><span class="pill">填空</span></div><h3>3. 填空：作业提供约 ______ 张目标人物照片，最终 testing 生成 ______ 张评分图片。</h3><input type="text" name="q3"></div>
+          <div class="q short" data-role="homework" data-title="4. 用 1-2 句话解释 personalization 在本作业里是什么意思。"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 用 1-2 句话解释 personalization 在本作业里是什么意思。</h3><textarea name="q4"></textarea></div>
+          <div class="q" data-role="homework" data-title="5. 只要脸像目标人物，就不需要管 prompt 是否对应。"><div class="q-meta"><span class="pill">判断</span></div><h3>5. 只要脸像目标人物，就不需要管 prompt 是否对应。</h3><div class="choices"><label><input type="radio" name="q5" value="对">对</label><label><input type="radio" name="q5" value="错">错</label></div></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、主线理解</h3><p>这一组要求你把概念连成一条可复述的链路。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="6. 把作业流程排成顺序：连接 Drive、下载资料、设置参数、训练、testing、压缩提交。"><div class="q-meta"><span class="pill">排序</span></div><h3>6. 把作业流程排成顺序：连接 Drive、下载资料、设置参数、训练、testing、压缩提交。</h3><textarea name="q6"></textarea></div>
+          <div class="q short" data-role="homework" data-title="7. 区分 dataset 里的训练照片和评分 prompts。"><div class="q-meta"><span class="pill">对照</span></div><h3>7. 区分 dataset 里的训练照片和评分 prompts。</h3><textarea name="q7"></textarea></div>
+          <div class="q short" data-role="homework" data-title="8. 为什么作业需要预留约 4GB Google Drive 空间？"><div class="q-meta"><span class="pill">解释</span></div><h3>8. 为什么作业需要预留约 4GB Google Drive 空间？</h3><textarea name="q8"></textarea></div>
+          <div class="q short" data-role="homework" data-title="9. 如果 package 安装失败，你会先检查哪些环境或路径问题？"><div class="q-meta"><span class="pill">场景</span></div><h3>9. 如果 package 安装失败，你会先检查哪些环境或路径问题？</h3><textarea name="q9"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、例子阅读</h3><p>这一组把讲义里的最小例子转成可检查的问题。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="10. 最小示例里 continue_train、validate、testing 分别写出什么结果？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>10. 最小示例里 <code>continue_train</code>、<code>validate</code>、<code>testing</code> 分别写出什么结果？</h3><textarea name="q10"></textarea></div>
+          <div class="q short" data-role="homework" data-title="11. 如果删掉 validation，训练仍能结束，但你会失去什么观察能力？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>11. 如果删掉 validation，训练仍能结束，但你会失去什么观察能力？</h3><textarea name="q11"></textarea></div>
+          <div class="q short" data-role="homework" data-title="12. learning rate 调大可能带来哪一个好处和哪一个坏处？"><div class="q-meta"><span class="pill">参数</span></div><h3>12. learning rate 调大可能带来哪一个好处和哪一个坏处？</h3><textarea name="q12"></textarea></div>
+          <div class="q short" data-role="homework" data-title="13. train steps 很高时，除了效果，你还要考虑什么现实限制？"><div class="q-meta"><span class="pill">参数</span></div><h3>13. train steps 很高时，除了效果，你还要考虑什么现实限制？</h3><textarea name="q13"></textarea></div>
+          <div class="q short" data-role="homework" data-title="14. 总训练 800 步，validation ratio 为 0.5，大约每多少步做一次 validation？"><div class="q-meta"><span class="pill">计算</span></div><h3>14. 总训练 800 步，validation ratio 为 0.5，大约每多少步做一次 validation？</h3><input type="text" name="q14"></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、错误诊断</h3><p>这一组按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="15. 有人说 validation report 里的三张图分数就是最终成绩。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 有人说 validation report 里的三张图分数就是最终成绩。错因、后果、修法是什么？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q15"></textarea></div>
+          <div class="q short" data-role="homework" data-title="16. 有人为了 face distance 低，直接找 25 张 Brad Pitt 照片提交。评分为什么要用 CLIP score 防这种做法？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 有人为了 face distance 低，直接找 25 张 Brad Pitt 照片提交。评分为什么要用 CLIP score 防这种做法？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q16"></textarea></div>
+          <div class="q short" data-role="homework" data-title="17. 有人生成了 8 张没有脸的图片，但衣服描述大致符合 prompt。这个提交的问题在哪里？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>17. 有人生成了 8 张没有脸的图片，但衣服描述大致符合 prompt。这个提交的问题在哪里？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q17"></textarea></div>
+          <div class="q short" data-role="homework" data-title="18. 有人把 checkpoint 文件压成 zip 提交，没有提交 inference 图片。错在哪里？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>18. 有人把 checkpoint 文件压成 zip 提交，没有提交 inference 图片。错在哪里？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q18"></textarea></div>
+          <div class="q short" data-role="homework" data-title="19. 有人把 learning rate 开很大后，脸很像但白色 T 恤 prompt 经常变成黑色西装。你会怎样调整？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>19. 有人把 learning rate 开很大后，脸很像但白色 T 恤 prompt 经常变成黑色西装。你会怎样调整？</h3><div class="solve-note">从身份相似、文字对齐和参数取舍三点回答。</div><textarea name="q19"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>五、场景迁移</h3><p>这一组检查你能不能换个场景继续判断。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="20. 如果你只能再跑一次训练，你会优先改 learning rate 还是 train steps？说明依据。"><div class="q-meta"><span class="pill">应用</span></div><h3>20. 如果你只能再跑一次训练，你会优先改 learning rate 还是 train steps？说明依据。</h3><textarea name="q20"></textarea></div>
+          <div class="q short" data-role="homework" data-title="21. 写出提交前的 5 条检查清单。"><div class="q-meta"><span class="pill">清单</span></div><h3>21. 写出提交前的 5 条检查清单。</h3><textarea name="q21"></textarea></div>
+          <div class="q short" data-role="homework" data-title="22. 如果 checkpoint-best 的验证分数高，但 testing 里 no-face 很多，你会选 best 还是 last？怎么判断？"><div class="q-meta"><span class="pill">应用</span></div><h3>22. 如果 checkpoint-best 的验证分数高，但 testing 里 no-face 很多，你会选 best 还是 last？怎么判断？</h3><textarea name="q22"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>六、表达输出</h3><p>最后两题检查你能不能讲给别人听。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="23. 如果被问“为什么不用完整微调，而用 LoRA”，你会怎么答？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>23. 如果被问“为什么不用完整微调，而用 LoRA”，你会怎么答？</h3><textarea name="q23"></textarea></div>
+          <div class="q full" data-role="homework" data-title="24. 用 6-9 句话讲清楚作业十 Stable Diffusion Fine-tuning 的完整流程和评分逻辑。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>24. 用 6-9 句话讲清楚作业十 Stable Diffusion Fine-tuning 的完整流程和评分逻辑。</h3><div class="solve-note">必须串联 Stable Diffusion、text-to-image、personalization、LoRA、learning rate、train steps、checkpoint、testing、face distance、CLIP score、no-face、25 张图片、zip。</div><textarea name="q24"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>练习记录</h2><span class="tag">EXPORT</span></div>
+      <p class="muted">完成练习后生成记录，方便后续回看。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+
+<script src="../../../../assets/study-page.js"></script>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){
+  const max=document.documentElement.scrollHeight-innerHeight;
+  progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";
+  let current=sections[0]?.id;
+  for(const section of sections){
+    const rect=section.getBoundingClientRect();
+    if(rect.top<innerHeight*.36) current=section.id;
+    section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);
+  }
+  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));
+}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+document.querySelectorAll(".codebar").forEach(bar=>{
+  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
+  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});
+  bar.appendChild(btn);
+});
+const lrLevel=document.getElementById("lrLevel");
+const stepLevel=document.getElementById("stepLevel");
+const modePresets={
+  balanced:{lr:45,steps:200,title:"当前判断：先保平衡",text:"这个区间适合先拿稳定结果：身份相似会变好，prompt 对齐通常还不会被严重破坏。继续看 validation 图片，再决定是否加步数。"},
+  identity:{lr:78,steps:500,title:"当前判断：身份相似更强",text:"脸会更接近目标人物，但文字条件更容易被覆盖。看到衣服、职业或场景经常偏离 prompt 时，就该收回学习率或训练步数。"},
+  prompt:{lr:24,steps:150,title:"当前判断：保留文字对齐",text:"这个设置更保守，原模型的 text-to-image 能力保留较多。若生成脸仍不像目标人物，可以小幅增加步数，而不是一次把学习率拉很高。"}
+};
+function clamp(n,min,max){return Math.max(min,Math.min(max,n));}
+function updateTradeoff(){
+  const lr=Number(lrLevel.value);
+  const steps=Number(stepLevel.value);
+  document.getElementById("lrOut").textContent=lr;
+  document.getElementById("stepOut").textContent=steps;
+  const identity=clamp(18+lr*.52+steps*.035,0,100);
+  const prompt=clamp(94-lr*.48-steps*.018,0,100);
+  const noface=clamp(5+(lr>70?(lr-70)*1.1:0)+(steps>650?(steps-650)*.045:0),0,100);
+  document.getElementById("identityFill").style.width=identity+"%";
+  document.getElementById("promptFill").style.width=prompt+"%";
+  document.getElementById("nofaceFill").style.width=noface+"%";
+  document.getElementById("identityText").textContent=Math.round(identity);
+  document.getElementById("promptText").textContent=Math.round(prompt);
+  document.getElementById("nofaceText").textContent=Math.round(noface);
+  document.getElementById("valEvery").textContent=Math.max(50,Math.round(steps*.5));
+  let text="身份、prompt、no-face 三条线都要看。";
+  let title="当前判断";
+  if(lr>72||steps>650){title="当前判断：过拟合风险上升";text="身份相似可能继续变好，但 prompt 对齐和 no-face 风险都在变差。先看 validation 图片是否已经出现衣服、职业、场景偏离。";}
+  else if(lr<30&&steps<250){title="当前判断：训练偏保守";text="prompt 对齐较稳，但脸可能还不像目标人物。如果 validation 仍像普通陌生人，可以优先增加训练步数。";}
+  else if(prompt<45){title="当前判断：文字对齐偏弱";text="如果白色 T 恤、护士服、牛仔裤等条件常被画错，说明模型太偏向身份，参数需要收一点。";}
+  else {title="当前判断：平衡区间";text="适合先跑出可提交结果，再根据 final 25 张图决定是否补一次训练。";}
+  document.getElementById("vizTitle").textContent=title;
+  document.getElementById("vizText").textContent=text;
+}
+lrLevel.addEventListener("input",updateTradeoff);
+stepLevel.addEventListener("input",updateTradeoff);
+document.querySelectorAll("[data-mode]").forEach(btn=>btn.addEventListener("click",()=>{
+  document.querySelectorAll("[data-mode]").forEach(b=>b.classList.toggle("active",b===btn));
+  const preset=modePresets[btn.dataset.mode];
+  lrLevel.value=preset.lr;
+  stepLevel.value=preset.steps;
+  updateTradeoff();
+  document.getElementById("vizTitle").textContent=preset.title;
+  document.getElementById("vizText").textContent=preset.text;
+}));
+updateTradeoff();
+function valueOfQuestion(q){
+  const radio=q.querySelector("input[type=radio]:checked"); if(radio) return radio.value;
+  const text=q.querySelector("textarea,input[type=text],select"); return text?text.value.trim():"";
+}
+function questionGroup(q){return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";}
+function generateRecord(){
+  const qs=[...document.querySelectorAll('[data-role="homework"]')],groups={},warnings=[];
+  qs.forEach((q,i)=>{
+    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";
+    const hint=q.querySelector(".solve-note")?.innerText.trim()||"";
+    const answer=valueOfQuestion(q);
+    if(!answer) warnings.push("第 "+(i+1)+" 题未填写："+title);
+    if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))) warnings.push("第 "+(i+1)+" 题建议补齐“错因 / 后果 / 修法”。");
+    if(q.dataset.type==="feynman"){
+      const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
+      if(answer&&answer.length<120) warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");
+      const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):[];
+      if(lack.length) warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");
+    }
+    const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
+  });
+  let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";
+  Object.keys(groups).forEach(group=>{out+="## "+group+"\n\n";groups[group].forEach(item=>{out+="### "+item.title+"\n";if(item.hint) out+="提示摘要："+item.hint+"\n\n";out+=item.answer+"\n\n";});});
+  document.getElementById("record").textContent=out;
+  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以用于回看。";
+}
+function fallbackCopy(text,onOk,onFail){
+  const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";document.body.appendChild(ta);ta.focus();ta.select();
+  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
+}
+function copyText(text,onOk,onFail){
+  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
+  else fallbackCopy(text,onOk,onFail);
+}
+function copyRecord(){
+  copyText(document.getElementById("record").textContent,()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";},()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";});
+}
+</script>
+</body>
+</html>

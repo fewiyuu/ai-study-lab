@@ -1,0 +1,932 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工具使用的能力层级</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="Agentic 后训练与工具使用 RL" data-unit="01">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>Agentic 后训练与工具使用 RL</strong>
+        <span>01</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#terms"><span class="dot"></span>术语与误区</a>
+        <a href="#ladder"><span class="dot"></span>能力层级</a>
+        <a href="#mechanism"><span class="dot"></span>核心机制</a>
+        <a href="#example"><span class="dot"></span>例子</a>
+        <a href="#boundary-note"><span class="dot"></span>先知道，先别追</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把层级坐标看清，再看论文和训练方法。这样更容易判断失败该修哪一层。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">课程单元</div>
+          <h1>工具使用的能力层级</h1>
+          <p>本页只讲一件事：怎样把“模型会不会用工具”拆成可诊断的层级，并据此判断该先修接口、轨迹，还是环境训练。先把层级看清，再去看后面的论文、评测和训练方法，就不会把一次合法调用误当成完整智能体能力。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页后你应该能做什么</h3>
+          <ul>
+  <li>能区分格式遵循、工具选择、参数构造、多步规划和环境适应这五类问题。</li>
+  <li>能根据失败现象判断该先改 schema、工具描述、轨迹数据，还是环境与奖励。</li>
+  <li>能读懂一条工具使用轨迹，指出观察有没有改变下一步行动。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goal</span>
+  </div>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>先分清问题层</h3>
+      <p>看见工具任务失败时，先判断是 JSON、工具选错、参数错、轨迹断了，还是环境没处理好。</p>
+    </div>
+    <div class="box info">
+      <h3>把失败映射到修法</h3>
+      <p>知道哪类问题该先用 schema、示例、SFT、轨迹标注，哪类问题才轮到环境和 RL。</p>
+    </div>
+    <div class="box">
+      <h3>为后续单元铺路</h3>
+      <p>读后面的 ReAct、Toolformer、ToolBench、OpenEnv 资料时，能看出它们分别在补哪一层。</p>
+    </div>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">from call to environment</span>
+  </div>
+  <p class="lead">工具使用要分层看：先能输出合法调用，再能选对工具，再能把参数填准，再能根据观察改下一步，最后才是在有状态的环境里稳定完成任务。</p>
+  <div class="shape-tracer" data-shape-tracer data-export-context="工具使用主线追踪" data-export-lang="text">
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1">
+        <code>call tool({"x":1})</code><span>L0-L1</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-2">
+        <code>observation -> next action</code><span>L3-L4</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1">
+        <b>接口层</b><span>输入：工具描述、schema、用户意图</span>
+        <p>看的是模型能不能把请求翻成可解析、可执行、可审计的调用。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-2">
+        <b>闭环层</b><span>输入：观察、状态、奖励、终止条件</span>
+        <p>看的是模型会不会根据环境反馈改计划，也要看它能不能把调用串成闭环。</p>
+      </div>
+    </div>
+  </div>
+  <p>这个分法对应课程前后关系：前面看接口和日志，后面看轨迹和环境。你现在先把层级坐标记住，后面每篇论文都能对号入座。</p>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语与误区</h2>
+    <span class="tag">terms</span>
+  </div>
+  <table class="metric-table" data-export-context="工具使用术语对照" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>术语</th>
+        <th>直觉</th>
+        <th>更准确的说法</th>
+        <th>常见误判</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>工具</td>
+        <td>模型能请求外部系统做一件事。</td>
+        <td>带名字、描述、参数约束、返回值和运行限制的可调用接口。</td>
+        <td>只盯着函数名，忽略权限、错误、延迟和副作用。</td>
+      </tr>
+      <tr>
+        <td>Action / Observation</td>
+        <td>模型做一步，系统回一步。</td>
+        <td>行动产生工具调用或环境动作；观察把结果、错误和状态变化送回模型。</td>
+        <td>把观察当成附加说明，没意识到它会改变下一步决策。</td>
+      </tr>
+      <tr>
+        <td>环境</td>
+        <td>会记状态的任务世界。</td>
+        <td>跨轮维护状态、终止条件和奖励的系统，动作会影响后续观察。</td>
+        <td>把无状态工具当环境，结果只会得到一次性的回答。</td>
+      </tr>
+      <tr>
+        <td>奖励</td>
+        <td>告诉模型这条轨迹好不好。</td>
+        <td>由任务结果或环境状态计算出来的反馈信号。</td>
+        <td>以为奖励越密越好，结果模型学会钻局部规则。</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="ladder">
+  <div class="head">
+    <h2>能力层级</h2>
+    <span class="tag">ladder</span>
+  </div>
+  <div class="viz-panel" data-export-context="五层能力分层" data-export-lang="table">
+    <table class="metric-table">
+      <thead>
+        <tr>
+          <th>层级</th>
+          <th>能做什么</th>
+          <th>典型失败</th>
+          <th>先看哪里</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>L0 格式遵循</td>
+          <td>输出合法 JSON、字段名和类型正确。</td>
+          <td>结构破损、字段缺失、类型不对。</td>
+          <td>schema、解析器、结构化输出约束。</td>
+        </tr>
+        <tr>
+          <td>L1 工具选择</td>
+          <td>从多个工具里挑出相关工具。</td>
+          <td>选错工具、没选到必须工具、工具太多时混淆。</td>
+          <td>工具描述、分组和检索顺序。</td>
+        </tr>
+        <tr>
+          <td>L2 参数构造</td>
+          <td>把自然语言目标转成正确参数。</td>
+          <td>值幻觉、单位错、漏参数。</td>
+          <td>参数标注、校验错误回传、调用示例。</td>
+        </tr>
+        <tr>
+          <td>L3 多步规划</td>
+          <td>根据观察调整下一步。</td>
+          <td>不读观察、重复调用、提前结束。</td>
+          <td>轨迹、action/observation 对、阶段评分。</td>
+        </tr>
+        <tr>
+          <td>L4 环境适应</td>
+          <td>在有状态环境里完成任务并处理失败。</td>
+          <td>恢复不了异常、越权调用、对终止迟钝。</td>
+          <td>状态、奖励、沙盒、审计和回退。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>核心判断</h3>
+    <p>一次合法调用只能证明模型至少碰到了 L0 或 L1/L2 的一部分。只有当观察真的改变后续行动，而且任务在状态变化中还能收束，才开始接近 Agentic 工具使用。</p>
+  </div>
+</section>
+
+<section id="mechanism">
+  <div class="head">
+    <h2>核心机制</h2>
+    <span class="tag">diagnose before train</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>先分层，再决定训练手段</h3>
+      <p>如果模型连工具名和参数都老出错，直接上 RL 只会把问题揉成一团。分层的意义，是把“失败了”拆成能定位的层：接口问题先修接口，轨迹问题先修观察和规划，环境问题再看状态、奖励和权限。</p>
+      <p>这也是为什么课程把 Agents SDK、ReAct、ToolBench 和 OpenEnv 放在同一条线上：它们对应同一条链上的不同层。</p>
+    </div>
+    <div class="box info math-block" data-export-context="训练难度拆解" data-export-lang="math">
+      $$D = C_{interface} + S_{state} + L_{latency} + R_{risk}$$
+      <p>这里的 <code>D</code> 只是教学上的难度拆解。课堂里用它来判断先修哪一层。<code>C</code> 表示接口复杂度，<code>S</code> 表示状态连续性，<code>L</code> 表示反馈延迟，<code>R</code> 表示副作用风险。</p>
+    </div>
+  </div>
+
+  <h3>层级和工程对象怎么对应</h3>
+  <table class="metric-table" data-export-context="层级与工程对象对应表" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>层级</th>
+        <th>看什么对象</th>
+        <th>读什么</th>
+        <th>写什么 / 改什么</th>
+        <th>出错时的症状</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>L0-L2</td>
+        <td>工具 schema、参数、返回值</td>
+        <td>工具描述、字段约束、错误消息</td>
+        <td>调用文本、参数值、结构化输出</td>
+        <td>解析失败、字段缺失、参数错位</td>
+      </tr>
+      <tr>
+        <td>L3</td>
+        <td>轨迹</td>
+        <td>前一步观察、任务目标、历史动作</td>
+        <td>下一步行动、停止信号、改计划</td>
+        <td>重复调用、忽略观察、提前结束</td>
+      </tr>
+      <tr>
+        <td>L4</td>
+        <td>环境状态</td>
+        <td>状态、奖励、终止条件、权限边界</td>
+        <td>episode 里的动作、回退策略、最终决策</td>
+        <td>越权、奖励投机、任务卡死</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>这张表的重点在读写关系。你要先问“模型读了什么、写了什么”，再问“该用什么方法修”。</p>
+</section>
+
+<section id="training-map">
+  <div class="head">
+    <h2>训练怎么选</h2>
+    <span class="tag">method map</span>
+  </div>
+  <p>同一条失败日志，在不同层级下应该指向不同的方法。这个判断顺序很重要，因为它会决定你是在补数据、改提示、收紧 schema，还是换成状态化环境。</p>
+  <table class="metric-table" data-export-context="层级到训练手段" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>层级</th>
+        <th>最值得先看什么</th>
+        <th>优先方法</th>
+        <th>别急着做什么</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>L0</td>
+        <td>调用文本是否符合 schema。</td>
+        <td>结构化输出、字段约束、解析器回传、少量正反例。</td>
+        <td>别先上奖励，解析都过不去时奖励只会把错误藏起来。</td>
+      </tr>
+      <tr>
+        <td>L1</td>
+        <td>工具名、描述、分组和检索顺序是否混淆。</td>
+        <td>工具描述改写、工具分组、检索器、对比样本。</td>
+        <td>别把所有工具一股脑暴露给模型。</td>
+      </tr>
+      <tr>
+        <td>L2</td>
+        <td>参数值是否被正确抽取、补齐和校验。</td>
+        <td>带参数标注的 SFT、错误回传样本、参数对齐示例。</td>
+        <td>别只看最终答案对不对，参数错而答案对的样本会误导训练。</td>
+      </tr>
+      <tr>
+        <td>L3</td>
+        <td>第一步观察有没有改变第二步行动。</td>
+        <td>ReAct 轨迹、阶段评分、失败轨迹重写、多步偏好比较。</td>
+        <td>别在没有轨迹的情况下讨论“规划能力”。</td>
+      </tr>
+      <tr>
+        <td>L4</td>
+        <td>状态、奖励、终止和权限是否形成闭环。</td>
+        <td>OpenEnv 类环境、episode 训练、奖励检查、沙盒审计。</td>
+        <td>别把生产工具直接当实验环境。</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>你可以把这张表当成一个极简决策树：先看是不是格式问题，再看是不是工具选择问题，再看是不是参数问题，最后才看是否真的进入环境训练。这样做的好处，是你不会把最便宜能修的问题留到最后。</p>
+</section>
+
+<section id="state-ledger">
+  <div class="head">
+    <h2>状态账本</h2>
+    <span class="tag">state ledger</span>
+  </div>
+  <p>下面这张账本用“同一条订单任务”串起读、写、失效和下一步检查。它的作用是把隐藏状态摊开，让你在调试时知道到底是哪个环节把任务带偏了。</p>
+  <table class="metric-table" data-export-context="工具任务状态账本" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>步骤</th>
+        <th>读什么</th>
+        <th>写什么</th>
+        <th>什么时候还是有效的</th>
+        <th>错了会怎样</th>
+        <th>下一步查什么</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>查订单状态</td>
+        <td>order_id、当前状态、失败原因。</td>
+        <td>把 observation 追加进轨迹。</td>
+        <td>当下一个动作还没发生时。</td>
+        <td>如果没读到 reason，下一步很容易走错方向。</td>
+        <td>先看 observation 有没有被完整写回上下文。</td>
+      </tr>
+      <tr>
+        <td>决定下一步</td>
+        <td>当前 observation、任务目标、历史动作。</td>
+        <td>下一步 action 或停止信号。</td>
+        <td>当任务目标还没变化时。</td>
+        <td>重复调用、误判状态、提前结束。</td>
+        <td>看 action 前有没有真正引用前一步结果。</td>
+      </tr>
+      <tr>
+        <td>执行有副作用的工具</td>
+        <td>权限、审计、回退条件。</td>
+        <td>真实系统状态。</td>
+        <td>只在权限明确、边界明确时有效。</td>
+        <td>越权、误操作、回退困难。</td>
+        <td>先确认是否能在沙盒或只读模式下复现。</td>
+      </tr>
+      <tr>
+        <td>读取奖励</td>
+        <td>最终状态、任务成功条件。</td>
+        <td>训练信号。</td>
+        <td>episode 结束、或者环境给出终止信息时。</td>
+        <td>奖励投机、局部最优、学会钻规则。</td>
+        <td>检查 reward 是否真的对应任务成功，别只看表面合规。</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>读这张表时，最有用的问题是：这一步读了什么、写了什么、有没有把下一步需要的信息保住。一旦某一步把关键状态丢了，后面所有训练都会沿着错误的上下文继续。</p>
+</section>
+
+<section id="layer-traps">
+  <div class="head">
+    <h2>常见层级陷阱</h2>
+    <span class="tag">mistake map</span>
+  </div>
+  <div class="grid2">
+    <div class="box warn">
+      <h3>把所有错误都归成“模型不行”</h3>
+      <p>这会让你直接上 RL，结果把最便宜的接口问题、描述问题和参数问题藏进更贵的训练里。更稳的做法，是先用一条失败样本判断它属于哪层。</p>
+      <p>如果连 JSON 都破，先修 L0；如果工具选错，先修 L1；如果参数抽错，先修 L2；只有当观察没有改变下一步，才进入 L3；只有当状态化闭环真的存在，才轮到 L4。</p>
+    </div>
+    <div class="box info" data-export-context="层级排错清单" data-export-lang="text">
+      <p><strong>排错顺序</strong></p>
+      <p>1. 先看能不能解析。</p>
+      <p>2. 再看是不是工具选错。</p>
+      <p>3. 再看是不是参数错。</p>
+      <p>4. 再看 observation 有没有进下一步。</p>
+      <p>5. 最后再看环境状态、奖励和权限。</p>
+      <p>这个顺序的好处是，你不会在 L0 问题上浪费 L4 的训练成本。</p>
+    </div>
+  </div>
+  <p>如果你以后要自己做评测，最先要加的是一个能把失败分层的记录格式。没有这个分层，训练和诊断会互相打架。</p>
+</section>
+
+<section id="failure-lab">
+  <div class="head">
+    <h2>故障台</h2>
+    <span class="tag">terminal lab</span>
+  </div>
+  <p>下面这三个 case 都是这类系统里常见的失败面。你不需要先写代码，先学会从输出反推层级，再去决定修哪里。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1">字段破损</button>
+      <button class="ghost" data-terminal-case="case-2">观察被忽略</button>
+      <button class="ghost" data-terminal-case="case-3">权限越界</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">parser error: missing field "reason"
+expected schema:
+  {"status": string, "reason": string}</pre>
+    <template data-terminal-output="case-1">parser error: missing field "reason"
+expected schema:
+  {"status": string, "reason": string}</template>
+    <template data-terminal-output="case-2">trace warning: observation read but not used
+step 1: get_order_status -> {"status": "pending", "reason": "payment_review"}
+step 2: create_ticket -> shipping_delay
+diagnosis: L3 planning failure</template>
+    <template data-terminal-output="case-3">tool denied: refund requires human approval
+diagnosis: permission boundary not modeled
+next check: sandbox / review gate / audit log</template>
+  </div>
+  <div class="grid3">
+    <div class="box">
+      <h3>字段破损</h3>
+      <p>这个输出说明问题先卡在格式层。先修 schema、字段名和类型，别先讨论轨迹和奖励。</p>
+    </div>
+    <div class="box">
+      <h3>观察被忽略</h3>
+      <p>这说明模型看到了结果，却没有把结果带进下一步。先看轨迹和观察回填，再决定要不要换训练算法。</p>
+    </div>
+    <div class="box">
+      <h3>权限越界</h3>
+      <p>这类错误在环境侧更危险，因为它会真的改动系统状态。先补权限模型，再谈闭环训练。</p>
+    </div>
+  </div>
+</section>
+
+<section id="operation-bridge">
+  <div class="head">
+    <h2>操作桥</h2>
+    <span class="tag">from symptom to next reading</span>
+  </div>
+  <p>这一节把前面的分层判断落到实际动作上。你拿到一条失败样本后，不要先急着翻整篇论文，也不要把它直接扔给更重的训练方法。先把样本拆成四件事：它看见了什么、做了什么、哪里断了、下一步该去看哪类资料。只要这四件事说清楚，后面的阅读顺序就会稳定很多。</p>
+  <p>这一步很像给失败样本做路由。路由的意思不是给结论贴标签，而是先把样本送到正确的检查台。字段破损应该去 schema 台，工具混淆应该去工具描述台，参数错误应该去参数回填台，观察没进下一步应该去轨迹台，状态和奖励没闭环应该去环境台。你先把台子找对，再决定要不要换方法。</p>
+  <p>如果你把所有样本都交给更重的训练，表面上看是在做统一处理，实际上是在把低层故障和高层故障混在一起。这样会带来两个后果：一是诊断成本越来越高，因为每个错误都要穿过更多层；二是训练信号越来越脏，因为本来可以靠规则、示例或约束修掉的问题，被你塞进了轨迹或环境里。</p>
+  <p>桥接章节的目标，是让你把“看见一个坏样本”变成“三步动作”：先定层级，再找证据，再选资料。这个顺序比“先想训练法”更稳，因为训练法永远建立在问题已经被说清楚的前提上。问题没说清楚时，最容易出现的就是方法选得很重，修得却很轻。</p>
+  <div class="grid2">
+    <div class="box" data-input-demo>
+      <h3>样本处理四步</h3>
+      <p>第一步，摘出原始症状，例如字段缺失、工具选错、参数写错、观察没进下一步，或者状态和奖励没有闭环。第二步，把症状落到层级上，先判 L0-L2，只有在轨迹和环境信号明确时才往后走。</p>
+      <p>第三步，写下证据。证据最好是能直接复述出来的日志片段、轨迹片段、表格字段，或者一个能让人复查的状态表。第四步，给出下一篇要看的资料类型，而不是直接给出“应该怎么训练”。</p>
+      <p>可以把这个流程想成一个轻量排障单：症状、层级、证据、下一步，四栏就够了。比如一条日志如果写着“工具调用合法，但第二步没有读取 observation”，那就先记 L3；如果写着“字段名缺失，结构直接报错”，就先记 L0。你不需要在这一层就把全部修法写满，只要把第一站选对，后面就会轻很多。</p>
+      <p>这个流程的好处是，你不会把所有问题都往 RL 里塞。很多样本根本不需要更复杂的奖励设计，只需要更好的 schema、工具分组、轨迹标注，或者一个更清楚的环境边界。</p>
+      <pre data-export-context="样本处理短流程" data-export-lang="text"><code>症状
+  -> 层级
+  -> 证据
+  -> 下一篇资料
+  -> 训练或工程修法</code></pre>
+    </div>
+    <div class="box info math-block">
+      <h3>桥接表</h3>
+      <table class="metric-table" data-export-context="症状到阅读动作桥接表" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>你看到的现象</th>
+            <th>先记哪层</th>
+            <th>下一步先看什么</th>
+            <th>先别做什么</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>JSON 破损、字段名飘、结构不稳</td>
+            <td>L0</td>
+            <td>schema、解析器、结构化输出约束</td>
+            <td>先别碰奖励设计。</td>
+          </tr>
+          <tr>
+            <td>工具选错、检索顺序乱、描述混淆</td>
+            <td>L1</td>
+            <td>工具描述、分组、排序、路由器</td>
+            <td>先别把更多工具塞给模型。</td>
+          </tr>
+          <tr>
+            <td>参数漏填、值错、单位错、类型错</td>
+            <td>L2</td>
+            <td>参数标注、错误回传、对照示例</td>
+            <td>先别把问题解释成规划失败。</td>
+          </tr>
+          <tr>
+            <td>观察被看见，却没有改变下一步</td>
+            <td>L3</td>
+            <td>ReAct、轨迹、阶段评分、多步评测</td>
+            <td>先别直接改 reward。</td>
+          </tr>
+          <tr>
+            <td>状态、权限、奖励一起变</td>
+            <td>L4</td>
+            <td>OpenEnv、沙盒、审计、回退</td>
+            <td>先别接生产系统。</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>这张表的用途很直接：把一条样本放进对的检查台，然后只读该层需要看的证据。你不用一开始就知道答案，只要知道先看哪一层，后面的判断就会快很多。</p>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="box warn">
+      <h3>常见误读</h3>
+      <p>最常见的误读，是把所有失败都往最显眼的地方放。比如看到一条轨迹里有工具调用，就以为问题一定在规划；看到一个环境任务失败，就以为一定要换 RL。实际上，很多更早的错误会伪装成更晚的错误。字段破损会像规划失败，工具描述太糊会像参数错，参数错会像轨迹不稳，环境边界没写清会像奖励投机。</p>
+      <p>第二种误读，是只看结果，不看读写关系。你应该关心模型读了什么、写了什么、下一步有没有用到上一步结果，而不是只盯着最后答对没有。只看最后结果，很容易把一个低层错误拖成高层问题，最后把诊断成本抬上去。</p>
+      <p>第三种误读，是把“方法名”当成“问题答案”。ReAct、Toolformer、ToolBench、OpenEnv 都有名字，但名字本身不会告诉你该先修什么。你还是要回到样本，先判层级，再看这篇资料到底补的是接口、轨迹，还是环境。</p>
+      <p>第四种误读，是把“先读资料”误当成“先背结论”。这类课的价值不在于背名字，而在于看到一条日志就知道应该去哪一层找下一步。你能把层级说对，后面的阅读才会省力。</p>
+      <p>如果你愿意再多做一步，就把样本写成“小卡片”：一行症状、一行层级、一行证据、一行下一步。这样做的好处是，后面的 ReAct、ToolBench 和 OpenEnv 资料都能直接挂到这张卡片上，不会各讲各的。</p>
+    </div>
+    <div class="box">
+      <h3>你现在应该能做什么</h3>
+      <p>拿到一条新的失败日志时，先写出三件事：它属于哪层、最直接的证据是什么、下一步该去看哪类资料。能把这三件事写出来，就说明这一页的坐标系已经能用了。</p>
+      <p>如果一条样本同时出现了接口错和轨迹错，先修更低的那层。低层没通的时候，高层信号常常只是表象。这个判断会直接影响你后面是补 schema、改工具描述，还是读 ReAct 和环境训练资料。</p>
+      <p>这一节不是再讲一遍概念，而是把概念转成动作。你读完这一节，应该能把失败样本从“看起来很乱”变成“知道先看哪里”。</p>
+    </div>
+  </div>
+  <div class="box info">
+    <h3>路由表</h3>
+    <table class="metric-table" data-export-context="症状到资料的路由表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>失败样本</th>
+          <th>优先资料</th>
+          <th>次级资料</th>
+          <th>先别碰什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>字段破损、键名飘了</td>
+          <td>schema 约束和工具输出规范</td>
+          <td>结构化输出样例</td>
+          <td>环境奖励和长链规划</td>
+        </tr>
+        <tr>
+          <td>工具选错、调用目标跑偏</td>
+          <td>工具描述、检索器、分组</td>
+          <td>对比样本、工具排序</td>
+          <td>先别给它更多工具</td>
+        </tr>
+        <tr>
+          <td>参数漏填、值抽错、单位错</td>
+          <td>参数标注、错误回传、示例</td>
+          <td>参数级 SFT</td>
+          <td>先别把它归到规划失败</td>
+        </tr>
+        <tr>
+          <td>看见观察但没变下一步</td>
+          <td>ReAct、ToolBench、轨迹评测</td>
+          <td>多步偏好比较</td>
+          <td>先别直接改 reward</td>
+        </tr>
+        <tr>
+          <td>状态、权限、奖励都在动</td>
+          <td>OpenEnv、沙盒、审计、回退</td>
+          <td>环境训练和安全边界</td>
+          <td>先别上生产系统</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>这张路由表的意思很简单：同一个失败样本可以有不同层的表面表现，但你只要先确定最早出问题的地方，后面的修法就会自然收窄。先把样本送到对的台子，再谈修法，通常比一上来就讨论方法名更省力。</p>
+  </div>
+  <div class="box">
+    <h3>补一个小例子</h3>
+    <p>假设你看到一条日志：模型查到“订单待审核”，却还是继续发起“催发货”工单。把它放进桥接表后，你会先记成 L3，再去看轨迹，而不是先追环境奖励。轨迹上要找的不是最后答得对不对，而是第一步观察有没有进入第二步动作。</p>
+    <div class="codebar">
+      <span class="label">轨迹摘要</span>
+      <span class="kind">action/observation</span>
+    </div>
+    <pre data-export-context="桥接案例轨迹" data-export-lang="text"><code>action 1: get_order_status(order_id=A1024)
+observation 1: status=pending_review
+action 2: create_ticket(type=shipping_delay)</code></pre>
+    <table class="metric-table" data-export-context="桥接案例诊断表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>看到什么</th>
+          <th>先判什么</th>
+          <th>下一步</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>第二步仍然沿着发货走</td>
+          <td>L3</td>
+          <td>查观察回填和轨迹样本</td>
+        </tr>
+        <tr>
+          <td>第一步字段就破了</td>
+          <td>L0</td>
+          <td>先修 schema 和解析</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>这个小例子有一个直接后果：如果你把它误判成环境问题，就会先去改 reward，结果最该修的轨迹和回填被放在后面。下一次遇到同类样本时，先按这张表走一遍，基本就能少绕一圈。</p>
+    <p>你现在应该能把一条样本写成“症状、层级、证据、下一步”四栏，并且知道它先该去看哪篇资料。这个动作本身就足够支撑后面的单元阅读了。</p>
+  </div>
+</section>
+
+<section id="source-map">
+  <div class="head">
+    <h2>源映射</h2>
+    <span class="tag">source map</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>这页怎么用来源</h3>
+      <p>Agents SDK 负责让你看到工具、handoff、guardrails 和 tracing 这些工程边界；ReAct 和 ToolBench 负责把行动、观察和多步轨迹拉出来；OpenEnv 负责把状态、奖励和终止条件连起来。</p>
+      <p>因此，这一页的结构不是按论文名排，而是按问题层排：先接口，再轨迹，再环境。你读到任意一篇资料时，只要先问它属于哪层，就不会迷路。</p>
+    </div>
+    <div class="box info" data-export-context="源到层级的对应关系" data-export-lang="table">
+      <table class="metric-table">
+        <thead>
+          <tr>
+            <th>来源</th>
+            <th>主要补哪层</th>
+            <th>你应该先学到什么</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Agents SDK</td>
+            <td>L0-L2</td>
+            <td>工具、handoff、guardrails、tracing。</td>
+          </tr>
+          <tr>
+            <td>ReAct / ToolBench / API-Bank</td>
+            <td>L3</td>
+            <td>行动、观察、轨迹、多步评测。</td>
+          </tr>
+          <tr>
+            <td>OpenEnv / verl</td>
+            <td>L4</td>
+            <td>状态、奖励、终止、环境训练和安全边界。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <p>这不是在给资料贴标签，而是在告诉你：如果一篇资料读起来像“接口说明”，就别拿它去回答环境训练的问题；如果一篇资料讲的是环境奖励，也别指望它解决 schema 破损。层级先对，后面的阅读才省力。</p>
+</section>
+
+<section id="example">
+  <div class="head">
+    <h2>例子</h2>
+    <span class="tag">worked cases</span>
+  </div>
+  <div class="box">
+    <h3>例 1：看上去会调用工具，实际上没读观察</h3>
+    <p>用户说：“查一下订单是否已经发货，如果没有，帮我创建催办工单。”模型先查到结果，再直接创建工单：</p>
+    <div class="codebar">
+      <span class="label">轨迹片段</span>
+      <span class="kind">JSON-like</span>
+    </div>
+    <pre data-export-context="订单轨迹片段" data-export-lang="text"><code>call get_order_status({"order_id": "A1024"})
+observation: {"status": "pending", "reason": "payment_review"}
+
+call create_ticket({"order_id": "A1024", "type": "shipping_delay"})</code></pre>
+    <p>这里不是“不会写 JSON”，而是第一步观察没有改变第二步行动。真正的问题是 L3：模型没把 <code>payment_review</code> 读进计划。你可以把它想成一个小型排错实验：输入、观察、下一步动作都在，但状态没有被真正消费，所以轨迹断在中间。</p>
+    <p>这个例子之所以重要，是因为它能把“结果看起来对”和“过程真的对”分开。后者才是后训练和工具使用 RL 真正要优化的对象。</p>
+  </div>
+  <div class="grid2">
+    <div class="box warn">
+      <h3>修正后的轨迹</h3>
+      <div class="codebar">
+        <span class="label">轨迹片段</span>
+        <span class="kind">ReAct-style</span>
+      </div>
+      <pre data-export-context="修正轨迹" data-export-lang="text"><code>thought: 订单未发货，但原因是 payment_review，不该创建物流催办。
+action: ask_payment_review_status({"order_id": "A1024"})
+observation: {"review_eta": "24h", "can_escalate": false}
+final: 告知用户订单在支付审核中，预计 24 小时内更新。</code></pre>
+      <p>这条轨迹的关键不在“多调用了一次”，而在于第二步是由第一步观察推出的，而不是硬接着往下点。</p>
+    </div>
+    <div class="box danger">
+      <h3>常见错误</h3>
+      <p>把所有失败都归因于模型“不够聪明”，然后直接上 RL。这个做法通常会把 L0/L1/L2 的错误藏进训练里，最后只剩下更难读的轨迹。</p>
+      <p><strong>修法：</strong>先标注失败层级。如果是 L1/L2，先修工具描述、schema、示例和错误回传；如果是 L3/L4，再考虑轨迹数据、环境和奖励。</p>
+    </div>
+  </div>
+</section>
+
+<section id="boundary-note">
+  <div class="head">
+    <h2>先知道，先别追</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="box info">
+    <p>这页先不展开的内容有五个：ReAct 的完整提示模板、Toolformer 的数据生成细节、ToolBench 的任务集合、OpenEnv 的代码接口、沙盒和上线审计的具体实现。现在先把层级坐标记住，它们会在后面的单元重新出现。</p>
+    <p>如果你在读后面的论文时开始纠结“到底先用 SFT 还是先用 RL”，先回到这页，看看问题卡在哪一层。很多时候答案不是换训练法，而是先把失败症状说清楚。</p>
+    <p>再往后读时，记住一个简单规则：接口问题先看可解析性，轨迹问题先看观察是否改变计划，环境问题先看状态、奖励和权限有没有闭环。这个规则比任何一篇单独论文都更早派上用场。</p>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>作答目标</strong>
+    <p>不要只背层级名称。每题都尽量把“现象 -> 层级 -> 证据 -> 修法”说出来。</p>
+  </div>
+  <div class="review-card">
+    <strong>检查重点</strong>
+    <p>你的答案是否区分了接口、轨迹、环境、奖励和安全边界。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>基础辨认</h3>
+      <p>先把层级和概念边界认出来。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速回忆</b>
+      <span>L0 格式，L1 选择，L2 参数，L3 轨迹，L4 环境。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="基础辨认" data-title="哪种现象最能说明模型超过了单步工具调用？" data-answer="B" data-explain="真正的关键不是调用得像不像，而是 observation 是否改变了下一步 action。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">层级判断</span></div>
+      <h3>哪种现象最能说明模型超过了单步工具调用？</h3>
+      <label><input type="radio" name="q1" value="A"> A. 模型输出了合法 JSON。</label>
+      <label><input type="radio" name="q1" value="B"> B. 模型根据第一步观察改变第二步工具选择。</label>
+      <label><input type="radio" name="q1" value="C"> C. 模型使用了很长的工具描述。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="基础辨认" data-title="无状态工具和环境是同一回事吗？" data-answer="false" data-explain="无状态工具一次只处理一次调用；环境会保留状态，动作会影响后续观察。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">概念边界</span></div>
+      <h3>无状态工具和环境是同一回事吗？</h3>
+      <label><input type="radio" name="q2" value="true"> 对</label>
+      <label><input type="radio" name="q2" value="false"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q3" data-group="基础辨认" data-title="API-Bank 关注的三个 API 能力维度">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">论文线索</span></div>
+      <h3>API-Bank 关注的三个 API 能力维度可概括为 planning、retrieving 和 ______。</h3>
+      <input type="text" name="q3" placeholder="填写一个英文动名词" data-answer="calling" data-explain="它指实际发起 API 调用和参数构造。">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">别把它写成“invoke”。这里对应论文里的能力拆法。</p>
+    </div>
+
+    <div class="q full" data-question="q4" data-group="基础辨认" data-title="解释 function calling 不等于 agentic 工具使用">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">核心概念</span></div>
+      <h3>用 120 字以内解释：为什么 function calling 不等于 agentic 工具使用？</h3>
+      <p class="solve-note">先说 function calling 证明了什么，再说它还没有证明什么。至少提到单步调用、多步观察、环境状态里的两项。</p>
+      <textarea name="q4" placeholder="从单步调用、多步观察、环境状态、错误恢复四点里选至少两点。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案会先说 function calling 只证明模型能输出符合 schema 的调用，再说它并没有证明模型会读观察、会修正下一步、会在状态变化中完成任务。提到“单步调用”和“多步观察”通常就能抓住主线；如果还能补上环境状态或错误恢复，会更完整。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>诊断与设计</h3>
+      <p>把日志现象转成训练或工程修法。</p>
+    </div>
+    <div class="quick-review">
+      <b>作答格式</b>
+      <span>现象 -> 层级 -> 证据 -> 修法。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q5" data-group="诊断与设计" data-title="错误诊断：模型忽略工具返回" data-answer="L3" data-explain="这是多步规划失败，不是单次格式错误。先修轨迹和观察回填，再看是否需要更重的训练。">
+      <div class="q-meta"><span class="pill">error diagnosis</span><span class="pill">轨迹分析</span></div>
+      <h3>模型第一次查询返回“账户余额不足”，但第二步仍然调用“立即转账”。这主要是哪一层失败？</h3>
+      <p class="solve-note">提示：关注 observation 有没有改变 action。不要直接跳到 RL。</p>
+      <label><input type="radio" name="q5" value="L1"> L1</label>
+      <label><input type="radio" name="q5" value="L3"> L3</label>
+      <label><input type="radio" name="q5" value="L4"> L4</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>主要是 L3 多步规划失败，因为模型没有把 observation“账户余额不足”吸收到下一步行动里。优先修法是补轨迹、改提示或示例、做 action/observation 级别评测；如果是参数或工具描述本身混淆，再回到 L1/L2。直接上 RL 通常太早。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q6" data-group="诊断与设计" data-title="任务设计：什么时候需要 OpenEnv 类环境">
+      <div class="q-meta"><span class="pill">scenario transfer</span><span class="pill">环境判断</span></div>
+      <h3>为“浏览网页并完成多页表单”设计训练评测时，为什么普通无状态工具不够？</h3>
+      <p class="solve-note">从状态连续性、动作影响观察、终止条件、奖励读取四点回答。</p>
+      <textarea name="q6" placeholder="回答时把网页状态、动作、观察和奖励串起来。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>因为网页会保持状态，前一步动作会改变后一步能看到什么；多页表单还有终止条件和局部错误恢复，单次无状态工具调用只能描述一次点击或一次提交，不能表达整个过程。合格答案最好能说出“状态连续性”和“观察会被动作改变”这两个点。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q7" data-group="诊断与设计" data-title="安全边界：生产工具是否能直接进 RL">
+      <div class="q-meta"><span class="pill">checklist</span><span class="pill">安全</span></div>
+      <h3>一个客服 agent 可以退款、改地址、发送邮件。你会直接把这些生产工具接进 RL 环境吗？为什么？</h3>
+      <p class="solve-note">至少选出三项必须先处理的边界：沙盒、副作用、权限、审计、回退、奖励投机。</p>
+      <label><input type="checkbox" name="q7" value="沙盒"> 沙盒</label>
+      <label><input type="checkbox" name="q7" value="副作用"> 副作用</label>
+      <label><input type="checkbox" name="q7" value="权限"> 权限</label>
+      <label><input type="checkbox" name="q7" value="审计"> 审计</label>
+      <label><input type="checkbox" name="q7" value="回退"> 回退</label>
+      <label><input type="checkbox" name="q7" value="奖励投机"> 奖励投机</label>
+      <details>
+        <summary>展开反馈</summary>
+        <p>不应直接接进生产工具。更稳妥的做法是先做只读版本、模拟器或沙盒版本，保留人工确认和回退机制，再逐步放开权限。只说“不安全”不够，最好说明哪些能力先模拟、哪些先只读、哪些必须人工确认。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q8" data-group="诊断与设计" data-title="综合解释：能力层级的作用">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">Feynman</span></div>
+      <h3>把本单元讲给一个刚会 function calling 的工程师：能力层级为什么能节省训练成本？</h3>
+      <p class="solve-note">用一个连续故事回答：接口 -> 轨迹 -> 环境 -> 奖励 -> 安全。至少举一个低层问题不该先用 RL 解决的例子。</p>
+      <textarea name="q8" placeholder="把分层、先修法和风险控制串起来。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好的答案会说明：分层先把问题定位到具体层，避免把简单的格式错误、工具混淆或参数错当成 RL 问题；只有当轨迹和环境层真的需要学习闭环时，再引入更重的训练。能明确举出一个低层问题，例如 JSON 破损或参数错位，不该直接上 RL，就说明理解到位了。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>层级映射</h3>
+      <p>把症状和修法连起来。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速判别</b>
+      <span>接口错先修接口，观察错先修轨迹，环境错再看奖励和权限。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q9" data-group="层级映射" data-title="JSON 字段错主要卡在哪层？" data-answer="L0" data-explain="字段错通常是格式遵循问题，先看 schema 和解析器。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">层级映射</span></div>
+      <h3>JSON 字段错主要卡在哪层？</h3>
+      <label><input type="radio" name="q9" value="L0"> L0</label>
+      <label><input type="radio" name="q9" value="L3"> L3</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q10" data-group="层级映射" data-title="观察被忽略时最可能的层级" data-answer="L3" data-explain="能看到 observation 却仍重复调用，通常先看多步规划和观察回填。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">轨迹诊断</span></div>
+      <h3>模型明明看到了 observation，却仍重复同一个调用。最可能先归到哪层？</h3>
+      <label><input type="radio" name="q10" value="L1"> L1</label>
+      <label><input type="radio" name="q10" value="L3"> L3</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q11" data-group="层级映射" data-title="哪类能力最依赖状态化环境？" data-answer="L4" data-explain="状态化环境对应动作、状态、奖励和终止条件的闭环。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">环境判断</span></div>
+      <h3>哪类能力最依赖状态化环境？</h3>
+      <label><input type="radio" name="q11" value="L2"> L2</label>
+      <label><input type="radio" name="q11" value="L4"> L4</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="层级映射" data-title="把错误修法配回层级">
+      <div class="q-meta"><span class="pill">matching</span><span class="pill">修法</span></div>
+      <h3>把“先修 schema / 先修轨迹 / 先修环境奖励”分别对应到最合理的层级。</h3>
+      <p>写出你的配对，并说明每个修法为什么优先。</p>
+      <textarea name="q12" placeholder="例如：schema -> L0/L1，轨迹 -> L3，环境奖励 -> L4。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>schema 通常先对应 L0，工具选择有时也会受它影响；轨迹问题主要在 L3；环境奖励、终止和权限边界主要在 L4。答案不要求死背一个唯一映射，但要能说清为什么先修这一层。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><a href="https://openai.github.io/openai-agents-python/tools/">OpenAI Agents SDK：Tools</a>。用于理解 hosted tools、function tools、agents as tools，以及工具 schema、错误处理和工具暴露面的工程意义。</li>
+  <li><a href="https://openai.github.io/openai-agents-python/handoffs/">OpenAI Agents SDK：Handoffs</a>，以及 guardrails、tracing 相关文档。用于理解任务转交、运行时检查和轨迹记录，不把它们误写成训练算法。</li>
+  <li><a href="https://huggingface.co/docs/trl/main/openenv">TRL OpenEnv Integration</a>。用于理解 tools 与 environments 的区别、状态化多轮 interaction、environment_factory、reward_func 和 episode 结构。</li>
+  <li><a href="https://arxiv.org/abs/2210.03629">ReAct</a>、<a href="https://arxiv.org/abs/2302.04761">Toolformer</a>、<a href="https://arxiv.org/abs/2307.16789">ToolLLM / ToolBench</a>、<a href="https://arxiv.org/abs/2304.08244">API-Bank</a>。用于说明推理-行动-观察轨迹、工具使用数据构造和多步评测维度。</li>
+  <li><a href="https://github.com/volcengine/verl">verl</a> 与推理训练资料。用于对照可验证奖励和交互式奖励的差异。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

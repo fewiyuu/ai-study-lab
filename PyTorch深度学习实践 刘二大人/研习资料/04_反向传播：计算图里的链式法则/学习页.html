@@ -1,628 +1,894 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-page-shell="study-page-v2">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>04｜反向传播：计算图里的链式法则</title>
-  <style>
-:root{
-  --navy:#1b2a4a;--cyan:#00a9f4;--bg:#f4f6f9;--paper:#fff;--ink:#172033;--muted:#5d6878;--line:#d8dee8;
-  --soft:#eef7f4;--warn:#fff6df;--info:#eef4ff;--redsoft:#fff0ed;--code:#111827;--codeText:#e5e7eb;
-  --sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif;
-  --serif:"Noto Serif CJK SC","Songti SC","STSong","SimSun",serif;
-  --mono:"Cascadia Code","Consolas","SFMono-Regular",monospace;
-}
-*{box-sizing:border-box}html{scroll-behavior:smooth}
-body{margin:0;background:linear-gradient(90deg,rgba(27,42,74,.045) 1px,transparent 1px) 0 0/60px 60px,linear-gradient(rgba(27,42,74,.035) 1px,transparent 1px) 0 0/60px 60px,var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.72;-webkit-font-smoothing:antialiased}
-.progress{position:fixed;left:0;top:0;height:4px;width:0;background:linear-gradient(90deg,var(--cyan),var(--navy));z-index:10}
-.layout{display:grid;grid-template-columns:308px minmax(0,1fr);min-height:100vh}
-aside{position:sticky;top:0;height:100vh;overflow:auto;background:var(--navy);color:#fff;padding:30px 22px;background-image:repeating-linear-gradient(90deg,transparent,transparent 59px,rgba(255,255,255,.045) 59px,rgba(255,255,255,.045) 60px),repeating-linear-gradient(0deg,transparent,transparent 59px,rgba(255,255,255,.035) 59px,rgba(255,255,255,.035) 60px)}
-.brand{border-bottom:1px solid rgba(255,255,255,.36);padding-bottom:22px;margin-bottom:20px}.brand strong{display:block;color:#fff;font-family:var(--serif);font-size:27px;line-height:1.22}.brand span{display:block;color:rgba(255,255,255,.72);font-size:13px;margin-top:8px}
-nav{display:grid}.nav-title{margin:20px 0 8px;color:rgba(255,255,255,.54);font-family:var(--mono);font-size:11px;letter-spacing:.12em}
-nav a{display:flex;gap:10px;align-items:center;color:rgba(255,255,255,.82);text-decoration:none;border-bottom:1px solid rgba(255,255,255,.13);padding:10px 0;font-size:13px}
-nav a:hover,nav a.active{color:#fff;border-color:rgba(255,255,255,.42);font-weight:700}.dot{width:6px;height:6px;background:var(--cyan);opacity:.62;flex:0 0 auto}.side-note{margin-top:24px;padding:13px;border:1px solid rgba(255,255,255,.22);color:rgba(255,255,255,.74);font-size:13px;line-height:1.8}
-main{max-width:1420px;padding:34px 44px}.hero,section{background:var(--paper);border:1px solid var(--line);box-shadow:0 14px 28px rgba(27,42,74,.08)}.hero{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:24px;padding:42px;border-top:6px solid var(--navy)}.kicker{font-family:var(--mono);font-size:12px;color:#738197;letter-spacing:.16em;text-transform:uppercase;margin-bottom:14px}
-h1{margin:0;font-family:var(--serif);font-size:44px;line-height:1.15;color:#111;letter-spacing:0}h2{margin:0;font-family:var(--serif);font-size:30px;line-height:1.25;color:#111}h3{margin:0 0 8px;font-size:18px;color:#111}p{margin:8px 0}.muted,.hero p{color:var(--muted)}section{margin-top:18px;padding:30px 34px}.head{display:flex;justify-content:space-between;gap:16px;align-items:start;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--line)}.tag,.pill{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:#69788d;background:#edf2f8;border:1px solid var(--line);padding:3px 7px}
-.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.8fr);gap:14px}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.box,.route,.viz-cell,.q,.review-card{background:#fff;border:1px solid var(--line);padding:16px}.soft{background:var(--soft)}.warn{background:var(--warn)}.info{background:var(--info)}.redsoft{background:var(--redsoft)}
-.route h3,.box h3,.viz-cell b{font-family:var(--serif);font-weight:800}.lesson-block{border-left:4px solid var(--navy);padding:4px 0 12px 18px;margin:18px 0}.lesson-block h3{font-family:var(--serif);font-size:22px}.can-do{background:#f0f7fb;border-left:4px solid var(--cyan);padding:10px 12px;color:#334155}
-.map{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:18px 0}.node{background:#eef4ff;border:1px solid #cbd8ec;color:#1b2a4a;padding:8px 10px;font-weight:800}.arrow{color:#7c8798}
-.viz-panel{border:1px solid var(--line);background:#f8fbff;padding:18px;margin:14px 0}.viz-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.viz-note{font-size:14px;color:#475569;border-top:1px solid var(--line);padding-top:12px}
-table{width:100%;border-collapse:collapse;margin:14px 0;background:#fff}th,td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}th{background:#eef4ff;color:#1b2a4a}
-code{background:#e8eef6;color:#172033;padding:2px 5px;border-radius:4px;font-family:var(--mono);font-size:.92em}
-.formula{background:#fffdfa;border:1px solid #d9d0bf;border-left:6px solid var(--navy);padding:17px 20px;margin:14px 0;font-family:"Cambria Math","Times New Roman",var(--serif);font-size:18px;line-height:1.75;overflow:auto}.math{white-space:nowrap}
-.codebar{margin-top:16px;background:#252526;color:#cbd5e1;border:1px solid #3c3c3c;border-bottom:0;padding:8px 12px;display:flex;gap:12px;align-items:center;font-family:var(--mono);font-size:13px}.codebar:before{content:"";width:34px;height:10px;flex:0 0 auto;background:radial-gradient(circle at 5px 5px,#f87171 0 4px,transparent 4.5px),radial-gradient(circle at 17px 5px,#fbbf24 0 4px,transparent 4.5px),radial-gradient(circle at 29px 5px,#34d399 0 4px,transparent 4.5px)}.codebar .label{color:#93c5fd;margin-right:auto}.codebar .kind{color:#9ca3af}
-.copy-code{border:1px solid #3c3c3c;background:#2d2d30;color:#dbeafe;padding:3px 7px;font-family:var(--mono);font-size:12px;cursor:pointer}
-pre{margin:0 0 14px;background:var(--code);color:var(--codeText);border:1px solid #3c3c3c;padding:16px;overflow:auto;font-family:var(--mono);font-size:14px;line-height:1.65}pre code{background:transparent;color:inherit;padding:0}
-.practice-intro{display:grid;grid-template-columns:1fr 1fr;gap:14px}.practice-group{border:1px solid var(--line);margin-top:18px;background:#fff}.group-head{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:14px;padding:18px 20px;background:#eef7fb;border-bottom:1px solid var(--line)}.group-head h3{font-family:var(--serif);font-size:23px}.quick-review{border-left:4px solid var(--navy);padding-left:13px;color:#475569}.quick-review b{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:#64748b}.drill-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line)}.q{border:0}.q.full{grid-column:1/-1}.q-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}.q h3{font-size:16px;line-height:1.55}.choices label{display:block;margin:7px 0}.solve-note{background:#fff6df;border-left:4px solid #c28a17;color:#5c4618;padding:8px 10px;font-size:13px;margin:8px 0}textarea,input[type=text]{width:100%;border:1px solid #cbd5e1;background:#fff;color:var(--ink);padding:10px;font:inherit;resize:vertical}textarea{min-height:74px}input[type=radio]{accent-color:var(--navy);margin-right:7px}
-.answer{white-space:pre-wrap;background:#fff;border:1px dashed #9aa7bb;padding:14px;max-height:380px;overflow:auto}.quality{display:none;white-space:pre-wrap;background:#fff6df;border:1px solid #d7b66b;color:#5c4618;padding:12px;margin:12px 0}.actions{position:sticky;bottom:0;display:flex;gap:10px;justify-content:flex-end;padding-top:14px;margin-top:18px;background:linear-gradient(transparent,var(--bg) 38%)}button{border:0;background:var(--navy);color:#fff;padding:9px 13px;font:inherit;cursor:pointer}.ghost{background:#fff;color:var(--navy);border:1px solid var(--navy)}
-@media(max-width:960px){.layout{grid-template-columns:1fr}aside{position:static;height:auto}.hero,.grid2,.grid3,.practice-intro,.group-head,.viz-grid{grid-template-columns:1fr}main{padding:18px}.hero,section{padding:22px 18px}h1{font-size:31px}.drill-grid{grid-template-columns:1fr}.q.full{grid-column:auto}}
-</style>
+  <title>反向传播：计算图里的链式法则</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
 </head>
-<body>
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand">
-      <strong>04｜反向传播：计算图里的链式法则</strong>
-      <span>PyTorch 深度学习实践｜刘二大人课程学习页</span>
+<body data-course="PyTorch 深度学习实践 刘二大人" data-unit="04 反向传播">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>PyTorch 深度学习实践 刘二大人</strong>
+        <span>04 反向传播</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#graph"><span class="dot"></span>计算图</a>
+        <a href="#chain-rule"><span class="dot"></span>链式法则</a>
+        <a href="#manual-trace"><span class="dot"></span>手算追踪</a>
+        <a href="#branch-sum"><span class="dot"></span>分支相加</a>
+        <a href="#autograd"><span class="dot"></span>Autograd</a>
+        <a href="#state-ledger"><span class="dot"></span>状态账本</a>
+        <a href="#scalar-loss"><span class="dot"></span>标量 loss</a>
+        <a href="#accumulation"><span class="dot"></span>梯度累积</a>
+        <a href="#training-bridge"><span class="dot"></span>训练顺序</a>
+        <a href="#failure-lab"><span class="dot"></span>故障实验</a>
+        <a href="#boundary"><span class="dot"></span>边界</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">这一页只看梯度怎样从前向计算里出来、落到 `.grad` 里，以及训练循环怎样把状态交给下一步。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">第 04 讲 · 自动求导入口</div>
+          <h1>反向传播：计算图里的链式法则</h1>
+          <p>上一讲讲的是怎么用梯度更新参数。这一讲补前向和更新之间那段：前向怎样留下计算图，<code>loss.backward()</code> 怎样把梯度写进叶子参数的 <code>.grad</code>，以及为什么 <code>zero_grad()</code>、<code>backward()</code>、<code>step()</code> 的顺序不能乱。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../03_梯度下降：沿着损失下降的方向更新参数/学习页.html">上一讲：梯度下降</a>
+            <a href="../05_用PyTorch实现线性回归：Module、Loss与Optimizer/学习页.html">下一讲：PyTorch 线性回归</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页，你先能做什么</h3>
+          <ul>
+  <li>能用同一个标量例子手算 <code>dL/dw</code> 和 <code>dL/db</code>。</li>
+  <li>能说清 <code>requires_grad</code>、叶子张量、<code>.grad</code> 和标量 <code>loss</code> 的分工。</li>
+  <li>能定位三类训练循环错误：没建图、梯度累积、把 <code>backward()</code> 和 <code>step()</code> 的职责混在一起。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">从更新倒回梯度来源</span>
+  </div>
+  <p>梯度下降需要梯度，但真正写训练代码时，你通常不会手写每个导数。PyTorch 会在前向传播时记录张量运算，等你对标量 <code>loss</code> 调用 <code>backward()</code>，它再沿着这张图把梯度传回参数。</p>
+  <p>本页只处理一条最小链路：<code>x</code> 和参数 <code>w,b</code> 先算出 <code>y_hat = x * w + b</code>，再算 <code>loss = (y_hat - y)^2</code>。这个例子足够小，能手算，也能看出梯度是分别落到 <code>w</code> 和 <code>b</code> 上的。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="forward"><code>forward</code><span>计算预测并建图</span></button>
+      <button class="trace-line" data-trace-step="loss"><code>loss</code><span>把误差压成标量目标</span></button>
+      <button class="trace-line" data-trace-step="backward"><code>backward</code><span>沿图写入梯度</span></button>
+      <button class="trace-line" data-trace-step="step"><code>step</code><span>优化器读取梯度改参数</span></button>
     </div>
-    <div class="nav-title">CONTENTS</div>
-    <nav><a href="#goal"><span class="dot"></span>学习目标</a><a href="#map"><span class="dot"></span>概念骨架</a><a href="#lecture"><span class="dot"></span>讲义</a><a href="#terms"><span class="dot"></span>术语表</a><a href="#examples"><span class="dot"></span>代码与例子</a><a href="#pitfalls"><span class="dot"></span>误区诊断</a><a href="#practice"><span class="dot"></span>练习区</a><a href="#export"><span class="dot"></span>导出</a></nav>
-    <div class="side-note">来源：P4【04.反向传播】。本页按当前 PyTorch 习惯整理，旧课写法中容易过时的部分已换成更稳的表达。</div>
-  </aside>
-  <main>
-    <section class="hero" id="goal">
-      <div>
-        <div class="kicker">PYTORCH STUDY PAGE · LESSON 04</div>
-        <h1>反向传播：计算图里的链式法则</h1>
-        <p>理解前向传播如何建立计算图，反向传播如何按链式法则把梯度传回参数，并能解释 `backward()`、叶子张量和梯度累积。</p>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="forward">
+        <b>前向计算</b>
+        <span>x, w, b -> y_hat</span>
+        <p>这一步会留下中间张量和它们的来路。</p>
       </div>
-      <div class="route">
-        <h3>这节课抓一件事</h3>
-        <p>把计算图、局部梯度、链式法则、标量 loss 和梯度清零讲透。</p>
-        <ol>
-          <li>先看对象之间的数据流。</li>
-          <li>再看每一步的形状、类型和状态变化。</li>
-          <li>最后用练习题检查自己能不能诊断错误。</li>
-        </ol>
+      <div class="tensor-card" data-trace-target="loss">
+        <b>损失</b>
+        <span>y_hat, y -> loss</span>
+        <p>训练里常见的 <code>loss</code> 是标量，反向传播从这个标量目标开始。</p>
       </div>
-    </section>
-
-    <section id="map">
-      <div class="head"><h2>概念骨架</h2><span class="tag">先搭主线</span></div>
-      
-    <div class="map"><span class="node">参数</span><span class="arrow">→</span><span class="node">预测</span><span class="arrow">→</span><span class="node">误差</span><span class="arrow">→</span><span class="node">损失</span><span class="arrow">→</span><span class="node">梯度</span><span class="arrow">→</span><span class="node">更新</span></div>
-    <div class="viz-panel">
-      <div class="viz-grid">
-        <div class="viz-cell">
-          <b>先看输入</b>
-          <p>确认数据形状、标签形式和 dtype。许多训练错误在进入模型前已经发生。</p>
-        </div>
-        <div class="viz-cell">
-          <b>再看变换</b>
-          <p>逐层追踪输出形状和语义，别只看 API 名字。每一层都应该能回答“它把什么变成什么”。</p>
-        </div>
-        <div class="viz-cell">
-          <b>最后看目标</b>
-          <p>确认 loss 的输入约定、输出是否是标量，以及评估指标是否对应真实任务。</p>
-        </div>
+      <div class="tensor-card" data-trace-target="backward">
+        <b>反向传播</b>
+        <span>loss.backward()</span>
+        <p>它不改参数，只把梯度写进叶子参数的 <code>.grad</code>。</p>
       </div>
-      <p class="viz-note">判断句：如果你说不清某一行读入什么、输出什么、改变什么状态，就先不要急着调参。</p>
+      <div class="tensor-card" data-trace-target="step">
+        <b>参数更新</b>
+        <span>optimizer.step()</span>
+        <p>优化器读取 <code>.grad</code> 后更新参数，这才是参数数值发生变化的地方。</p>
+      </div>
     </div>
-    
-      
-        <div class="formula">
-          <div><b>链式法则</b>：<span class="math">∂Loss/∂w = ∂Loss/∂y · ∂y/∂w</span></div>
-          <div>反向传播做的事，就是把每个局部导数沿计算图乘回去，并把结果累积到参数梯度上。</div>
-        </div>
-        
-    </section>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="反向传播主线读写表" data-export-lang="table">
+      <thead>
+        <tr><th>阶段</th><th>读什么</th><th>写什么 / 改什么</th><th>出错时的信号</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>前向</td><td><code>x,w,b</code></td><td><code>y_hat</code> 和计算图</td><td>后面 <code>backward()</code> 没有路可走</td></tr>
+        <tr><td>loss</td><td><code>y_hat,y</code></td><td>标量 <code>loss</code></td><td>目标不是标量时反向入口不清楚</td></tr>
+        <tr><td><code>backward()</code></td><td>计算图和局部导数</td><td>叶子参数的 <code>.grad</code></td><td><code>grad</code> 是 <code>None</code> 或残留旧值</td></tr>
+        <tr><td><code>step()</code></td><td>参数和 <code>.grad</code></td><td>参数数值</td><td>只反向不更新，参数不会动</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
 
-    <section id="lecture">
-      <div class="head"><h2>讲义</h2><span class="tag">慢读这一部分</span></div>
-      
-        <div class="lesson-block">
-          <h3>1. 反向传播先依赖一次前向传播</h3>
-          <p>反向传播不是单独发生的。你必须先做前向传播：输入经过一连串计算得到预测，再由预测和标签得到 loss。这个过程中，每个中间结果都会记录它来自哪些运算，形成一张计算图。</p><p>计算图像一条有方向的账本。前向时记录“谁由谁算出来”；反向时从 loss 出发，沿着图往回算每个参数对 loss 的影响。没有前向建立的图，反向就不知道该沿哪条路径传梯度。</p><p>你现在应该能解释：`loss.backward()` 不是重新前向计算，而是在已有计算图上反向传播梯度。</p>
-          <p class="can-do">读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
-        </div>
-        
+<section id="graph">
+  <div class="head">
+    <h2>前向先建计算图</h2>
+    <span class="tag">forward graph</span>
+  </div>
+  <p>反向传播依赖前向传播留下的依赖关系。只看数值时，<code>y_hat</code> 是一个数字；从自动求导看，它还带着“我由 <code>x * w + b</code> 算出来”的记录。后面算 <code>loss</code> 时，这条记录继续接到 <code>(y_hat - y)^2</code> 上。</p>
+  <p>为了让机制可见，先固定一个样本：<code>x=2</code>、<code>y=5</code>、<code>w=1</code>、<code>b=0.5</code>。前向得到 <code>y_hat=2.5</code>，误差 <code>e=-2.5</code>，损失 <code>loss=6.25</code>。这些数字后面会原样进入手算和 PyTorch 代码。</p>
+  <div class="math-block" data-export-context="标量计算图定义" data-export-lang="math">
+    $$
+    y\_hat = xw + b,\quad e = y\_hat - y,\quad L = e^2
+    $$
+    <p>这里的符号都能直接对应代码：<code>x,w,b</code> 先生成预测，预测和标签生成误差，误差平方生成标量 loss。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="标量前向追踪表" data-export-lang="table">
+      <thead>
+        <tr><th>节点</th><th>公式</th><th>代入值</th><th>当前数值</th><th>依赖谁</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>mul</code></td><td><code>x * w</code></td><td><code>2 * 1</code></td><td><code>2</code></td><td><code>x,w</code></td></tr>
+        <tr><td><code>y_hat</code></td><td><code>x * w + b</code></td><td><code>2 + 0.5</code></td><td><code>2.5</code></td><td><code>x,w,b</code></td></tr>
+        <tr><td><code>e</code></td><td><code>y_hat - y</code></td><td><code>2.5 - 5</code></td><td><code>-2.5</code></td><td><code>y_hat,y</code></td></tr>
+        <tr><td><code>L</code></td><td><code>e ** 2</code></td><td><code>(-2.5) ** 2</code></td><td><code>6.25</code></td><td><code>e</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>先别背术语，先能指着每个节点说出它读了什么、算出了什么、下一步会把梯度传给谁。</p>
+</section>
 
-        <div class="lesson-block">
-          <h3>2. 链式法则把局部影响连成整体影响</h3>
-          <p>一个参数通常不会直接变成 loss，中间会经过多步计算。链式法则说，如果 `w` 影响 `y_hat`，`y_hat` 又影响 loss，那么 loss 对 `w` 的影响可以由这些局部影响相乘得到。</p><p>反向传播的高效之处在于复用中间梯度。每个节点只需要知道上游传来的梯度和本地运算的导数，就能把梯度继续传给自己的输入。复杂网络也是这个原则，只是节点更多。</p><p>你现在应该能用“局部导数 × 上游梯度”解释反向传播，而不是只把它背成一个黑盒算法。</p>
-          <p class="can-do">读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
-        </div>
-        
+<section id="chain-rule">
+  <div class="head">
+    <h2>链式法则怎样接上整条路径</h2>
+    <span class="tag">local gradient</span>
+  </div>
+  <p>一个参数通常不会直接变成 loss。比如 <code>w</code> 先影响 <code>y_hat</code>，<code>y_hat</code> 影响误差 <code>e</code>，<code>e</code> 再影响 <code>L</code>。链式法则做的事，就是把每一段“局部影响”乘起来。</p>
+  <div class="math-block" data-export-context="链式法则手算公式" data-export-lang="math">
+    $$
+    \frac{\partial L}{\partial w}
+    = \frac{\partial L}{\partial e}
+    \cdot \frac{\partial e}{\partial y\_hat}
+    \cdot \frac{\partial y\_hat}{\partial w}
+    = 2e \cdot 1 \cdot x
+    $$
+    $$
+    \frac{\partial L}{\partial b}
+    = \frac{\partial L}{\partial e}
+    \cdot \frac{\partial e}{\partial y\_hat}
+    \cdot \frac{\partial y\_hat}{\partial b}
+    = 2e \cdot 1 \cdot 1
+    $$
+    <p>代入 <code>e=-2.5</code>、<code>x=2</code>，得到 <code>dL/dw=-10</code>，<code>dL/db=-5</code>。</p>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>上游梯度</h3>
+      <p>从 loss 往回传来的量叫上游梯度。到 <code>e</code> 这里，上游就是 <code>dL/de = 2e = -5</code>。</p>
+    </div>
+    <div class="box info">
+      <h3>局部导数</h3>
+      <p>每个运算只需要知道自己的局部导数。比如 <code>y_hat=xw+b</code> 对 <code>w</code> 的局部导数是 <code>x</code>，对 <code>b</code> 的局部导数是 <code>1</code>。</p>
+    </div>
+  </div>
+  <p>反向传播就是这件事：每个节点拿到上游梯度，再乘自己的局部导数，把结果传给前面的节点。网络变深以后，规则没有变，只是路径更多。</p>
+</section>
 
-        <div class="lesson-block">
-          <h3>3. PyTorch 自动求导记录的是张量运算</h3>
-          <p>在 PyTorch 里，如果一个张量设置了 `requires_grad=True`，并参与可求导运算，框架就会记录计算图。最终对标量 loss 调用 `backward()` 后，梯度会写到需要梯度的叶子张量的 `.grad` 上。</p><p>叶子张量通常是你直接创建并要求求梯度的参数。中间张量默认不保留 `.grad`，因为它们不是优化器要更新的对象。这个设计减少内存，也让参数更新目标更清楚。</p><p>你现在应该能判断：为什么 `w.grad` 有值，而某个中间变量的 `.grad` 可能是空。</p>
-          <p class="can-do">读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
-        </div>
-        
+<section id="manual-trace">
+  <div class="head">
+    <h2>把一个 backward 手算到底</h2>
+    <span class="tag">trace table</span>
+  </div>
+  <p>下面这张表按真实反向顺序走一遍。这里沿用前向阶段已经保存的中间值：<code>x=2</code>、<code>e=-2.5</code>，不重新跑前向。</p>
+  <div class="table-wrap">
+    <table data-export-context="反向传播手算追踪表" data-export-lang="table">
+      <thead>
+        <tr><th>反向步骤</th><th>上游梯度</th><th>局部导数</th><th>传回结果</th><th>写到哪里</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>L=e^2</code></td><td><code>1</code></td><td><code>dL/de = 2e = -5</code></td><td><code>-5</code></td><td>传给 <code>e</code></td></tr>
+        <tr><td><code>e=y_hat-y</code></td><td><code>-5</code></td><td><code>de/dy_hat=1</code></td><td><code>-5</code></td><td>传给 <code>y_hat</code></td></tr>
+        <tr><td><code>y_hat=xw+b</code> 到 <code>w</code></td><td><code>-5</code></td><td><code>dy_hat/dw=x=2</code></td><td><code>-10</code></td><td><code>w.grad</code></td></tr>
+        <tr><td><code>y_hat=xw+b</code> 到 <code>b</code></td><td><code>-5</code></td><td><code>dy_hat/db=1</code></td><td><code>-5</code></td><td><code>b.grad</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>同一个例子的纯 Python 手算</span><button class="copy" data-copy="manual-backward">复制</button></div>
+  <pre id="manual-backward" data-export-context="纯 Python 手算反向传播" data-export-lang="python"><code class="language-python">x = 2.0
+y = 5.0
+w = 1.0
+b = 0.5
 
-        <div class="lesson-block">
-          <h3>4. loss 通常必须是标量</h3>
-          <p>调用 `backward()` 时，最常见写法是对标量 loss 调用。标量 loss 对所有参数都有一个清晰的优化目标。如果 loss 是向量，PyTorch 需要你额外提供反向传播的初始梯度，否则不知道向量的每一项该怎样合成目标。</p><p>这也是损失函数默认会做 reduction 的原因。比如 MSE 可以对每个样本算误差，再求均值。均值后的 loss 是一个标量，就能自然地驱动所有参数更新。</p><p>你现在应该能说明为什么训练代码里常见 `loss = criterion(pred, target)` 之后直接 `loss.backward()`。</p>
-          <p class="can-do">读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
-        </div>
-        
+y_hat = x * w + b      # 2.5
+e = y_hat - y          # -2.5
+loss = e ** 2          # 6.25
 
-        <div class="lesson-block">
-          <h3>5. 梯度会累积，清零不是装饰</h3>
-          <p>PyTorch 的梯度默认是累积的。每次 `backward()` 会把新梯度加到已有 `.grad` 上，而不是自动覆盖。这样设计是为了支持梯度累积等高级用法，但初学训练循环里通常每个 batch 前都要清零。</p><p>如果忘记 `optimizer.zero_grad()`，参数更新会混入上一批数据的梯度。loss 可能仍然变化，但方向已经不是当前 batch 的真实梯度，训练会变得难以解释。</p><p>你现在应该能把 `zero_grad()` 放在正确位置，并解释它为什么通常在 `backward()` 前。</p>
-          <p class="can-do">读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
-        </div>
-        
+dL_de = 2 * e          # -5.0
+de_dyhat = 1.0
+dyhat_dw = x           # 2.0
+dyhat_db = 1.0
 
-        <div class="lesson-block">
-          <h3>6. 反向传播和优化器分工不同</h3>
-          <p>`backward()` 只负责算梯度并写入 `.grad`，它不会自动改参数。`optimizer.step()` 才会根据这些梯度更新参数。把这两件事分开，是 PyTorch 训练循环的基本分工。</p><p>这也解释了很多常见错误：只 `backward()` 不 `step()`，参数不会动；只 `step()` 不 `backward()`，优化器没有新梯度可读；清零位置错了，梯度会被提前抹掉或错误累积。</p><p>你现在应该能读懂一次训练 step 的状态变化：loss 建图，backward 写梯度，step 改参数，zero_grad 清理旧梯度。</p>
-          <p class="can-do">读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
-        </div>
-        
-      <div class="box soft">
-        <h3>完整知识链路</h3>
-        <p>把计算图、局部梯度、链式法则、标量 loss 和梯度清零讲透。 它仍然落在同一条 PyTorch 主线上：先准备能被模型读取的数据，再让模型输出符合任务的张量，用合适的损失函数得到标量 loss，反向传播写入梯度，优化器更新参数，最后在评估模式下检查结果。换任务时，最先变化的是输入形状、模型输出含义和 loss 输入约定。</p>
-      </div>
-    </section>
+dL_dw = dL_de * de_dyhat * dyhat_dw  # -10.0
+dL_db = dL_de * de_dyhat * dyhat_db  # -5.0</code></pre>
+  <p>这段算顺了，后面的 <code>loss.backward()</code> 就只是把同一件事自动化，而且能处理更大的图。</p>
+</section>
 
-    <section id="terms">
-      <div class="head"><h2>术语表</h2><span class="tag">别混词</span></div>
-      <table>
-        <thead><tr><th>术语</th><th>直觉与定义</th><th>常见误解</th></tr></thead>
-        <tbody><tr><td>计算图</td><td>记录张量运算依赖关系的有向图。</td><td>以为它是手动画出来才存在。</td></tr>
-<tr><td>反向传播</td><td>从 loss 出发按链式法则计算各参数梯度。</td><td>以为它会直接更新参数。</td></tr>
-<tr><td>叶子张量</td><td>通常是用户创建、需要求梯度、优化器会更新的张量。</td><td>把所有中间变量都当成参数。</td></tr>
-<tr><td>梯度累积</td><td>多次 backward 的梯度会加到 `.grad` 上。</td><td>误以为每次 backward 自动清空。</td></tr></tbody>
-      </table>
-      <h3>易混概念对照</h3>
-      <table>
-        <thead><tr><th>概念</th><th>准确含义</th><th>不要混成</th></tr></thead>
-        <tbody><tr><td>forward</td><td>建立计算图并得到预测/loss</td><td>不是参数更新</td></tr>
-<tr><td>backward</td><td>沿计算图写入梯度</td><td>不是优化器</td></tr>
-<tr><td>step</td><td>根据梯度改参数</td><td>不是计算梯度</td></tr></tbody>
-      </table>
-    </section>
+<section id="branch-sum">
+  <div class="head">
+    <h2>同一个参数走多条路时，梯度要相加</h2>
+    <span class="tag">branch merge</span>
+  </div>
+  <p>前面的例子只有一条主路径，适合入门，但真实计算图经常会分叉。一个参数可能同时影响两个中间量，这两个中间量再一起影响 loss。反向传播遇到这种结构时，会把从不同分支传回来的梯度加起来，再写到同一个参数的 <code>.grad</code>。</p>
+  <p>看一个稍微多一步的例子：<code>a = w * x</code>，<code>c = w + b</code>，最后 <code>z = a + c</code>，<code>L = (z - y) ** 2</code>。这里 <code>w</code> 同时出现在 <code>a</code> 和 <code>c</code> 两条路径里。反向传播到 <code>w</code> 时，不能只拿其中一条路径的贡献。</p>
+  <div class="math-block" data-export-context="共享参数分支梯度公式" data-export-lang="math">
+    $$
+    z = wx + (w + b),\quad L = (z-y)^2
+    $$
+    $$
+    \frac{\partial L}{\partial w}
+    = \frac{\partial L}{\partial z}
+    \cdot
+    \left(
+    \frac{\partial a}{\partial w}
+    +
+    \frac{\partial c}{\partial w}
+    \right)
+    =
+    2(z-y)(x+1)
+    $$
+    <p>如果 <code>x=2</code>、<code>y=6</code>、<code>w=1</code>、<code>b=0.5</code>，那么 <code>z=3.5</code>，<code>z-y=-2.5</code>，所以 <code>dL/dw = 2*(-2.5)*(2+1) = -15</code>。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="分支梯度相加追踪表" data-export-lang="table">
+      <thead>
+        <tr><th>路径</th><th>局部关系</th><th>传回 <code>w</code> 的局部导数</th><th>贡献</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>w -> a -> z -> L</code></td><td><code>a = w * x</code></td><td><code>da/dw = x = 2</code></td><td><code>2(z-y) * 2 = -10</code></td></tr>
+        <tr><td><code>w -> c -> z -> L</code></td><td><code>c = w + b</code></td><td><code>dc/dw = 1</code></td><td><code>2(z-y) * 1 = -5</code></td></tr>
+        <tr><td>合并到 <code>w.grad</code></td><td>两条路径都来自同一个叶子参数</td><td><code>x + 1 = 3</code></td><td><code>-10 + -5 = -15</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>PyTorch 会自动把分支贡献加起来</span><button class="copy" data-copy="branch-sum-code">复制</button></div>
+  <pre id="branch-sum-code" data-export-context="分支梯度自动相加代码" data-export-lang="python"><code class="language-python">import torch
 
-    <section id="examples">
-      <div class="head"><h2>代码与例子</h2><span class="tag">逐行读语义</span></div>
-      <p class="muted">读代码时先标出输入、输出和状态变化。能解释这些，才算真正看懂。</p>
-      
-        <div class="codebar"><span class="label">最小 autograd 示例</span><span class="kind">示例代码</span></div>
-        <pre><code>import torch
+x = torch.tensor(2.0)
+y = torch.tensor(6.0)
+w = torch.tensor(1.0, requires_grad=True)
+b = torch.tensor(0.5, requires_grad=True)
 
-w = torch.tensor([1.0], requires_grad=True)
-x = torch.tensor([2.0])
-y = torch.tensor([4.0])
+a = w * x
+c = w + b
+z = a + c
+loss = (z - y) ** 2
+loss.backward()
 
-y_hat = x * w
+print(w.grad)  # tensor(-15.)，来自两条路径的贡献相加
+print(b.grad)  # tensor(-5.)</code></pre>
+  <p>这个机制能解释很多训练日志里的现象：一个参数的梯度会把所有影响 loss 的路径贡献合并起来。调试时只盯一条路径，很容易漏掉一部分来源，最后把梯度大小或符号看错。</p>
+  <div class="box warn">
+    <h3>排查梯度和手算不一致时</h3>
+    <p>先查是不是漏了一条路径，或者把 batch 里多个样本的贡献当成了单个样本。排查顺序可以固定下来：第一步打印参与 loss 的所有中间量；第二步画出同一个参数到 loss 的所有路径；第三步确认 loss 的 reduction 是 <code>mean</code> 还是 <code>sum</code>；最后再比较每条路径的局部导数。这样能把“梯度不对”拆成几个能检查的小问题。</p>
+    <p>在后面的网络里，同一个权重会被很多样本、很多输出位置共同使用。它的 <code>.grad</code> 往往是多条路径、多条样本贡献合并后的结果。理解这一点后，你看到梯度比单样本手算值小一半或大几倍时，先检查平均方式、广播和共享路径，再去看学习率。</p>
+  </div>
+</section>
+
+<section id="graph-release">
+  <div class="head">
+    <h2>为什么同一张图通常只反向一次</h2>
+    <span class="tag">graph lifetime</span>
+  </div>
+  <p><code>backward()</code> 需要前向时保存下来的中间值。普通训练里，一次反向之后这些中间值通常就可以释放，内存也会回收一部分。这和“每个 batch 通常只反向一次”的节奏是对齐的。</p>
+  <p>如果你要对同一张图再 backward 一次，就需要显式保留图。PyTorch 里的对应参数是 <code>retain_graph=True</code>。普通训练循环里一般不会开它；它主要对应重复反向或高阶梯度。</p>
+  <div class="table-wrap">
+    <table data-export-context="计算图释放状态表" data-export-lang="table">
+      <thead>
+        <tr><th>状态</th><th>中间值</th><th>会发生什么</th><th>适合场景</th><th>风险</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>第一次 <code>backward()</code></td><td>可用</td><td>梯度写入 <code>.grad</code>，图通常被释放</td><td>普通单步训练</td><td>第二次对同一图反向会失败</td></tr>
+        <tr><td><code>retain_graph=True</code></td><td>保留</td><td>允许再次反向</td><td>重复 backward 或高阶梯度</td><td>更占内存，默认别开</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>同一张图两次 backward 的边界</span><button class="copy" data-copy="graph-release-code">复制</button></div>
+  <pre id="graph-release-code" data-export-context="同一张图反向两次示例" data-export-lang="python"><code class="language-python">loss.backward()
+# 如果还要对同一张图再反向一次，才写：
+# loss.backward(retain_graph=True)</code></pre>
+  <p>实际排错时，先分清是“图被释放了”还是“梯度没清干净”。前者看的是重复 backward 的报错，后者看的是 <code>.grad</code> 里是不是残留了上一轮的值。两者症状相近，但检查点完全不同。</p>
+</section>
+
+<section id="autograd">
+  <div class="head">
+    <h2>PyTorch autograd 对应到哪里</h2>
+    <span class="tag">code bridge</span>
+  </div>
+  <p>PyTorch 里只有需要求梯度的张量才会被重点追踪。对参数来说，常见做法是创建时写 <code>requires_grad=True</code>，或者把它们放进 <code>nn.Parameter</code>。当这些张量参与可求导计算时，框架会在结果张量上挂上 <code>grad_fn</code>，说明它有来路。</p>
+  <div class="codebar"><span>最小 autograd 示例</span><button class="copy" data-copy="autograd-minimal">复制</button></div>
+  <pre id="autograd-minimal" data-export-context="PyTorch autograd 最小示例" data-export-lang="python"><code class="language-python">import torch
+
+x = torch.tensor(2.0)
+y = torch.tensor(5.0)
+w = torch.tensor(1.0, requires_grad=True)
+b = torch.tensor(0.5, requires_grad=True)
+
+y_hat = x * w + b
+loss = (y_hat - y) ** 2
+
+print(y_hat.grad_fn)  # AddBackward0 等，说明 y_hat 有计算来路
+print(loss.grad_fn)   # PowBackward0 等，说明 loss 也在图上
+
+loss.backward()
+print(w.grad)         # tensor(-10.)
+print(b.grad)         # tensor(-5.)</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="autograd 对象职责表" data-export-lang="table">
+      <thead>
+        <tr><th>对象 / 属性</th><th>作用</th><th>本例状态</th><th>常见误读</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>requires_grad=True</code></td><td>告诉 autograd 这个张量需要梯度</td><td><code>w,b</code> 打开</td><td>给数据 <code>x,y</code> 乱开梯度</td></tr>
+        <tr><td><code>grad_fn</code></td><td>记录结果由哪个可求导运算产生</td><td><code>y_hat,loss</code> 有</td><td>把它当成最终梯度值</td></tr>
+        <tr><td><code>.grad</code></td><td>保存反向传播写入的梯度</td><td><code>w.grad=-10,b.grad=-5</code></td><td>以为所有中间张量默认都有</td></tr>
+        <tr><td><code>backward()</code></td><td>沿图传播梯度</td><td>写入叶子张量</td><td>以为它直接更新参数</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>中间张量的 <code>.grad</code> 默认通常是空的，这是为了节省内存。你真正要更新的是参数，所以先盯住叶子参数的 <code>.grad</code>。</p>
+</section>
+
+<section id="state-ledger">
+  <div class="head">
+    <h2>叶子张量和状态账本</h2>
+    <span class="tag">leaf tensor</span>
+  </div>
+  <p>叶子张量可以先用一个实际规则记住：你直接创建并要求梯度的参数，通常就是叶子张量。它们是优化器要管理的对象，<code>backward()</code> 会把梯度累积到它们的 <code>.grad</code> 上。</p>
+  <div class="table-wrap">
+    <table data-export-context="叶子张量与中间张量状态表" data-export-lang="table">
+      <thead>
+        <tr><th>张量</th><th>是否是叶子张量</th><th>是否需要梯度</th><th><code>grad_fn</code></th><th><code>backward()</code> 后默认看哪里</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>w</code></td><td>是</td><td>是</td><td>无</td><td><code>w.grad</code></td></tr>
+        <tr><td><code>b</code></td><td>是</td><td>是</td><td>无</td><td><code>b.grad</code></td></tr>
+        <tr><td><code>y_hat</code></td><td>否</td><td>由 <code>w,b</code> 传来</td><td>有</td><td>默认不保留 <code>.grad</code></td></tr>
+        <tr><td><code>loss</code></td><td>否</td><td>是</td><td>有</td><td>作为反向入口</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>读 grad 的优先级</h3>
+    <p>调试时先看参数的 <code>.grad</code>。如果你确实要看中间张量的梯度，需要额外调用 <code>retain_grad()</code>。这门课当前阶段先不把它当默认动作。</p>
+  </div>
+</section>
+
+<section id="intermediate-grad">
+  <div class="head">
+    <h2>中间张量为什么默认不保留 .grad</h2>
+    <span class="tag">retain_grad</span>
+  </div>
+  <p>前向里每多留一个中间张量的梯度，内存就多占一份。训练时真正需要更新的是叶子参数，所以 PyTorch 默认只把梯度写到叶子张量的 <code>.grad</code> 里。中间张量可以重新算，叶子参数才是优化器要读的状态。</p>
+  <p>如果你要排查某个中间节点的值，才临时让它保留梯度。这个动作适合调试，不适合作普通训练默认设置。</p>
+  <div class="table-wrap">
+    <table data-export-context="中间张量与 retain_grad 对照表" data-export-lang="table">
+      <thead>
+        <tr><th>对象</th><th>默认是否保留 <code>.grad</code></th><th>什么时候会有值</th><th>代价</th><th>典型用途</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>叶子参数 <code>w,b</code></td><td>会</td><td><code>backward()</code> 之后</td><td>保存本轮梯度</td><td>交给优化器更新</td></tr>
+        <tr><td>中间张量 <code>y_hat</code></td><td>不会</td><td>显式调用 <code>retain_grad()</code> 后</td><td>额外占内存</td><td>调试局部路径</td></tr>
+        <tr><td>输入 <code>x,y</code></td><td>通常不会</td><td>只有你明确要求梯度时</td><td>容易把关注点带偏</td><td>特殊分析任务</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>只在调试时保留中间梯度</span><button class="copy" data-copy="retain-grad-demo">复制</button></div>
+  <pre id="retain-grad-demo" data-export-context="retain_grad 调试示例" data-export-lang="python"><code class="language-python">import torch
+
+x = torch.tensor(2.0)
+w = torch.tensor(1.0, requires_grad=True)
+b = torch.tensor(0.5, requires_grad=True)
+y = torch.tensor(5.0)
+
+y_hat = x * w + b
+y_hat.retain_grad()
 loss = (y_hat - y) ** 2
 loss.backward()
-print(w.grad)  # tensor([-8.])</code></pre>
-        
 
-        <div class="codebar"><span class="label">错误示例：忘记清零梯度</span><span class="kind">错误示例</span></div>
-        <pre><code>for x, y in loader:
-    pred = model(x)
-    loss = criterion(pred, y)
-    loss.backward()
-    optimizer.step()
-    # 少了 optimizer.zero_grad()
-    # 下一轮 backward 会把新梯度加到旧梯度上</code></pre>
-        
+print(y_hat.grad)  # 调试时可以看中间节点梯度
+print(w.grad)
+print(b.grad)</code></pre>
+  <p>这段代码只说明一件事：中间张量的梯度并非不能看，而是默认不保留。把它临时打开以后，才能沿着更细的路径定位哪里传错了值。</p>
+</section>
 
-        <div class="codebar"><span class="label">推荐训练顺序</span><span class="kind">示例代码</span></div>
-        <pre><code>for x, y in loader:
-    pred = model(x)
-    loss = criterion(pred, y)
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()</code></pre>
-        
-    </section>
+<section id="scalar-loss">
+  <div class="head">
+    <h2>为什么常见 loss 是标量</h2>
+    <span class="tag">scalar target</span>
+  </div>
+  <p><code>backward()</code> 需要一个清楚的起点。训练里最常见的起点是一个标量 loss，因为它代表“这批样本在当前参数下有多差”。如果 loss 还是向量，PyTorch 需要你额外提供每个元素的权重，也就是反向传播的初始梯度。</p>
+  <div class="codebar"><span>向量 loss 和标量 loss 的差别</span><button class="copy" data-copy="scalar-loss-code">复制</button></div>
+  <pre id="scalar-loss-code" data-export-context="标量 loss 与向量 loss 对比" data-export-lang="python"><code class="language-python">pred = torch.tensor([2.0, 4.0, 7.0], requires_grad=True)
+target = torch.tensor([2.0, 5.0, 6.0])
 
-    <section id="pitfalls">
-      <div class="head"><h2>误区诊断</h2><span class="tag">错因 / 后果 / 修法</span></div>
-      <div class="grid2">
-        <div class="box warn">
-          <h3>认为 backward 会更新参数</h3>
-          <p><b>后果：</b>`backward()` 只写梯度，参数值不变。</p>
-          <p><b>修法：</b>调用 `optimizer.step()` 才更新。</p>
+loss_each = (pred - target) ** 2  # shape: [3]
+# loss_each.backward()            # 常见情况下会报错：loss 需要先变成标量
+
+loss = loss_each.mean()           # shape: []
+loss.backward()                   # 可以直接从标量目标反向传播</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="loss reduction 对照表" data-export-lang="table">
+      <thead>
+        <tr><th>写法</th><th>输出形状</th><th>能否直接 <code>backward()</code></th><th>适合场景</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>reduction='none'</code></td><td>每个样本一个 loss</td><td>通常不直接用</td><td>要做样本权重、排查异常样本</td></tr>
+        <tr><td><code>mean()</code></td><td>标量</td><td>可以</td><td>最常见的训练入口</td></tr>
+        <tr><td><code>sum()</code></td><td>标量</td><td>可以</td><td>希望 loss 随样本数累加时</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>向量 loss 也有用；初学训练循环先把目标压成标量，再调用 <code>loss.backward()</code>，这样反向入口更清楚。</p>
+</section>
+
+<section id="accumulation">
+  <div class="head">
+    <h2>梯度会累积，清零是必要步骤</h2>
+    <span class="tag">grad accumulation</span>
+  </div>
+  <p>PyTorch 的 <code>.grad</code> 默认会累积。第二次 <code>backward()</code> 会把新梯度加到旧梯度上，不会自动覆盖。这一设计支持梯度累积等用法；在普通 mini-batch 训练里，如果你忘了清零，下一次更新会混进上一批数据的梯度。</p>
+  <div class="codebar"><span>两次 backward 的梯度累积</span><button class="copy" data-copy="grad-accumulation">复制</button></div>
+    <pre id="grad-accumulation" data-export-context="梯度累积最小复现" data-export-lang="python"><code class="language-python">w = torch.tensor(1.0, requires_grad=True)
+
+loss1 = (2 * w - 5) ** 2
+loss1.backward()
+print(w.grad)  # tensor(-12.)
+
+loss2 = (3 * w - 7) ** 2
+loss2.backward()
+print(w.grad)  # tensor(-36.)，第二次 backward 会叠加到第一次上</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="梯度累积读写表" data-export-lang="table">
+      <thead>
+        <tr><th>时间点</th><th><code>w.grad</code> 初始状态</th><th>动作</th><th><code>w.grad</code> 结果</th><th>训练含义</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>第 1 个 batch 前</td><td><code>None</code> 或 0</td><td><code>backward()</code></td><td>当前 batch 梯度</td><td>正常</td></tr>
+        <tr><td>第 2 个 batch 前没清零</td><td>上一批梯度</td><td><code>backward()</code></td><td>旧梯度 + 新梯度</td><td>更新方向被污染</td></tr>
+        <tr><td>第 2 个 batch 前清零</td><td>0 或 <code>None</code></td><td><code>backward()</code></td><td>当前 batch 梯度</td><td>普通训练循环的预期</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>因此常见写法是每个 batch 内先 <code>optimizer.zero_grad()</code>，再 <code>loss.backward()</code>，最后 <code>optimizer.step()</code>。也有人把清零放在上一个 batch 末尾，只要状态交接清楚，也可以；本页推荐使用更容易读的“本 batch 开头清理旧梯度”。</p>
+</section>
+
+<section id="training-bridge">
+  <div class="head">
+    <h2>把 backward 接回训练循环</h2>
+    <span class="tag">operation bridge</span>
+  </div>
+  <p>第三讲已经用梯度更新参数。这一页补上的就是梯度怎样产生、存在哪里。到第五讲开始用 <code>nn.Module</code>、loss 函数和优化器时，下面这段顺序就是最小模板。</p>
+  <div class="codebar"><span>推荐读法：一次训练 step</span><button class="copy" data-copy="training-step">复制</button></div>
+  <pre id="training-step" data-export-context="PyTorch 一次训练 step 顺序" data-export-lang="python"><code class="language-python">for x, y in loader:
+    pred = model(x)              # 前向：建立本轮计算图
+    loss = criterion(pred, y)    # 标量目标
+
+    optimizer.zero_grad()        # 清掉上一轮 .grad
+    loss.backward()              # 写入本轮梯度
+    optimizer.step()             # 读取梯度并更新参数</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="训练 step 状态交接表" data-export-lang="table">
+      <thead>
+        <tr><th>代码行</th><th>读取</th><th>写入 / 改变</th><th>如果漏掉</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>pred = model(x)</code></td><td>输入和当前参数</td><td>预测与计算图</td><td>没有可反向的图</td></tr>
+        <tr><td><code>loss = criterion(pred, y)</code></td><td>预测和标签</td><td>标量 loss</td><td>没有优化目标</td></tr>
+        <tr><td><code>zero_grad()</code></td><td>参数已有 <code>.grad</code></td><td>清空旧梯度</td><td>新旧梯度混在一起</td></tr>
+        <tr><td><code>loss.backward()</code></td><td>loss 和计算图</td><td>参数 <code>.grad</code></td><td>优化器没有新梯度可用</td></tr>
+        <tr><td><code>optimizer.step()</code></td><td>参数和 <code>.grad</code></td><td>参数数值</td><td>只算梯度，参数不动</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box soft">
+    <h3>手动更新时怎么写</h3>
+    <p>如果不用优化器，手动改参数要放在 <code>with torch.no_grad()</code> 里。这样做是为了避免“参数更新”本身被 autograd 继续记录进下一张图。</p>
+  </div>
+  <div class="codebar"><span>手动更新要关闭建图</span><button class="copy" data-copy="manual-step-nograd">复制</button></div>
+  <pre id="manual-step-nograd" data-export-context="torch.no_grad 手动更新" data-export-lang="python"><code class="language-python">loss.backward()
+
+with torch.no_grad():
+    w -= 0.01 * w.grad
+    b -= 0.01 * b.grad
+
+w.grad.zero_()
+b.grad.zero_()</code></pre>
+  <p>手动更新还要留意两个细节。第一，更新前后最好打印一次参数值，确认真的发生了变化；第二，清梯度要在下一次 <code>backward()</code> 前完成，不能在 <code>backward()</code> 和参数更新之间把刚算出的梯度抹掉。训练循环看的是状态交接，不只是 API 名字有没有写全。这个顺序感建立起来后，后续换成 <code>nn.Module</code>、<code>nn.MSELoss</code> 和优化器对象时，代码只是更规范，状态交接仍然是同一套。</p>
+</section>
+
+<section id="failure-lab">
+  <div class="head">
+    <h2>故障实验：看症状先定位哪一步</h2>
+    <span class="tag">failure lab</span>
+  </div>
+  <p>反向传播相关错误大多来自状态没交接好。下面这几个症状可以直接映射到检查点。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="no-grad">grad 是 None</button>
+      <button class="ghost" data-terminal-case="accumulate">loss 乱跳</button>
+      <button class="ghost" data-terminal-case="no-step">参数不动</button>
+      <button class="ghost" data-terminal-case="vector-loss">向量 loss 报错</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">症状：w.grad 是 None。
+先查：w 是不是叶子张量，创建时有没有 requires_grad=True。
+下一步：打印 w.requires_grad、w.is_leaf、loss.grad_fn。</pre>
+    <template data-terminal-output="no-grad">症状：w.grad 是 None。
+先查：w 是不是叶子张量，创建时有没有 requires_grad=True。
+下一步：打印 w.requires_grad、w.is_leaf、loss.grad_fn。</template>
+    <template data-terminal-output="accumulate">症状：loss 还能跑，但更新方向越来越难解释。
+先查：每个 batch 前有没有 optimizer.zero_grad()。
+下一步：连续打印两轮 backward 前后的参数 .grad。</template>
+    <template data-terminal-output="no-step">症状：loss.backward() 正常，grad 有值，但参数没有变化。
+先查：有没有调用 optimizer.step()，优化器是不是拿到了模型参数。
+下一步：在 step 前后打印同一个参数的数值。</template>
+    <template data-terminal-output="vector-loss">症状：grad can be implicitly created only for scalar outputs。
+先查：loss 的 shape 是否不是标量。
+下一步：用 mean() 或 sum() 做 reduction，或显式传入 gradient。</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="反向传播故障定位表" data-export-lang="table">
+      <thead>
+        <tr><th>症状</th><th>最先检查</th><th>常见原因</th><th>修法</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>.grad is None</code></td><td><code>requires_grad</code> 和叶子状态</td><td>参数没有被 autograd 跟踪</td><td>创建参数时开启梯度，或使用 <code>nn.Parameter</code></td></tr>
+        <tr><td>loss 波动异常</td><td><code>zero_grad()</code> 位置</td><td>梯度累积混入旧 batch</td><td>每个 batch 前清旧梯度</td></tr>
+        <tr><td>grad 有值但参数不动</td><td><code>optimizer.step()</code></td><td>只算梯度，没更新参数</td><td>确认 step 被调用，且优化器拿到参数</td></tr>
+        <tr><td>非标量 backward 报错</td><td><code>loss.shape</code></td><td>loss 没有 reduce</td><td>先 <code>mean()</code> 或 <code>sum()</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>这里先不追的内容</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <p>这一页把主线收在普通一阶梯度上。<code>retain_graph=True</code>、二阶梯度、hook、自定义 <code>autograd.Function</code>、复杂优化器内部状态都先放一边。同一张计算图通常反向一次后会被释放；如果你真的要对同一张图反向多次，才会遇到 <code>retain_graph=True</code> 这类选项。</p>
+  <p>下一讲会把这套机制放进 PyTorch 线性回归：模型负责前向，loss 负责给出标量目标，<code>backward()</code> 写梯度，optimizer 更新参数。到了那里，你先按这页的读写表检查每一行，再去看模型结构和优化器参数。</p>
+  <div class="table-wrap">
+    <table data-export-context="反向传播边界与后续表" data-export-lang="table">
+      <thead>
+        <tr><th>概念</th><th>本页怎么处理</th><th>什么时候再看</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>retain_graph=True</code></td><td>只知道它和重复反向同一张图有关</td><td>需要多次 backward 或高阶梯度时</td></tr>
+        <tr><td>二阶梯度</td><td>先不展开</td><td>元学习、某些优化算法、曲率分析</td></tr>
+        <tr><td>hook</td><td>先不作为调试默认手段</td><td>需要观察深层网络内部梯度时</td></tr>
+        <tr><td>优化器状态</td><td>只看 <code>step()</code> 读取 <code>.grad</code></td><td>学习 Adam、momentum 等优化器时</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
         </div>
-        
-
-        <div class="box warn">
-          <h3>忘记清零梯度</h3>
-          <p><b>后果：</b>新旧梯度累积，更新方向混乱。</p>
-          <p><b>修法：</b>每个 batch 通常先 `optimizer.zero_grad()`。</p>
-        </div>
-        
-
-        <div class="box warn">
-          <h3>对非标量 loss 直接 backward</h3>
-          <p><b>后果：</b>PyTorch 可能不知道初始梯度。</p>
-          <p><b>修法：</b>先 reduce 成标量或显式提供 gradient。</p>
-        </div>
-        
-
-        <div class="box warn">
-          <h3>以为所有 `.grad` 都有值</h3>
-          <p><b>后果：</b>中间张量默认不保留梯度。</p>
-          <p><b>修法：</b>关注叶子参数的 `.grad`。</p>
-        </div>
-        
-
-        <div class="box warn">
-          <h3>用 `.data` 随意改参数</h3>
-          <p><b>后果：</b>可能绕开 autograd，破坏计算图语义。</p>
-          <p><b>修法：</b>用优化器或 `torch.no_grad()` 下的明确更新。</p>
-        </div>
-        
-
-        <div class="box warn">
-          <h3>把训练循环当成背诵模板</h3>
-          <p><b>后果：</b>模板能跑不等于能诊断。每一行都要知道它读什么、写什么、改变哪个状态。</p>
-          <p><b>修法：</b>把每行标成前向、loss、清梯度、反向或更新。</p>
-        </div>
-        
-
-        <div class="box warn">
-          <h3>只看 loss 下降</h3>
-          <p><b>后果：</b>loss 下降只能说明优化目标变小，还要检查数据、标签、输出形状和评估指标是否对应任务。</p>
-          <p><b>修法：</b>同时检查验证集指标和预测样例。</p>
-        </div>
-        
-
-        <div class="box warn">
-          <h3>混用训练和评估状态</h3>
-          <p><b>后果：</b>`model.train()` 和 `model.eval()` 会影响 Dropout、BatchNorm 等层，评估时还要配合 `torch.no_grad()`。</p>
-          <p><b>修法：</b>训练和评估写成两个清楚的函数。</p>
-        </div>
-        </div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>练习区</h2><span class="tag">20 题</span></div>
-      <div class="practice-intro">
-        <div class="review-card"><strong>怎么写答案</strong><p>选择和判断题先给结论；短答题写 1-3 句话；诊断题按“错因、后果、修法”回答；最后的费曼题用完整段落串起主线。</p></div>
-        <div class="review-card"><strong>检查重点</strong><p>每个答案尽量落到形状、数据流、loss 输入约定或参数状态上。只写“因为不对”通常不够。</p></div>
-      </div>
-      
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>基础概念</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="1. `loss.backward()` 的主要作用是什么？">
-              <div class="q-meta"><span class="pill">选择</span><span class="pill">基础概念</span></div>
-              <h3>1. `loss.backward()` 的主要作用是什么？</h3>
-              <div class="solve-note">区分 backward 和 optimizer。</div>
-              <div class="choices"><label><input type="radio" name="q1" value="沿计算图计算梯度并写到参数 `.grad`">沿计算图计算梯度并写到参数 `.grad`</label><label><input type="radio" name="q1" value="立刻清空梯度">立刻清空梯度</label><label><input type="radio" name="q1" value="加载下一批数据">加载下一批数据</label></div>
-            </div>
-            
-            <div class="q " data-title="2. PyTorch 默认会在每次 `backward()` 前自动清空旧梯度。">
-              <div class="q-meta"><span class="pill">判断</span><span class="pill">基础概念</span></div>
-              <h3>2. PyTorch 默认会在每次 `backward()` 前自动清空旧梯度。</h3>
-              <div class="solve-note">想想为什么要写 `zero_grad()`。</div>
-              <textarea name="q2" rows="3"></textarea>
-            </div>
-            
-            <div class="q " data-title="3. 反向传播使用的核心微积分规则是 ______。">
-              <div class="q-meta"><span class="pill">填空</span><span class="pill">基础概念</span></div>
-              <h3>3. 反向传播使用的核心微积分规则是 ______。</h3>
-              <div class="solve-note">它把局部导数连起来。</div>
-              <textarea name="q3" rows="3"></textarea>
-            </div>
-            
-          </div>
-        </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>链路理解</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="4. 排序：`optimizer.step()` / `loss.backward()` / `optimizer.zero_grad()` / `pred = model(x)`。">
-              <div class="q-meta"><span class="pill">排序</span><span class="pill">链路理解</span></div>
-              <h3>4. 排序：`optimizer.step()` / `loss.backward()` / `optimizer.zero_grad()` / `pred = model(x)`。</h3>
-              <div class="solve-note">按一次训练 step 写。</div>
-              <textarea name="q4" rows="3"></textarea>
-            </div>
-            
-          </div>
-        </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>代码阅读</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="5. 在最小示例中，为什么梯度最后写到 `w.grad`？">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">代码阅读</span></div>
-              <h3>5. 在最小示例中，为什么梯度最后写到 `w.grad`？</h3>
-              <div class="solve-note">从 `requires_grad=True` 和叶子张量回答。</div>
-              <textarea name="q5" rows="3"></textarea>
-            </div>
-            
-            <div class="q " data-title="6. `loss = (y_hat - y) ** 2` 为什么能继续反传到 `w`？">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">代码阅读</span></div>
-              <h3>6. `loss = (y_hat - y) ** 2` 为什么能继续反传到 `w`？</h3>
-              <div class="solve-note">说明计算图保存了依赖。</div>
-              <textarea name="q6" rows="3"></textarea>
-            </div>
-            
-          </div>
-        </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>错误诊断</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q full" data-title="7. 训练循环漏掉 `optimizer.step()`，会发生什么？">
-              <div class="q-meta"><span class="pill">诊断</span><span class="pill">错误诊断</span></div>
-              <h3>7. 训练循环漏掉 `optimizer.step()`，会发生什么？</h3>
-              <div class="solve-note">说清梯度有但参数不更新。</div>
-              <textarea name="q7" rows="3"></textarea>
-            </div>
-            
-            <div class="q full" data-title="8. 训练循环漏掉 `optimizer.zero_grad()`，会发生什么？">
-              <div class="q-meta"><span class="pill">诊断</span><span class="pill">错误诊断</span></div>
-              <h3>8. 训练循环漏掉 `optimizer.zero_grad()`，会发生什么？</h3>
-              <div class="solve-note">说清梯度累积。</div>
-              <textarea name="q8" rows="3"></textarea>
-            </div>
-            
-            <div class="q full" data-title="9. 某个中间张量 `.grad` 是 None，一定是错误吗？">
-              <div class="q-meta"><span class="pill">诊断</span><span class="pill">错误诊断</span></div>
-              <h3>9. 某个中间张量 `.grad` 是 None，一定是错误吗？</h3>
-              <div class="solve-note">从中间张量默认不保留回答。</div>
-              <textarea name="q9" rows="3"></textarea>
-            </div>
-            
-          </div>
-        </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>概念区分</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="10. 匹配 forward / backward / step：建图、写梯度、改参数。">
-              <div class="q-meta"><span class="pill">匹配</span><span class="pill">概念区分</span></div>
-              <h3>10. 匹配 forward / backward / step：建图、写梯度、改参数。</h3>
-              <div class="solve-note">不要混用概念。</div>
-              <textarea name="q10" rows="3"></textarea>
-            </div>
-            
-            <div class="q " data-title="11. 叶子张量和中间张量的区别是什么？">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">概念区分</span></div>
-              <h3>11. 叶子张量和中间张量的区别是什么？</h3>
-              <div class="solve-note">从创建方式和是否优化回答。</div>
-              <textarea name="q11" rows="3"></textarea>
-            </div>
-            
-          </div>
-        </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>场景应用</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="12. 如果你想累积 4 个 batch 再更新一次，`zero_grad()` 应该怎样调整？">
-              <div class="q-meta"><span class="pill">场景</span><span class="pill">场景应用</span></div>
-              <h3>12. 如果你想累积 4 个 batch 再更新一次，`zero_grad()` 应该怎样调整？</h3>
-              <div class="solve-note">说明这时梯度累积是有意使用。</div>
-              <textarea name="q12" rows="3"></textarea>
-            </div>
-            
-            <div class="q " data-title="13. 为什么评估阶段不需要反向传播？">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">场景应用</span></div>
-              <h3>13. 为什么评估阶段不需要反向传播？</h3>
-              <div class="solve-note">从不更新参数回答。</div>
-              <textarea name="q13" rows="3"></textarea>
-            </div>
-            
-          </div>
-        </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>面试追问</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="14. 用 2-3 句话解释计算图。">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">面试追问</span></div>
-              <h3>14. 用 2-3 句话解释计算图。</h3>
-              <div class="solve-note">说清前向记录和反向使用。</div>
-              <textarea name="q14" rows="3"></textarea>
-            </div>
-            
-            <div class="q " data-title="15. `backward()` 和 `optimizer.step()` 的分工是什么？">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">面试追问</span></div>
-              <h3>15. `backward()` 和 `optimizer.step()` 的分工是什么？</h3>
-              <div class="solve-note">分别说。</div>
-              <textarea name="q15" rows="3"></textarea>
-            </div>
-            
-          </div>
-        </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>检查清单</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q full" data-title="16. 梯度相关 bug 你会检查哪 5 件事？">
-              <div class="q-meta"><span class="pill">清单</span><span class="pill">检查清单</span></div>
-              <h3>16. 梯度相关 bug 你会检查哪 5 件事？</h3>
-              <div class="solve-note">覆盖 requires_grad、loss 标量、清零、backward、step。</div>
-              <textarea name="q16" rows="3"></textarea>
-            </div>
-            
-          </div>
-        </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>代码修正</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q full" data-title="17. 有人把 `optimizer.zero_grad()` 放在 `loss.backward()` 后、`step()` 前，会怎样？">
-              <div class="q-meta"><span class="pill">诊断</span><span class="pill">代码修正</span></div>
-              <h3>17. 有人把 `optimizer.zero_grad()` 放在 `loss.backward()` 后、`step()` 前，会怎样？</h3>
-              <div class="solve-note">说清梯度被清掉，step 读不到。</div>
-              <textarea name="q17" rows="3"></textarea>
-            </div>
-            
-          </div>
-        </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>迁移应用</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="18. 为什么复杂网络仍然能用同一个 `backward()`？">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">迁移应用</span></div>
-              <h3>18. 为什么复杂网络仍然能用同一个 `backward()`？</h3>
-              <div class="solve-note">从链式法则和计算图回答。</div>
-              <textarea name="q18" rows="3"></textarea>
-            </div>
-            
-          </div>
-        </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>费曼解释</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q full" data-title="19. 用 6-9 句话解释：前向传播、反向传播和参数更新各自做什么。">
-              <div class="q-meta"><span class="pill">费曼</span><span class="pill">费曼解释</span></div>
-              <h3>19. 用 6-9 句话解释：前向传播、反向传播和参数更新各自做什么。</h3>
-              <div class="solve-note">串联计算图、loss、梯度累积、zero_grad 和 step。</div>
-              <textarea name="q19" rows="5"></textarea>
-            </div>
-            
-          </div>
-        </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>自我检查</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="20. 学完本页后，你现在能做什么？">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">自我检查</span></div>
-              <h3>20. 学完本页后，你现在能做什么？</h3>
-              <div class="solve-note">写一个能检查训练循环的动作。</div>
-              <textarea name="q20" rows="3"></textarea>
-            </div>
-            
-          </div>
-        </div>
-        
-    </section>
-
-    <section id="export">
-      <div class="head"><h2>导出练习记录</h2><span class="tag">复盘用</span></div>
-      <p class="muted">完成练习后生成记录，方便后续复盘。</p>
-      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
-    </section>
-  </main>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>作答方式</h3>
+    <p>先用本页的标量例子自查，再读训练循环。重点是指出哪一步建图、哪一步写梯度、哪一步改参数。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>题目会反复检查三件事：链式法则的数值、autograd 的状态位置、训练 step 的交接顺序。</p>
+  </div>
 </div>
-<script>
-const navLinks = [...document.querySelectorAll("nav a[href^='#']")];
-const sections = navLinks.map(a => document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress = document.getElementById("progress");
-function updateReadingState(){
-  const max = document.documentElement.scrollHeight - innerHeight;
-  progress.style.width = max > 0 ? `${Math.min(100, scrollY / max * 100)}%` : "0";
-  let current = sections[0]?.id;
-  for (const section of sections) {
-    const rect = section.getBoundingClientRect();
-    if (rect.top < innerHeight * 0.36) current = section.id;
-  }
-  navLinks.forEach(a => a.classList.toggle("active", a.getAttribute("href") === `#${current}`));
-}
-addEventListener("scroll", updateReadingState, {passive:true});
-addEventListener("resize", updateReadingState);
-updateReadingState();
-document.querySelectorAll(".codebar").forEach(bar => {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "copy-code";
-  btn.textContent = "复制";
-  btn.addEventListener("click", () => {
-    const code = bar.nextElementSibling?.innerText || "";
-    navigator.clipboard.writeText(code).then(() => {
-      btn.textContent = "已复制";
-      setTimeout(() => btn.textContent = "复制", 1200);
-    }).catch(() => {
-      btn.textContent = "失败";
-      setTimeout(() => btn.textContent = "复制", 1200);
-    });
-  });
-  bar.appendChild(btn);
-});
-const questions = [{'group': '基础概念', 'title': '1. `loss.backward()` 的主要作用是什么？', 'name': 'q1', 'type': 'radio', 'hint': '区分 backward 和 optimizer。'}, {'group': '基础概念', 'title': '2. PyTorch 默认会在每次 `backward()` 前自动清空旧梯度。', 'name': 'q2', 'type': 'text', 'hint': '想想为什么要写 `zero_grad()`。'}, {'group': '基础概念', 'title': '3. 反向传播使用的核心微积分规则是 ______。', 'name': 'q3', 'type': 'text', 'hint': '它把局部导数连起来。'}, {'group': '链路理解', 'title': '4. 排序：`optimizer.step()` / `loss.backward()` / `optimizer.zero_grad()` / `pred = model(x)`。', 'name': 'q4', 'type': 'text', 'hint': '按一次训练 step 写。'}, {'group': '代码阅读', 'title': '5. 在最小示例中，为什么梯度最后写到 `w.grad`？', 'name': 'q5', 'type': 'text', 'hint': '从 `requires_grad=True` 和叶子张量回答。'}, {'group': '代码阅读', 'title': '6. `loss = (y_hat - y) ** 2` 为什么能继续反传到 `w`？', 'name': 'q6', 'type': 'text', 'hint': '说明计算图保存了依赖。'}, {'group': '错误诊断', 'title': '7. 训练循环漏掉 `optimizer.step()`，会发生什么？', 'name': 'q7', 'type': 'text', 'hint': '说清梯度有但参数不更新。'}, {'group': '错误诊断', 'title': '8. 训练循环漏掉 `optimizer.zero_grad()`，会发生什么？', 'name': 'q8', 'type': 'text', 'hint': '说清梯度累积。'}, {'group': '错误诊断', 'title': '9. 某个中间张量 `.grad` 是 None，一定是错误吗？', 'name': 'q9', 'type': 'text', 'hint': '从中间张量默认不保留回答。'}, {'group': '概念区分', 'title': '10. 匹配 forward / backward / step：建图、写梯度、改参数。', 'name': 'q10', 'type': 'text', 'hint': '不要混用概念。'}, {'group': '概念区分', 'title': '11. 叶子张量和中间张量的区别是什么？', 'name': 'q11', 'type': 'text', 'hint': '从创建方式和是否优化回答。'}, {'group': '场景应用', 'title': '12. 如果你想累积 4 个 batch 再更新一次，`zero_grad()` 应该怎样调整？', 'name': 'q12', 'type': 'text', 'hint': '说明这时梯度累积是有意使用。'}, {'group': '场景应用', 'title': '13. 为什么评估阶段不需要反向传播？', 'name': 'q13', 'type': 'text', 'hint': '从不更新参数回答。'}, {'group': '面试追问', 'title': '14. 用 2-3 句话解释计算图。', 'name': 'q14', 'type': 'text', 'hint': '说清前向记录和反向使用。'}, {'group': '面试追问', 'title': '15. `backward()` 和 `optimizer.step()` 的分工是什么？', 'name': 'q15', 'type': 'text', 'hint': '分别说。'}, {'group': '检查清单', 'title': '16. 梯度相关 bug 你会检查哪 5 件事？', 'name': 'q16', 'type': 'text', 'hint': '覆盖 requires_grad、loss 标量、清零、backward、step。'}, {'group': '代码修正', 'title': '17. 有人把 `optimizer.zero_grad()` 放在 `loss.backward()` 后、`step()` 前，会怎样？', 'name': 'q17', 'type': 'text', 'hint': '说清梯度被清掉，step 读不到。'}, {'group': '迁移应用', 'title': '18. 为什么复杂网络仍然能用同一个 `backward()`？', 'name': 'q18', 'type': 'text', 'hint': '从链式法则和计算图回答。'}, {'group': '费曼解释', 'title': '19. 用 6-9 句话解释：前向传播、反向传播和参数更新各自做什么。', 'name': 'q19', 'type': 'text', 'hint': '串联计算图、loss、梯度累积、zero_grad 和 step。'}, {'group': '自我检查', 'title': '20. 学完本页后，你现在能做什么？', 'name': 'q20', 'type': 'text', 'hint': '写一个能检查训练循环的动作。'}];
-function valueOf(q){
-  if(q.type === "radio"){
-    const el = document.querySelector(`input[name="${q.name}"]:checked`);
-    return el ? el.value : "";
-  }
-  const el = document.querySelector(`[name="${q.name}"]`);
-  return el ? el.value.trim() : "";
-}
-function generateRecord(){
-  const groups = {};
-  const missing = [];
-  questions.forEach(q => {
-    const v = valueOf(q);
-    if(!v) missing.push(q.title);
-    if(!groups[q.group]) groups[q.group] = [];
-    groups[q.group].push({title:q.title, answer:v || "（未填写）", hint:q.hint});
-  });
-  let out = "# 04｜反向传播：计算图里的链式法则｜练习记录\n\n";
-  Object.keys(groups).forEach(group => {
-    out += `## ${group}\n\n`;
-    groups[group].forEach(item => {
-      out += `### ${item.title}\n提示：${item.hint}\n\n${item.answer}\n\n`;
-    });
-  });
-  document.getElementById("record").textContent = out;
-  const warnings = [];
-  if(missing.length) warnings.push(`还有 ${missing.length} 题未填写。`);
-  const feynman = questions.filter(q => q.title.includes("费曼")).map(valueOf).join("\n");
-  if(feynman && feynman.length < 120) warnings.push("费曼解释偏短，建议讲成 6-9 句话。");
-  const quality = document.getElementById("quality");
-  quality.style.display = "block";
-  quality.textContent = warnings.length ? warnings.join("\n") : "练习记录完整，可以用于复盘。";
-}
-function copyRecord(){
-  navigator.clipboard.writeText(document.getElementById("record").textContent).catch(() => alert("复制失败，请手动复制。"));
-}
-</script>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>计算图和手算</h3>
+      <p>仍然使用 <code>x=2,y=5,w=1,b=0.5</code>。先把前向数字算稳，再看反向梯度。</p>
+    </div>
+    <div class="quick-review">
+      <b>提示</b>
+      <code>y_hat=2.5</code>，<code>e=-2.5</code>，<code>L=6.25</code>。
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1_forward_value" data-group="计算图和手算" data-title="1. 当前例子里 y_hat 等于多少？" data-answer="B">
+      <div class="q-meta"><span class="pill" data-type="choice">choice</span><span class="pill">前向</span></div>
+      <h3>1. 当前例子里 <code>y_hat = x * w + b</code> 等于多少？</h3>
+      <label><input type="radio" name="q1_forward_value" value="A"> <code>2.0</code></label>
+      <label><input type="radio" name="q1_forward_value" value="B"> <code>2.5</code></label>
+      <label><input type="radio" name="q1_forward_value" value="C"> <code>5.0</code></label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2_loss_value" data-group="计算图和手算" data-title="2. loss 等于多少？" data-answer="6.25">
+      <div class="q-meta"><span class="pill" data-type="fill">fill</span><span class="pill">前向</span></div>
+      <h3>2. <code>loss = (y_hat - y) ** 2</code> 等于多少？</h3>
+      <input type="text" name="q2_loss_value" placeholder="填一个数">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q3_chain_dw" data-group="计算图和手算" data-title="3. dL/dw 等于多少？" data-answer="-10">
+      <div class="q-meta"><span class="pill" data-type="fill">fill</span><span class="pill">链式法则</span></div>
+      <h3>3. 对当前例子，<code>dL/dw</code> 等于多少？</h3>
+      <input type="text" name="q3_chain_dw" placeholder="填一个数">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p><code>dL/dw = 2e * x = 2 * (-2.5) * 2 = -10</code>。只写负号不够，要能说出负号来自误差 <code>e=-2.5</code>。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q4_chain_db" data-group="计算图和手算" data-title="4. dL/db 等于多少？" data-answer="-5">
+      <div class="q-meta"><span class="pill" data-type="fill">fill</span><span class="pill">链式法则</span></div>
+      <h3>4. 对当前例子，<code>dL/db</code> 等于多少？</h3>
+      <input type="text" name="q4_chain_db" placeholder="填一个数">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q5_chain_explain" data-group="计算图和手算" data-title="5. 用一句话解释为什么 dL/dw 要乘 x。">
+      <div class="q-meta"><span class="pill" data-type="short answer">short answer</span><span class="pill">链式法则</span></div>
+      <h3>5. 用一句话解释：为什么 <code>dL/dw</code> 里要乘 <code>x</code>？</h3>
+      <p class="solve-note">回答要点是 <code>y_hat = xw + b</code> 对 <code>w</code> 的局部导数是 <code>x</code>。</p>
+      <textarea name="q5_chain_explain" rows="3" placeholder="先说局部导数，再说上游梯度"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案会说：从 <code>y_hat</code> 往 <code>w</code> 传梯度时，本地运算是 <code>y_hat=xw+b</code>，所以 <code>dy_hat/dw=x</code>；上游梯度要乘这个局部导数，才得到 <code>dL/dw</code>。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q5b_branch_sum" data-group="计算图和手算" data-title="5b. 分支例子里 dL/dw 等于多少？" data-answer="-15">
+      <div class="q-meta"><span class="pill" data-type="fill">fill</span><span class="pill">分支相加</span></div>
+      <h3>5b. 对分支例子 <code>z = w*x + (w+b)</code>，当前 <code>dL/dw</code> 等于多少？</h3>
+      <input type="text" name="q5b_branch_sum" placeholder="填一个数">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>答案是 <code>-15</code>。两条路径分别贡献 <code>-10</code> 和 <code>-5</code>，写到同一个 <code>w.grad</code> 时要相加。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q5c_branch_rule" data-group="计算图和手算" data-title="5c. 同一参数影响 loss 的多条路径怎样合并？" data-answer="B">
+      <div class="q-meta"><span class="pill" data-type="choice">choice</span><span class="pill">分支相加</span></div>
+      <h3>5c. 同一个参数通过多条路径影响 loss 时，反向传播怎样合并这些贡献？</h3>
+      <label><input type="radio" name="q5c_branch_rule" value="A"> 只保留最后一条路径的梯度</label>
+      <label><input type="radio" name="q5c_branch_rule" value="B"> 把各条路径传回来的梯度相加</label>
+      <label><input type="radio" name="q5c_branch_rule" value="C"> 自动丢掉较小的梯度</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>Autograd 状态判断</h3>
+      <p>这组检查你能不能把 PyTorch 里的属性和训练状态对上。</p>
+    </div>
+    <div class="quick-review">
+      <b>提示</b>
+      先分清叶子张量、中间张量、<code>grad_fn</code>、<code>.grad</code>。
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q6_requires_grad" data-group="Autograd 状态判断" data-title="6. 哪些张量应该 requires_grad=True？" data-answer="B">
+      <div class="q-meta"><span class="pill" data-type="choice">choice</span><span class="pill">autograd</span></div>
+      <h3>6. 在当前标量例子里，通常哪些张量需要 <code>requires_grad=True</code>？</h3>
+      <label><input type="radio" name="q6_requires_grad" value="A"> <code>x</code> 和 <code>y</code></label>
+      <label><input type="radio" name="q6_requires_grad" value="B"> <code>w</code> 和 <code>b</code></label>
+      <label><input type="radio" name="q6_requires_grad" value="C"> 所有张量都必须打开</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q7_backward_writes" data-group="Autograd 状态判断" data-title="7. loss.backward() 主要写入哪里？" data-answer="B">
+      <div class="q-meta"><span class="pill" data-type="choice">choice</span><span class="pill">状态</span></div>
+      <h3>7. <code>loss.backward()</code> 主要把结果写到哪里？</h3>
+      <label><input type="radio" name="q7_backward_writes" value="A"> 直接写回 <code>loss</code> 的数值</label>
+      <label><input type="radio" name="q7_backward_writes" value="B"> 叶子参数的 <code>.grad</code></label>
+      <label><input type="radio" name="q7_backward_writes" value="C"> 自动调用 <code>optimizer.step()</code></label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q8_grad_fn" data-group="Autograd 状态判断" data-title="8. y_hat 有 grad_fn 说明什么？" data-answer="A">
+      <div class="q-meta"><span class="pill" data-type="choice">choice</span><span class="pill">grad_fn</span></div>
+      <h3>8. <code>y_hat.grad_fn</code> 有值，最准确说明什么？</h3>
+      <label><input type="radio" name="q8_grad_fn" value="A"> 它是由可求导运算产生的中间张量</label>
+      <label><input type="radio" name="q8_grad_fn" value="B"> 它已经被优化器更新过</label>
+      <label><input type="radio" name="q8_grad_fn" value="C"> 它一定是叶子参数</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q9_intermediate_grad" data-group="Autograd 状态判断" data-title="9. 中间张量默认一定有 .grad。" data-answer="false">
+      <div class="q-meta"><span class="pill" data-type="true/false">true/false</span><span class="pill">状态</span></div>
+      <h3>9. 中间张量默认一定会在 <code>.grad</code> 里保留梯度。</h3>
+      <label><input type="radio" name="q9_intermediate_grad" value="true"> 对</label>
+      <label><input type="radio" name="q9_intermediate_grad" value="false"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>训练 step 顺序</h3>
+      <p>这组只看一次 mini-batch 内部的状态交接。</p>
+    </div>
+    <div class="quick-review">
+      <b>提示</b>
+      推荐顺序：前向、loss、清梯度、反向、更新。
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q10_order" data-group="训练 step 顺序" data-title="10. 写出一次训练 step 的顺序。">
+      <div class="q-meta"><span class="pill" data-type="sequence">sequence</span><span class="pill">训练循环</span></div>
+      <h3>10. 写出一次训练 step 的推荐顺序，并标出哪一步写 <code>.grad</code>。</h3>
+      <p class="solve-note">至少包含 <code>model(x)</code>、<code>criterion</code>、<code>zero_grad</code>、<code>backward</code>、<code>step</code>。</p>
+      <textarea name="q10_order" rows="4" placeholder="按顺序写，每一步后面补一句状态变化"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>推荐顺序是：<code>pred = model(x)</code> 建图；<code>loss = criterion(pred,y)</code> 得到标量目标；<code>optimizer.zero_grad()</code> 清旧梯度；<code>loss.backward()</code> 写本轮 <code>.grad</code>；<code>optimizer.step()</code> 读梯度并改参数。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q11_zero_grad" data-group="训练 step 顺序" data-title="11. zero_grad 的直接作用是什么？" data-answer="A">
+      <div class="q-meta"><span class="pill" data-type="choice">choice</span><span class="pill">清梯度</span></div>
+      <h3>11. <code>optimizer.zero_grad()</code> 的直接作用是什么？</h3>
+      <label><input type="radio" name="q11_zero_grad" value="A"> 清掉参数上旧的 <code>.grad</code></label>
+      <label><input type="radio" name="q11_zero_grad" value="B"> 计算当前 batch 的梯度</label>
+      <label><input type="radio" name="q11_zero_grad" value="C"> 更新参数</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q12_step_reads" data-group="训练 step 顺序" data-title="12. optimizer.step() 读取什么？" data-answer="B">
+      <div class="q-meta"><span class="pill" data-type="choice">choice</span><span class="pill">更新</span></div>
+      <h3>12. <code>optimizer.step()</code> 更新参数时主要读取什么？</h3>
+      <label><input type="radio" name="q12_step_reads" value="A"> 原始标签的文件路径</label>
+      <label><input type="radio" name="q12_step_reads" value="B"> 参数当前值和对应 <code>.grad</code></label>
+      <label><input type="radio" name="q12_step_reads" value="C"> 中间张量的所有历史值</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q13_no_grad" data-group="训练 step 顺序" data-title="13. 手动改参数时为什么用 torch.no_grad？" data-answer="C">
+      <div class="q-meta"><span class="pill" data-type="choice">choice</span><span class="pill">manual update</span></div>
+      <h3>13. 手动改参数时为什么常放在 <code>with torch.no_grad()</code> 里？</h3>
+      <label><input type="radio" name="q13_no_grad" value="A"> 让参数不再是 Tensor</label>
+      <label><input type="radio" name="q13_no_grad" value="B"> 让 loss 自动变小</label>
+      <label><input type="radio" name="q13_no_grad" value="C"> 避免参数更新操作继续被记录进计算图</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>故障诊断</h3>
+      <p>最后把症状映射回具体检查点。答案要给排查顺序，不要只写“调参”。</p>
+    </div>
+    <div class="quick-review">
+      <b>提示</b>
+      看 <code>requires_grad</code>、<code>loss.shape</code>、<code>.grad</code>、<code>step()</code> 前后参数值。
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q14_vector_loss" data-group="故障诊断" data-title="14. 向量 loss 直接 backward 报错，先修哪一步？" data-answer="B">
+      <div class="q-meta"><span class="pill" data-type="diagnosis">diagnosis</span><span class="pill">loss</span></div>
+      <h3>14. 向量 loss 直接 <code>backward()</code> 报错，先修哪一步？</h3>
+      <label><input type="radio" name="q14_vector_loss" value="A"> 先换优化器</label>
+      <label><input type="radio" name="q14_vector_loss" value="B"> 用 <code>mean()</code> 或 <code>sum()</code> 得到标量 loss</label>
+      <label><input type="radio" name="q14_vector_loss" value="C"> 删掉标签</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q15_grad_none" data-group="故障诊断" data-title="15. w.grad 是 None，最先看什么？" data-answer="A">
+      <div class="q-meta"><span class="pill" data-type="diagnosis">diagnosis</span><span class="pill">grad none</span></div>
+      <h3>15. <code>w.grad</code> 是 <code>None</code>，最先看什么？</h3>
+      <label><input type="radio" name="q15_grad_none" value="A"> <code>w.requires_grad</code>、<code>w.is_leaf</code> 和 <code>loss.grad_fn</code></label>
+      <label><input type="radio" name="q15_grad_none" value="B"> 只看学习率</label>
+      <label><input type="radio" name="q15_grad_none" value="C"> 先把 batch 变大</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q16_accumulation_case" data-group="故障诊断" data-title="16. loss 能跑但更新方向混乱，写出排查顺序。">
+      <div class="q-meta"><span class="pill" data-type="debug plan">debug plan</span><span class="pill">累积</span></div>
+      <h3>16. 训练能跑，但不同 batch 的更新方向越来越难解释。你会怎么排查？</h3>
+      <p class="solve-note">至少要提到 <code>zero_grad()</code> 位置，以及打印两轮 <code>backward()</code> 前后的 <code>.grad</code>。</p>
+      <textarea name="q16_accumulation_case" rows="4" placeholder="写排查顺序，不要只写原因名"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>稳的排查顺序是：先看每个 batch 前有没有清梯度；再打印 <code>backward()</code> 前后的 <code>param.grad</code>，确认旧梯度是否残留；最后检查是否有意做梯度累积。如果没有明确累积策略，普通训练循环应让每个 batch 使用自己的梯度。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q17_synthesis" data-group="故障诊断" data-title="17. 用 6-8 句话串起本页主线。">
+      <div class="q-meta"><span class="pill" data-type="synthesis">synthesis</span><span class="pill">总结</span></div>
+      <h3>17. 用 6-8 句话串起本页主线：从前向建图到参数更新。</h3>
+      <p class="solve-note">必须出现：计算图、标量 loss、链式法则、<code>.grad</code>、<code>zero_grad()</code>、<code>step()</code>。</p>
+      <textarea name="q17_synthesis" rows="5" placeholder="按状态交接顺序讲"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案会按顺序讲：前向传播用参数和输入得到预测，并记录计算图；预测和标签得到标量 loss；<code>backward()</code> 从 loss 出发，沿图用链式法则传梯度；梯度写到叶子参数的 <code>.grad</code>；普通训练循环要先清掉旧梯度；<code>optimizer.step()</code> 读取本轮梯度后更新参数。若能补上“<code>backward()</code> 不直接改参数”，说明职责分得清。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul>
+  <li>刘二大人《PyTorch 深度学习实践》课程第 04 讲：反向传播。学习范围以 2026-06-21 的课程树快照为准。</li>
+  <li>本课程第 03 讲《梯度下降：沿着损失下降的方向更新参数》：作为本页的前置内容，提供 <code>loss.backward()</code>、<code>optimizer.step()</code>、<code>optimizer.zero_grad()</code> 的训练循环位置。</li>
+  <li>本课程第 05 讲《用 PyTorch 实现线性回归：Module、Loss 与 Optimizer》：作为下一步连接，本页只解释梯度产生和状态交接，不展开完整优化器教程。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
 </body>
 </html>

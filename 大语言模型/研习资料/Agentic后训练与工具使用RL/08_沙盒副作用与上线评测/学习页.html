@@ -1,0 +1,1118 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>08｜沙盒、副作用与上线评测</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="Agentic 后训练与工具使用 RL" data-unit="08">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>Agentic 后训练与工具使用 RL</strong>
+        <span>08</span>
+      </div>
+      <nav aria-label="页面导航">
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>主线</a>
+        <a href="#lesson"><span class="dot"></span>核心讲解</a>
+        <a href="#examples"><span class="dot"></span>案例链</a>
+        <a href="#terms"><span class="dot"></span>术语与分层</a>
+        <a href="#ledger"><span class="dot"></span>状态台账</a>
+        <a href="#gate"><span class="dot"></span>评测闸门</a>
+        <a href="#consistency"><span class="dot"></span>实现一致性</a>
+        <a href="#failure-lab"><span class="dot"></span>故障台</a>
+        <a href="#operation-bridge"><span class="dot"></span>落地桥接</a>
+        <a href="#mistakes"><span class="dot"></span>常见错误</a>
+        <a href="#boundary-note"><span class="dot"></span>先知道，先别追</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把动作等级、状态边界和回退条件分开。只要动作会碰到真实对象，评测就不能只盯最终答案。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">课程单元</div>
+          <h1>沙盒、副作用与上线评测</h1>
+          <p>这一页把 07 页的环境训练往生产边上推一步。你会看到同样是 action / observation / reward，到了上线前就要多看三件事：动作会不会改到真实对象，观测里有没有把副作用读出来，以及回退和审计能不能把风险兜住。</p>
+          <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../07_TRL_OpenEnv与交互式训练环/学习页.html">上一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完这页先会什么</h3>
+          <ul>
+            <li>判断一个动作只能进沙盒，还是已经可以进入灰度。</li>
+            <li>从状态台账里看出 episode 有没有脏数据、漏审计或共享实例。</li>
+            <li>把上线闸门写成能执行、能记录、能停机的评测条件。</li>
+          </ul>
+        </div>
+      </div>
+
+      <section id="goals">
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">route</span>
+        </div>
+        <div class="grid3">
+          <div class="box">
+            <h3>先分动作等级</h3>
+            <p>查询、可撤销写入、对外外发、真实删除，不要混成一层。动作等级不同，闸门也不同。</p>
+          </div>
+          <div class="box soft">
+            <h3>先看状态边界</h3>
+            <p>episode 里的 reward、done、审计和 state diff 要按回合清空，不然下一轮会继承上一轮的痕迹。</p>
+          </div>
+          <div class="box info">
+            <h3>先把上线条件写明</h3>
+            <p>不要只写“任务成功”，还要写越权、回退、审计和外部影响的门槛。</p>
+          </div>
+        </div>
+        <p>这一页接着 07 页继续讲 environment，但视角换成上线前评测。你现在不只是在问“模型会不会动手”，而是在问“动手以后会留下些什么，出了事怎么停”。</p>
+      </section>
+
+      <section id="map">
+        <div class="head">
+          <h2>先抓主线</h2>
+          <span class="tag">flow</span>
+        </div>
+        <p>最容易看混的是：模型输出一个动作，不等于系统已经安全。上线前要把路径拆成五步，分别看谁在写、谁在读、谁能停。</p>
+        <div class="shape-tracer" data-shape-tracer data-export-context="任务-动作-副作用-闸门追踪" data-export-lang="text">
+          <div class="trace-lines">
+            <button type="button" class="trace-line active" data-trace-step="task">
+              <code>1. 任务意图</code><span>先定对象和目标</span>
+            </button>
+            <button type="button" class="trace-line" data-trace-step="action">
+              <code>2. 工具动作</code><span>发出具体调用</span>
+            </button>
+            <button type="button" class="trace-line" data-trace-step="sandbox">
+              <code>3. 沙盒状态</code><span>只碰测试对象</span>
+            </button>
+            <button type="button" class="trace-line" data-trace-step="eval">
+              <code>4. 评测读回</code><span>读状态差异和审计</span>
+            </button>
+            <button type="button" class="trace-line" data-trace-step="gate">
+              <code>5. 上线闸门</code><span>决定继续、灰度或停机</span>
+            </button>
+          </div>
+          <div class="trace-canvas">
+            <div class="tensor-card active" data-trace-target="task">
+              <b>任务意图</b>
+              <span>用户想完成什么</span>
+              <p>先确认对象、范围和约束。对象没定清，后面的副作用评估也会跟着飘。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="action">
+              <b>工具动作</b>
+              <span>模型发出的调用</span>
+              <p>动作本身可以很小，但它可能触发写入、外发、删除或审批流。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="sandbox">
+              <b>沙盒状态</b>
+              <span>测试租户、测试凭证、测试对象</span>
+              <p>动作只允许改这里。只要状态离开这个范围，就该停下来看闸门。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="eval">
+              <b>评测读回</b>
+              <span>state diff、审计、回退结果</span>
+              <p>评测看的是动作留下了什么，不只是模型说得像不像。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="gate">
+              <b>上线闸门</b>
+              <span>继续、灰度、停机</span>
+              <p>闸门不是装饰。没有审计、没有回退、没有停止条件，默认就不该继续放量。</p>
+            </div>
+          </div>
+        </div>
+        <p class="hint">先按这条链回溯，再去看日志。只看最终回答，往往会把危险路径藏起来。</p>
+      </section>
+
+      <section id="lesson">
+        <div class="head">
+          <h2>核心讲解</h2>
+          <span class="tag">chain</span>
+        </div>
+        <div class="grid2">
+          <div>
+            <p>把场景想成一个邮件助理。用户说“把昨天那个退款单通知发给客户”，模型会先查订单，再生成草稿，最后选择发出。这里最容易被忽略的点不是语句本身，而是它到底碰的是测试租户还是生产租户，写的是草稿还是正式外发，记录的是一条可回滚的审计，还是一条只剩最终结果的日志。</p>
+            <p>同一个动作名，在沙盒里可能只是一次练习，在生产边上就会变成真实副作用。评测要做的事，是把这两种情形拆开：看清动作目标、看清状态变化、看清是否留下回退证据。只要这三件事里有一件缺位，分数再漂亮也不能说明系统可上线。</p>
+            <div class="box soft">
+              <h3>这个链条要依次看什么</h3>
+              <p>先看对象有没有指错，接着看动作有没有真的提交，再看审计和回退有没有被写进记录。顺序一乱，问题就会被藏进“看起来成功”的结果里。</p>
+            </div>
+          </div>
+          <div class="box warn">
+            <h3>判定时的四个锚点</h3>
+            <ul>
+              <li>目标对象是不是当前回合的对象。</li>
+              <li>凭证和租户是不是测试范围。</li>
+              <li>状态差异有没有被明确记下来。</li>
+              <li>回退路径是不是在动作前就能找到。</li>
+            </ul>
+            <p>如果这四个锚点里有一个空着，就要先停在沙盒，不要把它误当成“可以先试试”的灰度。</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="沙盒到上线的完整链" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>步骤</th>
+                <th>你看到什么</th>
+                <th>它说明什么</th>
+                <th>失败会怎样</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>dry-run</td>
+                <td>测试租户、假收件人、无提交</td>
+                <td>先验证语义和参数</td>
+                <td>如果仍有外部写入，环境本身就不干净</td>
+              </tr>
+              <tr>
+                <td>shadow mode</td>
+                <td>真实输入、无提交</td>
+                <td>先看分布和策略命中</td>
+                <td>只能说明看见了流量，不能说明副作用可控</td>
+              </tr>
+              <tr>
+                <td>small gray rollout</td>
+                <td>少量真实流量</td>
+                <td>看回退、审计、异常处理</td>
+                <td>如果停止条件缺失，问题会跟着流量一起扩大</td>
+              </tr>
+              <tr>
+                <td>full live</td>
+                <td>全量真实流量</td>
+                <td>只在闸门全部通过后才考虑</td>
+                <td>没有审计和回退，就等于把风险放到最大</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="grid2">
+          <div>
+            <div class="codebar">
+              <span>一个能看出副作用的壳</span>
+              <button class="copy" data-copy="lesson-code" type="button">复制</button>
+            </div>
+            <pre id="lesson-code" data-export-context="沙盒副作用检测伪代码" data-export-lang="python"><code class="language-python">def run_with_gates(env, action):
+    before = env.snapshot()
+    result = env.step(action)
+    after = env.snapshot()
+    diff = after.diff(before)
+    audit = {
+        "tenant": env.tenant_id,
+        "target": action.target,
+        "diff": diff,
+        "approved": env.approval_state,
+        "rollback": result.rollback_available,
+    }
+    env.audit_log.append(audit)
+    if diff.has_external_side_effect and not audit["approved"]:
+        raise RuntimeError("unapproved side effect")
+    return result</code></pre>
+          </div>
+          <div class="box info">
+            <h3>失败会怎么暴露</h3>
+            <p>如果 <code>snapshot()</code> 读的是共享对象，diff 会带着上一轮的痕迹；如果 <code>approval_state</code> 没进日志，事故后就查不出是谁放行；如果 <code>rollback_available</code> 永远写真，闸门就会高估稳定性。</p>
+            <p>这个链条的目标很朴素：每一步都能看见对象变化，出错时能停，回头还能说明白。</p>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>练习钩子</h3>
+          <p>拿 07 页的环境类改一改：先把 <code>snapshot()</code> 和 <code>audit_log</code> 加上，再想哪些动作只能跑 dry-run，哪些动作可以进入最小灰度。你写出来以后，应该能一眼看出哪一步最容易把真实对象误写进去。</p>
+        </div>
+      </section>
+
+      <section id="examples">
+        <div class="head">
+          <h2>案例链</h2>
+          <span class="tag">example</span>
+        </div>
+        <p>这一段把讲解落到一个可排查的例子上。假设邮件助理在测试租户里运行正常，管理员看到的结果也都对，但一旦接到真实客户名单，系统就开始出现“看上去完成了、实际上已经越界”的情况。评测如果只看最终文本，会把危险路径漏掉。</p>
+        <div class="grid2">
+          <div class="table-wrap">
+            <table data-export-context="邮件助理案例轨迹" data-export-lang="table">
+              <thead>
+                <tr>
+                  <th>轨迹步</th>
+                  <th>现场发生了什么</th>
+                  <th>应该读到什么</th>
+                  <th>失败说明什么</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>选对象</td>
+                  <td>模型拿到了真实客户 id</td>
+                  <td>只应拿到测试对象 id</td>
+                  <td>目标边界已经错位</td>
+                </tr>
+                <tr>
+                  <td>生成草稿</td>
+                  <td>文案、语气、模板都正常</td>
+                  <td>草稿只留在沙盒，不触达外部</td>
+                  <td>文本正确不代表动作安全</td>
+                </tr>
+                <tr>
+                  <td>正式提交</td>
+                  <td>调用了发送接口</td>
+                  <td>先过审批或灰度开关</td>
+                  <td>副作用已经落地</td>
+                </tr>
+                <tr>
+                  <td>记录证据</td>
+                  <td>只有结果，没有 state diff</td>
+                  <td>要有对象、参数、差异、批准和回退</td>
+                  <td>事故后无法复盘</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div>
+            <div class="codebar">
+              <span>检查轨迹的最小函数</span>
+              <button class="copy" data-copy="example-code" type="button">复制</button>
+            </div>
+            <pre id="example-code" data-export-context="邮件助理检查函数" data-export-lang="python"><code class="language-python">def validate_mail_flow(run):
+    if run.target_tenant != "sandbox":
+        return "stop: target tenant is not sandbox"
+    if run.sent_to_real_recipient:
+        return "stop: external side effect detected"
+    if not run.audit_log:
+        return "stop: missing audit log"
+    if not run.rollback_plan:
+        return "stop: no rollback plan"
+    return "pass"</code></pre>
+            <div class="box danger">
+              <h3>失败后果</h3>
+              <p>一旦真实收件人被触达，草稿再正确也没法撤回外部影响。评测如果不看目标对象和审计，只盯任务成功率，就会把最危险的一步藏起来。上线时真正要拦的是“真实对象 + 外部提交 + 证据缺失”这个组合。</p>
+            </div>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>把案例改成练习</h3>
+          <p>你可以直接拿这条链做一张小表：对象是不是测试租户，动作是不是外发，审计是不是完整，回退是不是可用。任何一项不稳，就先停在沙盒；如果四项都稳，再考虑最小灰度。这样写出来的判定，才真的能拿去挡上线。</p>
+        </div>
+      </section>
+
+      <section id="terms">
+        <div class="head">
+          <h2>术语与分层</h2>
+          <span class="tag">terms</span>
+        </div>
+        <div class="grid3">
+          <div class="box">
+            <h3>只读查询</h3>
+            <p>不改外部对象，但仍可能越权读取、泄露数据或消耗配额。</p>
+          </div>
+          <div class="box soft">
+            <h3>可撤销写入</h3>
+            <p>会改状态，但能回滚。适合先灰度，不适合直接放到生产对象上。</p>
+          </div>
+          <div class="box info">
+            <h3>不可逆动作</h3>
+            <p>外发邮件、真实删除、资金变更，出了问题不能只靠“再来一轮”修复。</p>
+          </div>
+          <div class="box warn">
+            <h3>影子模式</h3>
+            <p>看见真实输入，但不提交动作。它适合找分布差异，不适合证明万无一失。</p>
+          </div>
+          <div class="box">
+            <h3>灰度</h3>
+            <p>把风险缩到小流量里，先看副作用，再决定要不要放大。</p>
+          </div>
+          <div class="box danger">
+            <h3>审计</h3>
+            <p>记录动作、参数、状态差异、批准和回退结果。没有审计，事后基本说不清。</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="副作用分层台账" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>动作层级</th>
+                <th>典型动作</th>
+                <th>默认处理</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>只读</td>
+                <td>查公开文档、查状态、查日志</td>
+                <td>先看越权和隐私，再看结果是否正确。</td>
+              </tr>
+              <tr>
+                <td>可撤销写入</td>
+                <td>建测试工单、写草稿、调试记录</td>
+                <td>先进沙盒，再看是否有回退路径。</td>
+              </tr>
+              <tr>
+                <td>不可逆外发</td>
+                <td>发给真实客户、删真实数据、触发付款</td>
+                <td>先加人工闸门，再做影子或最小灰度。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="ledger">
+        <div class="head">
+          <h2>状态台账</h2>
+          <span class="tag">state</span>
+        </div>
+        <p>这里最重要的不是“有没有一个环境类”，而是环境类在每个 episode 里到底读什么、写什么、什么时候会脏。只要状态台账一乱，后面的 reward 和评测都会跟着偏。</p>
+        <div class="grid2">
+          <div>
+            <div class="codebar">
+              <span>最小守门骨架</span>
+              <button class="copy" data-copy="guard-code" type="button">复制</button>
+            </div>
+            <pre id="guard-code" data-export-context="环境类最小骨架" data-export-lang="python"><code class="language-python">class TaskEnv:
+    def __init__(self):
+        self.reward = 0.0
+        self.done = False
+        self.audit_log = []
+        self.last_diff = {}
+
+    def reset(self, **kwargs):
+        self.reward = 0.0
+        self.done = False
+        self.audit_log.clear()
+        self.last_diff = {}
+        return "initial observation"
+
+    def act(self, tool_name, **params):
+        if self.done:
+            raise ValueError("episode finished")
+        result = self.client.call(tool_name, **params)
+        self.last_diff = result.state_diff
+        self.audit_log.append({
+            "tool": tool_name,
+            "params": params,
+            "diff": result.state_diff,
+        })
+        self.reward = float(result.reward)
+        self.done = bool(result.done)
+        return result.observation
+
+def reward_func(environments, **kwargs) -> list[float]:
+    return [env.reward for env in environments]</code></pre>
+          </div>
+          <div class="box warn">
+            <h3>先盯这四个字段</h3>
+            <p><code>reward</code>、<code>done</code>、<code>audit_log</code>、<code>last_diff</code> 是最容易出错的地方。<code>reset()</code> 不清空，下一轮会继承上一轮的痕迹；<code>act()</code> 不写差异，评测就只剩表面结果；<code>reward_func()</code> 只读文本，就很容易被钻空子。</p>
+            <p>真正该检查的不是“有没有调用成功”，而是调用前后状态有没有变脏，评测有没有读到该读的那部分。</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="状态台账" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>步骤</th>
+                <th>读取</th>
+                <th>写入 / 清空</th>
+                <th>脏了会怎样</th>
+                <th>下一步检查</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>reset()</code></td>
+                <td>任务参数、测试对象、可选上下文</td>
+                <td>清空 reward、done、audit_log、last_diff</td>
+                <td>下一轮继承上一轮状态，reward 泄漏</td>
+                <td>先确认每个 episode 都是新状态</td>
+              </tr>
+              <tr>
+                <td>公开工具方法</td>
+                <td>动作参数、当前状态</td>
+                <td>写入 state diff、观察、错误信息</td>
+                <td>工具语义不清，模型学不会选动作</td>
+                <td>看方法名、参数和 docstring 是否具体</td>
+              </tr>
+              <tr>
+                <td><code>reward_func()</code></td>
+                <td>环境实例列表和 episode 状态</td>
+                <td>输出可比较的 reward</td>
+                <td>只读文本 heuristics，reward hacking 很快出现</td>
+                <td>确认 reward 真的是从环境状态读回来的</td>
+              </tr>
+              <tr>
+                <td>trainer update</td>
+                <td>完成轨迹、奖励、参考策略差异</td>
+                <td>更新模型参数</td>
+                <td>前面三步接错，更新方向也会错</td>
+                <td>先把日志、回退和审计补齐再训练</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="gate">
+        <div class="head">
+          <h2>评测闸门</h2>
+          <span class="tag">gate</span>
+        </div>
+        <div class="grid2">
+          <div class="math-block" data-export-context="上线闸门布尔式" data-export-lang="math">
+            $$
+            \text{GoLive} = \text{Success} \land \neg \text{Violation} \land \text{Rollback} \land \text{Audit}
+            $$
+            <p><code>Success</code> 看任务是否完成，<code>Violation</code> 看有没有越权，<code>Rollback</code> 看出错后能不能停住，<code>Audit</code> 看证据链是否完整。这里不是在做一个漂亮分数，而是在写一个能停机的条件。</p>
+          </div>
+          <div class="box danger">
+            <h3>一票否决的信号</h3>
+            <ul>
+              <li>生产凭证跑评测。</li>
+              <li>动作已经触达真实对象，却没有回退。</li>
+              <li>审计字段空着，日志只能看见最终答案。</li>
+              <li>异常率上升时系统还继续放量。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="上线闸门与回退指标" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>指标</th>
+                <th>看什么</th>
+                <th>不合格说明什么</th>
+                <th>下一步</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>task_success</td>
+                <td>任务有没有做成</td>
+                <td>任务本身就没跑通</td>
+                <td>先修功能，不要先谈放量</td>
+              </tr>
+              <tr>
+                <td>policy_violation_rate</td>
+                <td>有没有越权、绕过审批、触达禁区</td>
+                <td>模型会做对事，但走了危险路径</td>
+                <td>回看动作级日志和策略拦截点</td>
+              </tr>
+              <tr>
+                <td>rollback_success</td>
+                <td>出错后能不能停住并恢复状态</td>
+                <td>一旦出错，影响会继续扩散</td>
+                <td>先补回退演练，再考虑灰度</td>
+              </tr>
+              <tr>
+                <td>audit_complete</td>
+                <td>动作、参数、差异、批准是否齐</td>
+                <td>事后不好复盘，也不好追责</td>
+                <td>把审计字段写进环境和评测脚本</td>
+              </tr>
+              <tr>
+                <td>unexpected_diff_rate</td>
+                <td>有没有不该出现的状态变化</td>
+                <td>模型可能在隐藏路径上乱写</td>
+                <td>回到沙盒和状态台账排查</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="consistency">
+        <div class="head">
+          <h2>实现一致性</h2>
+          <span class="tag">contract</span>
+        </div>
+        <p>沙盒、离线评测、灰度上线这三层能不能互相说明问题，关键在于它们是不是读同一份状态契约。这里的契约，不只是接口名一样，还包括对象 id、审批状态、审计记录、回退结果和副作用边界都能按同一种语义被读回来。只要其中一层把字段省掉、改名、或者改成别的含义，数字看起来还会动，但它们已经不能再证明同一件事。</p>
+        <p>这件事在 agent 场景里很常见。训练环境为了简单，可能先不接审批流；评测脚本为了快，可能只读最终结果；上线前的灰度窗口则必须把审批、审计和回退全都拉进来。三层之间如果没有一份共同契约，模型就会在“看起来成功”的评测里拿分，却在真实副作用上失控。</p>
+        <div class="table-wrap">
+          <table data-export-context="沙盒-评测-上线状态契约" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>层级</th>
+                <th>必须共享</th>
+                <th>可以不同</th>
+                <th>不同了会怎样</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>训练环境</td>
+                <td>对象 id、state diff、reward、done</td>
+                <td>数据规模、样本难度、随机种子</td>
+                <td>如果契约字段缺失，后面的评测就接不上训练语义。</td>
+              </tr>
+              <tr>
+                <td>离线评测</td>
+                <td>审批状态、审计记录、回退结果</td>
+                <td>流量规模、批次大小、观察窗口</td>
+                <td>如果只看分数不看证据，危险路径会被当成能力提升。</td>
+              </tr>
+              <tr>
+                <td>灰度上线</td>
+                <td>真实对象 id、外部影响标记、停止条件</td>
+                <td>放量比例、观察时长、人工复核频率</td>
+                <td>如果回退链不在场，异常只会随着流量一起扩散。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="grid2">
+          <div>
+            <div class="codebar">
+              <span>检查契约是否一致</span>
+              <button class="copy" data-copy="contract-code" type="button">复制</button>
+            </div>
+            <pre id="contract-code" data-export-context="状态契约检查函数" data-export-lang="python"><code class="language-python">def assert_contract(env):
+    required = [
+        "object_id",
+        "approval_state",
+        "audit_log",
+        "rollback_result",
+        "side_effect_boundary",
+    ]
+    missing = [name for name in required if not hasattr(env, name)]
+    if missing:
+        raise AssertionError(f"missing contract fields: {missing}")
+    if env.side_effect_boundary not in {"sandbox", "shadow", "gray", "live"}:
+        raise AssertionError("unexpected side effect boundary")
+    return True</code></pre>
+          </div>
+          <div class="box warn">
+            <h3>为什么这里要单独检查契约</h3>
+            <p>如果训练环境没有这些字段，模型学到的是“简化版世界”。如果评测脚本没有这些字段，分数就只是在读一个缩水后的世界。如果上线灰度没有这些字段，风险就会在真实对象上直接放大。三层都写全，才能让同一件事在不同阶段都能被看见。</p>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>练习钩子</h3>
+          <p>把 07 页的 environment、这一页的 gate、还有你的评测脚本并排看一遍。只要你发现某个字段在其中一层被删掉，就说明这一层已经不能再拿来解释另两层的结果了。能写出这张对照表，你才算真正把训练和上线连在一起。</p>
+        </div>
+      </section>
+
+      <section id="failure-lab">
+        <div class="head">
+          <h2>故障台</h2>
+          <span class="tag">logs</span>
+        </div>
+        <p>先看输出，不先看结论。你要找的是哪一层开始脏了，是共享状态、审计缺失，还是动作已经越过了沙盒边界。</p>
+        <div class="terminal-lab" data-terminal-lab data-export-context="故障台日志" data-export-lang="text">
+          <div class="terminal-controls">
+            <button class="ghost active" type="button" data-terminal-case="case-1">影子模式</button>
+            <button class="ghost" type="button" data-terminal-case="case-2">共享状态泄漏</button>
+            <button class="ghost" type="button" data-terminal-case="case-3">真实外发失败</button>
+          </div>
+          <pre class="terminal-output" aria-live="polite">[ok] dry-run against test tenant
+action=send_email
+state_diff=none
+audit=complete
+gate=pass</pre>
+          <template data-terminal-output="case-1">[ok] dry-run against test tenant
+action=send_email
+state_diff=none
+audit=complete
+gate=pass</template>
+          <template data-terminal-output="case-2">[warn] reset() reused previous session
+action=create_ticket
+state_diff=last_customer_id leaked from prior episode
+audit=missing rollback_record
+gate=fail</template>
+          <template data-terminal-output="case-3">[error] real recipient list detected
+action=send_email
+state_diff=external side effect committed
+rollback=unavailable
+gate=stop</template>
+        </div>
+        <div class="box warn">
+          <h3>看日志时先找这三样</h3>
+          <p><code>state_diff</code>、<code>audit</code>、<code>rollback</code>。如果这三项不完整，最终答案再对也不能证明系统安全。</p>
+        </div>
+      </section>
+
+      <section id="operation-bridge">
+        <div class="head">
+          <h2>落地桥接</h2>
+          <span class="tag">bridge</span>
+        </div>
+        <div class="grid2">
+          <div>
+            <div class="codebar">
+              <span>上线闸门伪代码</span>
+              <button class="copy" data-copy="gate-check-code" type="button">复制</button>
+            </div>
+            <pre id="gate-check-code" data-export-context="上线闸门伪代码" data-export-lang="python"><code class="language-python">def should_go_live(metrics):
+    return (
+        metrics["task_success"] >= 0.9
+        and metrics["policy_violation_rate"] == 0
+        and metrics["rollback_success"] >= 0.99
+        and metrics["audit_complete"]
+    )</code></pre>
+          </div>
+          <div class="box info">
+            <h3>如果你已经有 07 页的环境类，下一步补什么</h3>
+            <p>先补 <code>audit_log</code>、<code>state_diff</code>、<code>rollback_result</code> 和 <code>approval_state</code>。然后把会碰真实对象的工具拆成 <code>dry-run</code> 和 <code>execute</code> 两条路径，先跑影子模式，再做最小灰度。</p>
+            <p>第一次最常见的失败是共享环境实例和漏记审计字段。只要这两项还在，reward 再高也不能说明可上线。</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="落地检查表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>你现在要改什么</th>
+                <th>为什么</th>
+                <th>先验失败</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>环境类的 reset</td>
+                <td>清空上一轮的脏状态</td>
+                <td>下一轮继承旧 reward、旧审计或旧对象 id</td>
+              </tr>
+              <tr>
+                <td>工具方法</td>
+                <td>把动作和副作用写清楚</td>
+                <td>模型只会看到一个泛化的 step，学不会选工具</td>
+              </tr>
+              <tr>
+                <td>reward_func</td>
+                <td>从环境状态读回结果</td>
+                <td>只看文本表面，reward hacking 很快出现</td>
+              </tr>
+              <tr>
+                <td>评测脚本</td>
+                <td>把闸门和回退条件固定下来</td>
+                <td>任务成功率看起来高，但危险路径没人拦</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见错误</h2>
+          <span class="tag">mistakes</span>
+        </div>
+        <p>最常见的错不是模型太笨，而是评测把危险藏起来了。下面这几条，优先按顺序排查。</p>
+        <div class="table-wrap">
+          <table data-export-context="常见错误与替代做法" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>错误</th>
+                <th>为什么危险</th>
+                <th>更稳的做法</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>用生产凭证跑评测</td>
+                <td>一次错误轨迹就可能触发真实数据修改或真实通知。</td>
+                <td>用测试身份、测试租户、测试副本和外发拦截。</td>
+              </tr>
+              <tr>
+                <td>只评最终答案</td>
+                <td>模型可能走危险路径拿到正确结果，副作用被遮住。</td>
+                <td>评完整轨迹、工具参数、状态差异和权限合规。</td>
+              </tr>
+              <tr>
+                <td>把人工确认放在动作后面</td>
+                <td>高风险动作已经发生，再确认只是确认既成事实。</td>
+                <td>在不可逆调用前展示对象、影响和回退方案。</td>
+              </tr>
+              <tr>
+                <td>把影子模式当成真实上线</td>
+                <td>看到了分布，不等于看到了副作用。</td>
+                <td>影子后面接最小灰度，再决定是否放大。</td>
+              </tr>
+              <tr>
+                <td>没有停止条件</td>
+                <td>异常率上升时系统继续扩大流量，风险会被放大。</td>
+                <td>为越权、工具错误、审计缺失、回滚失败设阈值。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="boundary-note">
+        <div class="head">
+          <h2>先知道，先别追</h2>
+          <span class="tag">boundary</span>
+        </div>
+        <div class="box warn">
+          <p>这一页先不追异步 rollout、分布式扩容、复杂 IAM、奖励模型重写和自动化事故复盘。它们都重要，但要等你已经能读懂状态台账、闸门表和故障日志再展开。</p>
+          <p>如果你现在只想继续往前走，先回头检查三件事：动作有没有碰到真实对象，日志有没有记下 state diff 和审批，出错以后有没有回退。</p>
+        </div>
+      </section>
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+          <div class="review-card">
+            <strong>作答目标</strong>
+            <p>把答案落到动作、状态、证据和回退四个对象上。别只写“要安全”，要写出安全由什么组成。</p>
+          </div>
+          <div class="review-card">
+            <strong>检查重点</strong>
+            <p>能不能区分只读、可撤销写入和不可逆动作；能不能说清为什么某个指标不足以上线。</p>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>一、概念辨认</h3>
+              <p>先确认你能快速判断一个动作的风险等级。</p>
+            </div>
+            <div class="quick-review">
+              <b>小复盘</b>
+              <span>只要动作会改真实对象，就必须先问副作用和回退。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q1" data-group="一、概念辨认" data-title="哪个最需要人工闸门？" data-answer="C" data-explain="不可逆外发最该先拦住，尤其是触达真实客户或真实资金时。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">闸门</span></div>
+              <h3>哪个最需要人工闸门？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q1" value="A">A. 查询公开文档片段</label><br>
+                <label><input type="radio" name="q1" value="B">B. 创建可删除的测试工单</label><br>
+                <label><input type="radio" name="q1" value="C">C. 向真实客户发送退款确认邮件</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q" data-question="q2" data-group="一、概念辨认" data-title="影子模式会直接改真实对象。" data-answer="false" data-explain="影子模式能看见真实输入，但不提交动作。">
+              <div class="q-meta"><span class="pill">true/false</span><span class="pill">影子模式</span></div>
+              <h3>影子模式会直接改真实对象。</h3>
+              <label><input type="radio" name="q2" value="true">对</label>
+              <label><input type="radio" name="q2" value="false">错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q short" data-question="q3" data-group="一、概念辨认" data-title="填写一个必须记录的审计对象">
+              <div class="q-meta"><span class="pill">short fill</span><span class="pill">审计</span></div>
+              <h3>除了最终回答，填写一个必须记录的审计对象。</h3>
+              <input type="text" name="q3" data-answer="状态差异,审计日志,批准记录,人工批准记录" data-explain="回头看 episode 时，至少要能还原状态差异或审计记录。" placeholder="例如：状态差异 / 审计日志 / 批准记录">
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>能帮助事故复盘的对象都可以：<strong>状态差异</strong>、<strong>审计日志</strong>、<strong>批准记录</strong>。只写“结果”不够，因为结果不能告诉你动作走了哪条路径。</p>
+              </details>
+            </div>
+
+            <div class="q" data-question="q4" data-group="一、概念辨认" data-title="只读工具没有风险。" data-answer="false" data-explain="只读也可能越权读取、泄露隐私或消耗配额。">
+              <div class="q-meta"><span class="pill">true/false</span><span class="pill">风险识别</span></div>
+              <h3>只读工具没有风险。</h3>
+              <label><input type="radio" name="q4" value="true">对</label>
+              <label><input type="radio" name="q4" value="false">错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q" data-question="q5" data-group="一、概念辨认" data-title="哪个指标最能暴露越权？" data-answer="A" data-explain="越权要看策略违反率，不要看回答长不长。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">指标</span></div>
+              <h3>哪个指标最能暴露越权？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q5" value="A">A. policy violation rate</label><br>
+                <label><input type="radio" name="q5" value="B">B. 页面停留时间</label><br>
+                <label><input type="radio" name="q5" value="C">C. 回答字数</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>二、评测设计</h3>
+              <p>把危险动作拆成负例、指标和阈值。</p>
+            </div>
+            <div class="quick-review">
+              <b>小复盘</b>
+              <span>评测不是证明模型聪明，而是证明它不会越权。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q full" data-question="q6" data-group="二、评测设计" data-title="为邮件助理勾出必须进负例集的动作">
+              <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">负例</span></div>
+              <h3>为“邮件助理 agent”勾出必须进负例集的 3 项。</h3>
+              <div class="choices">
+                <label><input type="checkbox" name="q6" value="绕过审批群发邮件">绕过审批群发邮件</label><br>
+                <label><input type="checkbox" name="q6" value="读取无关联系人">读取无关联系人</label><br>
+                <label><input type="checkbox" name="q6" value="伪造发件人">伪造发件人</label><br>
+                <label><input type="checkbox" name="q6" value="统计字数">统计字数</label>
+              </div>
+              <p class="hint">先选会触达外部对象、会越权、或会伪造身份的动作。统计字数只是噪声，不该进负例核心集。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>必须进负例集的是：<strong>绕过审批群发邮件</strong>、<strong>读取无关联系人</strong>、<strong>伪造发件人</strong>。这三项分别对应越权、隐私和身份伪造。<strong>统计字数</strong>不该作为核心负例，因为它不构成副作用。</p>
+              </details>
+            </div>
+
+            <div class="q" data-question="q7" data-group="二、评测设计" data-title="哪种日志最能说明模型绕过了沙盒？" data-answer="A" data-explain="能还原状态差异和批准链的日志，最容易看出模型是不是绕过了沙盒。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">日志</span></div>
+              <h3>哪种日志最能说明模型绕过了沙盒？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q7" value="A">A. state diff + approval record + target object</label><br>
+                <label><input type="radio" name="q7" value="B">B. answer length + token count</label><br>
+                <label><input type="radio" name="q7" value="C">C. GPU temperature</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q" data-question="q8" data-group="二、评测设计" data-title="常规任务成功率够高就可以上线。" data-answer="false" data-explain="成功率不能覆盖越权、恢复和审计。">
+              <div class="q-meta"><span class="pill">true/false</span><span class="pill">上线闸门</span></div>
+              <h3>常规任务成功率够高就可以上线。</h3>
+              <label><input type="radio" name="q8" value="true">对</label>
+              <label><input type="radio" name="q8" value="false">错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q short" data-question="q9" data-group="二、评测设计" data-title="填写一个回退指标">
+              <div class="q-meta"><span class="pill">short fill</span><span class="pill">回退</span></div>
+              <h3>填写一个能衡量恢复路径的指标。</h3>
+              <input type="text" name="q9" data-answer="回滚成功率,安全停机率,rollback success,safe stop rate" data-explain="指标要能看出出错后有没有停住或恢复。">
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>可以写 <strong>回滚成功率</strong>、<strong>安全停机率</strong>，或者英文 <strong>rollback success</strong>、<strong>safe stop rate</strong>。关键是这个指标要看得出系统在出错后有没有停住或恢复，而不是只看有没有把任务做完。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q10" data-group="二、评测设计" data-title="为创建退款草稿设计 4 格评测矩阵">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">矩阵</span></div>
+              <h3>为“创建退款草稿”设计 4 格评测矩阵。</h3>
+              <p>至少包含：正常退款、金额超限、缺少审批、工具超时。</p>
+              <p class="solve-note">先写场景，再写允许动作、禁止动作和观察指标。不要只写“能不能成功”。</p>
+              <textarea name="q10" placeholder="场景：...\n允许动作：...\n禁止动作：...\n观察指标：..."></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>合格答案应该把每一格都写成“场景 -> 动作 -> 指标”的关系。例如正常退款看草稿是否正确；金额超限看模型是否拒绝或降级；缺少审批看它是否先闸门而不是直接写入；工具超时看它是否停住并回退。只写“正常/异常”不够，要能对应到动作和回退。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>三、错误诊断与迁移</h3>
+              <p>先查实例和状态，再查 reward 和日志。</p>
+            </div>
+            <div class="quick-review">
+              <b>小复盘</b>
+              <span>共享实例、漏审计和没有回退，都是先查的对象。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q full" data-question="q11" data-group="三、错误诊断与迁移" data-title="这段 trainer 配置最大的问题是什么？" data-answer="A" data-explain="共享同一个环境实例会让 episode 互相污染。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">state leak</span></div>
+              <h3>这段 trainer 配置最大的问题是什么？</h3>
+              <div class="codebar">
+                <span>问题代码</span>
+                <button class="copy" data-copy="bad-trainer-code" type="button">复制</button>
+              </div>
+              <pre id="bad-trainer-code" data-export-context="共享环境实例的错误写法" data-export-lang="python"><code class="language-python">shared_env = TaskEnv()
+
+trainer = GRPOTrainer(
+    model=model,
+    train_dataset=dataset,
+    reward_funcs=reward_func,
+    environment_factory=shared_env,
+)</code></pre>
+              <div class="choices">
+                <label><input type="radio" name="q11" value="A">A. 共享同一个环境实例会让 episode 互相污染</label><br>
+                <label><input type="radio" name="q11" value="B">B. reward_func 不能返回浮点数</label><br>
+                <label><input type="radio" name="q11" value="C">C. train_dataset 不能叫 dataset</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q full" data-question="q12" data-group="三、错误诊断与迁移" data-title="一个文档 agent 的上线前权限分层怎么写？">
+              <div class="q-meta"><span class="pill">迁移</span><span class="pill">权限</span></div>
+              <h3>一个文档 agent 可以读取、改写和分享公司文档。请给出上线前的权限分层。</h3>
+              <p class="solve-note">区分只读、可撤销写入、对外分享；再说每层需要什么限制。</p>
+              <textarea name="q12" placeholder="只读：...\n可撤销写入：...\n对外分享：...\n需要的限制：..."></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>合格答案要分三层：<strong>只读</strong>先过权限和隐私检查；<strong>可撤销写入</strong>放在测试租户或可回滚草稿里；<strong>对外分享</strong>必须加人工闸门、审批和审计。答案里如果只写“读写分开”还不够，要说明每层的限制是什么。</p>
+              </details>
+            </div>
+
+            <div class="q" data-question="q13" data-group="三、错误诊断与迁移" data-title="为什么影子模式适合上线前发现真实分布问题？" data-answer="A" data-explain="影子模式能看见真实输入，但不提交动作，所以能对比分布而不制造副作用。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">灰度</span></div>
+              <h3>为什么影子模式适合上线前发现真实分布问题？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q13" value="A">A. 能看见真实输入，但不提交动作</label><br>
+                <label><input type="radio" name="q13" value="B">B. 可以直接改真实数据</label><br>
+                <label><input type="radio" name="q13" value="C">C. 只要回答更长就行</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q full" data-question="q14" data-group="三、错误诊断与迁移" data-title="综合解释：SFT 到环境 RL 的切换">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">切换</span></div>
+              <h3>综合解释：用 120-180 字讲清 SFT 到环境 RL 的切换。</h3>
+              <p>必须说到 <code>prompt-only</code>、<code>reset</code>、<code>observation</code>、<code>reward_func</code> 和 <code>episode</code>。</p>
+              <p class="solve-note">先给直觉，再给术语，最后说你现在能做什么。</p>
+              <textarea name="q14" placeholder="写给一个刚入门的人听"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>合格答案要说明：<code>prompt-only</code> 适合静态样本，环境 RL 适合状态连续任务；<code>reset</code> 清空旧 episode 并返回初始观察；模型执行动作后得到新的 <code>observation</code>；<code>reward_func</code> 再从环境实例里读出奖励。最后要点出：只要成败取决于连续交互，就该把训练切到环境里。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>四、上线表达</h3>
+              <p>把评审话术写成能交给产品、安全和平台一起看的清单。</p>
+            </div>
+            <div class="quick-review">
+              <b>小复盘</b>
+              <span>好的答案同时覆盖：动作、影响、证据、闸门、回退。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q full" data-question="q15" data-group="四、上线表达" data-title="写一个工具 agent 上线评审清单">
+              <div class="q-meta"><span class="pill">清单</span><span class="pill">评审</span></div>
+              <h3>写一个 8 项以内的工具 agent 上线评审清单。</h3>
+              <p class="solve-note">每项尽量写成“是否已经……”的问题。</p>
+              <textarea name="q15" placeholder="1. ...\n2. ...\n3. ..."></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>清单里至少要有：工具分层、凭证隔离、状态差异、负例评测、回退演练、审计完整、影子/灰度策略、停止条件。写成判断句会比写成描述句更容易落地。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q16" data-group="四、上线表达" data-title="面试中被问工具使用 RL 怎么安全上线？">
+              <div class="q-meta"><span class="pill">面试</span><span class="pill">解释</span></div>
+              <h3>面试中被问“工具使用 RL 怎么安全上线”，用 5-7 句话回答。</h3>
+              <p class="solve-note">先讲风险，再讲沙盒、评测、灰度、审计和回退。</p>
+              <textarea name="q16" placeholder="先讲风险，再讲办法。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>合格回答通常会先说：工具动作会改真实对象，所以不能直接在生产里探索。然后依次说沙盒、负例评测、影子模式、小流量灰度、审计和回退。最后要补一句：上线看的是副作用是否可控，不只是任务是否成功。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q17" data-group="四、上线表达" data-title="向产品经理解释为什么不能直接让模型在生产里探索">
+              <div class="q-meta"><span class="pill">迁移</span><span class="pill">沟通</span></div>
+              <h3>向产品经理解释：为什么不能直接让模型在生产里继续探索？</h3>
+              <p class="solve-note">用业务风险语言解释，不只说技术安全。</p>
+              <textarea name="q17" placeholder="用产品能听懂的话解释。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>答案里至少要说清：真实成本会被消耗、用户会被直接触达、数据会被污染、出错后回滚成本会升高。最后最好补一句，为什么离线学习、影子模式和灰度是更稳的替代方案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q18" data-group="四、上线表达" data-title="用一条链串起本页">
+              <div class="q-meta"><span class="pill">综合解释</span><span class="pill">Feynman</span></div>
+              <h3>用“任务意图 → 工具行动 → 环境副作用 → 评测与回退”串起本页。</h3>
+              <p class="solve-note">像教别人一样解释，至少包含一个具体工具例子。</p>
+              <textarea name="q18" placeholder="先给直觉，再给一个具体例子。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>合格答案要把四段链条讲清楚，并且至少举一个具体工具例子，比如发邮件、建工单或改文档。要点不是把名词串起来，而是说出每一步会留下些什么、哪里会出副作用、什么时候需要回退。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <p>点击生成后，会把本页的练习、状态和核心上下文整理成一份 Markdown 记录。后面复盘时，你不用再回到页面里逐题翻。</p>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="answer">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="ghost" type="button" onclick="generateRecord()">生成练习记录</button>
+          <button type="button" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <p>以下资料构成本页的公开边界，访问日期为 2026-06-21。TRl 相关接口会继续演进，实际训练或评测前要重新核对当前公开文档。</p>
+        <div class="grid2">
+          <div class="box">
+            <h3><a href="https://huggingface.co/docs/trl/en/openenv">OpenEnv Integration for Training LLMs with Environments</a></h3>
+            <p>支撑 <code>environment_factory</code>、环境类要求、<code>reset</code>、<code>reward_func</code> 和多轮交互循环的理解。</p>
+          </div>
+          <div class="box">
+            <h3><a href="https://huggingface.co/docs/trl/en/grpo_trainer">GRPO Trainer</a></h3>
+            <p>支撑 <code>GRPOTrainer</code>、奖励函数和环境训练的输入边界理解。</p>
+          </div>
+          <div class="box">
+            <h3><a href="https://huggingface.co/docs/trl/en/dataset_formats">Dataset formats and types</a></h3>
+            <p>用来区分 prompt-only、prompt-completion 和 preference，避免把静态样本直接误接到环境训练里。</p>
+          </div>
+          <div class="box">
+            <h3><a href="https://huggingface.co/docs/openenv/tutorials/wordle-grpo">OpenEnv Wordle with GRPO</a></h3>
+            <p>适合对照 episode、<code>done</code>、工具方法和自动循环的具体写法。</p>
+          </div>
+          <div class="box">
+            <h3><a href="https://huggingface.co/docs/trl/async_grpo_trainer">Asynchronous GRPO</a></h3>
+            <p>只作为边界提醒：异步 rollout、worker 和序列化对象放在下一步再看。</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

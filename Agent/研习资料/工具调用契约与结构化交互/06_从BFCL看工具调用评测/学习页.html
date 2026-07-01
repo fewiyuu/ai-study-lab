@@ -1,0 +1,1143 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>06｜从 BFCL 看工具调用评测</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="工具调用契约与结构化交互" data-unit="06｜从 BFCL 看工具调用评测">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>工具调用契约与结构化交互</strong>
+        <span>06｜从 BFCL 看工具调用评测</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#terms"><span class="dot"></span>术语账本</a>
+        <a href="#lesson"><span class="dot"></span>核心讲解</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#mechanism"><span class="dot"></span>判分机制</a>
+        <a href="#trace-lab"><span class="dot"></span>失败链路</a>
+        <a href="#example"><span class="dot"></span>评测样例</a>
+        <a href="#family"><span class="dot"></span>版本家族</a>
+        <a href="#bridge"><span class="dot"></span>业务桥接</a>
+        <a href="#mistakes"><span class="dot"></span>常见错误</a>
+        <a href="#boundary"><span class="dot"></span>资料边界</a>
+        <a href="#practice"><span class="dot"></span>练习区</a>
+        <a href="#export"><span class="dot"></span>导出复制</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把 BFCL 的维度拆开，再看每个维度如何进入自己的回归集。读完后要能把失败分成选择、参数、拒调、多轮状态和执行这几层。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">第 06 单元</div>
+          <h1>06｜从 BFCL 看工具调用评测</h1>
+          <p>这一页把 BFCL 当成评测工具调用能力的分解尺子：先看单轮、并行和拒调，再看多轮、agentic 和格式敏感，最后把这些维度变成自己的回归集。前一页已经把错误、拒绝、取消和回退分开，这一页继续看“能调用”怎样拆成能判分、能归因、能回归的对象。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../05_错误拒绝取消与回退/学习页.html">上一单元</a><a href="../07_可维护工具面的设计准则/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+  <li>能把 BFCL 的 single-turn、parallel、relevance、multi-turn 和 agentic 维度分开，不再把“工具调用能力”当成一个总分。</li>
+  <li>能分清 AST 评测、执行评测和业务回归集各自看什么，知道它们分别会漏掉什么。</li>
+  <li>能按自己的工具列表写出一小套评测样本，至少覆盖正例、干扰项、缺参、多轮、并行和拒调。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goals</span>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>先把评测拆小</h3>
+      <p>BFCL 的价值不在排行榜数字本身，而在它把工具调用拆成多个可观察对象：工具选择、参数填写、并行调用、拒调、多轮状态和真实执行。只看一次成功截图，很容易把工具设计问题误判成模型能力问题。</p>
+    </div>
+    <div class="box info">
+      <h3>读完后要能做的动作</h3>
+      <p>你拿到一个工具调用系统时，能先分出“这题测什么”，再决定该用 AST、执行验证还是业务回归集。你还可以把这些维度写成自己的最小评测单，而不是停在概念说明。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="本单元边界表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>本页要解决</th>
+          <th>暂时不展开</th>
+          <th>为什么这样切</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>把调用能力拆成可判分维度</td>
+          <td>完整排行榜算法</td>
+          <td>先会分解问题，再谈排名。</td>
+        </tr>
+        <tr>
+          <td>把结构化输出和 MCP 结果接进评测</td>
+          <td>所有 JSON Schema 关键字</td>
+          <td>先看输入输出契约怎么影响样本。</td>
+        </tr>
+        <tr>
+          <td>把 BFCL 思路迁移到自己的工具面</td>
+          <td>模型训练和微调</td>
+          <td>先补回归集，再谈模型层优化。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="position">
+  <div class="head">
+    <h2>课程位置</h2>
+    <span class="tag">route</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>上一页带来的东西</h3>
+      <p>前一页已经把错误、拒绝、取消和回退分开了。这一页继续往下看：当工具调用真的发生时，怎样把“成功一次”拆成“选对、填对、并行对、拒调对、多轮对”。</p>
+    </div>
+    <div class="box info">
+      <h3>下一页会接什么</h3>
+      <p>下一页会把这些评测结论反推到工具面设计：命名、分组、版本、最小暴露、返回结构和稳定边界。你先把评测维度看清，下一页才知道哪些设计项值得改。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="单元路线表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>阶段</th>
+          <th>在看什么</th>
+          <th>为什么要放在这儿</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>03-04</td>
+          <td>结构化输出和 MCP 工具契约</td>
+          <td>先知道输入输出怎么被约束。</td>
+        </tr>
+        <tr>
+          <td>05</td>
+          <td>错误、拒绝、取消与回退</td>
+          <td>先知道失败和恢复怎么写进契约。</td>
+        </tr>
+        <tr>
+          <td>06</td>
+          <td>BFCL 风格评测拆解</td>
+          <td>再把契约拿去测，看哪里会退化。</td>
+        </tr>
+        <tr>
+          <td>07</td>
+          <td>可维护工具面设计</td>
+          <td>最后把评测结果反推到命名、版本和治理。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">overview</span>
+  </div>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1">
+        <code>用户请求 + 工具列表 + 上下文</code><span>样本输入</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-2">
+        <code>模型输出候选动作</code><span>动作候选</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-3">
+        <code>AST / 执行 / 拒调 / 多轮状态</code><span>判分切面</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-4">
+        <code>回归记录与失败归因</code><span>结果落点</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1">
+        <b>起点</b>
+        <span>样本不是一句话</span>
+        <p>一个 BFCL 样本至少包含用户请求、可见工具、必要上下文和标准判分方式。缺了其中一项，后面的评测结果就很难复查。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-2">
+        <b>动作</b>
+        <span>先看是否该调用</span>
+        <p>模型不一定都应该调用工具。能不能选对工具、填对参数、判断没有合适工具，才是这类任务真正想看的地方。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-3">
+        <b>判分</b>
+        <span>不同层看不同结果</span>
+        <p>AST 看结构，执行验证看状态，relevance 看是否该调，多轮任务还要看前后轮状态能不能接上。一个分数很难同时代表这些层。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-4">
+        <b>落点</b>
+        <span>归因比总分更重要</span>
+        <p>真正有用的不是“模型 82 分”，而是“并行调用漏了一个对象”“多轮里先猜后做”“没有合适工具却硬调用”这类可修复信息。</p>
+      </div>
+    </div>
+  </div>
+  <div class="math-block" data-export-context="BFCL样本公式" data-export-lang="math">
+    $$
+    \text{BFCL样本} = \text{用户请求} + \text{工具候选} + \text{状态约束} + \text{标准动作} + \text{判分规则}
+    $$
+    <p>这里的“标准动作”可以是单个工具调用、多个并行调用、先追问再执行，或者在没有合适工具时不调用。公式里的每一项都能在样本和评测报告里找到对应位置。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="评测层次总表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>看什么</th>
+          <th>更适合发现什么</th>
+          <th>常漏什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>AST 匹配</td>
+          <td>函数名、参数键、参数类型、调用数量</td>
+          <td>真实后端状态、副作用、晚到结果</td>
+        </tr>
+        <tr>
+          <td>执行验证</td>
+          <td>最终状态、工具链路、恢复成功与否</td>
+          <td>表面格式差异、可解析但无意义的调用</td>
+        </tr>
+        <tr>
+          <td>业务回归集</td>
+          <td>你真正关心的用户场景与风险边界</td>
+          <td>如果样本设计太少，就会漏掉长尾失败</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语账本</h2>
+    <span class="tag">terms</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="BFCL维度账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>术语</th>
+          <th>直觉解释</th>
+          <th>它在测什么</th>
+          <th>常见误会</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>single-turn / simple</td>
+          <td>一个明确请求，工具面也给足了。</td>
+          <td>能不能选对工具并填对参数。</td>
+          <td>把它当成“最容易的聊天题”。</td>
+        </tr>
+        <tr>
+          <td>multiple</td>
+          <td>工具很多，干扰也很多。</td>
+          <td>能不能从相似工具里挑对那个。</td>
+          <td>以为只要 JSON 结构对就行。</td>
+        </tr>
+        <tr>
+          <td>parallel</td>
+          <td>一次要开多个独立调用。</td>
+          <td>调用数量、每次参数独立性和聚合能力。</td>
+          <td>只生成第一个对象，后面的漏掉。</td>
+        </tr>
+        <tr>
+          <td>relevance</td>
+          <td>先判断是否应该调工具。</td>
+          <td>没有合适工具时能否停下。</td>
+          <td>总觉得“有行动比没行动好”。</td>
+        </tr>
+        <tr>
+          <td>multi-turn</td>
+          <td>对话要延续状态。</td>
+          <td>前一轮的信息能不能接到下一轮。</td>
+          <td>只看最后一句，不看中间轮次。</td>
+        </tr>
+        <tr>
+          <td>agentic</td>
+          <td>不只调用一个 API，还要搜索、读写、记忆和转步骤。</td>
+          <td>更接近真实智能体链路。</td>
+          <td>把单次函数调用当成整个智能体能力。</td>
+        </tr>
+        <tr>
+          <td>format sensitivity</td>
+          <td>提示格式变了，系统会不会变弱。</td>
+          <td>对格式扰动的稳定性。</td>
+          <td>只测理想提示，不测格式变化。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="lesson">
+  <div class="head">
+    <h2>核心讲解</h2>
+    <span class="tag">lesson</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>1. 评测对象不是“模型”，而是“模型 + 工具契约 + 执行环境”</h3>
+      <p>同一个模型在两个工具面上的表现可能完全不同：一个工具名清楚、参数枚举稳定、错误可恢复；另一个工具名相似、描述互相覆盖、返回值是自然语言长段落。评测时如果只记录模型名，就会把工具设计问题误判成模型能力问题。</p>
+      <p>BFCL 的做法是把样本拆成多个可判分维度，让你看见模型在简单调用、多候选工具、并行调用、拒调、多轮状态和格式扰动下分别怎样失败。那样你改的是具体层，而不是盲目地给模型换一个更大的名字。</p>
+    </div>
+    <div class="box info">
+      <h3>2. 结构化输出和评测不是同一件事</h3>
+      <p>Structured Outputs 让输出更容易落在 schema 里，但它只解决“能不能解析、能不能约束字段”。评测还要追问“字段值是否正确”“调用对象是否齐全”“是否该调用”“执行后状态是否真的改变”。</p>
+      <p>所以，合法 JSON 只是一道入口门槛。真正的评测要继续往下看：参数语义、调用数量、结果状态和错误恢复，最后才是模型有没有把整段任务做对。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="核心判分链路" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>先看什么</th>
+          <th>下一层再看什么</th>
+          <th>常见误判</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>选择</td>
+          <td>是否该调用、该调用哪个工具</td>
+          <td>是否有相似工具干扰</td>
+          <td>把查询和写入混成一类</td>
+        </tr>
+        <tr>
+          <td>参数</td>
+          <td>键名、类型、数量、是否缺参</td>
+          <td>字段值是否真的贴合上下文</td>
+          <td>只看 JSON 结构，不看语义</td>
+        </tr>
+        <tr>
+          <td>执行</td>
+          <td>后端状态、错误和恢复路径</td>
+          <td>调用是否带来真实副作用</td>
+          <td>把可解析输出当成成功</td>
+        </tr>
+        <tr>
+          <td>状态</td>
+          <td>多轮前后是否接上</td>
+          <td>用户是否已经补足关键信息</td>
+          <td>只看最终回答，不看中间轮次</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>评分思路速记</span><button class="copy" data-copy="scoring-chain">复制</button></div>
+  <pre id="scoring-chain" data-export-context="评分思路速记" data-export-lang="text"><code class="language-text">选择是否正确
+→ 参数是否完整
+→ 是否需要并行调用
+→ 是否应该先追问
+→ 是否真的执行成功
+→ 是否可以归到回归集</code></pre>
+</section>
+
+<section id="mechanism">
+  <div class="head">
+    <h2>判分机制</h2>
+    <span class="tag">mechanism</span>
+  </div>
+  <div class="box soft">
+    <h3>先看哪一层</h3>
+    <p>一条评测记录里，最先要分清的是“有没有该调用”“调用结构对不对”“执行后状态对不对”“失败能不能归因”。这四层不是同一个问题。把它们混在一起，模型升级或工具改版时就不知道到底是哪一层退化了。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="评测分流表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>层级</th>
+          <th>读什么</th>
+          <th>判什么</th>
+          <th>常漏什么</th>
+          <th>下一步</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>AST</td>
+          <td>调用结构</td>
+          <td>工具名、参数键、参数类型、调用数量</td>
+          <td>真实状态、副作用、晚到结果</td>
+          <td>先修结构，再谈执行</td>
+        </tr>
+        <tr>
+          <td>执行</td>
+          <td>系统结果</td>
+          <td>后端状态、错误路径、恢复路径</td>
+          <td>格式噪声、可解析但无意义的输出</td>
+          <td>再看业务是否真的完成</td>
+        </tr>
+        <tr>
+          <td>relevance</td>
+          <td>是否值得调用</td>
+          <td>没有合适工具时能否停下</td>
+          <td>“总要做点什么”的冲动</td>
+          <td>把不调用也算成功样本</td>
+        </tr>
+        <tr>
+          <td>multi-turn</td>
+          <td>轮次状态</td>
+          <td>前后轮是否一致、是否先追问</td>
+          <td>只看最终一句</td>
+          <td>把状态带进下一轮样本</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>BFCL 样本模板</span><button class="copy" data-copy="bfcl-sample-template">复制</button></div>
+  <pre id="bfcl-sample-template" data-export-context="BFCL样本模板" data-export-lang="json"><code class="language-json">{
+  "case_id": "parallel_inventory_03",
+  "user_request": "请查 SKU-7、SKU-8、SKU-9 的库存。",
+  "tool_candidates": ["inventory.lookup"],
+  "gold_action": [
+    {"name": "inventory.lookup", "arguments": {"sku": "SKU-7"}},
+    {"name": "inventory.lookup", "arguments": {"sku": "SKU-8"}},
+    {"name": "inventory.lookup", "arguments": {"sku": "SKU-9"}}
+  ],
+  "allowed_no_call": false,
+  "execution_check": "三条库存结果都要出现",
+  "notes": "如果只查了一个 SKU，就算 JSON 解析正确，也应判失败。"
+}</code></pre>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1">只看成功截图</button>
+      <button class="ghost" data-terminal-case="case-2">只看 JSON 解析</button>
+      <button class="ghost" data-terminal-case="case-3">看完整评测</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">[report] 只看成功截图
+判定：信息太少。
+缺口：看不到是否选对工具、是否漏掉并行对象、是否有晚到结果。</pre>
+    <template data-terminal-output="case-1">[report] 只看成功截图
+判定：信息太少。
+缺口：看不到是否选对工具、是否漏掉并行对象、是否有晚到结果。</template>
+    <template data-terminal-output="case-2">[report] 只看 JSON 解析
+判定：格式过关，不等于评测过关。
+缺口：工具名可能错、参数可能缺、执行状态可能没变。</template>
+    <template data-terminal-output="case-3">[report] 看完整评测
+判定：记录工具选择、参数、执行状态、拒调与多轮状态。
+结果：能定位失败层，方便回归修复。</template>
+  </div>
+</section>
+
+<section id="trace-lab">
+  <div class="head">
+    <h2>失败链路</h2>
+    <span class="tag">trace</span>
+  </div>
+  <div class="box soft">
+    <h3>一个容易看错的样本</h3>
+    <p>用户请求：请把订单 A-1024 的收货地址改成上海市徐汇区，并顺便查一下 SKU-7、SKU-8、SKU-9 的库存。工具面里有 <code>update_order_address</code>、<code>get_order_status</code> 和 <code>inventory.lookup</code>。正确模型应该把前半句归到写入工具，把后半句拆成三个查询；如果它只返回一个函数调用、把查询和写入揉在一起，或者把 <code>update_order_address</code> 当查询，这题就该失败。</p>
+    <p>这类样本最容易让人误判成“模型挺会调用”，因为它确实能发出一条结构合法的调用。真正该看的不是有没有动作，而是动作有没有被拆对。BFCL 的好处就在这里：它逼你把“动作数”“对象数”“工具方向”分开看。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="失败链路账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>链路点</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>写错后的症状</th>
+          <th>该怎么修</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>请求分解</td>
+          <td>一句话里是否包含两个动作</td>
+          <td>一个写入动作 + 三个查询动作</td>
+          <td>把两种任务揉成一个调用</td>
+          <td>先把子目标拆开，再进工具选择</td>
+        </tr>
+        <tr>
+          <td>工具选择</td>
+          <td>每个子目标对应哪个工具</td>
+          <td>写入归写入，查询归查询</td>
+          <td>把查询工具误当写入工具</td>
+          <td>重新看工具描述和动作方向</td>
+        </tr>
+        <tr>
+          <td>参数形状</td>
+          <td>每个对象是否都被独立列出</td>
+          <td>三个 SKU 各一条调用</td>
+          <td>只查第一个对象</td>
+          <td>把调用数量纳入判分</td>
+        </tr>
+        <tr>
+          <td>结果归因</td>
+          <td>失败到底发生在哪一层</td>
+          <td>把漏对象、错工具、错方向分别记下</td>
+          <td>只写“模型不行”</td>
+          <td>把失败标到回归集条目里</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>坏样本与好样本</span><button class="copy" data-copy="trace-lab-code">复制</button></div>
+  <pre id="trace-lab-code" data-export-context="坏样本与好样本" data-export-lang="json"><code class="language-json">{
+  "bad_case": {
+    "tool_call": {
+      "name": "update_order_address",
+      "arguments": {
+        "order_id": "A-1024",
+        "address": "上海市徐汇区",
+        "sku": "SKU-7"
+      }
+    },
+    "why_wrong": "把写入和查询揉成一个调用，还塞了无关字段。"
+  },
+  "good_case": {
+    "tool_calls": [
+      {"name": "update_order_address", "arguments": {"order_id": "A-1024", "address": "上海市徐汇区"}},
+      {"name": "inventory.lookup", "arguments": {"sku": "SKU-7"}},
+      {"name": "inventory.lookup", "arguments": {"sku": "SKU-8"}},
+      {"name": "inventory.lookup", "arguments": {"sku": "SKU-9"}}
+    ],
+    "why_right": "先拆写入，再拆三个查询，每一步都能单独判分。"
+  }
+}</code></pre>
+  <div class="box info">
+    <h3>失败会怎么表现</h3>
+    <p>这类错常常不是“完全不会”，而是“看起来有动作，但动作方向不对”。AST 可能只看出它发出了一条结构合法的调用，执行验证却会发现库存少了两个对象，或者订单被改了，但查询结果没覆盖全。真正有用的评测，不是只记住它错了，而是把错归到“请求没拆开”“工具方向错”“并行对象漏了”这三类里。</p>
+    <p>当你把失败标成可回归的条目，下一次改工具描述、换模型或调整提示时，就能精准复测这一条，而不是整页重跑。这个动作很小，但它决定你后面是否能稳定地维护工具面。</p>
+  </div>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1">错误样本</button>
+      <button class="ghost" data-terminal-case="case-2">正确样本</button>
+      <button class="ghost" data-terminal-case="case-3">回归写法</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">[trace] 错误样本
+现象：只剩一个工具调用，sku 字段塞进了写入工具。
+判断：请求分解失败，后续评测会漏对象。</pre>
+    <template data-terminal-output="case-1">[trace] 错误样本
+现象：只剩一个工具调用，sku 字段塞进了写入工具。
+判断：请求分解失败，后续评测会漏对象。</template>
+    <template data-terminal-output="case-2">[trace] 正确样本
+现象：一个写入 + 三个查询，动作方向清楚。
+判断：AST 和执行都能分别检查。</template>
+    <template data-terminal-output="case-3">[trace] 回归写法
+记录：case_id、请求、标准动作、漏掉的对象、失败层级、修复建议。
+用途：以后改工具面时回放这一条。</template>
+  </div>
+  <div class="box warn">
+    <h3>把这条样本写进回归集</h3>
+    <p>这条样本最该留下的，不是“它失败了”，而是“它为什么失败”。你可以把它登记成一个稳定条目：<code>case_id</code> 写清楚，<code>failure_layer</code> 记成“请求分解”或“并行漏对象”，<code>expected_action</code> 写成四条调用，<code>regression_tag</code> 标成“写入 + 三个查询”。</p>
+    <p>以后只要工具描述、模型版本或提示格式有变化，就回放这条记录。它应该重新暴露同样的漏洞：要么少一个对象，要么把查询揉进写入，要么把工具方向选反。这样你修的不是一条输出，而是一整类退化。</p>
+    <p>下一步最适合做的事很简单：挑你自己的一个高频工具面，照这条样本写出 3 条回归记录。每条都要能在一眼之内看出失败层，而不是靠阅读一大段自然语言点评来猜。</p>
+  </div>
+  <div class="box">
+    <h3>把它变成可执行清单</h3>
+    <p>回归集写法最好再往前走半步：把一个样本拆成“看什么、判什么、怎么回放、回放后期待什么变化”。这样你以后在做版本升级时，不用重新理解整篇说明，只要按这四个字段跑一遍就知道它有没有退化。</p>
+    <div class="table-wrap">
+      <table data-export-context="回归条目清单" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>字段</th>
+            <th>写法</th>
+            <th>作用</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>case_id</code></td>
+            <td>固定且短的标识</td>
+            <td>让样本能在日志、面板和文档之间对上。</td>
+          </tr>
+          <tr>
+            <td><code>failure_layer</code></td>
+            <td>请求分解 / 工具选择 / 并行漏对象</td>
+            <td>把修复点指向具体层，而不是“模型太差”。</td>
+          </tr>
+          <tr>
+            <td><code>expected_action</code></td>
+            <td>一条写入 + 三条查询，或先追问再执行</td>
+            <td>告诉后续检查什么才算正确。</td>
+          </tr>
+          <tr>
+            <td><code>observed_signature</code></td>
+            <td>少了一个对象、把写入当查询、只剩一条调用</td>
+            <td>让失败既能被人看见，也能被脚本抓到。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>如果把这四项写全，你的样本就不再只是“题目”，而是一个小型诊断卡。它告诉你哪一层坏了、下一次该去哪里回放、回放成功后应该看到什么变化。</p>
+  </div>
+  <div class="codebar"><span>回放判分伪代码</span><button class="copy" data-copy="trace-score-pseudocode">复制</button></div>
+  <pre id="trace-score-pseudocode" data-export-context="回放判分伪代码" data-export-lang="python"><code class="language-python">if tool_calls != gold_calls:
+    fail("call count or tool choice wrong")
+elif missing_any_object:
+    fail("parallel object missing")
+elif state_after_run != expected_state:
+    fail("execution or recovery wrong")
+else:
+    pass("record into regression set")</code></pre>
+  <div class="box warn">
+    <h3>这段伪代码为什么有用</h3>
+    <p>它把判分顺序固定成了三步：先比调用，再比对象，再比执行状态。这样做的好处是，错误不会被一句“整体失败”吞掉。你一眼就能知道是工具选错、对象漏了，还是执行后状态没对上。到了回归阶段，这三种失败还能对应三种不同的修复动作。</p>
+  </div>
+</section>
+
+<section id="example">
+  <div class="head">
+    <h2>评测样例</h2>
+    <span class="tag">example</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="三类样例对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>样例</th>
+          <th>该看什么</th>
+          <th>容易错在哪</th>
+          <th>判分提示</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>单轮多候选</td>
+          <td>工具名与参数是否对齐</td>
+          <td>把查询工具当成写入工具</td>
+          <td>只要工具错，这题就该失败</td>
+        </tr>
+        <tr>
+          <td>并行调用</td>
+          <td>多个对象是否都被覆盖</td>
+          <td>只查第一个对象</td>
+          <td>漏一个也算失败</td>
+        </tr>
+        <tr>
+          <td>多轮缺参</td>
+          <td>是否先追问或补查</td>
+          <td>直接猜字段后执行</td>
+          <td>能追问通常比乱猜更对</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>案例 1：单轮多候选</h3>
+      <p>用户说要改地址，可用工具里既有查询也有写入。正确样本只会选写入工具，并填上订单号和新地址。这里测的是“工具名 + 参数”一起对不对。</p>
+    </div>
+    <div class="box">
+      <h3>案例 2：并行调用</h3>
+      <p>用户一次要查三个对象。正确样本不是拼成一个字符串，而是生成三条独立调用。这里测的是调用数量和每次参数是否独立。</p>
+    </div>
+    <div class="box">
+      <h3>案例 3：多轮缺参</h3>
+      <p>用户只说“明天上午订会议室”，但工具需要房间、时间和参会人。正确样本会先追问，或者先查可用房间，不会直接猜字段。</p>
+    </div>
+    <div class="box info">
+      <h3>你现在应该怎么读</h3>
+      <p>这三类样例的共同点不是“都要调用工具”，而是每一类都明确规定了该看什么、不该看什么。一个能跑通的 demo 不等于一个能回归的样本。</p>
+    </div>
+  </div>
+  <div class="codebar"><span>评测报告样例</span><button class="copy" data-copy="bfcl-report-sample">复制</button></div>
+  <pre id="bfcl-report-sample" data-export-context="评测报告样例" data-export-lang="json"><code class="language-json">{
+  "case_id": "multi_turn_missing_room",
+  "status": "fail",
+  "observed": {
+    "tool_calls": 1,
+    "selected_tool": "book_room",
+    "arguments": {
+      "room_id": "猜测值",
+      "start_time": "2026-06-22 09:00",
+      "end_time": "2026-06-22 10:00"
+    }
+  },
+  "reason": "缺少 room_id 和 attendee_ids 时不应直接猜。",
+  "next_fix": "把样本改成必须先追问的缺参任务。"
+}</code></pre>
+</section>
+
+<section id="family">
+  <div class="head">
+    <h2>BFCL 版本家族</h2>
+    <span class="tag">family</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="BFCL版本账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>阶段</th>
+          <th>关注点</th>
+          <th>你该学到什么</th>
+          <th>不要误读成什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>早期 BFCL</td>
+          <td>single-turn、multiple、parallel、relevance</td>
+          <td>工具选择、参数填写和不调用能力</td>
+          <td>排行榜上谁更强</td>
+        </tr>
+        <tr>
+          <td>BFCL V3</td>
+          <td>multi-turn、multi-step、缺参、长上下文</td>
+          <td>状态管理和追问能力</td>
+          <td>只看一次调用是否成功</td>
+        </tr>
+        <tr>
+          <td>BFCL V4</td>
+          <td>agentic、web search、memory、format sensitivity</td>
+          <td>更接近真实智能体的稳定性</td>
+          <td>只把它理解成“更大榜单”</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>这一页借用的是拆法，不是排名本身</h3>
+    <p>排行榜数值会变，题目设计也会变，但“该不该调用”“调用是否选对”“多步状态能不能接上”“格式变化会不会把系统打散”这些维度一直有用。你读 BFCL 时，最值得留下的是拆解方法，不是某一年的分数。</p>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>业务桥接</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="业务桥接表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>BFCL 维度</th>
+          <th>你的业务里怎么落地</th>
+          <th>典型失败</th>
+          <th>下一步动作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>single-turn / multiple</td>
+          <td>工具名相近、参数容易混淆的核心操作</td>
+          <td>选错工具、填错字段</td>
+          <td>补干扰项样本</td>
+        </tr>
+        <tr>
+          <td>parallel</td>
+          <td>一次要处理多个对象的查询或写入</td>
+          <td>漏掉其中一个对象</td>
+          <td>检查调用数量</td>
+        </tr>
+        <tr>
+          <td>relevance</td>
+          <td>没有合适工具时该停下的场景</td>
+          <td>硬编调用</td>
+          <td>把不调用也算成功</td>
+        </tr>
+        <tr>
+          <td>multi-turn</td>
+          <td>上一轮信息会影响下一轮动作</td>
+          <td>先猜后做</td>
+          <td>写缺参与追问样本</td>
+        </tr>
+        <tr>
+          <td>agentic / format sensitivity</td>
+          <td>搜索、记忆、格式变化与多步骤链路</td>
+          <td>提示格式一变就退化</td>
+          <td>补版本回归集</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>最小回归记录</span><button class="copy" data-copy="regression-record-template">复制</button></div>
+  <pre id="regression-record-template" data-export-context="最小回归记录" data-export-lang="json"><code class="language-json">{
+  "suite": "tool-calling-regression",
+  "case_id": "inventory_parallel_02",
+  "user_request": "请查 SKU-7、SKU-8、SKU-9 的库存。",
+  "expected": {
+    "tool_calls": 3,
+    "no_call": false,
+    "must_cover_all_objects": true
+  },
+  "failure_signal": "只返回了一个 SKU 的结果",
+  "owner_note": "把漏对象归到并行分支，不要混成普通 JSON 格式问题。"
+}</code></pre>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见误区</h2>
+    <span class="tag">mistakes</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="常见误区表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>误判</th>
+          <th>改法</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>只测一次成功</td>
+          <td>以为 demo 跑通就算评测完成</td>
+          <td>补拒调、缺参、并行、多轮和错误恢复样本</td>
+        </tr>
+        <tr>
+          <td>只看 JSON 解析</td>
+          <td>把格式正确当成任务正确</td>
+          <td>再看工具名、参数值和执行结果</td>
+        </tr>
+        <tr>
+          <td>不测不调用</td>
+          <td>默认行动总比停下好</td>
+          <td>把 relevance 也放进回归集</td>
+        </tr>
+        <tr>
+          <td>只看最终答案</td>
+          <td>中间动作错了也无所谓</td>
+          <td>把调用轨迹和状态变化一起记下来</td>
+        </tr>
+        <tr>
+          <td>不管版本变化</td>
+          <td>模型、工具或 schema 变了也不重测</td>
+          <td>每次改接口都回放固定样本</td>
+        </tr>
+        <tr>
+          <td>把 BFCL 当课程终点</td>
+          <td>看完榜单就结束</td>
+          <td>继续把维度迁移到自己的工具面</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box danger">
+    <h3>边界提醒</h3>
+    <p>这页先不追模型训练、具体榜单分数、评测脚本实现和提示词微调。先把“测什么”搞清楚，再去看“怎么跑分”。如果把顺序倒过来，最后常常只剩下一份漂亮但没法回归的报告。</p>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>资料边界</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>先别追的东西</h3>
+      <p>这一页不讲 BFCL 的完整数学、训练细节、论文谱系，也不讲你如何把工具调用模型重新训练一遍。那些内容会把重点拉到别处。</p>
+    </div>
+    <div class="box info">
+      <h3>这一页留下的动作</h3>
+      <p>把你自己的工具列表拿出来，写 8 到 10 条回归样本：正例、干扰项、缺参、并行、多轮、拒调、错误恢复都要有。下一页再看怎样让这些工具面长期可维护。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="学习边界表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>现在做什么</th>
+          <th>下一页接什么</th>
+          <th>更后面再看什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>把 BFCL 的维度拆成可判分对象</td>
+          <td>可维护工具面的设计准则</td>
+          <td>更细的版本迁移和治理策略</td>
+        </tr>
+        <tr>
+          <td>把业务样本写进回归集</td>
+          <td>命名、分组、版本和最小暴露</td>
+          <td>工具面治理中的审批和审计</td>
+        </tr>
+        <tr>
+          <td>给失败路径留归因字段</td>
+          <td>统一错误、状态和回退写法</td>
+          <td>更完整的自动化评测流水线</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>怎么答才算会</h3>
+    <p>这页的练习不看你记没记住名词，而是看你能不能把一个工具调用系统拆成可验证对象。回答时尽量写出“被测对象、期望行为、判分规则、失败归因”。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>先分清工具选择、参数、拒调、多轮状态、并行和执行，再决定样本放哪一类。开放题至少要说清楚分支、原因和动作，不要只写“重试”或“拒绝”。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第一组：维度辨析</h3>
+      <p>先确认你能把基本评测维度分清。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>先问“测什么”，再问“怎么测”。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1_simple_main" data-group="第一组：维度辨析" data-title="Q1. 单轮 simple 主要测什么？" data-answer="B" data-explain="单轮题先看工具选择和参数填写，不是在测长上下文状态。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">基础维度</span></div>
+      <h3>Q1. 单轮 simple 主要测什么？</h3>
+      <label><input type="radio" name="q1_simple_main" value="A">A. 模型能否在长对话中维护状态。</label>
+      <label><input type="radio" name="q1_simple_main" value="B">B. 模型能否为明确请求选对工具并填对参数。</label>
+      <label><input type="radio" name="q1_simple_main" value="C">C. 工具服务器能否自动生成用户界面。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2_schema_truth" data-group="第一组：维度辨析" data-title="Q2. 判断：JSON mode 等于 Structured Outputs strict schema。" data-answer="false" data-explain="JSON mode 只保证输出可解析，strict schema 才强调按指定结构约束。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">结构化输出</span></div>
+      <h3>Q2. 判断：JSON mode 等于 Structured Outputs strict schema。</h3>
+      <label><input type="radio" name="q2_schema_truth" value="true">对</label>
+      <label><input type="radio" name="q2_schema_truth" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q3_no_call" data-group="第一组：维度辨析" data-title="Q3. 填空：当没有合适工具时，评测应奖励什么行为？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">拒调</span></div>
+      <h3>Q3. 填空：当没有合适工具时，评测应奖励什么行为？</h3>
+      <input type="text" name="q3_no_call" data-answer="不调用工具,拒调,relevance" placeholder="例如：不调用工具，并说明缺少什么能力">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">BFCL 里这类能力通常归到 relevance。</p>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第二组：评测分层</h3>
+      <p>把 AST、执行和业务回归分开。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>结构对，不等于任务对；执行对，也不等于样本设计足够。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q4_ast_select" data-group="第二组：评测分层" data-title="Q4. AST 评测更擅长发现什么？" data-answer="A" data-explain="AST 更适合看结构、键名、参数类型和调用数量。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">AST</span></div>
+      <h3>Q4. AST 评测更擅长发现什么？</h3>
+      <label><input type="radio" name="q4_ast_select" value="A">A. 函数名错、参数键错、参数类型错、调用数量错。</label>
+      <label><input type="radio" name="q4_ast_select" value="B">B. 后端库存已经变化但模型没看到。</label>
+      <label><input type="radio" name="q4_ast_select" value="C">C. 用户其实不该调用工具。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q5_exec_check" data-group="第二组：评测分层" data-title="Q5. 哪些信号更靠近执行评测？">
+      <div class="q-meta"><span class="pill">checklist</span><span class="pill">执行</span></div>
+      <h3>Q5. 哪些信号更靠近执行评测？</h3>
+      <label><input type="checkbox" name="q5_exec_check" value="最终状态">任务最终状态是否真的改变。</label>
+      <label><input type="checkbox" name="q5_exec_check" value="副作用">工具调用是否产生了多余副作用。</label>
+      <label><input type="checkbox" name="q5_exec_check" value="参数键">参数键是否按顺序排好了。</label>
+      <label><input type="checkbox" name="q5_exec_check" value="恢复路径">错误后能不能按正确路径恢复。</label>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>前四项里，最终状态、副作用和恢复路径都更接近执行评测；参数键顺序更像 AST 或结构层问题。合格答案要能说明：执行评测关注“动作有没有真的完成”，而不是只看形式是否整齐。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q6_ast_exec_diff" data-group="第二组：评测分层" data-title="Q6. 用三句话解释 AST 和执行评测的区别。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">对比</span></div>
+      <h3>Q6. 用三句话解释 AST 和执行评测的区别。</h3>
+      <p class="solve-note">请按“看什么 / 能发现什么 / 会漏什么”来写。</p>
+      <textarea name="q6_ast_exec_diff" placeholder="先说 AST 看结构，再说执行评测看结果，最后说各自会漏掉什么。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要指出：AST 适合看函数名、参数键和调用数量；执行评测适合看真实状态和错误恢复；两者都不能单独覆盖全部场景，所以业务回归集还要补拒调、并行、多轮和格式敏感样本。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第三组：样本设计</h3>
+      <p>把 BFCL 思路写进自己的样本模板。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>样本里要有正例，也要有干扰项、缺参、并行和拒调。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q7_missing_param" data-group="第三组：样本设计" data-title="Q7. 设计一个必须先追问的缺参样本。">
+      <div class="q-meta"><span class="pill">scenario</span><span class="pill">多轮</span></div>
+      <h3>Q7. 设计一个必须先追问的缺参样本。</h3>
+      <p>请写一个“订会议室”的用户请求，让正确模型必须先追问，而不是直接调用。</p>
+      <p class="solve-note">请至少写出：用户请求、缺少的字段、期望模型追问、错误模型可能怎样乱猜。</p>
+      <textarea name="q7_missing_param" placeholder="写出一个缺 room_id 或 attendee_ids 的请求，再说明为什么不能直接执行。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要有明确的缺参点，不能把时间范围、房间和参会人都省掉。更好的答案会说明：正确模型要先追问或先查可用房间，不能凭上下文乱猜字段。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q8_record_fields" data-group="第三组：样本设计" data-title="Q8. 哪组字段最适合作为最小 benchmark record？" data-answer="B" data-explain="最小记录至少要保留请求、候选工具、标准动作和是否允许不调用。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">记录模板</span></div>
+      <h3>Q8. 哪组字段最适合作为最小 benchmark record？</h3>
+      <label><input type="radio" name="q8_record_fields" value="A">A. 只写模型名称和总分。</label>
+      <label><input type="radio" name="q8_record_fields" value="B">B. 请求、候选工具、标准动作、是否允许不调用。</label>
+      <label><input type="radio" name="q8_record_fields" value="C">C. 只写一段自然语言点评。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q9_parallel_fill" data-group="第三组：样本设计" data-title="Q9. 回归集里至少要覆盖哪些类样本？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">回归集</span></div>
+      <h3>Q9. 回归集里至少要覆盖哪些类样本？</h3>
+      <input type="text" name="q9_parallel_fill" data-answer="正例,反例,缺参,并行,多轮,拒调,错误恢复" placeholder="例如：正例、反例、缺参、并行、多轮、拒调、错误恢复">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">写出 5 类以上即可，但别只写成功样本。</p>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第四组：迁移与边界</h3>
+      <p>把 BFCL 的拆法迁移到自己的工具面。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>回归集不是排行榜摘要，而是可复查的失败说明书。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q10_regression_set" data-group="第四组：迁移与边界" data-title="Q10. 哪些样本应该进入回归集？">
+      <div class="q-meta"><span class="pill">checklist</span><span class="pill">迁移</span></div>
+      <h3>Q10. 哪些样本应该进入回归集？</h3>
+      <label><input type="checkbox" name="q10_regression_set" value="拒调">模型明确拒绝但被错误当成失败的样本。</label>
+      <label><input type="checkbox" name="q10_regression_set" value="并行">并行调用漏掉一个对象的样本。</label>
+      <label><input type="checkbox" name="q10_regression_set" value="多轮">多轮里先猜后做的样本。</label>
+      <label><input type="checkbox" name="q10_regression_set" value="晚到结果">用户取消后，旧结果晚到的样本。</label>
+      <label><input type="checkbox" name="q10_regression_set" value="成功截图">一次成功截图就足够的样本。</label>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>前四项都应该进回归集，第五项不够。好的答案要说明：你测的是失败是否可分流、可恢复、可停下，而不是单点成功。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q11_eval_plan" data-group="第四组：迁移与边界" data-title="Q11. 写 8 条最小评测清单。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">评测集</span></div>
+      <h3>Q11. 写 8 条最小评测清单。</h3>
+      <p class="solve-note">每条写：场景、可用工具、期望行为、判分方式。</p>
+      <textarea name="q11_eval_plan" placeholder="例如：无关请求 → 不调用工具 → relevance 正确。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案至少要覆盖 3 条成功调用、2 条无关/拒调、1 条并行、1 条多轮缺参、1 条工具错误恢复。更好的答案会把高风险动作和格式扰动也加进去。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q12_boundary_reason" data-group="第四组：迁移与边界" data-title="Q12. 为什么 BFCL 不能只看榜单位置？">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">边界</span></div>
+      <h3>Q12. 为什么 BFCL 不能只看榜单位置？</h3>
+      <p class="solve-note">请用 120-180 字回答，至少提到“维度拆分”和“回归集”中的一个。</p>
+      <textarea name="q12_boundary_reason" placeholder="先说排名只能告诉你谁强，再说你真正要拿走的是哪些维度和样本。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要指出：排行榜只能告诉你相对结果，不能直接告诉你为什么好或为什么坏。真正可迁移的是维度拆分、失败归因和回归集设计；这三者能落到自己的工具面上，排行榜数字本身不能。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><strong>课程首页</strong>：<a href="../index.html">工具调用契约与结构化交互</a>。用于确认本单元在整门课里的位置和前后衔接。</li>
+  <li><strong>OpenAI Function Calling</strong>：<a href="https://developers.openai.com/api/docs/guides/function-calling">https://developers.openai.com/api/docs/guides/function-calling</a>。用于理解工具选择、参数生成和调用分发。</li>
+  <li><strong>OpenAI Structured Outputs</strong>：<a href="https://developers.openai.com/api/docs/guides/structured-outputs">https://developers.openai.com/api/docs/guides/structured-outputs</a>。用于区分结构可校验和语义正确。</li>
+  <li><strong>MCP Tools spec 2025-11-25</strong>：<a href="https://modelcontextprotocol.io/specification/2025-11-25/server/tools">https://modelcontextprotocol.io/specification/2025-11-25/server/tools</a>。用于理解 inputSchema、outputSchema、structuredContent 和工具错误。</li>
+  <li><strong>MCP Schema Reference</strong>：<a href="https://modelcontextprotocol.io/specification/2025-11-25/schema">https://modelcontextprotocol.io/specification/2025-11-25/schema</a>。用于核对 schema 约束和互操作边界。</li>
+  <li><strong>BFCL leaderboard</strong>：<a href="https://gorilla.cs.berkeley.edu/leaderboard.html">https://gorilla.cs.berkeley.edu/leaderboard.html</a>。用于理解工具调用评测维度的总览。</li>
+  <li><strong>BFCL V3 multi-turn / multi-step</strong>：<a href="https://gorilla.cs.berkeley.edu/blogs/13_bfcl_v3_multi_turn.html">https://gorilla.cs.berkeley.edu/blogs/13_bfcl_v3_multi_turn.html</a>。用于理解多轮、多步、缺参和状态保持。</li>
+  <li><strong>BFCL V4 agentic family</strong>：<a href="https://gorilla.cs.berkeley.edu/blogs/15_bfcl_v4_web_search.html">web search</a>、<a href="https://gorilla.cs.berkeley.edu/blogs/16_bfcl_v4_memory.html">memory</a>、<a href="https://gorilla.cs.berkeley.edu/blogs/17_bfcl_v4_prompt_variation.html">prompt variation</a>。用于理解更接近真实智能体的评测切面。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

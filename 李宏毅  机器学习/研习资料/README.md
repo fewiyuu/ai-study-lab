@@ -5,7 +5,7 @@ aliases:
 tags:
   - 机器学习
   - 深度学习
-  - course-forge
+  - learning-kit
 ---
 
 # 李宏毅机器学习研习资料

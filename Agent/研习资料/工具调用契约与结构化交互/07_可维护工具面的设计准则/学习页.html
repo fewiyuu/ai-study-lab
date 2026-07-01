@@ -1,0 +1,1331 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>07｜可维护工具面的设计准则</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="工具调用契约与结构化交互" data-unit="07｜可维护工具面的设计准则">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>工具调用契约与结构化交互</strong>
+        <span>07｜可维护工具面的设计准则</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#terms"><span class="dot"></span>术语账本</a>
+        <a href="#mechanism"><span class="dot"></span>核心机制</a>
+        <a href="#example"><span class="dot"></span>例子</a>
+        <a href="#trace-lab"><span class="dot"></span>失败链路</a>
+        <a href="#ledger"><span class="dot"></span>状态台账</a>
+        <a href="#registry"><span class="dot"></span>注册表</a>
+        <a href="#audit-flow"><span class="dot"></span>审查实操</a>
+        <a href="#change-case"><span class="dot"></span>变更单</a>
+        <a href="#decision-lab"><span class="dot"></span>判定链</a>
+        <a href="#principles"><span class="dot"></span>设计准则</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#bridge"><span class="dot"></span>下一步</a>
+        <a href="#boundary"><span class="dot"></span>边界</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把工具面看成一组长期维护的接口，再看命名、schema、返回、权限和版本。最后用练习区检查你能不能把一组工具改得更稳。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">第 07 单元</div>
+          <h1>07｜可维护工具面的设计准则</h1>
+          <p>这一页不讲整套工具协议的细节，只讲当工具数量变多、业务开始演进时，怎样把工具面做成一组能长期维护的接口：模型能分辨，执行器能校验，维护者能回滚，回归集能复查。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../06_从BFCL看工具调用评测/学习页.html">上一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+  <li>能把一组工具拆成命名、描述、schema、返回、权限、版本和评测七个检查点，不再把“工具面”当成一个模糊目录。</li>
+  <li>能给相近工具写出互斥描述和最小 schema，让模型更容易选对，也让执行前校验更明确。</li>
+  <li>能为工具面建立台账和回归样本，知道哪些变更是兼容的，哪些必须补测试、补说明、补确认。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goals</span>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>先把工具面看成长期接口</h3>
+      <p>模型看到的是可选动作，不是你的代码树。工具越多，越需要先把动作边界、读写属性、权限等级和版本策略讲清楚，再谈业务能力能不能扩展。</p>
+    </div>
+    <div class="box info">
+      <h3>读完后要能做什么</h3>
+      <p>你拿到一组相近工具时，能先判断哪些该合并、哪些该拆分、哪些该加确认，最后把这些判断写进一个可复查的台账和回归集。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="本页范围表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>本页要解决</th>
+          <th>本页不展开</th>
+          <th>为什么这样切</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>工具面如何保持清楚、稳定、可测</td>
+          <td>后端所有内部函数</td>
+          <td>模型不需要看到实现细节，只需要看到可执行动作。</td>
+        </tr>
+        <tr>
+          <td>命名、schema、返回、权限、版本如何配合</td>
+          <td>MCP 协议总览</td>
+          <td>这里只取会影响工具面维护的那一部分。</td>
+        </tr>
+        <tr>
+          <td>如何把变更写进台账和回归样本</td>
+          <td>BFCL 榜单排名本身</td>
+          <td>分数只是结果，真正能迁移的是拆分方法。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">overview</span>
+  </div>
+  <p>当工具面还只有三五个动作时，很多模糊点看不出来。工具一多，最先出问题的往往不是代码，而是模型不知道该选谁、执行器不知道该拒谁、维护者不知道该改哪一层。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1">
+        <code>用户意图 + 可见工具列表</code><span>输入</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-2">
+        <code>名称 / 描述 / schema 先筛一轮</code><span>选择</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-3">
+        <code>权限 / 副作用 / 版本再收一轮</code><span>校验</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-4">
+        <code>结果回填 + 失败样本回流</code><span>闭环</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1">
+        <b>起点</b>
+        <span>先看工具能不能被看见</span>
+        <p>模型先接触的是一份工具清单。清单写得含糊，后面的判断就只能靠猜。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-2">
+        <b>筛选</b>
+        <span>先分出相近动作</span>
+        <p>名称和描述要给出足够的判别信号。相近工具如果只能靠上下文猜，就会不断误选。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-3">
+        <b>校验</b>
+        <span>再分出读写和风险</span>
+        <p>schema 负责结构，权限负责动作边界，版本负责旧调用是否还能过。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-4">
+        <b>闭环</b>
+        <span>最后把失败收回来</span>
+        <p>工具面改完以后，真正要回看的不是描述本身，而是旧样本会不会被新的工具面打断。</p>
+      </div>
+    </div>
+  </div>
+  <p>这条链路里只要有一环模糊，后面的“看起来能用”就会变成“偶尔能用”。</p>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语账本</h2>
+    <span class="tag">terms</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="工具面误区表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>容易混用的说法</th>
+          <th>本页怎么理解</th>
+          <th>如果混在一起会怎样</th>
+          <th>先记住什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>工具面</td>
+          <td>模型可见、可选、可校验、可治理的动作集合。</td>
+          <td>把后端所有函数都摊给模型，选择面会过大。</td>
+          <td>先暴露动作，再暴露实现。</td>
+        </tr>
+        <tr>
+          <td>schema</td>
+          <td>结构、类型、枚举、必填项和局部约束。</td>
+          <td>把跨字段规则和权限规则误塞进结构定义里。</td>
+          <td>schema 管结构，不管全部业务。</td>
+        </tr>
+        <tr>
+          <td>返回值</td>
+          <td>给下一步继续消费的结果，不是执行日志。</td>
+          <td>调试信息和业务数据混在一起，后续步骤更难读。</td>
+          <td>结构要稳定，字段要少而清楚。</td>
+        </tr>
+        <tr>
+          <td>MCP 工具</td>
+          <td>被协议发现、描述、约束、调用的工具。</td>
+          <td>把普通远程接口简单包一层就当成协议工具。</td>
+          <td>工具面要先可发现，再可执行。</td>
+        </tr>
+        <tr>
+          <td>BFCL 分数</td>
+          <td>一组评测结果，不是上线结论。</td>
+          <td>只看总分，不看失败是选错、填错还是不该调。</td>
+          <td>拿它拆维度，不拿它代替回归集。</td>
+        </tr>
+        <tr>
+          <td>工具描述</td>
+          <td>用来区分适用边界的短文本。</td>
+          <td>把描述写成提示词补丁，越写越长，越长越乱。</td>
+          <td>描述要短、准、可判别。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="mechanism">
+  <div class="head">
+    <h2>核心机制</h2>
+    <span class="tag">mechanism</span>
+  </div>
+  <div class="box soft">
+    <h3>先看一份最小工具定义</h3>
+    <p>下面这个例子只保留搜索动作。它足够小，能看出 name、description、schema 和注解分别在约束什么，也足够真实，不会把问题缩成玩具。</p>
+  </div>
+  <div class="codebar"><span>最小工具定义</span><button class="copy" data-copy="tool-schema">复制</button></div>
+  <pre id="tool-schema" data-export-context="最小工具定义" data-export-lang="json"><code class="language-json">{
+  "name": "search_notes",
+  "description": "只读。搜索知识库中的笔记，返回最相关的 10 条结果。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string" },
+      "scope": {
+        "type": "string",
+        "enum": ["project", "research", "knowledge"]
+      },
+      "limit": { "type": "integer", "minimum": 1, "maximum": 20 }
+    },
+    "required": ["query", "scope", "limit"],
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true
+  }
+}</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="工具字段读写表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>字段</th>
+          <th>它读什么</th>
+          <th>它写什么 / 约束什么</th>
+          <th>错了会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>name</code></td>
+          <td>动作和对象的最短标识。</td>
+          <td>写入一个可被模型稳定记住的选择点。</td>
+          <td>近义词太多，模型会互相误选。</td>
+        </tr>
+        <tr>
+          <td><code>description</code></td>
+          <td>适用边界和不适用边界。</td>
+          <td>写入判别信号，而不是宣传语。</td>
+          <td>描述过长，反而遮住差异。</td>
+        </tr>
+        <tr>
+          <td><code>inputSchema</code></td>
+          <td>参数结构、类型、枚举、范围。</td>
+          <td>把可填字段锁住，减少模糊输入。</td>
+          <td>执行前校验不了，只能到运行时才暴露错误。</td>
+        </tr>
+        <tr>
+          <td><code>annotations</code></td>
+          <td>读写属性、风险、行为线索。</td>
+          <td>写入权限门槛和确认策略。</td>
+          <td>写操作和读操作混在一起，安全边界会松。</td>
+        </tr>
+        <tr>
+          <td><code>output</code></td>
+          <td>下一步要消费的事实结果。</td>
+          <td>写入稳定返回，而不是一大段日志。</td>
+          <td>后续步骤难取字段，回放也难做。</td>
+        </tr>
+        <tr>
+          <td><code>version</code></td>
+          <td>旧调用还能不能继续用。</td>
+          <td>写入兼容期、迁移说明和回滚线索。</td>
+          <td>老样本和老提示词突然失效。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="math-block" data-export-context="维护风险公式" data-export-lang="math">
+    $$
+    R = \frac{S \times D \times V}{C}
+    $$
+    <p><code>S</code> 是同义工具数，<code>D</code> 是暴露面，<code>V</code> 是版本漂移强度，<code>C</code> 是回归覆盖密度。这个式子不是正式定理，只是提醒你：工具越像、越多、越常改，而回归越少，维护风险就越高。</p>
+  </div>
+</section>
+
+<section id="example">
+  <div class="head">
+    <h2>例子</h2>
+    <span class="tag">example</span>
+  </div>
+  <p>下面用一组常见的知识库动作做例子。先别管实现，只看这组名字有没有给模型足够的判别信号。</p>
+  <div class="table-wrap">
+    <table data-export-context="同义工具判断表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>工具</th>
+          <th>推荐动作</th>
+          <th>理由</th>
+          <th>如果不这样做</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>search_notes</code></td>
+          <td>保留</td>
+          <td>只读搜索，动作清楚，范围也清楚。</td>
+          <td>如果再起一个差不多的名字，模型会开始猜。</td>
+        </tr>
+        <tr>
+          <td><code>find_note</code></td>
+          <td>并入 <code>search_notes</code></td>
+          <td>如果只是同义词，没有新的边界，就不该重复暴露。</td>
+          <td>同义按钮越多，误选越多。</td>
+        </tr>
+        <tr>
+          <td><code>share_note</code></td>
+          <td>单独保留</td>
+          <td>外发动作有副作用，不能和搜索动作混成一类。</td>
+          <td>模型会把“查找”和“发送”误当成相近动作。</td>
+        </tr>
+        <tr>
+          <td><code>archive_note</code></td>
+          <td>单独保留并加确认</td>
+          <td>归档会改变资源状态，最好显性标出风险。</td>
+          <td>用户以为在整理，实际上在改变可见性。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <p>判断标准很简单：如果两个动作只是同义词，合并；如果差别在读写、外发或权限，就分开并把边界写进描述和注解。</p>
+  </div>
+</section>
+
+<section id="trace-lab">
+  <div class="head">
+    <h2>失败链路</h2>
+    <span class="tag">trace-lab</span>
+  </div>
+  <p>这一段把同一组工具放进四种真实情形里看：搜索、修改、外发、归档。你会看到，工具面一旦写得不稳，问题不是“调用失败”这么简单，而是模型会在最该谨慎的地方做出错误动作。</p>
+  <div class="table-wrap">
+    <table data-export-context="工具失败链路表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>情形</th>
+          <th>应该暴露什么</th>
+          <th>应该拦住什么</th>
+          <th>错误时的症状</th>
+          <th>怎么修</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>搜索笔记</td>
+          <td>只读工具、范围、limit 上限。</td>
+          <td>超大 limit、无关范围、空 query。</td>
+          <td>结果太多，后续步骤抓不到重点。</td>
+          <td>收紧 schema，把默认范围写清楚。</td>
+        </tr>
+        <tr>
+          <td>修改笔记</td>
+          <td>明确写操作、目标 id、确认门槛。</td>
+          <td>不带 id 的模糊修改、没确认就执行。</td>
+          <td>模型说的是“改一下”，系统做的是“改错对象”。</td>
+          <td>把写操作拆开，先查后改。</td>
+        </tr>
+        <tr>
+          <td>外发分享</td>
+          <td>收件人、权限级别、是否公开。</td>
+          <td>把外发动作藏在“整理”里。</td>
+          <td>用户以为只是在归档，实际上已经发出去了。</td>
+          <td>给外发动作单独命名，加确认。</td>
+        </tr>
+        <tr>
+          <td>归档资源</td>
+          <td>资源状态、是否可逆、回滚路径。</td>
+          <td>和删除混在一起。</td>
+          <td>后面找不到，回不来，也不知道谁改的。</td>
+          <td>把归档和删除分开，写回滚说明。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box soft">
+    <h3>一条最小操作链</h3>
+    <p>先搜索，再决定是否修改，再看是否分享，最后才考虑归档。这个顺序不是装饰，它是在把高风险动作放到后面，让低风险动作先把上下文收齐。</p>
+  </div>
+  <div class="codebar"><span>操作顺序示意</span><button class="copy" data-copy="operation-chain">复制</button></div>
+  <pre id="operation-chain" data-export-context="操作顺序示意" data-export-lang="text"><code class="language-text">search_notes -> inspect_result -> decide_write -> confirm_if_needed -> share_note -> archive_note</code></pre>
+  <div class="math-block" data-export-context="动作顺序代价" data-export-lang="math">
+    $$
+    \text{风险顺序} = \text{读} \rightarrow \text{轻写} \rightarrow \text{外发} \rightarrow \text{归档}
+    $$
+    <p>这不是数学结论，而是一条工作顺序：先读后写，先低风险后高风险。顺序倒过来，错误会更早发生，也更难回退。</p>
+  </div>
+</section>
+
+<section id="ledger">
+  <div class="head">
+    <h2>状态台账</h2>
+    <span class="tag">ledger</span>
+  </div>
+  <p>工具面真正难维护的地方，是很多状态不在一处。名字、参数、返回、权限、版本和评测样本都在读同一件事，但它们写回的是不同地方。</p>
+  <div class="table-wrap">
+    <table data-export-context="工具台账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>什么时候算有效</th>
+          <th>失配症状</th>
+          <th>下一步检查</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>name / description</td>
+          <td>模型如何区分动作。</td>
+          <td>选择面和判别信号。</td>
+          <td>一眼能分开相近工具。</td>
+          <td>同义工具互相抢位置。</td>
+          <td>把两个相近工具写成一句互斥描述。</td>
+        </tr>
+        <tr>
+          <td>inputSchema</td>
+          <td>参数结构、类型、边界。</td>
+          <td>可校验的输入约束。</td>
+          <td>执行前就能发现缺参或越界。</td>
+          <td>到了运行时才报错。</td>
+          <td>把开放文本改成字段和枚举。</td>
+        </tr>
+        <tr>
+          <td>output / structuredContent</td>
+          <td>下一步要读取的结果。</td>
+          <td>稳定返回结构。</td>
+          <td>后续步骤能直接取字段。</td>
+          <td>返回里混着日志和业务结果。</td>
+          <td>把日志移出返回结构。</td>
+        </tr>
+        <tr>
+          <td>permissions / annotations</td>
+          <td>动作风险和读写属性。</td>
+          <td>确认门槛和拦截策略。</td>
+          <td>写操作不会悄悄发生。</td>
+          <td>用户以为在看，系统其实在改。</td>
+          <td>给高风险动作单独加确认。</td>
+        </tr>
+        <tr>
+          <td>version / changelog</td>
+          <td>旧调用和旧样本。</td>
+          <td>兼容期和迁移说明。</td>
+          <td>老提示词还能按预期工作。</td>
+          <td>老样本突然失效。</td>
+          <td>保留别名、默认值或适配层。</td>
+        </tr>
+        <tr>
+          <td>metrics / regression cases</td>
+          <td>失败归因和历史问题。</td>
+          <td>回归样本和修复记录。</td>
+          <td>改完以后能复查是否变好。</td>
+          <td>问题反复出现，但没人记得。</td>
+          <td>把这次失败补进回归集。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="版本迁移表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>变更类型</th>
+          <th>兼容吗</th>
+          <th>应该补什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>新增可选字段</td>
+          <td>通常兼容</td>
+          <td>补一个用到新字段的正例。</td>
+        </tr>
+        <tr>
+          <td>新增必填字段</td>
+          <td>高风险</td>
+          <td>补旧提示词和缺参样本。</td>
+        </tr>
+        <tr>
+          <td>重命名字段</td>
+          <td>高风险</td>
+          <td>保留旧别名，补迁移说明。</td>
+        </tr>
+        <tr>
+          <td>改默认值</td>
+          <td>看语义</td>
+          <td>补边界样本，确认结果没反转。</td>
+        </tr>
+        <tr>
+          <td>拆分一个工具成两个</td>
+          <td>部分兼容</td>
+          <td>补选择样本，确认模型能分清边界。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="principles">
+  <div class="head">
+    <h2>设计准则</h2>
+    <span class="tag">principles</span>
+  </div>
+  <div class="math-block" data-export-context="可维护性启发式" data-export-lang="math">
+    $$
+    M = \text{清晰度} + \text{稳定性} + \text{可测性} + \text{可回滚性} - \text{冗余度}
+    $$
+    <p>这个式子只是在提醒你：名字越清楚、结构越稳定、回归越完整、版本越能退回去，工具面就越好维护；同义动作越多、重复暴露越多，维护成本就越高。</p>
+  </div>
+  <div class="principles">
+    <article class="principle"><small>P01</small><h3>最小暴露</h3><p>只暴露当前任务需要的动作。内部函数、临时调试能力和纯实现步骤不要直接进工具面。</p><div class="check">检查：删掉这个工具后，核心任务还能不能完成？</div></article>
+    <article class="principle"><small>P02</small><h3>互斥命名</h3><p>名称表达动作和对象，描述表达适用边界。相近工具必须能被一句话区分。</p><div class="check">检查：两个工具能不能被同一句请求同时触发？</div></article>
+    <article class="principle"><small>P03</small><h3>强 schema</h3><p>字段、类型、枚举、范围和必填项尽量明确，不要把结构化需求塞进一个 <code>text</code> 字段。</p><div class="check">检查：参数错了能不能在执行前暴露出来？</div></article>
+    <article class="principle"><small>P04</small><h3>稳定返回</h3><p>返回结构服务后续推理和审计。业务数据、用户提示、错误对象和调试日志要分开。</p><div class="check">检查：下一步调用能不能稳定读到字段？</div></article>
+    <article class="principle"><small>P05</small><h3>显性风险</h3><p>只读、写入、删除、外发、权限变更这些动作要在工具面上看得出来。</p><div class="check">检查：高风险工具有没有确认或授权门槛？</div></article>
+    <article class="principle"><small>P06</small><h3>错误可恢复</h3><p>错误不只是字符串。要区分参数错、权限错、资源不存在、外部失败、超时和用户取消。</p><div class="check">检查：模型拿到错误后知道下一步该问什么吗？</div></article>
+    <article class="principle"><small>P07</small><h3>版本可迁移</h3><p>schema 和语义变更要有兼容期、迁移说明、评测更新和回滚线索。</p><div class="check">检查：旧提示词和旧样本会不会被突然打断？</div></article>
+    <article class="principle"><small>P08</small><h3>评测绑定</h3><p>每个重要工具都要有正例、负例、边界值和权限场景。新增工具必须新增评测。</p><div class="check">检查：有没有覆盖“应该不调用工具”的样本？</div></article>
+    <article class="principle"><small>P09</small><h3>分层组合</h3><p>复杂流程不要让模型自己拼太多底层动作。能组合的步骤尽量放到执行器里。</p><div class="check">检查：模型是不是被迫记住一串业务顺序？</div></article>
+    <article class="principle"><small>P10</small><h3>可观测治理</h3><p>要记录工具选择、参数、结果、错误、耗时和版本。没有这些记录，就很难改出下一版。</p><div class="check">检查：一次失败能不能回放并归因到具体一层？</div></article>
+  </div>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见误区</h2>
+    <span class="tag">mistakes</span>
+  </div>
+  <p>这些错误看起来都很省事，实际会把工具面慢慢推向不可维护。最麻烦的地方不是某一次报错，而是错了以后没人知道该改哪一层。</p>
+  <div class="table-wrap">
+    <table data-export-context="常见误区表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>误区</th>
+          <th>表面症状</th>
+          <th>更好的做法</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>一个万能工具包住所有动作</td>
+          <td>看起来最省事，实际什么都难校验。</td>
+          <td>按真实用户意图拆成少量明确动作。</td>
+        </tr>
+        <tr>
+          <td>相近工具只改个名字就上线</td>
+          <td>模型开始在同义词之间猜。</td>
+          <td>合并同义工具，或者把边界写清楚。</td>
+        </tr>
+        <tr>
+          <td>返回里什么都塞</td>
+          <td>业务数据、日志、提醒混成一团。</td>
+          <td>把稳定结果和调试信息分开。</td>
+        </tr>
+        <tr>
+          <td>只测成功样本</td>
+          <td>看上去总分不错，实际一改就崩。</td>
+          <td>补无关请求、缺参、并行、权限和版本样本。</td>
+        </tr>
+        <tr>
+          <td>安全只写在描述里</td>
+          <td>工具还是会被误触发。</td>
+          <td>把风险写进注解、确认和执行策略。</td>
+        </tr>
+        <tr>
+          <td>改 schema 不留迁移说明</td>
+          <td>旧提示词和老样本突然失效。</td>
+          <td>保留别名、默认值、兼容期和回滚线索。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>下一步</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <p>这页学完以后，不要停在“我懂了工具面要可维护”。最有用的动作，是立刻拿一组真实工具，按本页的表重新看一遍。</p>
+  <div class="table-wrap">
+    <table data-export-context="下一步动作表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>现在做什么</th>
+          <th>要看什么</th>
+          <th>过关标准</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>列出你当前工具面里的 5 个动作</td>
+          <td>有没有同义项和重复项</td>
+          <td>能说出哪些合并、哪些保留。</td>
+        </tr>
+        <tr>
+          <td>给最相近的两项写一句互斥描述</td>
+          <td>名称和描述是否真能区分</td>
+          <td>不靠上下文也能分开。</td>
+        </tr>
+        <tr>
+          <td>给一个写操作加确认和权限提示</td>
+          <td>读写和风险是否显性化</td>
+          <td>高风险动作不再是隐式发生。</td>
+        </tr>
+        <tr>
+          <td>把一次旧失败补进回归集</td>
+          <td>失败是选错、填错还是不该调</td>
+          <td>下次改动后能复查同类问题。</td>
+        </tr>
+        <tr>
+          <td>回看第 06 单元的 BFCL 思路</td>
+          <td>哪些维度应该进入自己的样本</td>
+          <td>能把维度拆法迁移到你的工具面。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>这里先不追</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="box soft">
+    <p>这一页先不追完整 MCP 协议、JSON Schema 关键字清单、BFCL 排行榜分数、模型训练和复杂路由。那些话题都会在后面的单元或官方文档里回来，这一页只负责把工具面做得更稳。</p>
+    <p>如果你现在还想往下钻，优先回 03 看结构化输出，回 04 看 MCP 工具边界，回 06 看评测维度拆分。顺序错了，后面就很容易把“好看”误认成“好用”。</p>
+  </div>
+</section>
+
+<section id="registry">
+  <div class="head">
+    <h2>注册表与治理</h2>
+    <span class="tag">registry</span>
+  </div>
+  <p>工具面要能长期维护，最后一定会落到一张注册表。注册表的作用不是“把工具罗列出来”，而是让维护者能回答：这个动作为什么存在，谁在用，改了会不会坏，坏了怎么退。</p>
+  <div class="table-wrap">
+    <table data-export-context="工具注册表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>字段</th>
+          <th>为什么需要</th>
+          <th>维护时看什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>工具名</td>
+          <td>确认模型如何选择。</td>
+          <td>是否和其他工具重复或相似。</td>
+        </tr>
+        <tr>
+          <td>用途</td>
+          <td>确认为什么要暴露它。</td>
+          <td>是不是还服务当前场景。</td>
+        </tr>
+        <tr>
+          <td>输入 / 输出</td>
+          <td>确认结构和消费方式。</td>
+          <td>字段有没有改名、加默认值、加约束。</td>
+        </tr>
+        <tr>
+          <td>风险级别</td>
+          <td>确认是否需要门槛。</td>
+          <td>写操作、外发和权限变更有没有单独分层。</td>
+        </tr>
+        <tr>
+          <td>版本与负责人</td>
+          <td>确认变更归谁管。</td>
+          <td>旧版本有没有退路，谁来确认迁移。</td>
+        </tr>
+        <tr>
+          <td>回归编号</td>
+          <td>确认问题是否被记住。</td>
+          <td>这次失败有没有补进样本。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <p>如果一张注册表里只剩工具名和一句宣传语，它就不是治理材料，只是目录页。能维护的工具面，最后都要能回到这张表上检查。</p>
+  </div>
+</section>
+
+<section id="audit-flow">
+  <div class="head">
+    <h2>审查实操</h2>
+    <span class="tag">audit-flow</span>
+  </div>
+  <p>这一段用一组最容易出问题的动作做实操：<code>search_notes</code>、<code>find_note</code>、<code>share_note</code>、<code>archive_note</code>。你要做的不是背结论，而是顺着这组动作跑一遍“合并、拆分、确认、回归”的判断流程。</p>
+  <div class="table-wrap">
+    <table data-export-context="工具审查流程表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>看什么</th>
+          <th>做什么决定</th>
+          <th>常见坏法</th>
+          <th>落地动作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1. 读动作名</td>
+          <td>是不是同义词或近义词。</td>
+          <td>合并还是保留。</td>
+          <td>两个名字像，描述也像。</td>
+          <td>删掉重复暴露，保留一个主入口。</td>
+        </tr>
+        <tr>
+          <td>2. 看描述</td>
+          <td>边界有没有说清。</td>
+          <td>描述是否需要改写。</td>
+          <td>只写“智能”“快速”“一站式”。</td>
+          <td>补适用场景和不适用场景。</td>
+        </tr>
+        <tr>
+          <td>3. 看 schema</td>
+          <td>字段、枚举、范围、必填项。</td>
+          <td>是否能提前挡掉错参。</td>
+          <td>把所有内容塞进一个 text。</td>
+          <td>把开放文本拆成结构字段。</td>
+        </tr>
+        <tr>
+          <td>4. 看风险</td>
+          <td>读、写、外发、归档、删除。</td>
+          <td>是否需要确认。</td>
+          <td>写操作躲在普通按钮后面。</td>
+          <td>把高风险动作显性化。</td>
+        </tr>
+        <tr>
+          <td>5. 看版本</td>
+          <td>旧调用还能不能继续跑。</td>
+          <td>兼容还是破坏。</td>
+          <td>直接删字段、改默认值。</td>
+          <td>加别名、加适配、加迁移说明。</td>
+        </tr>
+        <tr>
+          <td>6. 看回归</td>
+          <td>失败样本有没有补进来。</td>
+          <td>要不要补正例和负例。</td>
+          <td>只测成功路径。</td>
+          <td>补一条失败、一条恢复、一条边界。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box soft">
+    <h3>一份可直接照着做的审查清单</h3>
+    <p>先把 <code>find_note</code> 并回 <code>search_notes</code>，因为它只是同义重复；再把 <code>share_note</code> 单独挑出来，因为它有外发副作用；再把 <code>archive_note</code> 加上确认和回滚说明，因为它会改变资源可见性。最后，把这四个动作各补一条回归样本，尤其要补一条“本来不该调用”的负例。</p>
+  </div>
+  <div class="codebar"><span>审查结论模板</span><button class="copy" data-copy="audit-template">复制</button></div>
+  <pre id="audit-template" data-export-context="审查结论模板" data-export-lang="text"><code class="language-text">动作名: ____ 
+结论: 合并 / 保留 / 拆分 / 加确认
+理由: 同义重复 / 读写不同 / 外发风险 / 归档可逆性 / 版本破坏
+补充: 描述改写 / schema 收敛 / 权限提示 / 回归样本编号</code></pre>
+  <div class="math-block" data-export-context="审查成本" data-export-lang="math">
+    $$
+    \text{审查成本} \approx \text{同义动作数} + \text{风险动作数} + \text{版本变更数} - \text{回归覆盖}
+    $$
+    <p>这不是精确公式，但很接近实际维护感受。动作越重复、风险越高、版本越常改，而回归越少，审查成本就越高。</p>
+  </div>
+</section>
+
+<section id="change-case">
+  <div class="head">
+    <h2>变更单</h2>
+    <span class="tag">change-case</span>
+  </div>
+  <p>把这些准则放进一个真实变更单里，会更容易看出它们不是口号。假设你现在要把知识库工具面从四个动作改成三个动作：<code>search_notes</code>、<code>share_note</code>、<code>archive_note</code>。这时，<code>find_note</code> 只是 <code>search_notes</code> 的同义词。</p>
+  <div class="table-wrap">
+    <table data-export-context="工具变更单" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>改动项</th>
+          <th>旧状态</th>
+          <th>新状态</th>
+          <th>为什么要改</th>
+          <th>会影响什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>工具名</td>
+          <td><code>search_notes</code> 与 <code>find_note</code> 并存。</td>
+          <td>只保留 <code>search_notes</code>。</td>
+          <td>同义暴露会让模型在两个近义按钮之间摇摆。</td>
+          <td>选择分数、路由稳定性、提示词兼容。</td>
+        </tr>
+        <tr>
+          <td>描述</td>
+          <td>两项都写“查找资料”。</td>
+          <td><code>search_notes</code> 明确只读搜索，<code>share_note</code> 明确外发。</td>
+          <td>描述越像，模型越容易把动作混成一类。</td>
+          <td>工具选择、误触发、审查成本。</td>
+        </tr>
+        <tr>
+          <td>schema</td>
+          <td>query 字段只有一个开放文本。</td>
+          <td>加上 scope、limit、是否公开等枚举。</td>
+          <td>结构更清楚，执行前能挡掉更多错参。</td>
+          <td>校验失败、缺参追问、默认值策略。</td>
+        </tr>
+        <tr>
+          <td>风险</td>
+          <td>外发和归档都没显性门槛。</td>
+          <td>share_note 和 archive_note 单独确认。</td>
+          <td>高风险动作不能藏在普通搜索后面。</td>
+          <td>确认流程、权限策略、审计记录。</td>
+        </tr>
+        <tr>
+          <td>版本</td>
+          <td>旧提示词直接调用旧动作名。</td>
+          <td>保留别名或适配层一段时间。</td>
+          <td>老样本和老提示词不能突然断路。</td>
+          <td>迁移说明、回滚路径、样本更新。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box soft">
+    <h3>这单改完以后要补什么</h3>
+    <p>第一，删掉 <code>find_note</code> 的独立入口，但保留一段兼容期。第二，把 <code>share_note</code> 的确认策略写入工具说明，而不是放在补充备注里。第三，给 <code>archive_note</code> 补一条能回滚的失败样本，确保“归档后找不到”这类问题不会再次出现。第四，把这次变更写进注册表和回归集，留下编号，后面才能查。</p>
+  </div>
+  <div class="codebar"><span>变更单摘要</span><button class="copy" data-copy="change-case-summary">复制</button></div>
+  <pre id="change-case-summary" data-export-context="变更单摘要" data-export-lang="text"><code class="language-text">删除同义工具 -> 收敛 schema -> 显性确认高风险动作 -> 写入迁移说明 -> 补回归样本</code></pre>
+  <div class="math-block" data-export-context="变更收益" data-export-lang="math">
+    $$
+    \text{收益} = \text{误选减少} + \text{校验提前} + \text{风险显性化} + \text{回归可追踪}
+    $$
+    <p>这条链路真正改变的不是页面排版，而是维护方式：你开始能把一个工具面改动拆成几个可检查步骤，而不是凭感觉改完就算。</p>
+  </div>
+</section>
+
+<section id="decision-lab">
+  <div class="head">
+    <h2>判定链</h2>
+    <span class="tag">decision-lab</span>
+  </div>
+  <p>如果你手里只有一条判断流程，这一页最想给你的就是下面这条。它不是协议，也不是框架，只是一条在真实审查里很管用的操作顺序：先看同义暴露，再看读写风险，再看版本回归，最后补样本。</p>
+  <div class="codebar"><span>工具面判定伪代码</span><button class="copy" data-copy="decision-code">复制</button></div>
+  <pre id="decision-code" data-export-context="工具面判定伪代码" data-export-lang="python"><code class="language-python">def audit_tool_surface(tools):
+    decisions = []
+    for tool in tools:
+        if is_synonym(tool, tools):
+            decisions.append((tool.name, "merge", "same action boundary"))
+            continue
+
+        if is_write_or_external(tool):
+            decisions.append((tool.name, "separate", "needs confirmation"))
+        else:
+            decisions.append((tool.name, "keep", "read-only or low risk"))
+
+        if schema_is_open_text(tool):
+            decisions.append((tool.name, "tighten_schema", "move to fields and enums"))
+
+        if version_breaks_old_calls(tool):
+            decisions.append((tool.name, "add_migration", "keep alias and regression cases"))
+
+    return decisions</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="判定链逐步表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>判断点</th>
+          <th>先问什么</th>
+          <th>如果答案是“是”</th>
+          <th>如果答案是“否”</th>
+          <th>回归怎么补</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>同义暴露</td>
+          <td>是不是同一个动作换了两个名字？</td>
+          <td>合并入口，只保留一个主名称。</td>
+          <td>继续看风险和结构。</td>
+          <td>补“误选相近工具”的样本。</td>
+        </tr>
+        <tr>
+          <td>读写风险</td>
+          <td>是不是写、删、外发、归档？</td>
+          <td>单独命名并加确认。</td>
+          <td>保持只读或低风险状态。</td>
+          <td>补“未确认不执行”的样本。</td>
+        </tr>
+        <tr>
+          <td>schema 收敛</td>
+          <td>是不是把很多字段塞进一个 text？</td>
+          <td>拆成字段、枚举和范围。</td>
+          <td>保留现有结构。</td>
+          <td>补缺参和越界样本。</td>
+        </tr>
+        <tr>
+          <td>版本兼容</td>
+          <td>旧调用还能不能继续跑？</td>
+          <td>加别名、默认值或适配层。</td>
+          <td>记录为破坏性变更。</td>
+          <td>补旧提示词和迁移样本。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box soft">
+    <h3>这个判定链的价值</h3>
+    <p>它把“我觉得这个工具面有问题”变成了“我知道应该合并哪一个名字、加在哪个确认、补哪类回归”。当你能把判断写成流程，维护就不再靠记性。</p>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>怎么答才算会</h3>
+    <p>这页不看你记住了多少术语，而是看你能不能把一个工具面拆成可维护的部分。答题时尽量写清楚对象、边界、风险和回归方式。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>先分出同义工具、读写工具、风险工具和版本工具，再决定哪些要合并、哪些要拆分、哪些要加确认。开放题不要只写“优化”，要写出具体改动。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第一组：先判边界</h3>
+      <p>先确认你有没有把“工具面”看成一个可维护的接口集合。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>先看动作边界，再看实现细节。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1_surface_def" data-group="第一组：先判边界" data-title="Q1. 哪一句最接近本页对“工具面”的定义？" data-answer="B" data-explain="本页把工具面定义成模型可见、可选、可校验、可治理的动作集合，不是后端函数全集。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">边界</span></div>
+      <h3>Q1. 哪一句最接近本页对“工具面”的定义？</h3>
+      <label><input type="radio" name="q1_surface_def" value="A">A. 后端所有函数的集合。</label>
+      <label><input type="radio" name="q1_surface_def" value="B">B. 模型可见、可选、可校验、可治理的动作集合。</label>
+      <label><input type="radio" name="q1_surface_def" value="C">C. 所有自然语言提示词的集合。</label>
+      <label><input type="radio" name="q1_surface_def" value="D">D. 评测分数的集合。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2_json_truth" data-group="第一组：先判边界" data-title="Q2. 判断：合法 JSON 就意味着工具面可维护。" data-answer="false" data-explain="合法 JSON 只说明结构能解析，不说明动作选对、参数语义对、权限也对。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">结构</span></div>
+      <h3>Q2. 判断：合法 JSON 就意味着工具面可维护。</h3>
+      <label><input type="radio" name="q2_json_truth" value="true">对</label>
+      <label><input type="radio" name="q2_json_truth" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q3_visible_action" data-group="第一组：先判边界" data-title="Q3. 填空：本页要求先看工具的什么，再看内部函数？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">暴露面</span></div>
+      <h3>Q3. 填空：本页要求先看工具的什么，再看内部函数？</h3>
+      <input type="text" name="q3_visible_action" data-answer="可见动作" placeholder="例如：可见动作">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第二组：看设计</h3>
+      <p>先判断哪些改动会让工具面更稳，哪些只是把问题往后推。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>好设计让选择更清楚，不是让描述更长。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q4_good_signs" data-group="第二组：看设计" data-title="Q4. 哪些改动通常是好信号？">
+      <div class="q-meta"><span class="pill">checklist</span><span class="pill">设计</span></div>
+      <h3>Q4. 哪些改动通常是好信号？</h3>
+      <label><input type="checkbox" name="q4_good_signs" value="合并同义工具">合并同义工具并写清边界。</label>
+      <label><input type="checkbox" name="q4_good_signs" value="加确认">给写操作单独加确认策略。</label>
+      <label><input type="checkbox" name="q4_good_signs" value="堆形容词">在 description 里堆更多形容词。</label>
+      <label><input type="checkbox" name="q4_good_signs" value="text字段">把结构化参数都压进一个 text 字段。</label>
+      <details>
+        <summary>展开反馈</summary>
+        <p>前两项是好信号，后两项会把可校验性和可维护性拉低。合格答案要能说明：合并是为了减少同义暴露，加确认是为了让风险显性化。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q5_schema_pick" data-group="第二组：看设计" data-title="Q5. 下面哪一项更适合写进 schema，而不是交给自然语言描述？" data-answer="A" data-explain="枚举值、范围和必填项都应该写进 schema，背景故事和口号不该占结构位。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">schema</span></div>
+      <h3>Q5. 下面哪一项更适合写进 schema，而不是交给自然语言描述？</h3>
+      <label><input type="radio" name="q5_schema_pick" value="A">A. 枚举值。</label>
+      <label><input type="radio" name="q5_schema_pick" value="B">B. 背景故事。</label>
+      <label><input type="radio" name="q5_schema_pick" value="C">C. 产品口号。</label>
+      <label><input type="radio" name="q5_schema_pick" value="D">D. 故障日志。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q6_boundary_desc" data-group="第二组：看设计" data-title="Q6. 写三句互斥描述，区分三类动作。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">描述</span></div>
+      <h3>Q6. 写三句互斥描述，区分三类动作。</h3>
+      <p class="solve-note">请给 <code>search_notes</code>、<code>find_note</code>、<code>share_note</code> 各写一句。要写出读写边界，不要只换同义词。</p>
+      <textarea name="q6_boundary_desc" placeholder="例如：search_notes 只读搜索；share_note 是外发；find_note 如果只是同义词就不必单独暴露。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要让三类动作能被一句话区分：一个是只读搜索，一个是同义重复要并入，一个是外发动作要单独保留。好的答案会顺手写出读写属性和风险差异。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第三组：看状态和版本</h3>
+      <p>工具面一旦进生产，版本和台账就会变成第一批要回看的对象。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>版本问题看起来像字段问题，实际常常是兼容问题。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q7_version_break" data-group="第三组：看状态和版本" data-title="Q7. 哪项最像版本破坏，而不是兼容变更？" data-answer="C" data-explain="删除必填字段会直接打断旧调用，属于高风险破坏性变更。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">版本</span></div>
+      <h3>Q7. 哪项最像版本破坏，而不是兼容变更？</h3>
+      <label><input type="radio" name="q7_version_break" value="A">A. 新增可选字段。</label>
+      <label><input type="radio" name="q7_version_break" value="B">B. 保留旧字段别名。</label>
+      <label><input type="radio" name="q7_version_break" value="C">C. 删除必填字段。</label>
+      <label><input type="radio" name="q7_version_break" value="D">D. 增加默认值。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q8_ledger_items" data-group="第三组：看状态和版本" data-title="Q8. 哪些信息应该进入工具台账？">
+      <div class="q-meta"><span class="pill">checklist</span><span class="pill">台账</span></div>
+      <h3>Q8. 哪些信息应该进入工具台账？</h3>
+      <label><input type="checkbox" name="q8_ledger_items" value="工具名">工具名。</label>
+      <label><input type="checkbox" name="q8_ledger_items" value="负责人">负责人。</label>
+      <label><input type="checkbox" name="q8_ledger_items" value="读写风险">读写属性和风险等级。</label>
+      <label><input type="checkbox" name="q8_ledger_items" value="版本">版本号或变更记录。</label>
+      <label><input type="checkbox" name="q8_ledger_items" value="运行日志全文">运行日志全文。</label>
+      <details>
+        <summary>展开反馈</summary>
+        <p>前四项应该进台账，日志全文不需要作为台账主记录。台账要回答的是“谁负责、做什么、读写什么、怎样回归”，不是把所有原始输出都堆进去。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q9_migration_note" data-group="第三组：看状态和版本" data-title="Q9. 写一段迁移说明。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">迁移</span></div>
+      <h3>Q9. 写一段迁移说明。</h3>
+      <p class="solve-note">请用 100-150 字说明：旧提示词如何继续调用 <code>search_notes</code>，新版本如何避免打断老样本。</p>
+      <textarea name="q9_migration_note" placeholder="写出兼容期、别名、默认值、回归样本这几项。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案至少要提到兼容期、旧别名或适配层、默认值策略和回归样本更新。更好的答案会指出：迁移说明不是公告，是给旧调用留路。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第四组：看回归</h3>
+      <p>回归集不是“再测一遍成功路径”，而是把最容易退化的地方先盯住。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>改工具面时，先补负例，再补正例。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q short" data-question="q10_regression_blank" data-group="第四组：看回归" data-title="Q10. 填空：本页要求新增工具时同时新增什么？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">回归</span></div>
+      <h3>Q10. 填空：本页要求新增工具时同时新增什么？</h3>
+      <input type="text" name="q10_regression_blank" data-answer="评测,回归样本" placeholder="例如：评测 或 回归样本">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q11_min_set" data-group="第四组：看回归" data-title="Q11. 下面哪组样本最接近最小回归集？" data-answer="B" data-explain="最小回归集应该覆盖正例、无关请求不调用、缺参、并行漏调和权限不足，而不只看成功路径。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">回归集</span></div>
+      <h3>Q11. 下面哪组样本最接近最小回归集？</h3>
+      <label><input type="radio" name="q11_min_set" value="A">A. 只有成功样本。</label>
+      <label><input type="radio" name="q11_min_set" value="B">B. 正例、无关请求不调用、缺参、并行漏调、权限不足。</label>
+      <label><input type="radio" name="q11_min_set" value="C">C. 只有长文本样本。</label>
+      <label><input type="radio" name="q11_min_set" value="D">D. 只有 UI 截图。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q12_bfcl_transfer" data-group="第四组：看回归" data-title="Q12. 为什么 BFCL 的拆法能迁移到工具面设计，但分数本身不能直接迁移？">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">BFCL</span></div>
+      <h3>Q12. 为什么 BFCL 的拆法能迁移到工具面设计，但分数本身不能直接迁移？</h3>
+      <p class="solve-note">请用 120-180 字回答，至少提到“维度拆分”和“回归集”中的一项。</p>
+      <textarea name="q12_bfcl_transfer" placeholder="先说维度拆分，再说怎么写回归集，最后说为什么分数不能直接当设计答案。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要说清楚：BFCL 迁移的是拆维度的方法，不是榜单数字本身。分数只能告诉你结果，不能直接告诉你问题在选择、参数、并行、拒调还是多轮状态；真正能迁移的是把这些维度写成自己的回归集。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第五组：失败链路</h3>
+      <p>把一条调用链拆开，看哪一步最容易坏。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>先读、再写、后外发、最后归档。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q13_chain_order" data-group="第五组：失败链路" data-title="Q13. 下面哪条顺序更稳？" data-answer="A" data-explain="先读后写，再外发，最后归档，能把高风险动作放在更后面，也更容易回滚。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">顺序</span></div>
+      <h3>Q13. 下面哪条顺序更稳？</h3>
+      <label><input type="radio" name="q13_chain_order" value="A">A. 搜索 -> 检查 -> 修改 -> 确认 -> 外发 -> 归档。</label>
+      <label><input type="radio" name="q13_chain_order" value="B">B. 外发 -> 归档 -> 修改 -> 搜索。</label>
+      <label><input type="radio" name="q13_chain_order" value="C">C. 归档 -> 修改 -> 外发 -> 搜索。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q14_failure_fix" data-group="第五组：失败链路" data-title="Q14. 说出一条失败链路的修复动作。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">故障</span></div>
+      <h3>Q14. 说出一条失败链路的修复动作。</h3>
+      <p class="solve-note">请任选“搜索、修改、外发、归档”中的一种，写出它最容易坏的点、症状和修法。</p>
+      <textarea name="q14_failure_fix" placeholder="例如：外发容易被藏在普通动作里，症状是用户以为没发出去，修法是单独命名并加确认。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要说清楚三件事：哪一步容易坏、坏了以后会看到什么症状、具体怎么改工具面。不要只写“加强校验”这种空话。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第六组：审查实操</h3>
+      <p>把工具面审查落实到能直接写下来的结论。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>把同义、外发、归档分开看。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q15_audit_decision" data-group="第六组：审查实操" data-title="Q15. 下面哪个判断最合理？" data-answer="A" data-explain="find_note 如果只是 search_notes 的同义词，应该合并而不是并排保留。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">审查</span></div>
+      <h3>Q15. 下面哪个判断最合理？</h3>
+      <label><input type="radio" name="q15_audit_decision" value="A">A. <code>find_note</code> 只是同义词时，应并入 <code>search_notes</code>。</label>
+      <label><input type="radio" name="q15_audit_decision" value="B">B. 同义词越多越安全。</label>
+      <label><input type="radio" name="q15_audit_decision" value="C">C. 名字不同就一定要分开保留。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q16_audit_write" data-group="第六组：审查实操" data-title="Q16. 按审查模板写一条结论。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">模板</span></div>
+      <h3>Q16. 按审查模板写一条结论。</h3>
+      <p class="solve-note">任选一个动作，写出“结论、理由、补充”三项。要求能直接用于改页或改工具说明。</p>
+      <textarea name="q16_audit_write" placeholder="例如：动作名 archive_note；结论加确认；理由是归档可逆性弱；补充是补回归样本和回滚说明。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要能直接转成维护动作：把结论写清楚，把理由写到能支持这个结论，把补充项落到描述、schema、权限或回归编号上。不要只写一条泛泛的建议。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第七组：变更单</h3>
+      <p>把一份工具改动写成可执行的审查记录。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>先删同义入口，再补回归。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q17_change_summary" data-group="第七组：变更单" data-title="Q17. 这份变更单最先应该补哪一项？" data-answer="B" data-explain="先补回归样本，因为删同义入口、加确认和改 schema 都需要回归来确认没有把旧调用打断。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">变更单</span></div>
+      <h3>Q17. 这份变更单最先应该补哪一项？</h3>
+      <label><input type="radio" name="q17_change_summary" value="A">A. 再写一段宣传语。</label>
+      <label><input type="radio" name="q17_change_summary" value="B">B. 回归样本和迁移说明。</label>
+      <label><input type="radio" name="q17_change_summary" value="C">C. 更多同义工具。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q18_change_note" data-group="第七组：变更单" data-title="Q18. 把变更单写成 4 行摘要。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">摘要</span></div>
+      <h3>Q18. 把变更单写成 4 行摘要。</h3>
+      <p class="solve-note">请写出：删了什么、保留什么、加了什么、还要补什么。</p>
+      <textarea name="q18_change_note" placeholder="例如：删掉 find_note；保留 search_notes；加 share_note 的确认；补 archive_note 的回归。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要能直接变成维护动作，而不是只写一句“优化了工具面”。最好的答案会把删除、保留、增加和补充四件事分别写清楚。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第八组：判定链</h3>
+      <p>把判断流程落到一条可执行的审查链上。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>先合并，再加确认，再补迁移。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q19_decision_chain" data-group="第八组：判定链" data-title="Q19. 下面哪一步最先做？" data-answer="A" data-explain="先判断是否同义暴露，再看风险和 schema，最后才做迁移说明。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">流程</span></div>
+      <h3>Q19. 下面哪一步最先做？</h3>
+      <label><input type="radio" name="q19_decision_chain" value="A">A. 先看是不是同义暴露。</label>
+      <label><input type="radio" name="q19_decision_chain" value="B">B. 先写迁移说明。</label>
+      <label><input type="radio" name="q19_decision_chain" value="C">C. 先堆更多提示词。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q20_decision_write" data-group="第八组：判定链" data-title="Q20. 用判定链写一段审查结论。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">判定链</span></div>
+      <h3>Q20. 用判定链写一段审查结论。</h3>
+      <p class="solve-note">请任选一个动作，按“同义暴露、风险、schema、版本、回归”五个词中的至少三个写出判断。</p>
+      <textarea name="q20_decision_write" placeholder="例如：find_note 与 search_notes 同义，合并；share_note 有外发风险，加确认；schema 里补枚举；版本保留别名；回归补误选样本。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要能直接转成审查记录。关键不在于写得长，而在于每一项都落到明确动作：合并、确认、收敛、兼容、回归。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><strong>课程首页</strong>：<a href="../index.html">工具调用契约与结构化交互</a>。用于确认本单元在整门课里的位置和前后衔接。</li>
+  <li><strong>OpenAI Function Calling</strong>：<a href="https://developers.openai.com/api/docs/guides/function-calling">官方指南</a>。用于理解工具定义、调用选择和执行回填。</li>
+  <li><strong>OpenAI Structured Outputs</strong>：<a href="https://developers.openai.com/api/docs/guides/structured-outputs">官方指南</a>。用于区分结构约束和语义正确。</li>
+  <li><strong>MCP Tools 规范</strong>：<a href="https://modelcontextprotocol.io/specification/2025-11-25/server/tools">2025-11-25 版</a>。用于理解 inputSchema、outputSchema 和工具行为注解。</li>
+  <li><strong>MCP Schema Reference</strong>：<a href="https://modelcontextprotocol.io/specification/2025-11-25/schema">Schema 参考</a>。用于核对输入输出结构和互操作边界。</li>
+  <li><strong>BFCL leaderboard</strong>：<a href="https://gorilla.cs.berkeley.edu/leaderboard.html">官方排行榜</a>。用于理解工具调用评测的维度拆分。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

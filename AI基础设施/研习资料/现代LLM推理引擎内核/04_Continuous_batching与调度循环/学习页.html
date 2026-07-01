@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Continuous batching 与调度循环</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="现代 LLM 推理引擎内核" data-unit="04｜Continuous batching 与调度循环">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>现代 LLM 推理引擎内核</strong>
+        <span>04｜Continuous batching 与调度循环</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#ledger"><span class="dot"></span>状态账本</a>
+        <a href="#mechanism"><span class="dot"></span>调度循环</a>
+        <a href="#window"><span class="dot"></span>调度窗口</a>
+        <a href="#example"><span class="dot"></span>迭代案例</a>
+        <a href="#tuning"><span class="dot"></span>参数取舍</a>
+        <a href="#diagnosis"><span class="dot"></span>诊断</a>
+        <a href="#bridge"><span class="dot"></span>资料路线</a>
+        <a href="#boundary"><span class="dot"></span>边界</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">本页把学习目标压到能动手检查的最小闭环。先顺着主线读，再用练习区自查。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">第 04 单元</div>
+          <h1>Continuous batching 与调度循环</h1>
+          <p>这一页只看 continuous batching 与调度循环：请求怎样在 waiting、running、preempted 和 finished 之间迁移，token budget 怎样决定本轮能推进多少 prefill / decode，chunked prefill 为什么可以和 decode 同轮共存。它承接 03 单元的块管理，也会把你送到 05 单元的算子层；更下游的路由、网关、多机扩展留到后面的单元。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../03_PagedAttention与块管理/学习页.html">上一单元</a><a href="../05_推理算子FlashAttention与量化/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+  <li>你能看一条调度轨迹，分出 waiting、running、preempted 和 finished 各自什么时候变化。</li>
+  <li>你能读懂 `max_num_batched_tokens`、`max_num_seqs`、`max_num_partial_prefills`、`scheduler_reserve_full_isl` 这些参数会把性能推向哪一边。</li>
+  <li>你能从 TTFT、ITL、吞吐、等待队列长度和 preemption 次数里，判断问题是在预算、队列还是抢占。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>先把问题定住</h2>
+    <span class="tag">goals</span>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>这页先抓什么</h3>
+      <p>先看请求怎样进入 waiting queue，怎样被 scheduler 选进 running queue，怎样在 token budget 不够时继续排队，怎样在显存压力下被抢占后回到等待队列。只要这条状态线没断，后面的参数和 benchmark 才有地方放。</p>
+    </div>
+    <div class="box info">
+      <h3>先别展开什么</h3>
+      <p>先不要把注意力放到路由、网关、分布式通信、speculative decoding、kernel fusion 或 MoE expert parallelism 上。那些内容会在后面的系统单元或算子单元里再回来。</p>
+    </div>
+  </div>
+  <div class="callout">
+    <strong>读完这一节，你要能做什么：</strong>
+    拿到一条请求轨迹，先说出它现在在哪个队列，再判断这轮能不能进 batch，最后说明它如果被抢占，是 swap 回去还是 recompute。
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>continuous batching 在改什么</h2>
+    <span class="tag">overview</span>
+  </div>
+  <p>静态 batch 的思路是先凑齐，再一起跑完。continuous batching 的思路是每一轮迭代都重排一次队伍：先让正在 decode 的请求继续前进，再把剩余 token budget 分给 chunked prefill，必要时再把长请求切块、把低优先级请求抢占出去。这样做的目的，是让 decode 不被长 prefill 长时间挡住，同时让新请求更快进入服务。</p>
+  <table data-export-context="静态 batch 与 continuous batching 的区别" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>层次</th>
+        <th>静态 batch</th>
+        <th>continuous batching</th>
+        <th>你要盯住的变化</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>请求进入</td>
+        <td>等一批请求凑齐后再开始</td>
+        <td>新请求可以在每轮迭代之间进入</td>
+        <td>观察 waiting queue 的长度和进入时机</td>
+      </tr>
+      <tr>
+        <td>prefill</td>
+        <td>常常整段一次性推进</td>
+        <td>长 prompt 可以被切成多个 chunk</td>
+        <td>观察 chunked prefill 是否抢占了过多预算</td>
+      </tr>
+      <tr>
+        <td>decode</td>
+        <td>容易和 prefill 一起被大 batch 牵着走</td>
+        <td>通常优先保住 decode 的节奏</td>
+        <td>观察 ITL 是否因为长 prefill 被拖慢</td>
+      </tr>
+      <tr>
+        <td>状态更新</td>
+        <td>一轮里状态变化少</td>
+        <td>每轮都可能有完成、继续、回队、抢占</td>
+        <td>观察 running / waiting / preempted 的迁移</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <strong>这页的锚点例子：</strong>
+    一组请求 A、B、C、D 会在不同轮次里交替出现。你后面看到的表格和代码，都会围着这组请求转。
+  </div>
+</section>
+
+<section id="ledger">
+  <div class="head">
+    <h2>状态账本</h2>
+    <span class="tag">ledger</span>
+  </div>
+  <p>调度器最重要的是知道每个请求现在处于什么状态，接下来要读什么、写什么、丢什么。下面这张表把状态迁移摆平，后面的预算和抢占都可以回到这里检查。</p>
+  <div class="table-wrap">
+    <table data-export-context="请求状态账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>进入前是什么</th>
+          <th>进入后是什么</th>
+          <th>读什么</th>
+          <th>写什么 / 变更什么</th>
+          <th>错了会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>waiting request</td>
+          <td>还没拿到本轮预算</td>
+          <td>继续等待，或被挑进 batch</td>
+          <td>队列顺序、优先级、前缀命中情况</td>
+          <td>排队位置、是否 chunked prefill</td>
+          <td>会把“没进 batch”误当成“服务挂了”</td>
+        </tr>
+        <tr>
+          <td>running request</td>
+          <td>已经在上一轮进入 batch</td>
+          <td>继续 decode，或推进一个 prefill chunk，或结束</td>
+          <td>当前剩余 token、KV cache 可用空间</td>
+          <td>新增 token 的状态、完成标记、流式返回</td>
+          <td>会把 decode 继续推进误看成“没有新状态”</td>
+        </tr>
+        <tr>
+          <td>partial prefill request</td>
+          <td>长 prompt 还没走完</td>
+          <td>保留已完成的 chunk，等待下一轮继续</td>
+          <td>剩余 prompt tokens、chunk 上限、token budget</td>
+          <td>已完成 chunk 的进度</td>
+          <td>会把长 prompt 当成一次性输入，预算算大</td>
+        </tr>
+        <tr>
+          <td>preempted request</td>
+          <td>本轮资源不够，先被让出位置</td>
+          <td>回 waiting，或走 swap / recompute</td>
+          <td>抢占模式、KV cache 压力、优先级</td>
+          <td>是否保留块、是否重算、是否重新排队</td>
+          <td>会把抢占当成错误，忽略它其实是在保住整体吞吐</td>
+        </tr>
+        <tr>
+          <td>finished request</td>
+          <td>还占着运行位和 KV 块</td>
+          <td>释放资源，退出调度循环</td>
+          <td>停止条件、采样结果、流式输出状态</td>
+          <td>释放 KV block、清掉 running 占位</td>
+          <td>会把已完成请求当成仍在占预算</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <strong>先检查哪里：</strong>
+    如果你在日志里只看到“慢”，先不要碰 kernel。先回到这张表，看请求到底是 waiting、running、partial prefill 还是 preempted。
+  </div>
+</section>
+
+<section id="mechanism">
+  <div class="head">
+    <h2>调度循环怎么跑</h2>
+    <span class="tag">mechanism</span>
+  </div>
+  <p>这一段把调度器拆成五步：新请求进入、预算检查、组 batch、执行 forward、回写状态。读的时候不要只盯最后一次 forward，要看每一步到底读了什么、写了什么、丢了什么。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button type="button" class="trace-line" data-trace-step="arrive">
+        <span>进入</span>
+        <em>request 先进入 waiting queue</em>
+      </button>
+      <button type="button" class="trace-line" data-trace-step="budget">
+        <span>预算</span>
+        <em>检查 token budget、seq 上限和 KV headroom</em>
+      </button>
+      <button type="button" class="trace-line" data-trace-step="mix">
+        <span>组批</span>
+        <em>decode 先走，剩余预算再给 chunked prefill</em>
+      </button>
+      <button type="button" class="trace-line" data-trace-step="forward">
+        <span>执行</span>
+        <em>一次 forward 只推进本轮选中的 token</em>
+      </button>
+      <button type="button" class="trace-line" data-trace-step="update">
+        <span>回写</span>
+        <em>完成则释放，未完成则回队或被抢占</em>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card" data-trace-target="arrive">
+        <b>进入</b>
+        <span>新的请求到达后先进入 waiting queue，不等于已经拿到 batch 里的位置。</span>
+        <p>看点：进入队列只是建立候选状态，不代表已经消耗 token budget。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="budget">
+        <b>预算</b>
+        <span>调度器会同时看 `max_num_batched_tokens`、`max_num_seqs`、KV cache headroom 和抢占策略。</span>
+        <p>看点：预算由 token budget、seq 上限、KV headroom 和抢占策略一起决定。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="mix">
+        <b>组批</b>
+        <span>decode 请求通常先保住节奏，剩下的预算再给 chunked prefill。</span>
+        <p>看点：这一步决定 TTFT 和 ITL 谁更容易被照顾。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="forward">
+        <b>执行</b>
+        <span>模型只处理这一轮被选中的 token，下一轮要重新排队。</span>
+        <p>看点：continuous batching 的“continuous”来自每轮重新排队和重新组批。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="update">
+        <b>回写</b>
+        <span>完成的请求释放资源，没完成的请求回到队列，必要时切换到 swap 或 recompute。</span>
+        <p>看点：状态回写决定下一轮能不能继续前进。</p>
+      </div>
+    </div>
+  </div>
+  <div class="codebar"><span>最小调度循环伪代码</span><button class="copy" data-copy="scheduler-loop-code">复制</button></div>
+  <pre id="scheduler-loop-code" data-export-context="最小调度循环伪代码" data-export-lang="python"><code class="language-python">while engine_running:
+    retire_finished_requests()
+    free_kv_for_finished_requests()
+
+    decode_batch = pick_decode_requests(running_queue, token_budget)
+    prefill_batch = pick_prefill_requests(
+        waiting_queue,
+        token_budget,
+        chunked_prefill=True,
+    )
+
+    batch = decode_batch + prefill_batch
+    outputs = model_forward(batch)
+    update_request_states(outputs)
+
+    if kv_pressure_high():
+        preempt_low_priority_requests(mode=preemption_mode)</code></pre>
+  <div class="callout">
+    <strong>这段代码要你盯住的 4 个动作：</strong>
+    先退场已完成请求，再挑 decode，再把剩余预算留给 prefill chunk，最后回写状态。只要这四步中的任一步顺序错了，队列表现就会变形。
+  </div>
+</section>
+
+<section id="window">
+  <div class="head">
+    <h2>调度窗口怎么看</h2>
+    <span class="tag">window</span>
+  </div>
+  <p>调度窗口可以理解为“这一轮允许被看见和被推进的请求集合”。它受三类限制共同影响：token 预算、序列上限和 KV cache headroom。窗口太窄，短请求也会排队；窗口太宽，长 prefill 和过多 running 请求会把 KV 压紧，后面只能靠抢占收场。</p>
+  <p>做线上判断时，不要只看平均输入长度。最好同时看 p95 prompt 长度、当前 decode 并发、KV 使用率峰值和 repeated preemption 数量；这四个量合在一起，才能说明到底是哪一层限制先撞墙。</p>
+  <div class="table-wrap">
+    <table data-export-context="调度窗口的三层限制" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>限制</th>
+          <th>它在保护什么</th>
+          <th>窗口变窄时</th>
+          <th>窗口变宽时</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>token budget</td>
+          <td>单轮 forward 的计算量和 prefill / decode 比例</td>
+          <td>prefill chunk 更小，TTFT 可能上升</td>
+          <td>吞吐可能上升，但 decode 更容易被长 prefill 挤压</td>
+        </tr>
+        <tr>
+          <td>`max_num_seqs`</td>
+          <td>同一轮能挂住多少条序列</td>
+          <td>waiting queue 更容易增长</td>
+          <td>并发更高，KV cache 压力也更高</td>
+        </tr>
+        <tr>
+          <td>KV headroom</td>
+          <td>后续 token 写入和请求恢复的空间</td>
+          <td>准入更保守，短期吞吐受限</td>
+          <td>更容易 over-admission，抢占和重算成本会上来</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <strong>读日志时的抓手：</strong>
+    如果 waiting 增长，看窗口是否太窄；如果 repeated preemption 增长，看窗口是否放得太宽；如果 TTFT 和 ITL 互相拉扯，回到 token budget 和 chunked prefill 的比例。
+    别把瞬时峰值当成稳定瓶颈，至少跨几个连续调度轮次一起看。
+  </div>
+</section>
+
+<section id="example">
+  <div class="head">
+    <h2>一轮一轮看 4 个请求怎么走</h2>
+    <span class="tag">example</span>
+  </div>
+  <p>下面这个例子只跟踪 A、B、C、D 四个请求。A 和 B 先在 decode 阶段继续生成；C 是一个长 prompt；D 是一个短 prompt，但到得更晚。这样安排是为了让你一次看到 decode 优先、chunked prefill、等待队列和抢占四件事。</p>
+  <div class="table-wrap">
+    <table data-export-context="4 个请求的迭代调度案例" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>轮次</th>
+          <th>本轮输入</th>
+          <th>预算状态</th>
+          <th>调度决策</th>
+          <th>结果</th>
+          <th>要看出的原则</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>t0</td>
+          <td>A、B 正在 decode；C 刚到，prompt 很长；D 还没到</td>
+          <td>token budget 足够容纳少量 decode 和一段 prefill chunk</td>
+          <td>A、B 继续 decode，C 只推进一个 chunk</td>
+          <td>A 可能完成；B 继续；C 保留 prefill 进度</td>
+          <td>decode 不该被长 prefill 一口气挤掉</td>
+        </tr>
+        <tr>
+          <td>t1</td>
+          <td>C 还没走完；D 到达，且输入更短</td>
+          <td>剩余预算更紧</td>
+          <td>优先保住正在 decode 的请求，再把剩余 token 分给 D 和 C 的下一段 chunk</td>
+          <td>D 可能比 C 更快进入 running</td>
+          <td>短请求不应永远排在长 prefill 后面</td>
+        </tr>
+        <tr>
+          <td>t2</td>
+          <td>B 还在生成；C 继续分段 prefill；D 转入 decode</td>
+          <td>running 数接近上限</td>
+          <td>不再放新请求进来，直到下一轮有人完成或释放位</td>
+          <td>waiting 增长，但 batch 保持稳定</td>
+          <td>`max_num_seqs` 在这里开始起约束作用</td>
+        </tr>
+        <tr>
+          <td>t3</td>
+          <td>C 的 prefill 还没结束，但 KV cache headroom 变紧</td>
+          <td>需要给后来的请求留空间</td>
+          <td>低优先级或长尾请求 C 被抢占，之后按 recompute 或 swap 恢复</td>
+          <td>C 回到 waiting；别的请求继续前进</td>
+          <td>抢占的作用是保住整体吞吐</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <strong>这张表最重要的结论：</strong>
+    一轮里既可以有 decode，也可以有 chunked prefill，还可以有抢占。continuous batching 关注每轮怎么重新组批，让不同状态的请求按预算继续前进。
+  </div>
+</section>
+
+<section id="tuning">
+  <div class="head">
+    <h2>参数怎么把系统推向不同方向</h2>
+    <span class="tag">tuning</span>
+  </div>
+  <p>调参时不要只问“这个值大不大”，要问它在减少哪一种等待。`max_num_batched_tokens` 更多是在调每轮 token 预算，`max_num_seqs` 更多是在调并发请求数，`max_num_partial_prefills` 和 `max_long_partial_prefills` 影响长 prompt 能同时被切几段，`scheduler_reserve_full_isl` 则决定你在准入时会不会把整段输入长度一起算进去。</p>
+  <div class="math-block" data-export-context="调度预算的简化记账框架" data-export-lang="math">
+    $$B = \text{max\_num\_batched\_tokens}$$
+    $$\text{chunk} = \min(P_{\text{remaining}}, \max(0, B - D - R))$$
+    <p>这里 \(B\) 是这一轮的总 token 预算，\(P_{\text{remaining}}\) 是还没走完的 prompt tokens，\(D\) 是这轮已经给 decode 留出的 token，\(R\) 是安全余量或保留头寸。这个式子用来帮助你判断为什么长 prefill 会和 decode 争预算。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="调参表：哪个参数在改哪一层" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>参数</th>
+          <th>主要控制什么</th>
+          <th>调大 / 调小会怎样</th>
+          <th>常见误读</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>`max_num_batched_tokens`</td>
+          <td>单轮总 token 预算</td>
+          <td>调小通常更利于 ITL，调大通常更利于 TTFT 和吞吐</td>
+          <td>把它当成“吞吐越大越好”的单旋钮</td>
+        </tr>
+        <tr>
+          <td>`max_num_seqs`</td>
+          <td>单轮最多处理多少个序列</td>
+          <td>调小会限制并发，调大能让更多请求进来，但也更吃 KV cache</td>
+          <td>把它当成 token budget 的替代品</td>
+        </tr>
+        <tr>
+          <td>`max_num_partial_prefills`</td>
+          <td>同时进行中的部分 prefill 数</td>
+          <td>调大能让更多长 prompt 同时切块推进，调小能让排队更保守</td>
+          <td>把长 prompt 和短 prompt 看成同一种调度成本</td>
+        </tr>
+        <tr>
+          <td>`max_long_partial_prefills`</td>
+          <td>超过阈值的长 prompt 同时推进的数量</td>
+          <td>调小后，短 prompt 更容易插队；调大后，长 prompt 更容易并行切块</td>
+          <td>忽略长请求和短请求的队列差异</td>
+        </tr>
+        <tr>
+          <td>`long_prefill_token_threshold`</td>
+          <td>多长算“长 prompt”</td>
+          <td>阈值降低会让更多请求走长 prompt 路径，阈值升高则相反</td>
+          <td>默认阈值一定适合自己的长度分布</td>
+        </tr>
+        <tr>
+          <td>`scheduler_reserve_full_isl`</td>
+          <td>准入时是否先检查整段输入是否装得下</td>
+          <td>打开后更保守，能减少 over-admission 和 KV thrashing</td>
+          <td>只看第一块就够了</td>
+        </tr>
+        <tr>
+          <td>`preemption_mode`</td>
+          <td>被抢占时是 swap 还是 recompute</td>
+          <td>swap 保留块，recompute 丢块重来</td>
+          <td>抢占只是“暂停”，不会改变后续成本</td>
+        </tr>
+        <tr>
+          <td>`scheduling-policy`</td>
+          <td>先来先服务还是优先级调度</td>
+          <td>`priority` 能让高优先级请求先走，但更容易牺牲公平性</td>
+          <td>公平和低延迟永远可以同时拉满</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <strong>调参顺序建议：</strong>
+    先看 token budget 和 `max_num_seqs`，再看长 prefill 的并行数，最后才看抢占模式。顺序反了，容易把问题从预算层拖到抢占层。
+  </div>
+</section>
+
+<section id="diagnosis">
+  <div class="head">
+    <h2>排障时先看哪里</h2>
+    <span class="tag">diagnosis</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="常见症状与先看什么" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>你看到的症状</th>
+          <th>更像哪类问题</th>
+          <th>先看什么</th>
+          <th>下一步再看什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>TTFT 变长，但 decode 还算稳定</td>
+          <td>prefill 过大或 chunk 太少</td>
+          <td>`max_num_batched_tokens`、`max_num_partial_prefills`、`max_long_partial_prefills`</td>
+          <td>prompt 长度分布和 chunked prefill 是否真的启用</td>
+        </tr>
+        <tr>
+          <td>ITL 变差，decode 经常被打断</td>
+          <td>prefill 挤压了 decode</td>
+          <td>token budget 是否给 prefill 留得太多</td>
+          <td>有没有把长 prompt 和短 prompt 一起塞进了同一轮</td>
+        </tr>
+        <tr>
+          <td>waiting queue 越来越长</td>
+          <td>并发上限太低，或者调度太保守</td>
+          <td>`max_num_seqs`、`scheduling-policy`</td>
+          <td>是否应该让短请求更容易插队</td>
+        </tr>
+        <tr>
+          <td>同一批请求反复被抢占</td>
+          <td>KV cache 压力过大或 over-admission</td>
+          <td>`scheduler_reserve_full_isl`、`preemption_mode`、KV headroom</td>
+          <td>是 swap 还是 recompute 更适合当前负载</td>
+        </tr>
+        <tr>
+          <td>长请求总是走不完</td>
+          <td>长 prefill 被切得太碎，或者长请求过多</td>
+          <td>`long_prefill_token_threshold`、`max_long_partial_prefills`</td>
+          <td>要不要减少长请求并行数，换短请求优先</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1" type="button">TTFT ↑</button>
+      <button class="ghost" data-terminal-case="case-2" type="button">反复抢占</button>
+      <button class="ghost" data-terminal-case="case-3" type="button">短请求排队</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">iteration 12:
+  decode requests: 2
+  prefill chunks: 3
+  waiting requests: 6
+  note: TTFT rising because long prefills keep taking the remaining budget</pre>
+    <template data-terminal-output="case-1">iteration 12:
+  decode requests: 2
+  prefill chunks: 3
+  waiting requests: 6
+  note: TTFT rising because long prefills keep taking the remaining budget</template>
+    <template data-terminal-output="case-2">iteration 27:
+  active requests: 15
+  preempted for recompute: 4
+  kv headroom: low
+  note: repeated preemption suggests over-admission or missing reserve</template>
+    <template data-terminal-output="case-3">iteration 31:
+  short requests waiting: 9
+  long partial prefills: 4
+  policy: FCFS
+  note: short prompts are waiting behind long chunked prefills</template>
+  </div>
+  <div class="callout">
+    <strong>排障起手式：</strong>
+    先看是 TTFT、ITL、waiting queue 还是 repeated preemption 在变坏，再回到参数表。不要一上来就把问题归给 kernel。
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>资料路线与下一步动作</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <p>这一节把“看到什么问题，先打开哪份文档”说清楚。你如果在 vLLM 里调参数，先看 optimization 和 engine args；你如果在 SGLang 里做 benchmark，先看 benchmark 和 profiling；你如果在长上下文负载上被 KV cache 卡住，再看 HiCache。</p>
+  <div class="table-wrap">
+    <table data-export-context="资料路线与下一步动作" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>材料</th>
+          <th>先抓什么</th>
+          <th>下一步动作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>vLLM Optimization and Tuning</td>
+          <td>chunked prefill、`max_num_batched_tokens`、TTFT / ITL / 吞吐的取舍</td>
+          <td>把自己的请求分布和默认预算对比一次</td>
+        </tr>
+        <tr>
+          <td>vLLM Engine Arguments</td>
+          <td>`--max-num-seqs`、`--enable-chunked-prefill`、`--preemption-mode`、`--scheduler-reserve-full-isl`</td>
+          <td>确认启动参数里哪些是默认值，哪些是你真的改过</td>
+        </tr>
+        <tr>
+          <td>vLLM Scheduler API</td>
+          <td>`PreemptionMode`、`PREEMPTED_FOR_RECOMPUTE`、reset / queue 逻辑</td>
+          <td>看一次抢占到底是保块还是重算</td>
+        </tr>
+        <tr>
+          <td>SGLang Welcome + Benchmark and Profiling</td>
+          <td>offline throughput、TTFT、TPOT、ITL、在线与离线 benchmark 的区别</td>
+          <td>先跑 `bench_serving`，再决定是否改参数</td>
+        </tr>
+        <tr>
+          <td>SGLang HiCache System Design + Best Practices</td>
+          <td>三层 KV cache、长上下文、多轮会话、复用收益</td>
+          <td>如果工作负载是长上下文或多轮，先看缓存层级，再看 batch 大小</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <strong>下一步怎么接到后面的课：</strong>
+    如果你关心的是算子和 kernel，去 05 单元；如果你关心的是把输出格式限制住，去 06 单元；如果你要做引擎选型和源码对照，去 07 单元。
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>这里先不追的几件事</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="grid2">
+    <div class="box danger">
+      <h3>先放一边</h3>
+      <p>网络路由、RPC、speculative decoding、FlashAttention kernel、MoE expert parallelism、分布式 gateway。它们都重要，但这页先不展开。</p>
+    </div>
+    <div class="box soft">
+      <h3>这页要完成的动作</h3>
+      <p>你要能从一个症状出发，先说清楚请求在哪个状态、这一轮 token budget 怎么分、是否启用了 chunked prefill、为什么会发生 preemption，以及下一步该调哪一个参数。</p>
+    </div>
+  </div>
+  <div class="callout">
+    <strong>边界一句话：</strong>
+    如果问题出在 queue、budget 或 preemption，就留在这一页；如果问题出在路由、模型结构或 kernel，就去别的单元。
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>怎么答才算会</h3>
+    <p>先把对象说清楚，再说预算和队列，再说为什么这一轮该让谁先走。只给结论、不讲状态和预算，通常说明你还没把这一页的机制读进去。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>你要能说出：谁在 waiting，谁在 running，谁会被 chunked prefill，谁会被抢占，哪些参数在控制 TTFT、ITL 和吞吐之间的取舍。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第一组：状态和主线</h3>
+      <p>先确认你能把 continuous batching 的主变化说清楚，再用术语补上边界。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>每轮都可能重排队伍；decode 优先，长 prefill 切块，抢占用于保住整体吞吐。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q1" data-group="第一组：状态和主线" data-title="continuous batching 的核心变化" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">主线</span></div>
+      <h3>continuous batching 的核心变化是什么？</h3>
+      <label><input type="radio" name="q1" value="A">A. 每个请求都必须等到全部结束后再进入下一轮。</label>
+      <label><input type="radio" name="q1" value="B">B. 每一轮迭代后都可以重新调整 batch，新的请求也能进来。</label>
+      <label><input type="radio" name="q1" value="C">C. 只要启用 chunked prefill，就不再需要调度器。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q2" data-group="第一组：状态和主线" data-title="max_num_seqs 是否等于 token budget" data-answer="false">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">预算</span></div>
+      <h3>`max_num_seqs` 可以直接代替 `max_num_batched_tokens`，因为它们控制的是同一件事。</h3>
+      <label><input type="radio" name="q2" value="true">对</label>
+      <label><input type="radio" name="q2" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q3" data-group="第一组：状态和主线" data-title="请求状态迁移" >
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">状态迁移</span></div>
+      <h3>用 waiting / running / preempted / finished 这四个词，讲一条请求从进入到结束会怎么变。</h3>
+      <p class="solve-note">答案至少要提到一轮里可能发生的两次变化：先进入 waiting，再被选中到 running；如果资源不够，可能先回 waiting 或进入 preempted。</p>
+      <textarea name="q3" placeholder="先写状态顺序，再写每一步为什么会变。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>一个合格答案至少要包含：请求先进入 waiting queue；被 scheduler 挑中后进入 running；如果本轮 token budget 或 KV headroom 不够，可能被 preempted，之后回到 waiting，或者按 swap / recompute 恢复；当采样结束或达到停止条件时进入 finished，并释放资源。答题时要同时提到“预算”和“资源释放”。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第二组：一轮里怎么分配</h3>
+      <p>这组看的是同一轮里哪些动作能同时发生，哪些动作应该排后面。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>decode 先保节奏，剩余预算给 chunked prefill；抢占是为了保住整体吞吐。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q4" data-group="第二组：一轮里怎么分配" data-title="同一轮里可以同时发生什么">
+      <div class="q-meta"><span class="pill">checkbox</span><span class="pill">分配</span></div>
+      <h3>下面哪些动作可以在同一轮里同时发生？</h3>
+      <label><input type="checkbox" name="q4" value="A">A. 一部分请求继续 decode。</label>
+      <label><input type="checkbox" name="q4" value="B">B. 新到的长 prompt 只推进一个 chunk 的 prefill。</label>
+      <label><input type="checkbox" name="q4" value="C">C. 前一轮被抢占的请求回到 waiting queue。</label>
+      <label><input type="checkbox" name="q4" value="D">D. 只要进入这一轮，所有请求都必须在这一轮结束。</label>
+      <details><summary>参考答案 / 评分要点</summary><p>A、B、C 都可以同时发生；D 不对。continuous batching 的重点是在同一轮里混合 decode、chunked prefill 和状态回写，让不同状态的请求按预算继续前进。</p></details>
+    </div>
+
+    <div class="q full" data-question="q5" data-group="第二组：一轮里怎么分配" data-title="scheduler_reserve_full_isl 的作用" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">准入</span></div>
+      <h3>`scheduler_reserve_full_isl=True` 主要是在防什么？</h3>
+      <label><input type="radio" name="q5" value="A">A. 只看第一段 chunk 就放行，后来才发现整段输入装不下。</label>
+      <label><input type="radio" name="q5" value="B">B. 所有请求都会自动变成更短的输出。</label>
+      <label><input type="radio" name="q5" value="C">C. 每轮 token budget 会自动翻倍。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q6" data-group="第二组：一轮里怎么分配" data-title="chunk size 的手算" data-answer="384">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">手算</span></div>
+      <h3>如果 `max_num_batched_tokens = 1024`，这轮已经给 decode 留出 512 个 token，又保留 128 个 token 的安全余量，剩余 prompt 还有 700 个 token，那么这一轮最多可以给 prefill 分多少 token？</h3>
+      <input type="text" name="q6" placeholder="只写数字。">
+      <p class="hint">先算 `1024 - 512 - 128`，再和剩余 prompt 取较小值。</p>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第三组：调参</h3>
+      <p>这组把参数和效果对应起来，避免你只会改值，不知道自己在改哪一层。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>`max_num_batched_tokens` 管单轮预算，`max_num_seqs` 管并发，长 prompt 的并行数要单独控。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q7" data-group="第三组：调参" data-title="哪个参数最直接限制每轮序列数" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">并发</span></div>
+      <h3>下面哪个参数最直接限制每一轮能处理多少个序列？</h3>
+      <label><input type="radio" name="q7" value="A">A. `max_num_batched_tokens`</label>
+      <label><input type="radio" name="q7" value="B">B. `max_num_seqs`</label>
+      <label><input type="radio" name="q7" value="C">C. `long_prefill_token_threshold`</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q8" data-group="第三组：调参" data-title="短请求插队的参数" data-answer="C">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">队列</span></div>
+      <h3>当很多长 prompt 一直占着 chunked prefill 时，下面哪个设置更容易让短请求插队？</h3>
+      <label><input type="radio" name="q8" value="A">A. 提高 `max_long_partial_prefills`，让更多长请求同时切块。</label>
+      <label><input type="radio" name="q8" value="B">B. 提高 `long_prefill_token_threshold`，让更多请求都算作长请求。</label>
+      <label><input type="radio" name="q8" value="C">C. 适当降低 `max_long_partial_prefills`，给短请求留出队头空间。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q9" data-group="第三组：调参" data-title="为什么小 budget 可能改善 ITL" >
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">取舍</span></div>
+      <h3>为什么把 `max_num_batched_tokens` 调小，常常会改善 ITL，却可能让 TTFT 变差？</h3>
+      <p class="solve-note">答案里要同时写出“decode 被更少地打断”和“prefill 需要更多轮才能走完”这两个点。</p>
+      <textarea name="q9" placeholder="先解释 ITL，再解释 TTFT。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>把 `max_num_batched_tokens` 调小，单轮里能塞进来的 prefill chunk 变少，decode 请求被长 prefill 打断的次数也会下降，所以 ITL 往往更稳；但同样的长 prompt 需要更多轮才能跑完，首个 token 或完整请求完成前要等更久，所以 TTFT 可能变差。答题时要把“少打断 decode”和“prefill 分轮更细”都说出来。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第四组：诊断和路线</h3>
+      <p>这组把症状、文档和下一步动作连起来。能答对，说明你已经能自己开第一轮排障。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>反复抢占看 KV headroom 和 reserve；要查 recompute 语义，就去 scheduler API。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q10" data-group="第四组：诊断和路线" data-title="反复抢占更像什么问题" data-answer="C">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">诊断</span></div>
+      <h3>如果你看到 `preempted for recompute` 反复出现，而且 waiting queue 也越来越长，最先该怀疑什么？</h3>
+      <label><input type="radio" name="q10" value="A">A. 采样温度太高。</label>
+      <label><input type="radio" name="q10" value="B">B. `max_num_seqs` 一定太小。</label>
+      <label><input type="radio" name="q10" value="C">C. KV cache 压力过大，或者准入太激进。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q11" data-group="第四组：诊断和路线" data-title="TTFT 变差先看什么" >
+      <div class="q-meta"><span class="pill">debug plan</span><span class="pill">TTFT</span></div>
+      <h3>如果开启 chunked prefill 之后 TTFT 变差，先检查哪三件事？</h3>
+      <p class="solve-note">答案至少要包含：`max_num_batched_tokens`、长 prompt 并行数、以及请求长度分布或 `scheduler_reserve_full_isl` 之一。</p>
+      <textarea name="q11" placeholder="按先后顺序写三项检查。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>可以先查：1）`max_num_batched_tokens` 是否过小，导致 prefill chunk 被切得太细；2）`max_num_partial_prefills` 和 `max_num_long_partial_prefills` 是否让长请求并行过多，挤压了短请求；3）`scheduler_reserve_full_isl` 是否没打开，或者请求长度分布变化后仍按老预算准入。只要能把“预算、长请求并行、准入检查”三件事说清楚，就算合格。</p></details>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="第四组：诊断和路线" data-title="去哪里查 recompute 语义" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">source route</span></div>
+      <h3>如果你要确认 `PREEMPTED_FOR_RECOMPUTE` 的含义，最先该看哪份资料？</h3>
+      <label><input type="radio" name="q12" value="A">A. vLLM Scheduler API。</label>
+      <label><input type="radio" name="q12" value="B">B. SGLang HiCache Best Practices。</label>
+      <label><input type="radio" name="q12" value="C">C. vLLM Engine Arguments 里的 LoRA 选项。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li>
+    <strong>Optimization and Tuning - vLLM Documentation</strong>
+    <span>解释 chunked prefill、`max_num_batched_tokens`，以及为什么小 budget 往往更利于 ITL，大 budget 往往更利于 TTFT 和吞吐。Snapshot: 2026-06-21.</span>
+  </li>
+  <li>
+    <strong>Engine Arguments - vLLM Documentation</strong>
+    <span>解释 `--max-num-seqs`、`--enable-chunked-prefill`、`--preemption-mode`、`--scheduler-reserve-full-isl` 等启动参数的含义。Snapshot: 2026-06-21.</span>
+  </li>
+  <li>
+    <strong>scheduler - vLLM Documentation</strong>
+    <span>解释 `PreemptionMode`、`PREEMPTED_FOR_RECOMPUTE`、reset / queue 相关逻辑，以及抢占时是保块还是重算。Snapshot: 2026-06-21.</span>
+  </li>
+  <li>
+    <strong>Welcome to SGLang</strong>
+    <span>说明 SGLang 作为低延迟、高吞吐 serving framework 的定位，以及它和 RadixAttention、prefix caching、multi-GPU parallelism 的关系。Snapshot: 2026-06-21.</span>
+  </li>
+  <li>
+    <strong>Benchmark and Profiling - SGLang Documentation</strong>
+    <span>说明 `bench_serving`、`bench_offline_throughput`、TTFT、TPOT、ITL 这些在线 / 离线 benchmark 的使用边界。Snapshot: 2026-06-21.</span>
+  </li>
+  <li>
+    <strong>HiCache System Design and Optimization</strong>
+    <span>说明 HiCache 的系统架构、workflow、三层缓存和配置参数，以及它如何扩展 KV cache 的驻留层级。Snapshot: 2026-06-21.</span>
+  </li>
+  <li>
+    <strong>HiCache Best Practices</strong>
+    <span>说明 HiCache 更适合长上下文和多轮对话场景，以及在什么负载下层次化缓存才值得付出搬运成本。Snapshot: 2026-06-21.</span>
+  </li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

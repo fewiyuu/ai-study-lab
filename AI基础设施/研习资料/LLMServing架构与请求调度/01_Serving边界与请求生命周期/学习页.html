@@ -1,0 +1,1013 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Serving 边界与请求生命周期</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="LLM Serving 架构与请求调度" data-unit="Unit 01">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>LLM Serving 架构与请求调度</strong>
+        <span>Unit 01</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#mechanism"><span class="dot"></span>核心机制</a>
+        <a href="#example"><span class="dot"></span>请求案例</a>
+        <a href="#walkthrough"><span class="dot"></span>完整走读</a>
+        <a href="#traceflow"><span class="dot"></span>状态追踪</a>
+        <a href="#ledger"><span class="dot"></span>状态账本</a>
+        <a href="#admission"><span class="dot"></span>接纳与背压</a>
+        <a href="#routing"><span class="dot"></span>路由与副本选择</a>
+        <a href="#failurelab"><span class="dot"></span>故障实验室</a>
+        <a href="#metrics"><span class="dot"></span>指标归因</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#bridge"><span class="dot"></span>下一步</a>
+        <a href="#boundary"><span class="dot"></span>边界</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把请求拆成入口、排队、prefill、decode 和返回，再看哪一层在写状态。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">Unit 01｜边界与生命周期</div>
+          <h1>Serving 边界与请求生命周期</h1>
+          <p>本页只收一件事：先把 LLM Serving 的边界画清，再把一次请求拆成入口、排队、prefill、decode、返回和观测几个状态。后面的 OpenAI 兼容接口、Admission Control、路由、伸缩和 SLO 都会回到这条路径上。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../02_OpenAI兼容接口与流式返回/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>先确认的三件事</h3>
+          <ul>
+  <li>画出一次请求从客户端到 token stream 的路径，并说出每层在读什么、写什么。</li>
+  <li>区分 Serving 层和推理引擎层，知道哪些问题该在入口处理，哪些该交给 engine。</li>
+  <li>看到 TTFT、TPOT、队列时间或 5xx 时，能先判断该查哪一层。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">Goals</span>
+  </div>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>先定义边界</h3>
+      <p>能说清 Serving 的边界：它负责把模型能力封装成可运营的线上服务。</p>
+    </div>
+    <div class="box soft">
+      <h3>再追状态</h3>
+      <p>能按接入、校验、路由、排队、prefill、decode、流式返回和完成记录描述一次请求。</p>
+    </div>
+    <div class="box soft">
+      <h3>最后先查哪层</h3>
+      <p>看到 TTFT、TPOT、队列时间、429/503 或长尾卡顿时，先把症状放回生命周期，再决定是否改参数。</p>
+    </div>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">Overview</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>这门课从哪一层开始看</h3>
+      <p>外部调用者看到的是 API 合同：请求怎么写、模型名怎么填、是否流式、超时时间多长、失败时返回什么。这个边界先于任何 GPU 调度出现。</p>
+      <p>进入服务层后，系统开始决定请求该不该接、该去哪个副本、是否要排队、是否要拒绝、是否要降级。只有到了引擎层，request 才会变成 sequence，开始处理 prompt、cache 和 token 生成。</p>
+    </div>
+    <div class="box info">
+      <h3>边界句</h3>
+      <p>Serving 层回答“请求怎么进来、去哪里、何时返回、何时记录”；推理引擎回答“已经进来的序列如何高效生成 token”。</p>
+      <p>后面的接口、路由、背压、伸缩、SLO 都是在这条边界上继续加决策。</p>
+    </div>
+  </div>
+</section>
+
+<section id="contract">
+  <div class="head">
+    <h2>请求合同</h2>
+    <span class="tag">Contract</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>先看哪些字段</h3>
+      <p>服务层接到请求后，最先读的是请求在当前系统里能不能安全接住的信号。model 决定路由候选，messages 或 prompt 决定 prefill 成本，stream 决定返回方式，max_tokens 决定 decode 上限，tenant 和 auth 决定是否进入可用范围。</p>
+      <p>这些字段放在一起看，才能解释为什么有些请求会在入口被拒绝，有些会进队列，有些会被送去更适合长上下文的副本。字段本身不复杂，关键是它们会一路改变后续状态。</p>
+    </div>
+    <div class="box info">
+      <h3>这一层只解决什么</h3>
+      <p>请求合同只负责把外部输入变成可执行的服务状态：合法、待排队、待路由、待降级或待拒绝。它还不负责生成 token，也不负责解释模型能力边界。</p>
+      <p>先把这一步看清，后面读 OpenAI 兼容接口、流式返回和错误码时，就知道哪些是协议细节，哪些是服务层决策。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="请求合同与影响点" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>字段</th>
+          <th>服务层先读什么</th>
+          <th>主要影响</th>
+          <th>错配后的症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>model</td>
+          <td>可用副本、版本、租户约束</td>
+          <td>路由候选和副本选择</td>
+          <td>请求被送去不匹配的副本，最后变成 4xx / 5xx</td>
+        </tr>
+        <tr>
+          <td>prompt / messages</td>
+          <td>上下文长度、历史规模、cache 命中</td>
+          <td>prefill 成本和 TTFT</td>
+          <td>短请求被长上下文拖慢，首 token 很晚才出现</td>
+        </tr>
+        <tr>
+          <td>stream</td>
+          <td>返回通道、连接寿命、客户端等待方式</td>
+          <td>响应节奏和超时边界</td>
+          <td>服务已经开始工作，客户端却先超时</td>
+        </tr>
+        <tr>
+          <td>max_tokens</td>
+          <td>decode 上限、GPU 预算、队列压力</td>
+          <td>输出长度和 TPOT</td>
+          <td>请求本来能结束，结果因为上限过大而拖长</td>
+        </tr>
+        <tr>
+          <td>tenant / auth</td>
+          <td>隔离规则、配额、优先级</td>
+          <td>接纳、拒绝和公平性</td>
+          <td>该挡的请求没挡住，或者该保的租户被挤掉</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>合同到状态的最短路径</span><button class="copy" data-copy="contract-path">复制</button></div>
+  <pre id="contract-path" data-export-context="合同到状态的最短路径" data-export-lang="python"><code class="language-python">request = parse_http_request()
+validate(request.model, request.messages, request.stream, request.max_tokens)
+target = route_to_model_replica(request.model, request.tenant, load, health)
+enqueue(target, request)</code></pre>
+</section>
+
+<section id="mechanism">
+  <div class="head">
+    <h2>核心机制</h2>
+    <span class="tag">Mechanism</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Serving 请求状态矩阵" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>前态</th>
+          <th>后态</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>错了会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>入口校验</td>
+          <td>HTTP 请求和字段</td>
+          <td>合法或拒绝</td>
+          <td>鉴权、配额、模型名、上下文长度、当前负载</td>
+          <td>接纳结果、错误码、入口日志</td>
+          <td>把明显超限的请求推到后面，最后在引擎层 OOM</td>
+        </tr>
+        <tr>
+          <td>路由</td>
+          <td>待处理请求</td>
+          <td>绑定到某个副本</td>
+          <td>模型版本、租户、健康状态、队列长度、负载</td>
+          <td>副本选择、路由记录</td>
+          <td>把请求打到忙副本，TTFT 抬高</td>
+        </tr>
+        <tr>
+          <td>prefill</td>
+          <td>sequence + prompt</td>
+          <td>KV cache 可用</td>
+          <td>prompt 长度、prefix cache、上下文 token</td>
+          <td>上下文状态、cache block</td>
+          <td>首 token 变慢，TTFT 拉长</td>
+        </tr>
+        <tr>
+          <td>decode</td>
+          <td>已有上下文</td>
+          <td>逐步生成 token</td>
+          <td>batch 混合、停止条件、输出长度、GPU 利用率</td>
+          <td>新 token、sequence 状态、统计指标</td>
+          <td>首 token 正常但后续 token 变慢，TPOT 变差</td>
+        </tr>
+        <tr>
+          <td>返回与观测</td>
+          <td>生成中的 token</td>
+          <td>客户端收到流式结果</td>
+          <td>网络状态、响应通道、错误和 usage</td>
+          <td>流式响应、usage、TTFT、TPOT、总时延</td>
+          <td>服务已经算完，但客户端看起来像卡住</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这张表的作用很简单：先看对象状态在哪里变，再看哪一层最可能出问题。慢请求通常先拆成排队、prefill、decode 和返回四段，再去定位真正的瓶颈。</p>
+</section>
+
+<section id="example">
+  <div class="head">
+    <h2>请求案例</h2>
+    <span class="tag">Example</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>一个客服聊天请求怎么走</h3>
+      <p>假设一个客服助手通过 OpenAI 兼容接口发起流式聊天请求：系统提示词较长，用户问题很短，服务有两个副本，后端使用高吞吐推理引擎。这个例子足够小，能看清路径，又不会把真实机制抹平。</p>
+      <p>请求先经过入口校验，再由服务层选择副本；副本内部把请求转成 sequence，先做 prefill 建立上下文，再做 decode 逐步生成 token，最后把结果流式返回，同时记录 usage 和时延。</p>
+    </div>
+    <div class="box warn">
+      <h3>看这个例子时要盯住什么</h3>
+      <ul>
+        <li>入口还没放行前，GPU 不该背锅。</li>
+        <li>prefill 慢，多半先看 prompt 长度、prefix cache 和上下文压力。</li>
+        <li>decode 慢，常见问题是输出很长、batch 混合差、GPU 被别的请求挤占。</li>
+      </ul>
+    </div>
+  </div>
+  <div class="codebar"><span>请求路径伪代码</span><button class="copy" data-copy="request-flow">复制</button></div>
+  <pre id="request-flow" data-export-context="请求路径伪代码" data-export-lang="python"><code class="language-python">request = parse_http_request()
+validate(request.model, request.messages, request.stream, request.max_tokens)
+target = route_to_model_replica(request.model, request.tenant, load, health)
+enqueue(target, request)
+
+sequence = target.start_sequence(request)
+engine.prefill(sequence)  # prompt -> KV cache, TTFT 关键路径
+while not sequence.finished():
+    token = engine.decode_step(sequence)
+    stream_to_client(token)
+
+record_metrics(queue_time, ttft, tpot, total_latency, status)</code></pre>
+</section>
+
+<section id="walkthrough">
+  <div class="head">
+    <h2>完整走读</h2>
+    <span class="tag">Walkthrough</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>把一条请求从头走到尾</h3>
+      <p>1. 客户端发来请求，外层只知道这是一个 HTTP / OpenAI-compatible 入口。2. 服务层先做鉴权、配额、字段合法性和上下文长度检查。3. 如果请求合法，再按照模型名、租户、健康状态和负载去挑副本。</p>
+      <p>4. 副本拿到请求后才开始排队。5. 引擎把 request 转成 sequence，先做 prefill，把 prompt 编成可复用的上下文状态。6. 接下来进入 decode，逐步生成 token，期间会一直和 batch、GPU 利用率和停止条件打交道。7. token 经过流式连接回到客户端。8. 整个过程结束后，系统写入 usage、TTFT、TPOT、queue time 和 status。</p>
+    </div>
+    <div class="box info">
+      <h3>这条走读的用处</h3>
+      <p>它的作用是把症状归位。你以后看到“慢请求”，先问它卡在哪一步，再决定是该看排队、prefill、decode，还是客户端返回链路。</p>
+      <p>同样的顺序还能帮你分辨问题有没有被说混：队列变长、GPU 忙、stream 慢、客户端超时，这四个现象常常同时出现，但根因不一样。</p>
+    </div>
+  </div>
+</section>
+
+<section id="traceflow">
+  <div class="head">
+    <h2>两条请求怎么分叉</h2>
+    <span class="tag">Trace</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>短请求和长请求，不一定卡在同一层</h3>
+      <p>先看两个最常见的样子。A 是短 prompt、正常排队的客服问答；B 是长上下文、带系统提示词和历史对话的总结请求。两个请求都可能叫“慢”，但慢的层次不同。</p>
+      <p>A 如果 TTFT 高，常见原因是入口排队、路由等待或副本繁忙；B 如果 TTFT 高，常见原因是 prefill 更重、prefix cache 命中差或上下文长度把首次 token 推迟了。两者都慢，不代表同一个瓶颈。</p>
+    </div>
+    <div class="box info">
+      <h3>先问三个问题</h3>
+      <p>第一，先确认请求有没有真正进入引擎。第二，确认 prefill 有没有做完。第三，确认 decode 是否已经开始并变慢。把这三层顺序问清，很多“服务很慢”的描述就能分成可检查的症状。</p>
+      <p>如果 A 和 B 都慢，先怀疑队列、路由和副本数；如果 A 还好、B 明显慢，先怀疑 prompt 长度和 cache 命中；如果首 token 正常、后面 token 慢，就去看 decode 和 batch。把这三种分叉记住，后面看 SLO 就能先问对层。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="两条请求分叉表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>请求样子</th>
+          <th>先观察什么</th>
+          <th>最可能卡在哪层</th>
+          <th>第一检查</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>短 prompt，TTFT 偏高</td>
+          <td>queue time、route wait、连接状态</td>
+          <td>入口或服务层</td>
+          <td>看排队、限流、健康副本是否不足</td>
+        </tr>
+        <tr>
+          <td>长 prompt，TTFT 偏高</td>
+          <td>上下文长度、prefix cache、prefill time</td>
+          <td>prefill</td>
+          <td>看 prompt 是否太长、历史是否可裁剪</td>
+        </tr>
+        <tr>
+          <td>首 token 正常，后续变慢</td>
+          <td>输出长度、batch 混合、GPU 利用率</td>
+          <td>decode</td>
+          <td>看长输出、调度不均或资源是否被挤占</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="ledger">
+  <div class="head">
+    <h2>状态账本</h2>
+    <span class="tag">Ledger</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>Serving 的每一层都在改状态</h3>
+      <p>这页最重要的习惯是盯住“谁写了什么”。一个请求从入口到返回，会在多个地方留下状态：请求对象、队列位置、副本选择、sequence、KV cache、流式连接和指标记录。</p>
+      <p>只要你知道某个状态是在哪一步被写入的，就能反推它什么时候应该存在，什么时候应该失效，什么时候不该拿来排障。这个方法比单纯记流程图更稳定。</p>
+    </div>
+    <div class="box info">
+      <h3>失效时最容易错的地方</h3>
+      <p>如果请求在入口被拒绝，就不该再期待 sequence 或 KV cache；如果流式返回已经结束，连接和上下文都应该回收；如果副本切换了，旧副本上的缓存和队列状态不能继续当成当前事实。很多故障都发生在“状态还在被错误沿用”的时候。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Serving 状态账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>谁创建</th>
+          <th>谁读取</th>
+          <th>谁写入 / 失效</th>
+          <th>典型症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>请求对象</td>
+          <td>入口解析层</td>
+          <td>鉴权、路由、观测</td>
+          <td>在入口阶段被标记合法、拒绝或重试</td>
+          <td>字段不合法却进到后面，最后变成 5xx</td>
+        </tr>
+        <tr>
+          <td>队列位置</td>
+          <td>服务层 admission / router</td>
+          <td>调度器、健康检查、限流器</td>
+          <td>入队、出队、丢弃、降级</td>
+          <td>TTFT 长但引擎利用率不高，说明卡在排队</td>
+        </tr>
+        <tr>
+          <td>sequence</td>
+          <td>副本内部</td>
+          <td>prefill、decode、停止条件</td>
+          <td>状态随着 token 生成逐步变化</td>
+          <td>写成了 request 级别变量，调度后全乱</td>
+        </tr>
+        <tr>
+          <td>KV cache</td>
+          <td>prefill 阶段</td>
+          <td>decode、后续 batch</td>
+          <td>被写入、复用、淘汰</td>
+          <td>prefill 很重但缓存没起作用，首 token 很慢</td>
+        </tr>
+        <tr>
+          <td>流式连接</td>
+          <td>返回链路</td>
+          <td>客户端、网关、超时控制</td>
+          <td>写入 token、关闭、重置</td>
+          <td>服务已经生成，但客户端看起来像没返回</td>
+        </tr>
+        <tr>
+          <td>指标记录</td>
+          <td>返回完成时</td>
+          <td>观测、容量规划、告警</td>
+          <td>写入 TTFT、TPOT、queue time、status</td>
+          <td>指标没分层，最后所有问题都被平均值吞掉</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="admission">
+  <div class="head">
+    <h2>接纳与背压</h2>
+    <span class="tag">Admission</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>为什么请求要分层接纳</h3>
+      <p>Serving 最容易出问题的地方，常常出现在决定“先接谁、后接谁、要不要暂时不接”的那一步。高并发时，系统必须在接收、排队、拒绝和降级之间做选择。</p>
+      <p>这会直接影响 TTFT、错误率和资源利用率。队列是缓冲，也是风险；背压是保护系统的方法，也是让结果更可解释的控制点。</p>
+    </div>
+    <div class="box info">
+      <h3>四个动作</h3>
+      <p>接收：说明请求已经通过入口检查，并进入服务范围。排队：说明副本暂时没空，但还愿意等待。拒绝：说明当前负载下继续接收只会把问题放大。降级：说明系统选了一个更低成本或更低能力的返回方式，至少先保住可用性。</p>
+    </div>
+  </div>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" type="button" data-trace-step="step-a">
+        <code>request -> admission</code><span>状态：新请求</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="step-b">
+        <code>admit -> queue</code><span>状态：等待执行</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="step-c">
+        <code>queue -> reject/degrade</code><span>状态：过载</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-a">
+        <b>新请求</b><span>HTTP 请求 / 外部合同</span>
+        <p>读：模型名、messages、stream、长度、当前负载。写：接纳检查结果。症状：如果这里没挡住超限请求，后面就会把问题推到引擎层。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-b">
+        <b>等待执行</b><span>服务层队列</span>
+        <p>读：副本健康、排队深度、租户配额。写：队列位置、等待时间。症状：TTFT 变长但 GPU 还没满，通常先看这里。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-c">
+        <b>过载分支</b><span>拒绝或降级</span>
+        <p>读：阈值、超时、重试压力。写：429 / 503 / 降级响应。症状：如果没有这个分支，系统会用无限等待把错误放大。</p>
+      </div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="接纳与背压判断表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>现象</th>
+          <th>优先动作</th>
+          <th>读什么</th>
+          <th>写什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>队列短、TTFT 稳</td>
+          <td>正常接收</td>
+          <td>副本健康、模型负载、上下文长度</td>
+          <td>接纳、路由、开始 prefill</td>
+        </tr>
+        <tr>
+          <td>队列增长但还能消化</td>
+          <td>适度排队</td>
+          <td>等待时间、峰值速率、重试情况</td>
+          <td>队列位置和等待时长</td>
+        </tr>
+        <tr>
+          <td>队列持续变长，TTFT 与错误率一起涨</td>
+          <td>拒绝或降级</td>
+          <td>排队深度、超时、重试放大</td>
+          <td>429 / 503、降级响应、告警</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box">
+    <h3>一个更具体的判断例子</h3>
+    <p>假设现在有两条请求同时到达：一条是 120 字的短问答，一条是 8k token 的长总结。短问答排队 2 秒还能接受；长总结如果继续排队，很可能把后面所有短请求一起拖慢。这个时候，服务层不应该只盯着“还能不能进”，而要先问“进来之后，会不会把别的请求也挤坏”。</p>
+    <p>这就是 admission 的判断方式：先看当前负载是否已经逼近不可接受的等待区间，再看这个请求会不会放大等待。服务层在这里做的是判断系统还能不能保持可解释的延迟和错误率。</p>
+  </div>
+  <div class="codebar"><span>接纳策略伪代码</span><button class="copy" data-copy="admission-policy">复制</button></div>
+  <pre id="admission-policy" data-export-context="接纳策略伪代码" data-export-lang="python"><code class="language-python">def admit(request, queue_depth, queue_time_p95, overload_threshold):
+    if not request.auth_ok:
+        return reject(401, "unauthorized")
+    if request.prompt_tokens > request.max_context:
+        return reject(400, "context too long")
+    if queue_depth > overload_threshold:
+        if request.is_long_running():
+            return degrade("shorter_response")
+        return reject(503, "busy")
+    if queue_time_p95 > request.max_wait:
+        return reject(429, "backpressure")
+    return queue(request)</code></pre>
+  <p>这段伪代码最重要的地方在顺序：先做硬门槛，再做负载判断，最后才把请求放入队列。顺序错了，拒绝会变得太晚，排队会变得太长，降级会被当成临时补丁。</p>
+  <p>你在练习里会用这段判断去回答三类题：哪一步该先看、什么情况应该拒绝、什么情况应该降级。等你能把这三类题答顺，背压就不再只是一个词，而是一个可执行的决策链。</p>
+  <p>这一步和后面的路由、prefill、decode 属于不同层。该拒绝的时候还继续排队，最后只会把短请求也拖慢。</p>
+</section>
+
+<section id="routing">
+  <div class="head">
+    <h2>路由与副本选择</h2>
+    <span class="tag">Routing</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>路由是挑合适的副本</h3>
+      <p>服务层要找的是对这个请求合适的副本。模型版本、租户、健康状态、上下文长度和当前排队情况，都会影响选择。</p>
+      <p>一个短问答和一个长总结，不该被当成同一类请求处理。前者更怕排队，后者更怕 prefill 压力；如果路由忽略了这些差别，负载均衡反而会把不平衡制造出来。</p>
+    </div>
+    <div class="box info">
+      <h3>你要记住的判断</h3>
+      <p>路由层读的是“谁还能接”，先看健康和负载，再看租户与模型版本，最后才决定要不要把请求送去某个副本。</p>
+      <p>所以，当你看到某个副本 TTFT 特别高，不要直接假设模型慢。它可能只是被塞进了太多长请求，或者它的 cache 命中更差。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="路由与副本选择表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>请求特征</th>
+          <th>路由优先看什么</th>
+          <th>常见选择</th>
+          <th>如果路由错了</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>短问答</td>
+          <td>健康、当前排队、返回速度</td>
+          <td>接近空闲且健康的副本</td>
+          <td>TTFT 被不必要的排队抬高</td>
+        </tr>
+        <tr>
+          <td>长上下文总结</td>
+          <td>上下文容量、prefix cache、内存压力</td>
+          <td>更适合处理长 prompt 的副本</td>
+          <td>prefill 变重，首 token 迟迟不出</td>
+        </tr>
+        <tr>
+          <td>特定租户或版本</td>
+          <td>租户隔离、模型版本、健康约束</td>
+          <td>满足合同的指定副本</td>
+          <td>把请求送到不该去的副本，最后变成 4xx / 5xx</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>路由选择伪代码</span><button class="copy" data-copy="routing-policy">复制</button></div>
+  <pre id="routing-policy" data-export-context="路由选择伪代码" data-export-lang="python"><code class="language-python">def route_to_model_replica(model, tenant, queue_depth, health, prompt_tokens):
+    candidates = [r for r in replicas if r.model == model and r.healthy]
+    if tenant.is_pinned:
+        candidates = [r for r in candidates if r.tenant == tenant]
+    if prompt_tokens > LONG_CONTEXT_THRESHOLD:
+        candidates = sorted(candidates, key=lambda r: (r.long_context_score, r.queue_depth))
+    else:
+        candidates = sorted(candidates, key=lambda r: (r.queue_depth, r.queue_time_p95))
+    return candidates[0] if candidates else None</code></pre>
+  <p>这段代码告诉你一件事：路由会同时读模型、租户、健康状态、上下文长度和等待情况，再决定把请求送到哪一个副本。</p>
+  <p>如果把路由简化成轮询，长请求很容易扎堆到同一个副本，TTFT 会持续变差；如果把路由简化成只看最空闲副本，健康副本和适配副本会被忽略，最后把错误变成更难排查的长尾。</p>
+  <p>你可以把这段判断接回练习题：当题目问“应该先看哪一层”时，如果问题表现为某个副本特别慢，就先从路由和副本合同开始，再决定是否继续看 decode。</p>
+</section>
+
+<section id="failurelab">
+  <div class="head">
+    <h2>故障实验室</h2>
+    <span class="tag">Failure Lab</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>把症状切成三类</h3>
+      <p>先看这个小实验。你不用真的跑服务，只要看输出，就能把“慢”拆成三种常见失败：入口排队过长、prefill 过重、decode 或连接返回变慢。每种失败都对应不同的下一步。</p>
+  <p>按钮切换的是同一条请求路径在不同状态下的日志。你要关注哪一层先露出问题，先看症状，再看日志。正常时 TTFT 不会让人等太久；长 prompt 时预填充会先变重；排队爆炸时引擎甚至还没开始做事。</p>
+    </div>
+    <div class="box warn">
+      <h3>观测顺序</h3>
+      <p>先读输出，再读症状，再读下一步。不要反过来：先想修哪一层，再去找证据。这样很容易把本来只需要限流的情况，误修成引擎调参。</p>
+    </div>
+  </div>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" type="button" data-terminal-case="case-1">正常</button>
+      <button class="ghost" type="button" data-terminal-case="case-2">长 prompt</button>
+      <button class="ghost" type="button" data-terminal-case="case-3">排队爆炸</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">[case normal]
+request accepted
+route -> healthy replica
+prefill -> 84 ms
+decode -> steady
+ttft -> 410 ms
+next step: keep current routing, watch p95 and queue time</pre>
+    <template data-terminal-output="case-1">[case normal]
+request accepted
+route -> healthy replica
+prefill -> 84 ms
+decode -> steady
+ttft -> 410 ms
+next step: keep current routing, watch p95 and queue time</template>
+    <template data-terminal-output="case-2">[case long prompt]
+request accepted
+route -> healthy replica
+prefill -> 1270 ms
+decode -> normal
+ttft -> 1490 ms
+next step: inspect prompt length, prefix cache hit rate, and context trimming</template>
+    <template data-terminal-output="case-3">[case overload]
+request accepted
+queue wait -> 18.2 s
+route -> delayed
+prefill -> not reached yet
+status -> 503 after timeout
+next step: reduce admission pressure, check queue depth, replica count, and retry amplification</template>
+  </div>
+</section>
+
+<section id="metrics">
+  <div class="head">
+    <h2>指标归因</h2>
+    <span class="tag">Metrics</span>
+  </div>
+  <div class="grid3">
+    <div class="box">
+      <h3>TTFT</h3>
+      <p>看用户多久看到第一个 token。它会同时受入口排队、路由等待、prefill 和返回链路影响。</p>
+    </div>
+    <div class="box">
+      <h3>TPOT</h3>
+      <p>看后续 token 的平均节奏。它更容易暴露 decode、batch 混合、GPU 利用率和长输出的压力。</p>
+    </div>
+    <div class="box">
+      <h3>Queue Time</h3>
+      <p>看请求进入执行前等了多久。它先反映服务层决策，不等于引擎内核慢。</p>
+    </div>
+  </div>
+  <div class="math-block" data-export-context="指标分解" data-export-lang="text">
+    TTFT = 入口排队 + 路由等待 + prefill + 首次返回
+    <p>这是一个拆分顺序：先把等待和计算分开，再决定该调队列、扩容、副本、cache 还是客户端超时。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="指标与排查位置" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>优先看哪层</th>
+          <th>下一步</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>TTFT 上升</td>
+          <td>入口、排队、prefill、返回</td>
+          <td>先拆 queue time，再看 prompt 长度和 prefix cache</td>
+        </tr>
+        <tr>
+          <td>TPOT 上升</td>
+          <td>decode、batch、GPU</td>
+          <td>看输出长度、batch 混合和副本负载</td>
+        </tr>
+        <tr>
+          <td>5xx 增多</td>
+          <td>入口或引擎错误</td>
+          <td>先分 4xx / 5xx，再看是请求问题还是系统问题</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见误区</h2>
+    <span class="tag">Mistakes</span>
+  </div>
+  <div class="grid2">
+    <div class="box warn">
+      <h3>误区 1：把所有 5xx 都归到模型质量</h3>
+      <p>很多错误根本没走到模型输出，可能是鉴权、限流、队列、路由、超时或引擎 OOM。先看返回位置，再看模型内容。</p>
+    </div>
+    <div class="box warn">
+      <h3>误区 2：只看平均延迟</h3>
+      <p>LLM 请求长度差异很大，平均值会把长尾藏起来。TTFT、TPOT、p95/p99 和队列时间比单个平均值更能解释体验。</p>
+    </div>
+    <div class="box warn">
+      <h3>误区 3：无限排队就能保护吞吐</h3>
+      <p>队列能缓冲波峰，也会把延迟和资源压力往后推。没有 admission control，排队只是在放大拥塞。</p>
+    </div>
+    <div class="box warn">
+      <h3>误区 4：把 stream 当成性能优化</h3>
+      <p>流式返回改善的是用户感知，不一定减少总计算量。它还会把连接管理、超时和返回链路的问题显出来。</p>
+    </div>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>下一步</h2>
+    <span class="tag">Bridge</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>这节课后先看什么</h3>
+      <p>下一单元会把 OpenAI 兼容接口展开，讨论 chat/completions、stream、错误码和客户端可见行为。你可以把这节课记成“系统边界图”，下一节再把边界上的协议补细。</p>
+      <p>如果你已经能把慢请求拆成排队、prefill、decode 和返回，就说明你不会在下一节把 API 形状和引擎细节混在一起。那时看 stream、超时和错误码，会更像是在给这条路径补协议。先把 queue time 和 TTFT 分开记，再对照一遍 route wait。</p>
+    </div>
+    <div class="box info">
+      <h3>下一步再看</h3>
+      <p>先别钻 tokenizer、CUDA kernel、KV cache 的具体布局、Ray Serve 部署细节和自动伸缩策略。它们会在后面的单元回来，但现在还没有共同对象可供你对齐。</p>
+      <p>等你把这页的边界、状态和指标讲顺，再回去看这些内容，才知道它们是在缩短哪一步、保护哪一个状态，或者把哪一种等待挪到别处。</p>
+    </div>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>边界</h2>
+    <span class="tag">Boundary</span>
+  </div>
+  <div class="grid3">
+    <div class="box">
+      <h3>本页覆盖</h3>
+      <p>一次请求的生命周期、服务层和引擎层的分工、TTFT / TPOT / 队列时间的归因。</p>
+    </div>
+    <div class="box">
+      <h3>本页不展开</h3>
+      <p>OpenAI 兼容接口细节、队列策略、路由算法、多租户隔离、自动伸缩和生产故障清单。</p>
+    </div>
+    <div class="box">
+      <h3>为什么要先停在这里</h3>
+      <p>先有统一对象，后面才能讨论“谁在排队、谁在算、谁在返回”。没有这条线，后续所有调优都容易变成错层修补。</p>
+    </div>
+  </div>
+  <div class="box" style="margin-top:14px;">
+    <h3>先放一边</h3>
+    <p>先别去追 continuous batching、speculative decoding、分布式 KV cache、服务网格和多集群部署。等你能把本页的状态账本讲清，再回去看这些主题，才知道它们是在缩短哪一步、保护哪一个状态，或者把哪一种等待挪到别处。</p>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>作答目标</strong>
+    <p>先能分层，再能诊断。大多数题都在测你能不能把症状放回请求路径，同时避免只背概念名。</p>
+  </div>
+  <div class="review-card">
+    <strong>检查重点</strong>
+    <p>优先看：对象属于哪一层、它读什么状态、写了什么状态、出错时最先查哪里。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、边界判断</h3>
+      <p>先看某个概念属于外部合同、服务层还是引擎层。</p>
+    </div>
+    <div class="quick-review">
+      <b>判断准则</b>
+      <span>客户端可见的是 API 合同；接收、拒绝、路由是服务层；prefill、decode、KV cache 是引擎层。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、边界判断" data-title="OpenAI 兼容接口主要解决什么问题？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">API 合同</span></div>
+      <h3>OpenAI 兼容接口主要解决什么问题？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q1" value="A">A. 让客户端以熟悉的请求和响应格式调用本地或自托管模型服务</label>
+        <label><input type="radio" name="q1" value="B">B. 保证每个 token 都由 OpenAI 的服务器生成</label>
+        <label><input type="radio" name="q1" value="C">C. 自动消除所有 GPU 显存压力</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">抓住“兼容”和“托管方”是两回事。</p>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、边界判断" data-title="Router 和 engine scheduler 可以互换吗？" data-answer="false">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">分层</span></div>
+      <h3>Router 和 engine scheduler 可以互换吗？</h3>
+      <label><input type="radio" name="q2" value="true">对</label>
+      <label><input type="radio" name="q2" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">一个选择副本，一个安排 sequence 的执行步。</p>
+    </div>
+
+    <div class="q short" data-question="q3" data-group="一、边界判断" data-title="填空：处理 prompt 并建立 KV cache 的阶段叫什么？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">prefill</span></div>
+      <h3>填空：处理 prompt 并建立 KV cache 的阶段叫什么？</h3>
+      <input type="text" name="q3" data-answer="prefill" placeholder="写一个英文术语">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">它通常是 TTFT 的关键路径之一。</p>
+    </div>
+
+    <div class="q full" data-question="q4" data-group="一、边界判断" data-title="用三句话解释 Serving 层和推理引擎层的边界。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">边界表达</span></div>
+      <h3>用三句话解释 Serving 层和推理引擎层的边界。</h3>
+      <p class="solve-note">回答结构：对象、职责、混淆后果。先说谁在面对客户端，再说谁在处理 sequence，最后说为什么不能混层。</p>
+      <textarea name="q4" placeholder="第一句说 Serving 层负责什么；第二句说引擎层负责什么；第三句说为什么不能混在一起。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>高质量回答至少包含：Serving 层负责协议、接纳、路由、排队、返回和观测；引擎层负责 prefill、decode、KV cache 和 token 生成；混层会让排障对象不清，最后把入口问题误判成模型问题。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、生命周期诊断</h3>
+      <p>把现象放回请求路径，找出最先应该检查的层。</p>
+    </div>
+    <div class="quick-review">
+      <b>诊断准则</b>
+      <span>TTFT 先拆排队和 prefill；TPOT 先看 decode 和 batch；错误先看 4xx/5xx 和超时边界。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q5" data-group="二、生命周期诊断" data-title="一个请求排队 20 秒后才开始 prefill，最先归因到哪里？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">队列</span></div>
+      <h3>一个请求排队 20 秒后才开始 prefill，最先归因到哪里？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q5" value="A">A. 服务层队列或 admission 策略</label>
+        <label><input type="radio" name="q5" value="B">B. 模型输出质量</label>
+        <label><input type="radio" name="q5" value="C">C. tokenizer 词表语义</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">还没开始 prefill，就先不要调 decode 参数。</p>
+    </div>
+
+    <div class="q" data-question="q6" data-group="二、生命周期诊断" data-title="TTFT 正常但长输出期间 token 变慢，优先检查什么？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">decode</span></div>
+      <h3>TTFT 正常但长输出期间 token 变慢，优先检查什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q6" value="A">A. Decode 阶段、batch 混合、输出长度和 GPU 利用率</label>
+        <label><input type="radio" name="q6" value="B">B. 是否所有客户端都改成非流式</label>
+        <label><input type="radio" name="q6" value="C">C. 课程地图是否有链接</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">首 token 不慢，说明主要问题不一定在 prefill。</p>
+    </div>
+
+    <div class="q short" data-question="q7" data-group="二、生命周期诊断" data-title="把 TTFT 拆成两个可能来源。">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">指标拆分</span></div>
+      <h3>把 TTFT 拆成两个可能来源。</h3>
+      <input type="text" name="q7" data-answer="排队;prefill" placeholder="例如：入口排队 + prefill 计算">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">至少写出一个服务层来源和一个引擎层来源。</p>
+    </div>
+
+    <div class="q full" data-question="q8" data-group="二、生命周期诊断" data-title="诊断：长上下文请求导致首 token 很慢。">
+      <div class="q-meta"><span class="pill">error diagnosis</span><span class="pill">prefill</span></div>
+      <h3>诊断：长上下文请求导致首 token 很慢。</h3>
+      <p class="solve-note">回答结构：原因、指标表现、缓解手段。至少说出一个服务层缓解和一个观测切口。</p>
+      <textarea name="q8" placeholder="说明它为什么影响 TTFT，并写出两个可能的服务层缓解手段。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>高质量回答应指出：长 prompt 让 prefill 更重，KV cache 压力更大，因此 TTFT 变长；服务层可做上下文长度限制、prompt 压缩、prefix cache 命中和 admission control；观测上应先拆 queue time 和 prefill time，不要只看总时延。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、迁移表达</h3>
+      <p>把这节课迁移到 vLLM、SGLang、TensorRT-LLM、Ray Serve LLM 的选型讨论中。</p>
+    </div>
+    <div class="quick-review">
+      <b>表达准则</b>
+      <span>不要说“哪个框架最好”，先说明你要比较的是服务层能力还是引擎层能力。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q9" data-group="三、迁移表达" data-title="比较工具时，哪一种说法更清楚？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">选型表达</span></div>
+      <h3>比较工具时，哪一种说法更清楚？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q9" value="A">A. 我们先分开比较入口/路由/伸缩能力，以及引擎调度/显存/吞吐能力</label>
+        <label><input type="radio" name="q9" value="B">B. 只要 QPS 高，就是完整 Serving 架构最好</label>
+        <label><input type="radio" name="q9" value="C">C. 只要接口兼容，就不需要监控和背压</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">选型前先分层。</p>
+    </div>
+
+    <div class="q short" data-question="q10" data-group="三、迁移表达" data-title="匹配：OpenAI-compatible 最接近哪个边界？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">接口边界</span></div>
+      <h3>匹配：OpenAI-compatible 最接近哪个边界？</h3>
+      <input type="text" name="q10" data-answer="外部 API 合同,API 合同" placeholder="写出最接近的边界">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">它解决客户端如何调用服务。</p>
+    </div>
+
+    <div class="q full" data-question="q11" data-group="三、迁移表达" data-title="写一段给同事的解释：为什么只跑起 vLLM server 还不够？">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">工程表达</span></div>
+      <h3>写一段给同事的解释：为什么只跑起 vLLM server 还不够？</h3>
+      <p class="solve-note">从入口合同、队列/背压、路由、副本、观测、错误处理里选 4 个点说明，别把问题全扔给引擎。</p>
+      <textarea name="q11" placeholder="从入口合同、队列/背压、路由、副本、观测、错误处理里选 4 个点说明。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好的回答会说：vLLM server 只覆盖了引擎和部分服务能力，但线上还要处理 API 合同、鉴权、限流、路由、队列、实例健康、观测、告警和回滚。没有外圈能力，接口兼容不等于可运营。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="三、迁移表达" data-title="综合解释：讲完一次请求的完整路径。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">Feynman</span></div>
+      <h3>综合解释：讲完一次请求的完整路径。</h3>
+      <p class="solve-note">用 8-12 句话，从客户端请求讲到 token stream 完成。必须包含入口、路由、队列、prefill、decode、指标。</p>
+      <textarea name="q12" placeholder="用 8-12 句话，从客户端请求讲到 token stream 完成。必须包含：入口、路由、队列、prefill、decode、指标。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>高质量回答应该像一条连续故事链：请求先经过协议和校验，再由服务层路由和排队；进入副本后转成 sequence，先 prefill 建立上下文，再 decode 逐步生成 token；最后流式返回并记录 TTFT、TPOT、队列时间和错误率。只列术语不算完成。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <div class="source-list">
+  <a href="../index.html">
+    <b>课程地图</b>
+    <span>课程总论、路线、单元顺序和相邻主题的来源。它说明这节课前后接哪几节。</span>
+  </a>
+  <a href="https://docs.ray.io/en/latest/serve/index.html">
+    <b>Ray Serve</b>
+    <span>deployment、replica、router、autoscaling 和 metrics 等服务层概念。访问日期：2026-06-21。</span>
+  </a>
+  <a href="https://docs.ray.io/en/latest/serve/llm/index.html">
+    <b>Ray Serve LLM</b>
+    <span>服务层、OpenAI 兼容入口、多副本和伸缩相关的公开文档来源。访问日期：2026-06-21。</span>
+  </a>
+  <a href="https://docs.vllm.ai/en/latest/">
+    <b>vLLM 文档</b>
+    <span>OpenAI 兼容服务、推理引擎参数、调度和批处理相关的公开文档来源。访问日期：2026-06-21。</span>
+  </a>
+  <a href="https://nvidia.github.io/TensorRT-LLM/">
+    <b>TensorRT-LLM 文档</b>
+    <span>高性能 runtime、serve、batching、KV cache 和后端部署相关的公开文档来源。访问日期：2026-06-21。</span>
+  </a>
+  <a href="https://docs.sglang.ai/">
+    <b>SGLang 文档</b>
+    <span>server、router、runtime 和结构化生成相关的公开文档来源。访问日期：2026-06-21。</span>
+  </a>
+</div>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

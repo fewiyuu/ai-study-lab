@@ -1,0 +1,953 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scaling、验证集与评估</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="从零训练小语言模型" data-unit="06">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>从零训练小语言模型</strong>
+        <span>06</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>概念骨架</a>
+        <a href="#terms"><span class="dot"></span>术语误区</a>
+        <a href="#loss"><span class="dot"></span>Loss 曲线</a>
+        <a href="#validation"><span class="dot"></span>验证集</a>
+        <a href="#scaling"><span class="dot"></span>Scaling 直觉</a>
+        <a href="#eval"><span class="dot"></span>评估协议</a>
+        <a href="#contamination"><span class="dot"></span>污染与泄漏</a>
+        <a href="#examples"><span class="dot"></span>诊断例子</a>
+        <a href="#bridge"><span class="dot"></span>下一步</a>
+        <a href="#check"><span class="dot"></span>自测答案方向</a>
+        <a href="#practice"><span class="dot"></span>练习导出</a>
+        <a href="#export"><span class="dot"></span>导出练习记录</a>
+        <a href="#sources"><span class="dot"></span>公开资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">这一页先把训练结果读明白：先看曲线是否可信，再看验证集是否隔离，再看 scaling 结论是否过度，最后才给出评估判断。每次都要写清协议和边界。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">评估判断</div>
+          <h1>Scaling、验证集与评估</h1>
+          <p>这一页接在 GPU 系统之后，专门处理“训练看起来在进步，但曲线、验证集和 benchmark 结论未必可信”这类判断问题。你要把 loss、验证集、规模趋势和污染检查放在同一张表里看，而不是把最后一个分数当结论。</p>
+
+          <div class="course-links">
+            <a href="../05_GPU系统与性能瓶颈/学习页.html">上一节：GPU 系统与性能瓶颈</a><a href="../index.html">课程地图</a><a href="../07_从教学代码到开放训练配方/学习页.html">下一节：从教学代码到开放训练配方</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页，你应该能做什么</h3>
+          <ul>
+  <li>能用训练 loss、验证 loss 和 perplexity 说明一次训练是否健康。</li>
+  <li>能设计一个最小验证集，并说清开发、封存和最终测试各自的用途。</li>
+  <li>能用 scaling 直觉比较实验配置，并在 benchmark 分数前先检查协议和污染边界。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">实验判断力</span>
+  </div>
+  <div class="grid">
+    <div class="box">
+      <h3>会读 loss 曲线</h3>
+      <p>能区分正常下降、过拟合、欠拟合、学习率异常、数据错误和评估口径变化，而不是只看最后一个数字。</p>
+    </div>
+    <div class="box">
+      <h3>会设计验证集</h3>
+      <p>知道验证集必须从训练中隔离出来，且要覆盖目标分布；在预训练场景下，还要分域记录 loss。</p>
+    </div>
+    <div class="box">
+      <h3>会用 scaling 规划预算</h3>
+      <p>理解 loss 往往随参数、数据和算力呈平滑下降趋势，但小实验只能给方向，不能直接承诺大模型结果。</p>
+    </div>
+  </div>
+  <div class="box warn" data-export-context="单位边界" data-export-lang="text">
+    <h3>本页边界</h3>
+    <p>这里不展开完整 benchmark 实现，也不教数据清洗流水线。你只需要学会把训练 step 拆成可以核对的结论证据：曲线、验证集、规模趋势、评估协议和污染检查。</p>
+  </div>
+</section>
+
+<section id="map">
+  <div class="head">
+    <h2>概念骨架</h2>
+    <span class="tag">Mental Model</span>
+  </div>
+  <p>直觉上，训练实验像一次科学测量：GPU 系统让实验能跑，loss 曲线给过程信号，验证集给泛化信号，scaling law 给预算方向，评估协议决定结论能不能对外比较。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" type="button" data-trace-step="train"><code>train</code><span>训练运行本身</span></button>
+      <button class="trace-line" type="button" data-trace-step="curve"><code>curve</code><span>loss / perplexity 读法</span></button>
+      <button class="trace-line" type="button" data-trace-step="val"><code>val</code><span>验证集隔离与分域</span></button>
+      <button class="trace-line" type="button" data-trace-step="scale"><code>scale</code><span>参数、数据与算力</span></button>
+      <button class="trace-line" type="button" data-trace-step="eval"><code>eval</code><span>协议、prompt 与解码</span></button>
+      <button class="trace-line" type="button" data-trace-step="boundary"><code>boundary</code><span>结论边界与污染</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="train">
+        <b>train</b>
+        <span>训练运行</span>
+        <p>先确认 batch、dtype、训练 tokens 和日志口径，再讨论结果好不好。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="curve">
+        <b>curve</b>
+        <span>loss / PPL</span>
+        <p>训练 loss 看优化过程，验证 loss 看泛化信号，perplexity 只是把同一个 loss 换成更容易读的单位。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="val">
+        <b>val</b>
+        <span>held-out</span>
+        <p>验证集必须先隔离，再看是否代表目标分布；总 loss 不够时，要补分域统计。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="scale">
+        <b>scale</b>
+        <span>趋势</span>
+        <p>规模趋势能帮你挑实验点，但不能把少量小模型点直接外推到大模型结论。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="eval">
+        <b>eval</b>
+        <span>protocol</span>
+        <p>prompt、解码、样本、脚本和随机性都要写清楚，否则分数不可比。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="boundary">
+        <b>boundary</b>
+        <span>结论边界</span>
+        <p>污染、近重复、时间泄漏和调榜泄漏都可能让“更好”看起来比实际更可靠。</p>
+      </div>
+    </div>
+  </div>
+  <div class="box info" data-export-context="训练判断顺序" data-export-lang="text">
+    <b>判断顺序</b>
+    <p>先看训练曲线是否健康，再看验证集是否可信，再看规模趋势是否稳定，最后才读 benchmark 分数。少一步，结论就可能只是口径变化。</p>
+  </div>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语与误区</h2>
+    <span class="tag">Vocabulary</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="术语与误区" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>术语</th>
+          <th>直觉解释</th>
+          <th>精确定义</th>
+          <th>常见误解</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>训练 loss</b></td>
+          <td>模型在刚见过或正在学习的数据上犯错多少。</td>
+          <td>通常是每个 token 的平均交叉熵，记录在训练 batch 上。</td>
+          <td>训练 loss 下降不等于泛化变好；它可能只是记住训练集或数据更简单。</td>
+        </tr>
+        <tr>
+          <td><b>验证 loss</b></td>
+          <td>模型在没参与参数更新的数据上犯错多少。</td>
+          <td>固定 held-out 数据上的平均交叉熵，用于调参、选 checkpoint 和判断泛化。</td>
+          <td>反复用验证集选模型，会让验证集也被间接训练。</td>
+        </tr>
+        <tr>
+          <td><b>困惑度 PPL</b></td>
+          <td>平均每步像是在多少个等可能 token 中做选择。</td>
+          <td>若 loss 使用自然对数，PPL = exp(loss)。</td>
+          <td>不同 tokenizer、不同文本分布上的 PPL 不能直接比较。</td>
+        </tr>
+        <tr>
+          <td><b>测试集</b></td>
+          <td>最后一次验收用的封存数据。</td>
+          <td>不用于日常调参，不用于选择 checkpoint，只在报告最终结论时使用。</td>
+          <td>把测试集看很多次再改模型，会把测试集变成验证集。</td>
+        </tr>
+        <tr>
+          <td><b>Scaling law</b></td>
+          <td>规模变大时，loss 往往按平滑规律下降。</td>
+          <td>经验性幂律关系，常考察参数量、训练 tokens、算力和 loss 的关系。</td>
+          <td>它不是自然定律；数据质量、架构、优化器和训练配方都会改趋势。</td>
+        </tr>
+        <tr>
+          <td><b>污染 contamination</b></td>
+          <td>考试题提前出现在训练或调参材料里。</td>
+          <td>评估样本、答案、近重复、解析或任务模板泄漏到训练、验证、提示或调参流程中。</td>
+          <td>污染不只等于完全重复；近重复、答案泄漏和多次调榜也会抬高分数。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="loss">
+  <div class="head">
+    <h2>Loss 曲线：先看过程是否可信</h2>
+    <span class="tag">Curve Reading</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <p><b>直觉：</b>loss 曲线是训练过程的体温计。它不告诉你模型会不会写代码、会不会推理，但能告诉你训练有没有明显发烧：学习率太大、数据断流、评估口径变了、过拟合或还没学够。</p>
+      <p><b>术语：</b>语言模型训练常用交叉熵 loss。对一个序列，模型在每个位置给下一个 token 一个概率；如果正确 token 的概率越高，负对数概率越低，loss 越低。</p>
+      <div class="math-block" data-export-context="loss 与 perplexity 公式" data-export-lang="math">
+        $$CrossEntropy = - \mathrm{mean}_{tokens}\log p(x_t\mid x_{<t})$$
+        $$Perplexity = \exp(CrossEntropy)$$
+        <p>这里的意思很简单：训练时先看平均交叉熵，再把它换成 perplexity 时，要知道两者本质上是同一个信号。</p>
+      </div>
+      <p>训练时至少记录四条信息：训练 loss、验证 loss、学习率、有效 token 数。只记录 step 编号，会让不同 batch、不同 accumulation、不同 GPU 数的实验难以比较。</p>
+    </div>
+    <div class="box warn" data-export-context="读曲线顺序" data-export-lang="table">
+      <h3>读曲线的顺序</h3>
+      <ol>
+        <li>先确认 x 轴是 step、token 还是 wall-clock。</li>
+        <li>看训练 loss 是否平滑下降，有没有尖峰、平台或突然断崖。</li>
+        <li>看验证 loss 是否同步下降，是否开始反弹。</li>
+        <li>把曲线变化和学习率、数据 shard、checkpoint 恢复、batch 改动对齐。</li>
+        <li>最后才比较不同模型的最终 loss。</li>
+      </ol>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="读曲线的四种信号" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>观察</th>
+          <th>更可能的含义</th>
+          <th>先检查什么</th>
+          <th>不要急着做什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>训练 loss 降，验证 loss 升</td>
+          <td>过拟合、验证集太小或训练 / 验证分布不一致。</td>
+          <td>验证集大小、去重、分域 loss、checkpoint 选择频率。</td>
+          <td>不要只因为训练 loss 好看就继续加 epoch。</td>
+        </tr>
+        <tr>
+          <td>训练和验证 loss 都不降</td>
+          <td>欠拟合、学习率不合适、模型太小、数据管线错误。</td>
+          <td>梯度是否非零、学习率曲线、标签 shift、batch 内容。</td>
+          <td>不要直接归因于“模型能力不足”。</td>
+        </tr>
+        <tr>
+          <td>loss 周期性尖峰</td>
+          <td>坏数据 shard、学习率调度、数值溢出、恢复 checkpoint 问题。</td>
+          <td>尖峰 step 对应的数据、dtype、梯度范数、NaN/Inf。</td>
+          <td>不要只做滑动平均把问题抹平。</td>
+        </tr>
+        <tr>
+          <td>验证 loss 突然大幅变好</td>
+          <td>可能是真进步，也可能是评估脚本、tokenizer 或验证集被换了。</td>
+          <td>eval commit、数据 hash、tokenizer 版本、prompt 模板。</td>
+          <td>不要立刻宣布突破。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="validation">
+  <div class="head">
+    <h2>验证集：不是随便留一小撮数据</h2>
+    <span class="tag">Held-out Data</span>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>验证集解决什么问题</h3>
+      <p>训练集像练习册，验证集像阶段小测。练习册分数提高说明你熟悉练习题，小测分数提高才更像学到了可迁移规律。</p>
+      <p>验证集是从参数更新中隔离出来的数据，用于选择 checkpoint、比较超参和早停。它不该参与训练梯度，也不该被数据清洗规则反复“优化”。</p>
+    </div>
+    <div class="box info">
+      <h3>预训练验证集要分域</h3>
+      <p>语言模型预训练数据通常混合网页、代码、百科、论文、对话和书籍。一个总验证 loss 可能掩盖分布差异：总 loss 下降时，代码域可能变好，新闻域可能变差，低资源语言可能几乎没学到。</p>
+      <p>最小做法是保留一个总验证集，再按来源或任务类型建立若干小验证集。每次评估同时报告总 loss 和分域 loss，这能帮你判断数据配方改变到底影响了哪里。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="验证集设计清单" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>为什么要做</th>
+          <th>如果跳过会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>先文档级去重，再切分训练 / 验证 / 测试</td>
+          <td>减少近重复样本泄漏。</td>
+          <td>同一篇文章可能同时出现在训练和验证里。</td>
+        </tr>
+        <tr>
+          <td>总验证集 + 分域验证集</td>
+          <td>看清楚哪些域变好，哪些域变差。</td>
+          <td>总 loss 下降时，局部退化会被藏起来。</td>
+        </tr>
+        <tr>
+          <td>开发 / 封存 / 测试三层</td>
+          <td>让调参和最终比较分开。</td>
+          <td>验证集会被人反复看坏，最后不再可信。</td>
+        </tr>
+        <tr>
+          <td>固定 hash、tokenizer、eval batch 和随机种子</td>
+          <td>让每次评估可复核。</td>
+          <td>你看到的改进可能只是协议漂移。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn" data-export-context="最低验证集配置" data-export-lang="text">
+    <b>最低配置</b>
+    <p>至少保留：固定数据 hash、固定 tokenizer、固定 eval batch、固定随机种子、文档级隔离、总 loss、分域 loss、每次评估的代码版本。否则你看到的变化可能来自评估过程，而不是模型。</p>
+  </div>
+</section>
+
+<section id="scaling">
+  <div class="head">
+    <h2>Scaling law 直觉：规模趋势是预算工具</h2>
+    <span class="tag">Scaling</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <p><b>直觉：</b>在很多语言模型实验里，参数更多、训练 tokens 更多、算力更多时，验证 loss 会按相对平滑的方式下降。把横轴和纵轴都取对数，许多曲线会接近直线，这就是幂律的直观图像。</p>
+      <p><b>术语：</b>Scaling law 是经验规律，不是保证。它依赖数据分布、模型族、优化配方、tokenizer、训练长度和评估集。你可以用它规划实验，但不能把小样本拟合结果当成大模型承诺。</p>
+      <div class="math-block" data-export-context="scaling 公式" data-export-lang="math">
+        $$L(N,D)\approx L_{\infty}+A\cdot N^{-\alpha}+B\cdot D^{-\beta}$$
+        $$C_{\mathrm{dense}}\approx 6\cdot N\cdot D$$
+        <p>这里的 N 是非 embedding 近似参数量，D 是训练 token 数，C 是粗略训练 FLOPs。公式只表达方向：参数和数据都能降低 loss，但边际收益递减。</p>
+      </div>
+    </div>
+    <div class="box bad" data-export-context="scaling 不能这样读" data-export-lang="text">
+      <h3>不要这样理解 scaling law</h3>
+      <ul>
+        <li>不要把单次训练曲线外推到 100 倍规模。</li>
+        <li>不要只增大模型、不增加数据，然后期待无限变好。</li>
+        <li>不要忽视数据质量；更多低质重复数据可能破坏趋势。</li>
+        <li>不要把 benchmark 分数和预训练 loss 的 scaling 混成一件事。</li>
+      </ul>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Scaling 比较表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>实验类型</th>
+          <th>目的</th>
+          <th>固定什么</th>
+          <th>改变什么</th>
+          <th>看什么结论</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>模型 scaling</td>
+          <td>看同一数据预算下，模型变大是否带来更低验证 loss。</td>
+          <td>数据配方、tokenizer、训练 tokens、优化器家族、评估集。</td>
+          <td>参数量、层数、宽度或 head 数。</td>
+          <td>loss 是否按 log-log 趋势下降，是否出现欠训练。</td>
+        </tr>
+        <tr>
+          <td>数据 scaling</td>
+          <td>看同一模型下，更多 token 是否继续带来收益。</td>
+          <td>模型、学习率策略、数据质量规则、评估集。</td>
+          <td>训练 token 数或 epoch 数。</td>
+          <td>验证 loss 是否继续下降，重复数据是否导致过拟合。</td>
+        </tr>
+        <tr>
+          <td>算力最优</td>
+          <td>在固定 FLOPs 预算内分配模型大小和训练 tokens。</td>
+          <td>硬件、训练代码、评估协议、候选模型族。</td>
+          <td>N 与 D 的组合。</td>
+          <td>哪组配置在同等算力下验证 loss 更低。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="eval">
+  <div class="head">
+    <h2>评估协议：loss 之外还要看任务行为</h2>
+    <span class="tag">Evaluation</span>
+  </div>
+  <div class="grid">
+    <div class="box soft">
+      <h3>内在评估</h3>
+      <p>验证 loss、perplexity、分域 loss。优点是便宜、稳定、适合训练中频繁运行；缺点是不直接等于用户任务能力。</p>
+    </div>
+    <div class="box info">
+      <h3>下游 benchmark</h3>
+      <p>问答、常识、数学、代码、阅读理解、多语言等。优点是更接近能力展示；缺点是容易受 prompt、解码和污染影响。</p>
+    </div>
+    <div class="box warn">
+      <h3>人工与部署指标</h3>
+      <p>偏好、事实性、安全性、延迟、成本、失败案例。优点是贴近使用；缺点是昂贵且主观，需要严格协议。</p>
+    </div>
+  </div>
+  <div class="grid2" style="margin-top:10px">
+    <div class="box" data-export-context="评估协议字段" data-export-lang="table">
+      <h3>评估不是一个数字</h3>
+      <p>一个模型可能验证 loss 更低，但数学题更差；也可能 benchmark 准确率更高，但输出校准、鲁棒性或效率更差。多指标评估的意义是暴露取舍，而不是寻找一个万能分数。</p>
+      <p>给一个小语言模型评估表时，至少列出 accuracy、loss、校准、鲁棒性、效率和污染检查。</p>
+    </div>
+    <div class="box">
+      <h3>Prompt 和解码参数也是评估的一部分</h3>
+      <p>同一个 benchmark，zero-shot、few-shot、chain-of-thought、温度、top-p、最大输出长度、停止词和评分脚本都会改变结果。没有固定协议的分数不能严肃比较。</p>
+      <p>报告时要写明 prompt 模板、示例选择、随机种子、解码参数、后处理规则和评估脚本版本。对于生成式任务，还要说明多次采样、pass@k 或人工评分规则。</p>
+    </div>
+  </div>
+</section>
+
+<section id="contamination">
+  <div class="head">
+    <h2>污染与泄漏：分数太好时先怀疑边界</h2>
+    <span class="tag">Contamination</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <p><b>直觉：</b>污染就是考试题或答案提前进了复习材料。语言模型训练语料来自大规模网页，公开 benchmark、题解、答案解析、排行榜讨论都可能混进去。</p>
+      <p><b>更准确地说：</b>污染不只包括完全重复的测试样本，还包括近重复、答案字段、解析文本、题目模板、few-shot 示例、调参时反复看测试集，以及模型开发者根据 benchmark 错题改数据。</p>
+      <p>污染最危险的地方是它会把“记忆或调榜”伪装成“能力”。更麻烦的是，污染不一定总让分数明显升高；有些污染影响很小，有些只影响特定任务或大模型。</p>
+    </div>
+    <div class="terminal-lab" data-terminal-lab>
+      <div class="terminal-controls">
+        <button class="ghost active" type="button" data-terminal-case="clean">干净基线</button>
+        <button class="ghost" type="button" data-terminal-case="leak">训练污染</button>
+        <button class="ghost" type="button" data-terminal-case="prompt">提示泄漏</button>
+        <button class="ghost" type="button" data-terminal-case="eval">调榜泄漏</button>
+      </div>
+      <pre class="terminal-output" data-export-context="污染诊断日志" data-export-lang="text" aria-live="polite">summary: validation stable, benchmark modest
+next: 先看数据边界，再看协议。</pre>
+      <template data-terminal-output="clean">summary: validation stable, benchmark modest
+next: 先看数据边界，再看协议。</template>
+      <template data-terminal-output="leak">summary: benchmark unusually high on a public set
+next: 检查原题 / 答案 / 解析是否出现在训练语料或近重复过滤前后。</template>
+      <template data-terminal-output="prompt">summary: score improves only with certain few-shot prompts
+next: 检查示例池、模板、停止词和解码参数是否与测试样本同源。</template>
+      <template data-terminal-output="eval">summary: repeated leaderboard submissions keep raising the score
+next: 检查调榜次数、最终测试集是否被反复看过。</template>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="污染排查清单" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>风险类型</th>
+          <th>例子</th>
+          <th>可能后果</th>
+          <th>缓解方法</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>训练污染</td>
+          <td>训练网页中出现 benchmark 原题和答案解析。</td>
+          <td>benchmark 分数高估，模型未必能泛化到新题。</td>
+          <td>hash / 近重复过滤；保留数据快照；报告污染分析。</td>
+        </tr>
+        <tr>
+          <td>验证污染</td>
+          <td>根据验证集表现反复修改数据过滤规则。</td>
+          <td>验证 loss 对未来数据不再可靠。</td>
+          <td>开发验证集和封存验证集分层；限制查看频率。</td>
+        </tr>
+        <tr>
+          <td>提示泄漏</td>
+          <td>few-shot 示例与测试样本同源，或包含答案模式。</td>
+          <td>模型学会格式而非任务能力。</td>
+          <td>固定示例池；按任务来源隔离；报告 prompt。</td>
+        </tr>
+        <tr>
+          <td>时间泄漏</td>
+          <td>用训练截止日期之后发布的题目做“未污染”判断，却没有记录语料时间。</td>
+          <td>无法证明测试晚于训练。</td>
+          <td>记录数据时间戳；使用动态或时间敏感评估。</td>
+        </tr>
+        <tr>
+          <td>调榜泄漏</td>
+          <td>多次提交公开 leaderboard 后按榜单反馈改模型。</td>
+          <td>测试集逐渐变成验证集。</td>
+          <td>保留私有最终测试集；限制提交次数；报告选择过程。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn" data-export-context="污染与背景知识的区别" data-export-lang="text">
+    <h3>污染与背景知识的区别</h3>
+    <p>训练集中出现某篇百科文章，不一定等于某个阅读理解题被污染；如果问题、答案和具体标注没有泄漏，模型可能只是拥有背景知识。污染判断要看样本、答案、任务模板和评估协议是否足以让模型“背题”。</p>
+  </div>
+</section>
+
+<section id="examples">
+  <div class="head">
+    <h2>诊断例子</h2>
+    <span class="tag">Cases</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="诊断例子" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>实验</th>
+          <th>参数量</th>
+          <th>训练 tokens</th>
+          <th>训练 loss</th>
+          <th>验证 loss</th>
+          <th>判断</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>A</td>
+          <td>120M</td>
+          <td>8B</td>
+          <td>2.42</td>
+          <td>2.55</td>
+          <td>基线正常，训练 / 验证间距不大。</td>
+        </tr>
+        <tr>
+          <td>B</td>
+          <td>350M</td>
+          <td>8B</td>
+          <td>2.25</td>
+          <td>2.60</td>
+          <td>更大模型训练 loss 更低但验证更差，可能数据不足或过拟合。</td>
+        </tr>
+        <tr>
+          <td>C</td>
+          <td>350M</td>
+          <td>24B</td>
+          <td>2.18</td>
+          <td>2.39</td>
+          <td>参数和数据一起增加后验证改善，更符合 scaling 方向。</td>
+        </tr>
+        <tr>
+          <td>D</td>
+          <td>350M</td>
+          <td>24B</td>
+          <td>2.17</td>
+          <td>2.10</td>
+          <td>验证 loss 低于训练 loss 不一定错，但要检查验证集是否更简单或被污染。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2" style="margin-top:10px">
+    <div class="box info">
+      <h3>怎么写结论</h3>
+      <p>“C 优于 B”比“350M 模型更好”更准确，因为 C 同时改变了训练 tokens。若要证明参数量带来收益，需要固定训练 tokens 或固定算力，再做更多点。</p>
+    </div>
+    <div class="box warn">
+      <h3>怎么继续实验</h3>
+      <p>补一个 120M/24B 和一个 700M/24B 的点，固定数据配方和评估脚本；同时报告分域验证 loss，看改善是否只来自某一类文本。</p>
+    </div>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>下一步</h2>
+    <span class="tag">Bridge</span>
+  </div>
+  <p>这一页先把“结果能不能信”讲清楚。下一页会把这些判断接到公开训练配方和开放报告上：你要继续看数据、超参、评估和阶段记录怎么一起披露，而不是只盯着一个验证分数。</p>
+  <p>这里补一个最常见的协议错误：同一个模型在两次 benchmark 上分数不同，原因可能不是模型变强，而是 prompt 模板、few-shot 示例、温度和停止词换了。只要这几个条件变了，分数就不再是同一把尺子。</p>
+  <div class="table-wrap">
+    <table data-export-context="本页到下一页的衔接" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>本页留下的证据</th>
+          <th>下一页怎么用</th>
+          <th>如果缺失会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>训练 loss、验证 loss、PPL</td>
+          <td>判断公开训练报告里哪些数值能比较，哪些只是过程信号。</td>
+          <td>只能看最终分数，容易把训练过程和泛化结论混在一起。</td>
+        </tr>
+        <tr>
+          <td>验证集分域、切分顺序、评估协议</td>
+          <td>核对下一页公开配方里的数据说明和评估设置。</td>
+          <td>很难判断一个更好分数来自模型、数据还是口径变化。</td>
+        </tr>
+        <tr>
+          <td>污染检查与报告边界</td>
+          <td>继续看训练记录、版本和开放材料时，先问结论能不能复核。</td>
+          <td>benchmark 分数再高，也可能只是记住了题目或调榜过程。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info" data-export-context="协议对照样例" data-export-lang="table">
+    <h3>一个最小对照样例</h3>
+    <p>假设模型 A 的验证 loss 没变，但 benchmark 从 54.1 跳到 57.8。先不要宣布进步，先对照下面四个字段：</p>
+    <table>
+      <thead>
+        <tr>
+          <th>字段</th>
+          <th>Run 1</th>
+          <th>Run 2</th>
+          <th>判断</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>prompt</td>
+          <td>zero-shot</td>
+          <td>3-shot</td>
+          <td>已经不是同一协议。</td>
+        </tr>
+        <tr>
+          <td>decode</td>
+          <td>temperature=0</td>
+          <td>temperature=0.7, top-p=0.95</td>
+          <td>结果会因为采样而变。</td>
+        </tr>
+        <tr>
+          <td>sample source</td>
+          <td>公开示例池 A</td>
+          <td>公开示例池 B</td>
+          <td>示例来源不同，不能直接比较。</td>
+        </tr>
+        <tr>
+          <td>script</td>
+          <td>eval_v1.py</td>
+          <td>eval_v2.py</td>
+          <td>脚本版本变化会改分数。</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>如果这四项没有完全对齐，分数变化只能说明“协议变了”，不能说明“模型变好了”。</p>
+  </div>
+  <div class="codebar"><span>eval_report_template.md</span></div>
+  <pre data-export-context="评估报告模板" data-export-lang="text"><code class="language-text"># 模型评估记录
+- 模型规模：
+- 训练 tokens：
+- 验证 loss / PPL：
+- benchmark：
+- protocol（prompt / decode / script）：
+- 污染检查：
+- 结论边界：</code></pre>
+  <div class="box warn" data-export-context="协议失败后果" data-export-lang="text">
+    <b>失败后果</b>
+    <p>如果你把协议差异当成模型改进，后面会继续错下去：数据配方会越改越乱，排行榜会越看越高，但最终模型在真实任务里的行为还是不稳。先把协议写清，后面才有资格谈 scaling 或配方改进。</p>
+    <p>对应练习就是练习 11 到 14：先确认污染边界，再写评估协议，再做排查，再用自己的话把整条链讲出来。</p>
+    <p>把这张对照表和自己的实验记录放在一起看：只要 prompt、decode 或脚本变了，就把那次结果标成“不可直接比较”。下次复跑前先对齐这四项，再看分数是否还会变化。</p>
+  </div>
+</section>
+
+<section id="check">
+  <div class="head">
+    <h2>自测答案方向</h2>
+    <span class="tag">Check</span>
+  </div>
+  <details>
+    <summary>练习 1-4 检查点</summary>
+    <div class="details-body">练习 1 选 B；练习 2 为错；练习 3 约为 exp(2.30)≈10；练习 4 应覆盖数据 shard、学习率调度、梯度范数、数值异常、checkpoint 恢复、评估脚本和日志同步，并说明如何复测。</div>
+  </details>
+  <details>
+    <summary>练习 5-7 检查点</summary>
+    <div class="details-body">练习 5 选 B；练习 6 为错；验证集方案应包含文档级隔离、固定 hash、分域 loss、开发 / 封存 / 测试分层；每天根据封存验证集改规则会造成调参泄漏。</div>
+  </details>
+  <details>
+    <summary>练习 8-10 检查点</summary>
+    <div class="details-body">练习 8 中 A 与 B 的 N×D 都是 1000M·B，粗略 FLOPs 相同；比较参数量时应固定数据配方、训练 tokens、tokenizer、评估集和优化器；过度外推风险来自点数少、规模跨度大、数据 / 优化 / 架构变化和置信度不足。</div>
+  </details>
+  <details>
+    <summary>练习 11-14 检查点</summary>
+    <div class="details-body">练习 11 选 D；练习 12 为错；污染排查应包含原题 / 答案 / 解析重叠、近重复、时间边界、prompt 示例、调榜记录、干净子集或改写测试；评估结论要写清协议和不能外推的范围。</div>
+  </details>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>作答目标</h3>
+    <p>这些题不是背名词，而是训练你拿到实验结果后能做判断：曲线是否可信、验证集是否合理、scaling 结论是否过度、评估是否被污染。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>答案要包含原因、证据和下一步动作。只写“过拟合”“数据污染”“模型太小”通常不够。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、读 loss 曲线</h3>
+      <p>先判断训练过程，再判断能否比较模型。</p>
+    </div>
+    <div class="quick-review"><b>关键</b><span>训练 loss 看优化，验证 loss 看泛化；曲线异常要对齐学习率、数据和评估脚本。</span></div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、读 loss 曲线" data-title="练习 1：选择曲线诊断" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">曲线诊断</span></div>
+      <h3>练习 1：选择曲线诊断</h3>
+      <p>某次训练中，训练 loss 持续下降，验证 loss 在中期后开始上升。最优先的诊断是什么？</p>
+      <label><input type="radio" name="q1" value="A">A. 训练变快了</label>
+      <label><input type="radio" name="q1" value="B">B. 可能过拟合或验证分布 / 大小有问题</label>
+      <label><input type="radio" name="q1" value="C">C. 验证集一定污染</label>
+      <label><input type="radio" name="q1" value="D">D. 学习率一定太小</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、读 loss 曲线" data-title="练习 2：判断训练 loss" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">训练 / 泛化</span></div>
+      <h3>练习 2：判断训练 loss</h3>
+      <p>判断：只要训练 loss 下降，就可以说明模型在目标任务上更强。</p>
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q3" data-group="一、读 loss 曲线" data-title="练习 3：填空 PPL">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">PPL</span></div>
+      <h3>练习 3：填空 PPL</h3>
+      <p>如果验证 cross-entropy loss 使用自然对数，loss = 2.30，则困惑度 PPL 约等于多少？</p>
+      <input type="text" name="q3" data-answer="10;10.0;10.00" placeholder="写近似值，并说明公式">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>答案约为 10，因为 PPL = exp(loss)；只写数字可以算对，但更好的答案会把公式一起写出来，并顺手说明 PPL 只是把同一个 loss 换成更直观的读法。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q4" data-group="一、读 loss 曲线" data-title="练习 4：异常尖峰排查">
+      <div class="q-meta"><span class="pill">错误诊断</span><span class="pill">尖峰</span></div>
+      <h3>练习 4：异常尖峰排查</h3>
+      <p>训练 loss 每隔约 5000 step 出现尖峰，验证 loss 也有小幅波动。写出至少 4 个排查点，并说明你会如何确认。</p>
+      <textarea name="q4" placeholder="从数据 shard、学习率、梯度范数、NaN/Inf、checkpoint 恢复、评估脚本等角度写。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案会覆盖：数据 shard 是否异常、学习率调度是否在尖峰处切换、梯度范数是否爆掉、是否出现 NaN/Inf、checkpoint 恢复前后是否一致、评估脚本和日志是否同步。答题时要写“现象 → 证据 → 复测方法”，不要只写现成名词。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、设计验证集</h3>
+      <p>验证集的价值来自隔离、代表性和稳定协议。</p>
+    </div>
+    <div class="quick-review"><b>关键</b><span>文档级隔离、分域统计、固定 hash、开发 / 封存 / 测试分层。</span></div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q5" data-group="二、设计验证集" data-title="练习 5：切分顺序" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">数据切分</span></div>
+      <h3>练习 5：切分顺序</h3>
+      <p>为了降低训练 / 验证近重复，较稳妥的顺序是什么？</p>
+      <label><input type="radio" name="q5" value="A">A. 按行随机切分后直接训练</label>
+      <label><input type="radio" name="q5" value="B">B. 先文档级去重和近重复检测，再做文档级切分</label>
+      <label><input type="radio" name="q5" value="C">C. 每个 epoch 重新抽验证集</label>
+      <label><input type="radio" name="q5" value="D">D. 把验证集中低 loss 样本移回训练集</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q6" data-group="二、设计验证集" data-title="练习 6：多域验证" data-answer="错">
+      <div class="q-meta"><span class="pill">判断</span><span class="pill">分域</span></div>
+      <h3>练习 6：多域验证</h3>
+      <p>判断：预训练验证集只需要一个总体 loss，分域 loss 没有必要。</p>
+      <label><input type="radio" name="q6" value="对">对</label>
+      <label><input type="radio" name="q6" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q7" data-group="二、设计验证集" data-title="练习 7：最小验证集方案">
+      <div class="q-meta"><span class="pill">方案设计</span><span class="pill">验证集</span></div>
+      <h3>练习 7：最小验证集方案</h3>
+      <p>你要训练一个中文为主、包含少量代码和英文网页的小模型。设计一个最小验证集：列出 4 个域、切分规则、记录字段和使用边界。</p>
+      <textarea name="q7" placeholder="建议包含：中文百科 / 网页、中文问答或对话、代码、英文网页；说明文档级隔离、hash、固定 tokenizer、开发 / 封存用途。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案会至少列出 4 个域，例如中文百科 / 网页、中文问答或对话、代码、英文网页；说明文档级隔离、近重复过滤、固定 tokenizer、固定 eval batch、分域 loss 和封存用途。还要写清楚：它能用于比较和调参，但不能被反复拿来改规则。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、Scaling 与实验比较</h3>
+      <p>练习把规模趋势变成可执行的对照实验。</p>
+    </div>
+    <div class="quick-review"><b>关键</b><span>固定变量、多个点、log-log 趋势、同等算力比较、不要过度外推。</span></div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q8" data-group="三、Scaling 与实验比较" data-title="练习 8：粗略算力比较">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">FLOPs</span></div>
+      <h3>练习 8：粗略算力比较</h3>
+      <p>用 C≈6ND 粗略比较：A = 100M 参数训练 10B tokens，B = 200M 参数训练 5B tokens。二者训练 FLOPs 是否大致相同？</p>
+      <input type="text" name="q8" data-answer="相同;大致相同;一样" placeholder="写出 N×D 的比较和结论">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>两者的 N×D 都是 1000M·B，所以粗略 FLOPs 大致相同。更好的答案会补一句：算力相近不代表训练结果相同，数据配方、优化器、tokenizer 和评估口径仍然可能改变验证 loss。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q9" data-group="三、Scaling 与实验比较" data-title="练习 9：选择控制变量" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">控制变量</span></div>
+      <h3>练习 9：选择控制变量</h3>
+      <p>你想比较模型参数量对验证 loss 的影响。最应该固定哪组变量？</p>
+      <label><input type="radio" name="q9" value="A">A. 数据配方、训练 tokens、tokenizer、评估集和优化器</label>
+      <label><input type="radio" name="q9" value="B">B. 只固定 GPU 型号</label>
+      <label><input type="radio" name="q9" value="C">C. 只固定训练天数</label>
+      <label><input type="radio" name="q9" value="D">D. 每个模型使用不同 tokenizer</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q10" data-group="三、Scaling 与实验比较" data-title="练习 10：设计 6 个 scaling 点">
+      <div class="q-meta"><span class="pill">方案设计</span><span class="pill">Scaling grid</span></div>
+      <h3>练习 10：设计 6 个 scaling 点</h3>
+      <p>在预算有限的情况下，为 100M-500M 小模型设计 6 个 scaling 实验点，用来比较模型大小和训练 tokens 的作用。</p>
+      <textarea name="q10" placeholder="写出 N、D 组合；说明固定变量；说明会画什么图、看什么趋势。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案至少包含三类点：同 D 不同 N、同 N 不同 D、近似同算力的对照点。还要说清固定变量、要画什么图、怎么看 log-log 趋势，以及为什么这些点不能直接外推到 7B 或更大模型。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、评估污染与报告</h3>
+      <p>最后把结论保护起来：协议、污染检查和报告边界。</p>
+    </div>
+    <div class="quick-review"><b>关键</b><span>公开 benchmark 不是天然干净；报告要包含 prompt、解码、脚本、数据边界。</span></div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q11" data-group="四、评估污染与报告" data-title="练习 11：污染类型" data-answer="D">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">污染边界</span></div>
+      <h3>练习 11：污染类型</h3>
+      <p>下列哪项不是污染或泄漏风险？</p>
+      <label><input type="radio" name="q11" value="A">A. 训练集中有测试题答案解析</label>
+      <label><input type="radio" name="q11" value="B">B. few-shot 示例来自测试集</label>
+      <label><input type="radio" name="q11" value="C">C. 多次看测试集结果后改模型</label>
+      <label><input type="radio" name="q11" value="D">D. 训练集中有与任务相关的普通背景知识，但没有题目和答案</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q12" data-group="四、评估污染与报告" data-title="练习 12：评估协议" data-answer="错">
+      <div class="q-meta"><span class="pill">判断</span><span class="pill">报告规范</span></div>
+      <h3>练习 12：评估协议</h3>
+      <p>判断：报告 benchmark 分数时，只要写模型名称和准确率就足够了。</p>
+      <label><input type="radio" name="q12" value="对">对</label>
+      <label><input type="radio" name="q12" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q13" data-group="四、评估污染与报告" data-title="练习 13：污染排查方案">
+      <div class="q-meta"><span class="pill">排查</span><span class="pill">Contamination</span></div>
+      <h3>练习 13：污染排查方案</h3>
+      <p>你的模型在一个公开选择题 benchmark 上分数异常高。写出至少 6 个污染排查步骤。</p>
+      <textarea name="q13" placeholder="从原题 / 答案 / 解析重叠、近重复、数据时间、prompt 示例、调榜次数、干净子集、改写测试等角度写。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案会覆盖：原题 / 答案 / 解析重叠、近重复、训练时间边界、prompt 示例来源、调榜次数、干净子集、改写测试或 paraphrase 测试。更关键的是，你要说明这些步骤如何把“记忆或调榜”与“真实泛化”区分开。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q14" data-group="四、评估污染与报告" data-title="练习 14：费曼解释">
+      <div class="q-meta"><span class="pill">综合解释</span><span class="pill">Feynman</span></div>
+      <h3>练习 14：费曼解释</h3>
+      <p>用 200-300 字向同学解释：为什么训练小语言模型时，验证集、scaling law 和污染检查必须放在一起看？</p>
+      <textarea name="q14" placeholder="先讲直觉，再讲术语：曲线、泛化、规模趋势、评估可信度。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案会把三件事连起来：验证集告诉你模型有没有学到可泛化的东西，scaling 说明该不该继续投入预算，污染检查则决定你看到的分数是不是被泄漏、近重复或调榜放大了。三个问题缺一个，结果都不够稳。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><b>Stanford CS336: Language Modeling from Scratch (Spring 2025)</b>：访问日期 2026-06-21。用来确认本单元在课程中的位置，也用来说明 scaling、evaluation、data 和系统课程之间的衔接。</li>
+  <li><b>Scaling Laws for Neural Language Models</b> 与 <b>Training Compute-Optimal Large Language Models</b>：访问日期 2026-06-21。用于理解参数量、数据量、算力和 loss 的经验关系。</li>
+  <li><b>Holistic Evaluation of Language Models</b>：访问日期 2026-06-21。用于理解多场景、多指标评估，而不是只看 accuracy。</li>
+  <li><b>Language Models are Few-Shot Learners</b>、<b>An Open Source Data Contamination Report for Large Language Models</b> 与 <b>Paloma</b>：访问日期 2026-06-21。用于理解污染、提示泄漏和分域 perplexity 视角。</li>
+  <li><b>PyTorch / NVIDIA / NCCL / Triton 公开文档</b>：访问日期 2026-06-21。用于校准术语和评估协议；具体 API 和性能结论会随版本变化，应以当前官方文档与本机 profiler 结果为准。</li>
+</ul>
+<div class="box warn" data-export-context="资料边界" data-export-lang="text">
+  <b>资料边界</b>
+  <p>本页是教学性重写，不复制课程作业或论文细节。公式、案例和对照表用于建立直觉，不替代真实 scaling 拟合、污染审计或完整 benchmark 报告。真实训练应以当前公开论文、课程材料、仓库 README、评估脚本和数据快照为准。</p>
+</div>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

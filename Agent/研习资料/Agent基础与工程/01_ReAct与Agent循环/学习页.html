@@ -1,0 +1,1028 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ReAct 与 Agent 循环</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="Agent 基础与工程" data-unit="01">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>Agent 基础与工程</strong>
+        <span>01</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#react"><span class="dot"></span>ReAct 直觉</a>
+        <a href="#mechanism"><span class="dot"></span>最小循环</a>
+        <a href="#state"><span class="dot"></span>状态台账</a>
+        <a href="#example"><span class="dot"></span>例子</a>
+        <a href="#workflow"><span class="dot"></span>分界</a>
+        <a href="#stop"><span class="dot"></span>停止条件</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#boundary"><span class="dot"></span>先别追</a>
+        <a href="#branching"><span class="dot"></span>分叉追踪</a>
+        <a href="#failure"><span class="dot"></span>故障拆分</a>
+        <a href="#recovery"><span class="dot"></span>修复顺序</a>
+        <a href="#trace-lab"><span class="dot"></span>日志诊断</a>
+        <a href="#permissions"><span class="dot"></span>权限与副作用</a>
+        <a href="#handoff"><span class="dot"></span>工程层衔接</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把 Agent 看成一个受控循环：目标、工具、观察、状态、停止条件。后面的架构、模式和评测都建立在这层上。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">ReAct / Agent 循环</div>
+          <h1>ReAct 与 Agent 循环</h1>
+          <p>这一页先把 Agent 讲成一个受控循环：模型先判断下一步，程序执行被允许的动作，环境把观察结果送回来，再由模型决定继续、改计划还是停下。后面的工程架构、设计模式、评测安全和多 Agent 判断，都建立在这条主线上。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../../index.html">Agent 研习资料</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页后能做什么</h3>
+          <ul>
+  <li>能把 Thought、Action、Observation 和 Stop condition 按顺序讲清楚，不把工具调用当成完整 Agent。</li>
+  <li>能画出最小 Agent Loop，并指出哪一层负责权限、日志、状态和人工确认。</li>
+  <li>能判断一个系统更像 Workflow 还是 Agent，并说出它该继续查证还是先停下来。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goals</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>先抓住的三件事</h3>
+      <p>第一，把 Agent 看成一轮一轮推进的控制回路。第二，知道每一轮里谁负责“想”、谁负责“做”、谁负责“记”。第三，能从运行轨迹里看出卡住、越权、重复搜索和提前停止分别出在哪一层。</p>
+    </div>
+    <div class="box soft">
+      <h3>这页的边界</h3>
+      <p>这里先讲 ReAct、最小循环、状态台账、workflow 边界和停止条件。规划器、记忆检索、评测框架、长程恢复和多 Agent 协作放到后面的单元展开。</p>
+    </div>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">overview</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>一个任务，四次回头</h3>
+      <p>最小的 Agent 会围绕“目标 → 判断下一步 → 执行动作 → 接收观察 → 更新状态”反复推进。只要中间有一步不清楚，下一轮就应该把不确定性暴露出来，别硬往前走。</p>
+      <p>这也是 ReAct 的核心：Reasoning 和 Acting 交错出现。思考要给下一步动作提供依据，动作要把外部事实带回来。</p>
+    </div>
+    <div class="box info">
+      <h3>一个会贯穿全页的小请求</h3>
+      <p>用户问：“这个订单为什么还没发货？”</p>
+      <p>这类问题很适合拿来讲 Agent，因为它不该直接猜答案。先查状态，再看库存，再判断是否需要追问或转人工，整个过程都能对应到一个具体回路。</p>
+    </div>
+  </div>
+</section>
+
+<section id="react">
+  <div class="head">
+    <h2>ReAct 的直觉</h2>
+    <span class="tag">react</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>推理和动作交错</h3>
+      <p>ReAct 的价值不在于“多写一点思考文本”，而在于让模型每做一步都能被外部结果纠正。只靠内部推理，错误会沿着同一条链继续长大；只靠一次性计划，遇到事实变化时很难回头。</p>
+      <p>当模型在思考里承认“我现在还不知道”，然后发起查询或调用工具，它是在把不确定性暴露出来。观察结果回来之后，它才有资格更新结论。</p>
+    </div>
+    <div class="box warn">
+      <h3>常见误会</h3>
+      <p>有人把 ReAct 读成“先想很多，再回答”。那会把真正有用的地方漏掉：观察结果如何改变下一轮动作。没有这一步，轨迹只是带着工具名的长推理。</p>
+    </div>
+  </div>
+  <div class="math-block" data-export-context="ReAct 的轨迹顺序" data-export-lang="text">
+    <p>目标 → 计划 / 判断 → 动作 → 观察 → 更新状态 → 决定继续或停止</p>
+    <p>这里真正要盯住的是观察如何改变下一步：能不能继续、该查什么、要不要转人工。</p>
+  </div>
+</section>
+
+<section id="mechanism">
+  <div class="head">
+    <h2>最小循环</h2>
+    <span class="tag">loop</span>
+  </div>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1" type="button">
+        <div>Step 1：输入与目标</div>
+        <span>用户请求、历史消息、当前状态</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-2" type="button">
+        <div>Step 2：模型提出下一步</div>
+        <span>思考 / 工具请求 / 终止判断</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-3" type="button">
+        <div>Step 3：程序执行受控动作</div>
+        <span>权限检查、参数校验、日志记录</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-4" type="button">
+        <div>Step 4：观察回流</div>
+        <span>结果、报错、缺失信息、风险信号</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-5" type="button">
+        <div>Step 5：更新状态并决定停不停</div>
+        <span>继续查、补问、转人工、收尾</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1" data-export-context="Step 1 输入与目标" data-export-lang="text">
+        <b>before</b>
+        <span>用户问题、上下文、已有事实</span>
+        <p>读入当前轮要解决什么。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-2" data-export-context="Step 2 模型提出下一步" data-export-lang="text">
+        <b>after</b>
+        <span>下一步计划或工具请求</span>
+        <p>决定是继续查证、提问还是结束。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-3" data-export-context="Step 3 程序执行受控动作" data-export-lang="text">
+        <b>reads</b>
+        <span>工具 schema、权限、预算</span>
+        <p>程序校验后才执行。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-4" data-export-context="Step 4 观察回流" data-export-lang="text">
+        <b>writes</b>
+        <span>观察、报错、状态变更</span>
+        <p>结果必须回到下一轮，日志只能作为复盘材料。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-5" data-export-context="Step 5 状态更新与停止" data-export-lang="text">
+        <b>symptom</b>
+        <span>不再重复、越权或空转</span>
+        <p>如果这一步没有做，Agent 就容易卡住。</p>
+      </div>
+    </div>
+  </div>
+  <p>一个健康的循环还要把边界控制和回流接上：谁能调用什么工具，失败后怎么记，状态缺失时要不要停。真正难的部分通常在外层约束，而不在 `while` 本身。</p>
+  <div class="codebar"><span>伪代码：受控 Agent Loop</span><button class="copy" data-copy="code-loop" type="button">复制</button></div>
+  <div class="code-wrap">
+    <pre id="code-loop" data-export-context="受控 Agent Loop 伪代码" data-export-lang="python"><code class="language-python">messages = [("user", user_input)]
+state = {"budget": 8, "need_followup": False}
+
+for step in range(MAX_STEPS):
+    proposal = model(messages, state, tools)
+    if proposal.kind == "final":
+        return proposal.text
+
+    action = proposal.action
+    if not allow(action, permissions, budget=state["budget"]):
+        messages.append(("system", "action rejected"))
+        state["need_followup"] = True
+        continue
+
+    observation = run_tool(action)
+    messages.append(("tool", observation))
+    state["budget"] -= 1
+
+    if done(observation, state):
+        return compose_answer(messages, state)</code></pre>
+  </div>
+</section>
+
+<section id="state">
+  <div class="head">
+    <h2>状态台账</h2>
+    <span class="tag">state</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Agent 状态台账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>什么时候会脏</th>
+          <th>出错症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>messages</td>
+          <td>用户历史、工具返回、系统提示</td>
+          <td>每一轮新观察和新指令</td>
+          <td>工具结果没写回去，下一轮就看不到事实</td>
+          <td>模型重复问同一件事，或者凭空继续推</td>
+        </tr>
+        <tr>
+          <td>state</td>
+          <td>预算、已知事实、是否需要追问</td>
+          <td>更新任务事实和执行边界</td>
+          <td>状态和消息不同步时，模型会拿旧信息做决定</td>
+          <td>已经查到的结果被当成没查到</td>
+        </tr>
+        <tr>
+          <td>permissions</td>
+          <td>当前用户能做什么、工具允许什么</td>
+          <td>记录拒绝或授权结果</td>
+          <td>没有检查写动作时，越权风险会直接穿透</td>
+          <td>误删、误改、误执行有副作用的操作</td>
+        </tr>
+        <tr>
+          <td>budget</td>
+          <td>剩余轮数、时间或成本</td>
+          <td>每轮递减，必要时触发停止</td>
+          <td>无限循环、重复搜索、重复调用工具</td>
+          <td>任务没结束，额度先耗尽</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="inline-note"><b>读这个表时的动作</b>先找“谁在读旧值”，再找“谁没把新值写回去”。很多 Agent 问题卡在状态衔接上。</p>
+</section>
+
+<section id="example">
+  <div class="head">
+    <h2>一个例子走到底</h2>
+    <span class="tag">example</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>订单为什么没发货</h3>
+      <p>第 1 轮：模型先判断“不能凭记忆回答”，决定查订单状态。第 2 轮：程序执行只读查询，观察到“已付款、仓库缺货”。第 3 轮：模型把缺货和预计补货时间合并，判断今天不能发货。第 4 轮：如果客户要一句话回复，就把已知事实压缩成可发给用户的结论。</p>
+      <p>这个例子里，每一轮做的事都很小，但它暴露了完整机制：先查证，再更新，再决定下一步。只要观察回流被截断，后面就会退化成猜测。</p>
+    </div>
+    <div class="box info">
+      <h3>从这个例子看出什么</h3>
+      <p>Action 负责提出可执行动作，Observation 负责把外部事实带回下一轮。把这两层看清楚，Agent 才能从“能调用工具”变成“能把工具结果用起来”。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="订单例子的轨迹表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>轮次</th>
+          <th>模型要做什么</th>
+          <th>程序要做什么</th>
+          <th>观察到什么</th>
+          <th>下一轮怎么变</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td>决定先查订单</td>
+          <td>准备受控工具调用</td>
+          <td>还没有事实</td>
+          <td>继续进入查询</td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>根据观察更新计划</td>
+          <td>执行只读查询</td>
+          <td>已付款，仓库缺货</td>
+          <td>需要结合补货时间判断</td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>压缩成用户可读结论</td>
+          <td>检查是否还缺信息</td>
+          <td>今天大概率不能发货</td>
+          <td>可回复，也可转人工</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="workflow">
+  <div class="head">
+    <h2>Workflow 和 Agent 的分界</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>先看控制权在哪</h3>
+      <p>当步骤顺序已经画死，分类、检索、总结、校验都由代码固定控制，系统更像 Workflow。模型可以参与其中某一步，但它不能改路径。下一步动作要由模型结合当前观察来决定时，才进入 Agent 设计空间。</p>
+      <p>这里看的是控制权。流程固定、验收清楚、异常分支可列完的时候，Workflow 更稳。需要探索、需要中途纠偏、需要处理不完整信息时，Agent 才值得上场。</p>
+    </div>
+    <div class="box warn">
+      <h3>判断句</h3>
+      <p>能提前把所有步骤写死，就优先用 Workflow。不能提前写死、必须靠观察决定下一步，就用 Agent，但同时要准备权限、追踪、预算和停止条件。</p>
+    </div>
+  </div>
+</section>
+
+<section id="stop">
+  <div class="head">
+    <h2>停止条件</h2>
+    <span class="tag">stop</span>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>停下来也是正常分支</h3>
+      <p>一个好的 Agent 需要知道什么时候该停：信息已经够了、权限不够、用户没给关键参数、预算已经快耗尽、工具结果不可靠。把这些情况写成正常分支，比强行继续要安全得多。</p>
+    </div>
+    <div class="box">
+      <h3>什么时候继续</h3>
+      <p>如果还缺的是能查到的事实，就继续查；如果缺的是用户才能补的输入，就先澄清；如果继续下去会越权或放大风险，就停下来。每一轮都要回答一个问题：它有没有减少不确定性。</p>
+    </div>
+  </div>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1" type="button">正常返回</button>
+      <button class="ghost" data-terminal-case="case-2" type="button">重复空转</button>
+      <button class="ghost" data-terminal-case="case-3" type="button">越权动作</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">[ok] 订单状态查到了
+[ok] 仓库缺货信息回来了
+[ok] 计划更新为“先回复客户，说明补货时间”</pre>
+    <template data-terminal-output="case-1">[ok] 订单状态查到了
+[ok] 仓库缺货信息回来了
+[ok] 计划更新为“先回复客户，说明补货时间”</template>
+    <template data-terminal-output="case-2">[warn] 连续三轮都在查询同一条订单
+[warn] 观察没有新增事实
+[fail] 缺少停止条件，循环开始空转</template>
+    <template data-terminal-output="case-3">[fail] action rejected: refund_order
+[warn] 当前用户没有退款权限
+[ok] 正确做法：先停止并请求人工确认</template>
+  </div>
+  <p>这个小实验的目的很直接：你要能从输出看出是“该继续查”、还是“该停下来”。如果结果没变，继续跑只是在耗预算；如果动作越权，继续跑只是在制造事故。</p>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见误区</h2>
+    <span class="tag">mistakes</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>有工具就算 Agent</h3>
+      <p>不算。单次工具调用只是能力入口，Agent 还要有多轮选择下一步的回路。</p>
+    </div>
+    <div class="box">
+      <h3>思考写得长就更可靠</h3>
+      <p>不一定。长思考可能只是把错误包装得更像对的，真正该看的还是观察是否回流、状态有没有更新、下一轮有没有变。</p>
+    </div>
+    <div class="box">
+      <h3>停止说明系统失败</h3>
+      <p>也不对。缺信息、缺权限、风险过高时，停下来才是正确动作。把停下来当成正常分支，系统才更可控。</p>
+    </div>
+    <div class="box">
+      <h3>换更强模型就能解决一切</h3>
+      <p>不会。工具 schema、状态写回、日志和停止条件出了问题，再强的模型也会在错误边界里绕圈。</p>
+    </div>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>先别追的东西</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="grid2">
+    <div class="box info">
+      <h3>这一节先不展开</h3>
+      <p>先别追规划器、记忆检索、长链路恢复、多 Agent 协作和评测框架。它们都很重要，但要在你已经看懂循环、状态和停止条件之后再进来。</p>
+    </div>
+    <div class="box">
+      <h3>它们会在哪里回来</h3>
+      <p>工程架构单元会把工具、记忆、权限和日志拼起来；设计模式单元会讲 routing、planning 和 reflection；评测追踪与安全会把这些机制变成验收条件；多 Agent 单元再讨论什么时候要拆角色、拆上下文。</p>
+    </div>
+  </div>
+</section>
+
+<section id="branching">
+  <div class="head">
+    <h2>分叉追踪</h2>
+    <span class="tag">trace</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>同一条请求，三个结局</h3>
+      <p>还是“这个订单为什么还没发货？”这条请求。第一种结局是查到了订单和库存，直接回复原因；第二种结局是订单号缺失，先向用户追问；第三种结局是查到信息却发现需要退款或改单，那就先停下来做权限确认。三种结局对应三种不同的停止条件。</p>
+      <p>这个分叉很重要，因为很多 Agent 页面只讲“继续查”，却不讲什么时候该换分支。没有分叉追踪，停止条件就会变成一句口号。</p>
+    </div>
+    <div class="box warn">
+      <h3>看分叉时先问三句</h3>
+      <p>第一，当前轮还缺的是系统能查到的事实，还是只有用户能补的输入？第二，继续动作会不会引入副作用？第三，观察结果有没有已经足够让系统收口？</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Agent 分叉追踪表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>分支</th>
+          <th>触发条件</th>
+          <th>下一步</th>
+          <th>为什么这样走</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>继续查</td>
+          <td>还有可查事实没查完</td>
+          <td>发起下一次查询</td>
+          <td>目标还没被事实支撑住</td>
+        </tr>
+        <tr>
+          <td>先追问</td>
+          <td>缺少用户才能补的参数</td>
+          <td>停止并澄清</td>
+          <td>继续查不会新增信息</td>
+        </tr>
+        <tr>
+          <td>先停下</td>
+          <td>动作会越权或有副作用</td>
+          <td>请求确认或转人工</td>
+          <td>正确性不只看答案，还看后果</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="failure">
+  <div class="head">
+    <h2>故障拆分</h2>
+    <span class="tag">debug</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>四种最常见的坏轨迹</h3>
+      <p>第一种是只会空想，不会发起工具调用。第二种是工具调用了，但观察没有写回。第三种是观察写回了，但状态没更新，下一轮还在拿旧信息做决定。第四种是该停的时候没停，导致越权、重复和空转一起出现。</p>
+      <p>这四种坏轨迹很值得记，因为它们分别对应四个不同的修法。只要把症状看混，修法就会变成瞎补。</p>
+    </div>
+    <div class="box warn">
+      <h3>对应的修法</h3>
+      <p>空想问题优先看工具 schema 和触发条件；观察不回流先看 messages；状态没更新先看 state；该停不停先看 budget、权限和人工确认分支。修法的顺序应该从数据流往回找，不要从最终答案硬拧。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Agent 故障拆分表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>最可能的根因</th>
+          <th>先看哪里</th>
+          <th>下一步检查</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>一直在想，没有行动</td>
+          <td>工具入口没被触发</td>
+          <td>模型输出和工具 schema</td>
+          <td>是不是任务本身需要查证</td>
+        </tr>
+        <tr>
+          <td>工具执行了，但又回到老问题</td>
+          <td>Observation 没进 messages</td>
+          <td>消息拼接点</td>
+          <td>下一轮能不能看到新事实</td>
+        </tr>
+        <tr>
+          <td>看起来知道了，其实还在拿旧信息决策</td>
+          <td>state 没更新</td>
+          <td>状态写入点</td>
+          <td>事实是否同时写到 state 和消息里</td>
+        </tr>
+        <tr>
+          <td>已经越权，还在继续跑</td>
+          <td>停止条件缺失</td>
+          <td>权限和预算检查</td>
+          <td>是否存在人工确认分支</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这个表的用途很具体：你以后看到 Agent 报错，不要先问“模型为什么这么笨”，先问“是哪个状态没有回流”。大多数问题都能在这四个症状里对上号。</p>
+</section>
+
+<section id="recovery">
+  <div class="head">
+    <h2>怎么把坏轨迹修回来</h2>
+    <span class="tag">repair</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>修复顺序</h3>
+      <p>先修入口，再修回流，最后修停止。入口问题通常是工具没有被触发，或者工具 schema 写得太散；回流问题通常是 observation 没有写回 messages 或 state；停止问题通常是预算、权限和人工确认分支没接上。</p>
+      <p>这个顺序很重要，因为如果你先修停止条件，却没把观察写回来，系统还是会重复空转。先修回流，再修收口，才有可能真正止住坏轨迹。</p>
+    </div>
+    <div class="box info">
+      <h3>修法对应的检查点</h3>
+      <p>入口看“模型有没有被允许请求工具”；回流看“工具返回有没有进入下一轮输入”；停止看“有没有清楚写出继续、追问、转人工的条件”。这三个检查点可以直接套到后面的工程单元。</p>
+    </div>
+  </div>
+  <div class="codebar"><span>坏轨迹修复清单</span><button class="copy" data-copy="code-repair" type="button">复制</button></div>
+  <div class="code-wrap">
+    <pre id="code-repair" data-export-context="坏轨迹修复清单" data-export-lang="text"><code class="language-text">1. 先确认任务是否真的需要查证，而不是直接回答。
+2. 检查工具 schema 是否清楚，模型是否真的能发起 action。
+3. 检查 observation 是否写回 messages，state 是否同步更新。
+4. 检查 budget、权限和人工确认分支是否存在。
+5. 如果结果重复，先停下来，不要把重复查询当进展。</code></pre>
+  </div>
+  <p>这张清单的意义是把调试动作固定下来。你下一次碰到 Agent 卡住时，不需要先想很大的理论，先按这五步检查，通常就能把问题缩到一个小层面。</p>
+</section>
+
+<section id="trace-lab">
+  <div class="head">
+    <h2>一段日志怎么看</h2>
+    <span class="tag">lab</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>把一段坏轨迹拆开</h3>
+      <p>假设系统连续三轮都在查同一条订单，工具返回的内容完全一样，但模型还是继续发起查询。这个时候不要只说“它在重复”。要继续问：它是没收到观察，还是收到了但没写回；是状态没更新，还是停止条件没写；是工具入口没限制，还是模型根本没看到查询已经没有增量。</p>
+      <p>真正的调试顺序应该是先找数据流，再找控制流。先看 Observation 有没有进 messages，再看 state 有没有同步，再看 budget 和权限有没有拦住空转。</p>
+    </div>
+    <div class="box info">
+      <h3>这段日志的结论</h3>
+      <p>如果三轮查询都没有新增信息，继续查就是坏动作，不是进展。此时最合理的分支通常是停止并澄清，或者把任务转给人工。能把这一步说清楚，说明你已经会把日志读成工程问题，而不只是读成文本。</p>
+    </div>
+  </div>
+  <div class="codebar"><span>坏轨迹日志</span><button class="copy" data-copy="code-log" type="button">复制</button></div>
+  <div class="code-wrap">
+    <pre id="code-log" data-export-context="坏轨迹日志" data-export-lang="text"><code class="language-text">[t1] Thought: 我先查订单状态
+[t1] Action: get_order_status(order_id=123)
+[t1] Observation: status=paid, warehouse=out_of_stock
+[t2] Thought: 再查一次订单状态更稳
+[t2] Action: get_order_status(order_id=123)
+[t2] Observation: status=paid, warehouse=out_of_stock
+[t3] Thought: 还是再查一次确认
+[t3] Action: get_order_status(order_id=123)</code></pre>
+  </div>
+  <p>读这段日志时，最关键的判断不是“它查了几次”，而是“每次查询之后有没有新增事实”。如果没有，就该停，不该再用同一个动作证明同一个事实。</p>
+</section>
+
+<section id="permissions">
+  <div class="head">
+    <h2>权限与副作用</h2>
+    <span class="tag">permissions</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>为什么这里要单独讲</h3>
+      <p>一条看起来很普通的 Agent 轨迹，真正决定风险的往往是它“能不能改东西”。查询订单状态和执行退款，在表面上都像一次工具调用，但一个只是读，另一个会改变外部世界。</p>
+      <p>如果你不把读写分开，模型很容易把副作用动作当成普通步骤，结果就是系统会在没有确认的情况下把危险操作跑出去。</p>
+    </div>
+    <div class="box warn">
+      <h3>读 / 写 / 副作用</h3>
+      <p>读操作只把事实带回来，比如查询库存、查询订单、读取规则。写操作会改变系统状态，比如取消订单、提交退款、修改地址。副作用动作通常需要更高权限或人工确认，因为一旦执行，回滚成本就会上去。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Agent 权限与副作用表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>动作</th>
+          <th>类型</th>
+          <th>默认策略</th>
+          <th>如果放错会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>查询订单状态</td>
+          <td>读</td>
+          <td>可自动执行</td>
+          <td>风险较低，但仍要记录观察</td>
+        </tr>
+        <tr>
+          <td>查询库存 ETA</td>
+          <td>读</td>
+          <td>可自动执行</td>
+          <td>会影响下一轮判断，但不会改外部状态</td>
+        </tr>
+        <tr>
+          <td>提交退款</td>
+          <td>写 / 副作用</td>
+          <td>先确认权限</td>
+          <td>错误退款会直接产生业务损失</td>
+        </tr>
+        <tr>
+          <td>取消订单</td>
+          <td>写 / 副作用</td>
+          <td>先确认权限</td>
+          <td>会改变用户的实际结果</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>读完这个表，你应该能把“查事实”和“改事实”分开。后面的评测、安全和 Harness 单元，基本都会围着这条线展开。</p>
+</section>
+
+<section id="handoff">
+  <div class="head">
+    <h2>把循环接到工程层</h2>
+    <span class="tag">handoff</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>这一层开始回答“系统怎么跑”</h3>
+      <p>ReAct 只回答了最小问题：模型如何在思考、行动和观察之间来回。真正做成产品时，还要再往外走一层，接上工具注册、权限校验、日志、预算、失败恢复和人工确认。循环本身只是执行关系，系统要靠外层工程把它包稳。</p>
+      <p>把这件事想清楚很重要。很多人第一次看 Agent，会把注意力放在“模型下一轮该想什么”上，但真正决定系统能不能上线的，往往是外层边界：这一步能不能调用，失败怎么记，返回值有没有写回，危险动作有没有挡住。</p>
+    </div>
+    <div class="box info">
+      <h3>从循环到服务，最少要多出四件事</h3>
+      <p>第一，工具要有名字、参数和返回值，不能只是口头描述。第二，权限要在程序侧拦住，不能只靠模型“自觉”。第三，日志要能让人复盘每一轮到底发生了什么。第四，预算和停止条件要能兜住空转，不然循环会一直跑到资源耗尽。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Agent 循环到工程层映射表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>循环里的概念</th>
+          <th>工程层的对应物</th>
+          <th>如果这里断了会怎样</th>
+          <th>下一个单元会继续讲什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Action</td>
+          <td>受控工具调用</td>
+          <td>模型会想做事，但程序不知该执行什么</td>
+          <td>工程架构里会讲工具编排、上下文和记忆</td>
+        </tr>
+        <tr>
+          <td>Observation</td>
+          <td>返回值、错误、状态变更</td>
+          <td>事实回不来，下一轮只能重复老判断</td>
+          <td>评测与追踪单元会把它变成可检查的轨迹</td>
+        </tr>
+        <tr>
+          <td>Stop condition</td>
+          <td>预算、权限、人工确认</td>
+          <td>系统要么空转，要么越权</td>
+          <td>安全单元会继续拆开风险边界</td>
+        </tr>
+        <tr>
+          <td>State</td>
+          <td>会话状态、任务状态、工作记忆</td>
+          <td>看起来知道了，其实下一轮还在读旧值</td>
+          <td>设计模式单元会讲状态如何驱动分支</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>你可以把这个映射当成过桥图。左边是概念，右边是落地。只要某个概念在右边找不到位置，它就还停留在“能说清”阶段，离“能上线”还差一步。</p>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box">
+    <strong>答题目标</strong>
+    <p>这组题要检查你能不能把 Agent 轨迹拆成真实的工程动作：谁在读什么、谁在写什么、哪里该停、哪里该查、哪里该拒绝。</p>
+  </div>
+  <div class="box info">
+    <strong>检查重点</strong>
+    <p>优先看控制权、状态回流和停止条件。开放题不用写长，但必须说明因果和边界。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>1. 概念辨认</h3>
+      <p>先把术语放回它们的工程位置。</p>
+    </div>
+    <div class="quick-review">复盘提示：先区分“能力入口”和“多轮回路”。很多错答都把工具调用直接当成 Agent。</div>
+  </div>
+  <div class="drill-grid">
+    <article class="q" data-question="q1" data-group="概念辨认" data-title="Q1 Workflow 还是 Agent" data-answer="Workflow">
+      <div class="q-meta"><span class="pill">01</span><span class="pill">choice</span></div>
+      <h3>如果系统按固定顺序执行“分类 → 检索 → 总结 → 校验”，模型不能改变步骤，它更接近什么？</h3>
+      <label><input type="radio" name="q1" value="Workflow">Workflow</label>
+      <label><input type="radio" name="q1" value="Agent">Agent</label>
+      <label><input type="radio" name="q1" value="Multi-Agent">Multi-Agent</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </article>
+    <article class="q" data-question="q2" data-group="概念辨认" data-title="Q2 Observation 的作用" data-answer="把外部反馈放回下一轮决策">
+      <div class="q-meta"><span class="pill">02</span><span class="pill">choice</span></div>
+      <h3>ReAct 里 Observation 的作用最接近哪一项？</h3>
+      <label><input type="radio" name="q2" value="把外部反馈放回下一轮决策">把外部反馈放回下一轮决策</label>
+      <label><input type="radio" name="q2" value="让页面看起来更完整">让页面看起来更完整</label>
+      <label><input type="radio" name="q2" value="替代工具权限校验">替代工具权限校验</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </article>
+    <article class="q" data-question="q3" data-group="概念辨认" data-title="Q3 有工具就算 Agent 吗" data-answer="错">
+      <div class="q-meta"><span class="pill">03</span><span class="pill">true/false</span></div>
+      <h3>只要模型能调用搜索工具，就可以称为 Agent。</h3>
+      <label><input type="radio" name="q3" value="对">对</label>
+      <label><input type="radio" name="q3" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </article>
+    <article class="q" data-question="q4" data-group="概念辨认" data-title="Q4 停止条件" data-answer="对">
+      <div class="q-meta"><span class="pill">04</span><span class="pill">true/false</span></div>
+      <h3>停止条件可以包括达到最大步数、缺少用户信息和触发权限边界。</h3>
+      <label><input type="radio" name="q4" value="对">对</label>
+      <label><input type="radio" name="q4" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </article>
+    <article class="q" data-question="q4b" data-group="概念辨认" data-title="Q4b 何时停下来" data-answer="工具结果一直重复，新增信息为零">
+      <div class="q-meta"><span class="pill">04b</span><span class="pill">choice</span></div>
+      <h3>下面哪一种最像“应该停下来”的情况？</h3>
+      <label><input type="radio" name="q4b" value="已经查到足够事实，可以回复">已经查到足够事实，可以回复</label>
+      <label><input type="radio" name="q4b" value="工具结果一直重复，新增信息为零">工具结果一直重复，新增信息为零</label>
+      <label><input type="radio" name="q4b" value="用户还没给关键参数，但还能继续猜">用户还没给关键参数，但还能继续猜</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </article>
+    <article class="q full" data-question="q4c" data-group="概念辨认" data-title="Q4c 停止与继续">
+      <div class="q-meta"><span class="pill">04c</span><span class="pill">choice</span></div>
+      <h3>哪一句最接近“继续查”的判断？</h3>
+      <label><input type="radio" name="q4c" value="还缺系统能查到的事实">还缺系统能查到的事实</label>
+      <label><input type="radio" name="q4c" value="动作会越权，需要确认">动作会越权，需要确认</label>
+      <label><input type="radio" name="q4c" value="用户没给关键参数，必须先问">用户没给关键参数，必须先问</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </article>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>2. 轨迹与状态</h3>
+      <p>看得懂回路，才有资格调试回路。</p>
+    </div>
+    <div class="quick-review">复盘提示：Observation 要能改变下一轮。看不到写回，后面的推理就容易空转。</div>
+  </div>
+  <div class="drill-grid">
+    <article class="q" data-question="q5" data-group="轨迹与状态" data-title="Q5 ReAct 三环节">
+      <div class="q-meta"><span class="pill">05</span><span class="pill">fill</span></div>
+      <h3>ReAct 的三个基本环节可以概括为：____、____、____。</h3>
+      <input type="text" name="q5" data-answer="思考;行动;观察" data-explain="按本页主线写出三个环节即可。">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </article>
+    <article class="q" data-question="q6" data-group="轨迹与状态" data-title="Q6 运行外壳">
+      <div class="q-meta"><span class="pill">06</span><span class="pill">fill</span></div>
+      <h3>程序包住模型、负责工具执行和边界控制的运行框架可称为 ____。</h3>
+      <input type="text" name="q6" data-answer="harness" data-explain="英文术语，写出 harness 即可。">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </article>
+    <article class="q full" data-question="q7" data-group="轨迹与状态" data-title="Q7 排序 Agent Loop">
+      <div class="q-meta"><span class="pill">07</span><span class="pill">ordering</span></div>
+      <h3>把最小 Agent Loop 排序：A 工具返回观察；B 模型选择动作；C 用户给目标；D 程序执行工具；E 判断停止或继续。</h3>
+      <textarea name="q7" placeholder="写出顺序，并用一句话说明每步输入输出"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>顺序应是 C → B → D → A → E。答题时要说明：目标先进入系统，模型基于目标提出动作，程序执行动作，观察回流，最后判断是否继续或停止。少写一步或把观察和最终回答混在一起，都说明回路没理清。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q8" data-group="轨迹与状态" data-title="Q8 匹配工程位置">
+      <div class="q-meta"><span class="pill">08</span><span class="pill">matching</span></div>
+      <h3>匹配概念：Thought / Action / Observation / Stop condition 分别对应什么工程位置？</h3>
+      <textarea name="q8" placeholder="逐项写出你的匹配"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>Thought 对应当前轮的判断与计划，Action 对应程序要执行的受控动作，Observation 对应工具或环境返回的事实，Stop condition 对应循环结束或转人工的分支。回答时要写工程位置，不要只翻译英文。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q9" data-group="轨迹与状态" data-title="Q9 代码阅读">
+      <div class="q-meta"><span class="pill">09</span><span class="pill">code reading</span></div>
+      <h3>读伪代码：为什么工具执行后要把结果追加回 messages？如果不追加会怎样？</h3>
+      <textarea name="q9" placeholder="从下一轮决策能否看到事实回答"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>因为下一轮模型要基于观察继续决定动作。若不追加，模型看不到新事实，只会重复旧判断、再次查询同一件事，或者在缺少证据的情况下直接下结论。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q9b" data-group="轨迹与状态" data-title="Q9b 状态没回流会怎样">
+      <div class="q-meta"><span class="pill">09b</span><span class="pill">error diagnosis</span></div>
+      <h3>如果观察没有写回状态，最常见的两个后果是什么？</h3>
+      <textarea name="q9b" placeholder="写出两个后果，并说明为什么会发生"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>常见后果是重复查询和重复推理。前者因为系统看起来“还没查过”；后者因为下一轮依然以旧信息为输入，继续沿着同一条错误路径走。答题时要把“没回流”和“重复空转”连起来。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q9c" data-group="轨迹与状态" data-title="Q9c 修复顺序">
+      <div class="q-meta"><span class="pill">09c</span><span class="pill">synthesis</span></div>
+      <h3>把“入口、回流、停止”三个修复点按你认为正确的顺序排出来，并解释为什么。</h3>
+      <textarea name="q9c" placeholder="先写顺序，再写原因"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>常见顺序是先入口、再回流、最后停止。理由是：如果动作入口都没接上，后面的状态和停止条件无从谈起；如果回流没接上，系统会反复空转；等前两层稳定后，再修停止条件才有意义。答题时要写出层次，不能只给一个名词列表。</p>
+      </details>
+    </article>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>3. 诊断与转移</h3>
+      <p>把错误放回机制里，别只说“结果不对”。</p>
+    </div>
+    <div class="quick-review">复盘提示：先说错因，再说后果，再说修法。这样答案才像诊断，不像感想。</div>
+  </div>
+  <div class="drill-grid">
+    <article class="q full" data-question="q10" data-group="诊断与转移" data-title="Q10 工具失败后反复重试">
+      <div class="q-meta"><span class="pill">10</span><span class="pill">error diagnosis</span></div>
+      <h3>某 Agent 工具失败后只收到“失败”，然后反复重试。错因、后果、修法各写一句。</h3>
+      <textarea name="q10" placeholder="错因：...&#10;后果：...&#10;修法：..."></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>错因：观察没有给出可用信息，状态也没有更新。后果：模型只会在同一个错误上循环，可能耗尽预算。修法：让工具返回结构化错误、把失败原因写回状态，并在重试前判断是否需要改参数或转人工。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q11" data-group="诊断与转移" data-title="Q11 缺少停止条件的风险">
+      <div class="q-meta"><span class="pill">11</span><span class="pill">error diagnosis</span></div>
+      <h3>系统没有最大步数，也没有需要人工确认的分支。会出现什么风险？</h3>
+      <textarea name="q11" placeholder="至少写两个具体风险"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>至少应写出两类：预算或时间被耗尽，重复调用同一工具导致空转；以及遇到高风险动作时没有刹车，可能把越权或误操作直接执行出去。说清楚风险如何从“没有停下来的条件”里长出来，比只写“会出错”更重要。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q12" data-group="诊断与转移" data-title="Q12 哪些动作可以自动">
+      <div class="q-meta"><span class="pill">12</span><span class="pill">scenario transfer</span></div>
+      <h3>客服机器人要查订单和退款。哪些动作可以自动，哪些动作需要确认？</h3>
+      <textarea name="q12" placeholder="按读数据 / 写数据 / 外部副作用区分"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>只读查询通常可以自动，比如看订单状态、库存、物流时间；写数据或有副作用的动作通常需要确认，比如退款、改地址、取消订单。答案要按“读 / 写 / 副作用”分层，不能停在“有些自动，有些不自动”。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q13" data-group="诊断与转移" data-title="Q13 读论文助手该用什么">
+      <div class="q-meta"><span class="pill">13</span><span class="pill">scenario transfer</span></div>
+      <h3>你要做一个读论文助手。它需要 Agent 还是 Workflow？给出你的判断条件。</h3>
+      <textarea name="q13" placeholder="先写场景，再写判断"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>如果任务路径稳定、步骤可预先写清，Workflow 就够；如果需要根据论文内容、用户追问和中途反馈动态选择下一步，就更像 Agent。好的答案要先写“判断条件”，再下结论，不要只报一个名词。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q13b" data-group="诊断与转移" data-title="Q13b 什么时候转人工">
+      <div class="q-meta"><span class="pill">13b</span><span class="pill">scenario transfer</span></div>
+      <h3>订单需要退款，但当前用户没有权限。系统该怎么处理？</h3>
+      <textarea name="q13b" placeholder="先写判断，再写下一步"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>应该先停下来，不要硬执行退款；然后说明原因、请求人工确认或切到有权限的流程。好答案会明确提到“这一步有副作用”以及“不能把越权动作包装成普通查询”。</p>
+      </details>
+    </article>
+    <article class="q" data-question="q14" data-group="诊断与转移" data-title="Q14 Workflow 和 Agent 的核心区别">
+      <div class="q-meta"><span class="pill">14</span><span class="pill">short answer</span></div>
+      <h3>用 2-3 句话解释 Workflow 和 Agent 的核心区别。</h3>
+      <textarea name="q14" placeholder="写下你的答案"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>要点是控制权和路径。Workflow 的步骤由代码固定，Agent 让模型根据观察决定下一步。写得好的答案会提到“谁来决定下一步”和“遇到新信息时能不能改计划”。</p>
+      </details>
+    </article>
+    <article class="q" data-question="q15" data-group="诊断与转移" data-title="Q15 为什么外层工程更复杂">
+      <div class="q-meta"><span class="pill">15</span><span class="pill">short answer</span></div>
+      <h3>为什么说 Agent Loop 本身不复杂，复杂的是循环外的工程边界？</h3>
+      <textarea name="q15" placeholder="写下你的答案"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>因为真正容易出问题的地方包括工具验权、状态写回、预算控制、错误记录和停止分支。答案最好至少提到工具、状态、权限、评测中的两个。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q16" data-group="诊断与转移" data-title="Q16 何时该澄清">
+      <div class="q-meta"><span class="pill">16</span><span class="pill">short answer</span></div>
+      <h3>什么时候 Agent 应该向用户澄清？</h3>
+      <textarea name="q16" placeholder="写出判断规则"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>当缺少的是用户才能补的关键信息，或者继续查下去只会重复已有事实时，应该先澄清。答案要说出“缺什么”和“为什么不能继续盲查”。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q16b" data-group="诊断与转移" data-title="Q16b 三个分支">
+      <div class="q-meta"><span class="pill">16b</span><span class="pill">synthesis</span></div>
+      <h3>把“继续查 / 先追问 / 先停下”三种分支各写一句判断规则。</h3>
+      <textarea name="q16b" placeholder="每个分支一句话"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>继续查：还有可查事实能减少不确定性。先追问：缺的是只有用户能补的输入。先停下：继续动作会越权、带副作用或已经没法增加有效信息。答题时不要把三个分支混成一条。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q17" data-group="诊断与转移" data-title="Q17 费曼解释">
+      <div class="q-meta"><span class="pill">17</span><span class="pill">synthesis</span></div>
+      <h3>用 5-7 句话向新人解释 Agent Loop。必须串联：目标、思考、行动、观察、状态、停止条件、工具权限。</h3>
+      <textarea name="q17" placeholder="像在教同事，不要背术语表"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好的答案会把七个要素串成一条过程线，避免挨个背术语。先说目标如何进入系统，再说思考如何形成下一步，接着说程序如何执行工具并检查权限，最后说观察如何回到状态里、停止条件如何让循环收口。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q18" data-group="诊断与转移" data-title="Q18 更像 bug 还是 feature">
+      <div class="q-meta"><span class="pill">18</span><span class="pill">code reading</span></div>
+      <h3>模型给出很长 Thought，但没有调用任何能验证事实的工具。你如何判断这条轨迹有没有问题？</h3>
+      <textarea name="q18" placeholder="区分闲聊任务和事实任务"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>要先看任务性质：如果是开放式想法整理，长 Thought 未必有问题；如果是事实核验、查询或执行任务，没有观察回流通常就是问题。好答案会说明“任务需要查证时，长思考不能替代工具验证”。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q19" data-group="诊断与转移" data-title="Q19 修复清单">
+      <div class="q-meta"><span class="pill">19</span><span class="pill">checklist</span></div>
+      <h3>按本页的坏轨迹修复顺序，写出 5 个检查点。</h3>
+      <textarea name="q19" placeholder="1. ...&#10;2. ...&#10;3. ..."></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>参考检查点：任务是否需要查证；工具入口是否能触发；观察是否写回 messages；状态是否同步更新；预算、权限和人工确认是否存在。答案不必逐字相同，但要覆盖入口、回流、停止三层。</p>
+      </details>
+    </article>
+    <article class="q full" data-question="q20" data-group="诊断与转移" data-title="Q20 循环到工程层">
+      <div class="q-meta"><span class="pill">20</span><span class="pill">synthesis</span></div>
+      <h3>把“Action / Observation / Stop condition / State”分别翻译成工程上能检查的一件事。</h3>
+      <textarea name="q20" placeholder="逐项写出对应关系"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>参考对应：Action 对应受控工具调用和参数校验；Observation 对应返回值、错误和状态变更是否写回；Stop condition 对应预算、权限和人工确认是否真正生效；State 对应会话状态或任务状态是否同步更新。好答案会写出“怎么检查”，而不是只写名词翻译。</p>
+      </details>
+    </article>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><a href="https://arxiv.org/abs/2210.03629">ReAct: Synergizing Reasoning and Acting in Language Models</a>（访问日期：2026-06-21）：支撑本页的 ReAct 直觉、Thought / Action / Observation 轨迹、状态更新和停止条件。</li>
+  <li><a href="https://tw93.fun/2026-03-21/agent.html">你不知道的 Agent：原理、架构与工程实践</a>（访问日期：2026-06-21）：支撑本页对 workflow 边界、harness、权限、日志和工程外壳的讲法。</li>
+  <li><a href="../index.html">Agent 基础与工程课程地图</a>：提供本单元在整门课中的位置、先后顺序和后续衔接。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

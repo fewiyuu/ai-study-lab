@@ -1,318 +1,807 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-page-shell="study-page-v2">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RAG 论文精读 06｜记忆更新与边界：热替换、空文档与检索坍塌</title>
-  <style>
-:root{--bg:#f4f6f9;--paper:#fff;--ink:#1a1a1a;--muted:#5f6875;--quiet:#8a95a4;--line:#d8dee8;--navy:#1b2a4a;--cyan:#00a9f4;--soft:#eef8fc;--warn:#fff4d8;--redsoft:#fff0ed;--greenbox:#edf8f3;--code:#1e1e1e;--codeText:#d4d4d4;--sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",Arial,sans-serif;--serif:"Songti SC","Noto Serif CJK SC","STSong","SimSun",serif;--mono:"Cascadia Mono","Cascadia Code","Consolas","SFMono-Regular",monospace}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:linear-gradient(90deg,rgba(27,42,74,.045) 1px,transparent 1px) 0 0/60px 60px,linear-gradient(rgba(27,42,74,.035) 1px,transparent 1px) 0 0/60px 60px,var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.72;-webkit-font-smoothing:antialiased}.progress{position:fixed;left:0;top:0;height:4px;width:0;background:linear-gradient(90deg,var(--cyan),var(--navy));z-index:10}.layout{display:grid;grid-template-columns:308px minmax(0,1fr);min-height:100vh}
-aside{position:sticky;top:0;height:100vh;overflow:auto;background:var(--navy);color:#fff;padding:30px 22px;background-image:repeating-linear-gradient(90deg,transparent,transparent 59px,rgba(255,255,255,.045) 59px,rgba(255,255,255,.045) 60px),repeating-linear-gradient(0deg,transparent,transparent 59px,rgba(255,255,255,.035) 59px,rgba(255,255,255,.035) 60px)}.brand{border-bottom:1px solid rgba(255,255,255,.36);padding-bottom:22px;margin-bottom:20px}.brand strong{display:block;font-size:27px;line-height:1.18;font-family:var(--serif);font-weight:700}.brand span{display:block;color:rgba(255,255,255,.68);font-size:13px;margin-top:8px;line-height:1.7}nav{display:grid}nav a{display:flex;gap:10px;align-items:center;color:rgba(255,255,255,.82);text-decoration:none;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.13);font-size:13px;letter-spacing:.04em}.dot{width:5px;height:5px;background:var(--cyan);opacity:.55;flex:0 0 auto}nav a:hover,nav a.active{color:#fff;border-color:rgba(255,255,255,.42);font-weight:700}nav a.active .dot{opacity:1;transform:scale(1.35)}.side-note{margin-top:24px;padding:14px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:rgba(255,255,255,.72);font-size:13px;line-height:1.8}
-main{max-width:1420px;width:100%;padding:34px 44px}.hero,section{position:relative;background:var(--paper);border:1px solid var(--line);box-shadow:0 14px 28px rgba(27,42,74,.08)}.hero{display:grid;grid-template-columns:minmax(0,1fr) 392px;gap:24px;padding:38px 42px;border-top:6px solid var(--navy)}section{padding:30px 34px;margin-top:18px}.kicker{font-family:var(--mono);font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.18em;margin-bottom:16px}h1{margin:0;font-family:var(--serif);font-size:48px;line-height:1.12;color:#111}h2{margin:0;font-family:var(--serif);font-size:31px;line-height:1.22;color:#111}h3{margin:0 0 8px;font-size:17px;line-height:1.45;color:#111}p{margin:8px 0}.muted,.hero p{color:var(--muted)}a{color:#146fb2}.head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--line)}.tag,.pill{display:inline-flex;align-items:center;color:#8390a0;font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase}
-.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(310px,.88fr);gap:1px;background:var(--line);border:1px solid var(--line);margin:14px 0}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:14px 0}.box,.q,.review-card,.check-item,.answer,.quality{background:rgba(255,255,255,.72);padding:16px}.soft{background:var(--soft)}.warn{background:var(--warn)}.redsoft{background:var(--redsoft)}.greenbox{background:var(--greenbox)}.route{background:#fff;border:1px solid var(--line);padding:22px}.route h3,.box h3,.review-card strong,.check-item b{font-family:var(--serif);font-weight:900}.map{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0;align-items:center;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:14px 0}.node{background:#f7f9fc;border:1px solid var(--line);color:#20304d;padding:8px 12px;font-weight:900}.arrow{color:#a7b0bd}
-code{background:#e9eef6;color:#17202a;padding:2px 5px;font-family:var(--mono);font-size:.92em}.codebar{margin-top:14px;background:#252526;color:#cbd5e1;border:1px solid #3c3c3c;border-bottom:0;padding:8px 12px;display:flex;align-items:center;font-family:var(--mono);font-size:13px}.codebar:before{content:"";width:34px;height:10px;margin-right:10px;flex:0 0 auto;background:radial-gradient(circle at 5px 5px,#f87171 0 4px,transparent 4.5px),radial-gradient(circle at 17px 5px,#fbbf24 0 4px,transparent 4.5px),radial-gradient(circle at 29px 5px,#34d399 0 4px,transparent 4.5px)}.codebar .label{color:#93c5fd;margin-right:auto}.codebar.danger{border-color:#7f1d1d;background:#3b1f1f}.codebar.danger .label{color:#fecaca}.copy-code{margin-left:12px;border:1px solid #3c3c3c;background:#2d2d30;color:#dbeafe;padding:3px 7px;font-family:var(--mono);font-size:12px;cursor:pointer}pre{margin:0 0 12px;background:var(--code);color:var(--codeText);border:1px solid #3c3c3c;padding:15px 16px;overflow:auto;font-family:var(--mono);font-size:14px;line-height:1.64}pre code{background:transparent;color:inherit;padding:0}.comment{color:#6a9955}.kw{color:#c586c0}.fn{color:#dcdcaa}.str{color:#ce9178}.num{color:#b5cea8}.var{color:#9cdcfe}
-.formula{background:#fffdfa;color:#1e1a16;border:1px solid #d9d0bf;border-left:5px solid var(--navy);padding:16px 18px;overflow:auto;font-family:"Cambria Math","Latin Modern Math","Times New Roman",var(--serif);font-size:18px;line-height:1.8;margin:12px 0}.frac{display:inline-grid;grid-template-rows:auto auto;vertical-align:middle;text-align:center;margin:0 .12em}.frac .top{border-bottom:1px solid currentColor;padding:0 .18em}.frac .bottom{padding:0 .18em}.sum{font-size:1.35em;vertical-align:middle}.sub{font-size:.72em;vertical-align:sub}.sup{font-size:.72em;vertical-align:super}
-.viz-panel{background:#fff;border:1px solid var(--line);padding:16px;margin:12px 0}.viz-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.viz-cell{background:#f7f9fc;border:1px solid var(--line);padding:14px}.metric-table{width:100%;border-collapse:collapse;margin:10px 0;background:#fff}.metric-table th,.metric-table td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}.metric-table th{background:#f0f4fa}.flow-svg{width:100%;height:auto;display:block;background:#fff;border:1px solid var(--line)}.checkpoint{margin:12px 0 0;padding:10px 12px;background:#f3f7fb;border-left:4px solid var(--cyan);color:#39465a}.seg{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.seg button{background:#edf2f7;color:#23324a;border:1px solid #d8dee8}.seg button.active{background:var(--navy);color:#fff}button{border:0;background:var(--navy);color:#fff;padding:9px 12px;font:inherit;cursor:pointer}.ghost{background:#fff;color:var(--navy);border:1px solid var(--navy)}.bar{height:18px;background:#dbeafe;border:1px solid #bfdbfe;margin:4px 0}.bar strong{display:block;height:100%;background:#1b75bb;color:#fff;font-size:12px;line-height:18px;padding-left:6px;min-width:38px}
-.practice-intro{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:14px}.practice-check{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:12px 0}.practice-group{border:1px solid var(--line);background:#fff;margin-top:20px}.group-head{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px;padding:20px 22px;border-bottom:1px solid var(--line)}.group-head h3{font-family:var(--serif);font-size:25px}.quick-review{border-left:2px solid var(--navy);padding-left:14px;font-size:13.5px;color:var(--muted)}.quick-review b{display:block;font-family:var(--mono);font-size:11px;color:#8390a0;letter-spacing:.16em;margin-bottom:5px}.drill-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line)}.q{min-height:148px}.q.full{grid-column:1/-1}.q h3{font-size:16px;line-height:1.55}.q-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}.solve-note{margin:8px 0 0;padding:9px 12px;background:#f4f7fb;border-left:4px solid var(--navy);color:#566273;font-size:13px}.choices label{display:block;margin:7px 0}input[type=radio],input[type=checkbox]{accent-color:var(--navy);margin-right:7px}textarea,input[type=text],select{width:100%;border:1px solid var(--line);background:#fff;color:var(--ink);padding:10px;font:inherit;resize:vertical}textarea{min-height:74px}.short textarea{min-height:58px}.answer{white-space:pre-wrap;background:#fff;border:1px dashed #9aa7b6;max-height:420px;overflow:auto}.quality{display:none;white-space:pre-wrap;background:#fff7df;border:1px solid #e5c569;color:#574322;margin:12px 0}.actions{position:sticky;bottom:0;display:flex;gap:10px;justify-content:flex-end;padding-top:14px;margin-top:18px;background:linear-gradient(transparent,var(--bg) 42%)}ul,ol{padding-left:21px}li{margin:4px 0}
-@media(max-width:980px){.layout{grid-template-columns:minmax(0,1fr)}aside{position:static;height:auto}main{padding:18px}.hero,section{padding:22px 18px}.hero,.grid2,.grid3,.viz-grid,.practice-intro,.group-head,.drill-grid{grid-template-columns:minmax(0,1fr)}h1{font-size:34px;overflow-wrap:anywhere}.practice-check{grid-template-columns:minmax(0,1fr)}pre{font-size:13.5px}.metric-table,.metric-table thead,.metric-table tbody,.metric-table tr,.metric-table th,.metric-table td{display:block;width:100%;max-width:100%}.metric-table thead{display:none}.metric-table tr{border:1px solid var(--line);margin:0 0 10px;background:#fff}.metric-table th,.metric-table td{border:0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.metric-table tr>*:last-child{border-bottom:0}}
-</style>
+  <title>记忆更新与边界：热替换空文档与检索坍塌</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
 </head>
-<body data-feynman-keywords="index hot-swapping、Null document、Retrieval Collapse、Broader Impact、bias、misinformation、external memory">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>RAG 论文精读</strong><span>06｜记忆更新与边界：热替换、空文档与检索坍塌<br>读论文最后的边界：RAG 能换索引更新知识，但也有空检索、坍塌、偏见和滥用风险。</span></div>
-    <nav><a href="#goal"><span class="dot"></span>学习目标</a><a href="#skeleton"><span class="dot"></span>概念骨架</a><a href="#terms"><span class="dot"></span>术语表</a><a href="#hotswap"><span class="dot"></span>Index hot-swapping</a><a href="#null"><span class="dot"></span>Null document</a><a href="#collapse"><span class="dot"></span>Retrieval collapse</a><a href="#impact"><span class="dot"></span>Broader Impact</a><a href="#takeaway"><span class="dot"></span>整篇论文的最终抓手</a><a href="#pitfalls"><span class="dot"></span>最后一块常见误区</a><a href="#code"><span class="dot"></span>最小例子</a><a href="#compare"><span class="dot"></span>易混概念</a><a href="#practice"><span class="dot"></span>综合练习</a><a href="#export"><span class="dot"></span>导出记录</a></nav>
-    <div class="side-note">来源：Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks<br><a href="https://arxiv.org/abs/2005.11401" style="color:#fff">arXiv:2005.11401</a><br>论文 4.5 Index hot-swapping、Discussion、Broader Impact、Appendix F/H。</div>
-  </aside>
-  <main>
-    <section class="hero" id="goal">
-      <div>
-        <div class="kicker">RAG Paper Reading 06</div>
-        <h1>记忆更新与边界：热替换、空文档与检索坍塌</h1>
-        <p>读论文最后的边界：RAG 能换索引更新知识，但也有空检索、坍塌、偏见和滥用风险。</p>
-        <p>这一块只抓论文中的一个最小学习单元。读的时候先看直觉，再看术语和公式，最后用练习区检查自己能不能复述、诊断和迁移。</p>
-        <div class="map"><span class="node">换索引</span><span class="arrow">→</span><span class="node">知识更新</span><span class="arrow">→</span><span class="node">空文档</span><span class="arrow">→</span><span class="node">检索坍塌</span><span class="arrow">→</span><span class="node">偏见来源</span><span class="arrow">→</span><span class="node">适用边界</span></div>
+<body data-course="RAG 论文精读" data-unit="06">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>RAG 论文精读</strong>
+        <span>06</span>
       </div>
-      <div class="route">
-        <h3>这一页结束时，你要能做到</h3>
-        <ol><li>解释 index hot-swapping 证明了什么。</li><li>说明 null document 机制为什么被尝试又被省略。</li><li>解释 retrieval collapse 的现象和可能原因。</li><li>说清 RAG 的社会影响和工程边界。</li></ol>
-      </div>
-    </section>
-    <section id="skeleton">
-      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
-      <svg class="flow-svg" viewBox="0 0 980 170" role="img" aria-label="本块概念链路">
-        <defs><marker id="arrow-06" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#1b2a4a"/></marker></defs>
-        <rect x="30" y="52" width="130" height="68" fill="#eef8fc" stroke="#d8dee8"/><text x="95" y="91" text-anchor="middle" font-size="14" font-weight="700">换索引</text><line x1="160" y1="86" x2="178" y2="86" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow-06)"/><rect x="185" y="52" width="130" height="68" fill="#fff4d8" stroke="#d8dee8"/><text x="250" y="91" text-anchor="middle" font-size="14" font-weight="700">知识更新</text><line x1="315" y1="86" x2="333" y2="86" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow-06)"/><rect x="340" y="52" width="130" height="68" fill="#eef8fc" stroke="#d8dee8"/><text x="405" y="91" text-anchor="middle" font-size="14" font-weight="700">空文档</text><line x1="470" y1="86" x2="488" y2="86" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow-06)"/><rect x="495" y="52" width="130" height="68" fill="#fff4d8" stroke="#d8dee8"/><text x="560" y="91" text-anchor="middle" font-size="14" font-weight="700">检索坍塌</text><line x1="625" y1="86" x2="643" y2="86" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow-06)"/><rect x="650" y="52" width="130" height="68" fill="#eef8fc" stroke="#d8dee8"/><text x="715" y="91" text-anchor="middle" font-size="14" font-weight="700">偏见来源</text><line x1="780" y1="86" x2="798" y2="86" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow-06)"/><rect x="805" y="52" width="130" height="68" fill="#fff4d8" stroke="#d8dee8"/><text x="870" y="91" text-anchor="middle" font-size="14" font-weight="700">适用边界</text>
-      </svg>
-      <div class="checkpoint">这张图是读本块的导航。以后复述时，先把图里的节点按顺序讲出来，再补公式和例子。</div>
-    </section>
-    <section id="terms">
-      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
-      <table class="metric-table"><thead><tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr></thead><tbody><tr><td>index hot-swapping</td><td>不重新训练模型，只替换外部索引。</td><td>论文用 2016 和 2018 Wikipedia 索引回答世界领导人问题。</td><td>只能更新外部知识，不保证所有行为同步改变。</td></tr><tr><td>null document</td><td>显式表示没有有用检索结果的空文档。</td><td>论文尝试 k+1 个文档边际化，但没有带来收益。</td><td>没有采用不等于无答案问题不存在。</td></tr><tr><td>retrieval collapse</td><td>检索器对不同输入总取同一批文档。</td><td>生成器随后学会忽略文档，表现接近 BART。</td><td>不是所有任务都适合端到端学习检索。</td></tr><tr><td>external memory version</td><td>索引对应的知识时间点。</td><td>2016/2018 Wikipedia 会影响回答。</td><td>RAG 的知识不是抽象永远正确的。</td></tr><tr><td>bias in source</td><td>外部资料本身可能有偏见或错误。</td><td>Wikipedia 或任何知识源都不是完全中立。</td><td>检索增强不自动消除数据偏见。</td></tr><tr><td>misuse risk</td><td>更事实的生成也可能被滥用。</td><td>可能用于误导内容、冒充、垃圾信息等。</td><td>RAG 的可控性收益伴随风险。</td></tr></tbody></table>
-    </section>
-    
-    <section id="hotswap">
-      <div class="head"><h2>Index hot-swapping：更新知识不一定要重训</h2><span class="tag">HOT-SWAP</span></div>
-      
-          <p>RAG 的一个重要优势是外部记忆可以替换。论文用 2016 年和 2018 年的 Wikipedia 索引做演示：准备 82 个在两个年份间发生变化的世界领导人职位问题，例如“Who is the President of Peru?”，然后用不同索引回答。</p>
-          <p>结果很清楚：2016 索引对 2016 领导人回答正确率 70%，2018 索引对 2018 领导人正确率 68%；如果索引和年份错配，准确率很低。这个实验说明模型的回答确实受外部索引版本影响。换索引可以改变世界知识，而不需要重新训练 BART 参数。</p>
-          <p>但这个结论也有边界。热替换能更新外部事实来源，不等于所有任务行为都会自动变好。如果 query encoder 不会把新问题检索到正确文档，或者生成器忽略文档，换索引也救不了。热替换证明的是非参数记忆的可编辑性，不是完整系统自动正确。</p>
-          <div class="grid2">
-            <div class="box greenbox"><h3>证明了什么</h3><p>外部索引版本会影响 RAG 的事实回答，知识可以通过替换索引更新。</p></div>
-            <div class="box warn"><h3>没证明什么</h3><p>没证明所有事实都能自动更新，也没证明检索和生成永远忠于新索引。</p></div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先看主线</a>
+        <a href="#terms"><span class="dot"></span>术语和边界</a>
+        <a href="#state-ledger"><span class="dot"></span>状态账本</a>
+        <a href="#hotswap"><span class="dot"></span>热替换</a>
+        <a href="#trace-lab"><span class="dot"></span>三种结局</a>
+        <a href="#demo"><span class="dot"></span>输入演示</a>
+        <a href="#compare"><span class="dot"></span>三种边界</a>
+        <a href="#k-tradeoff"><span class="dot"></span>K 值变化</a>
+        <a href="#nulldoc"><span class="dot"></span>空文档</a>
+        <a href="#collapse"><span class="dot"></span>检索坍塌</a>
+        <a href="#log-bridge"><span class="dot"></span>日志回归</a>
+        <a href="#impact"><span class="dot"></span>影响与风险</a>
+        <a href="#boundary"><span class="dot"></span>先别钻</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">本页只讲 RAG 的边界层：索引版本、K 值、空文档、检索坍塌和风险控制。先顺着主线读，再用练习区自查。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">paper boundary</div>
+          <h1>记忆更新与边界：热替换空文档与检索坍塌</h1>
+          <p>这一页只读论文里和边界有关的部分：先看索引热替换怎样说明外部记忆可以更新，再看 K 值变化、空文档和检索坍塌分别暴露了什么问题，最后把更事实的系统为什么也有风险讲清。这里的重点不是把结果页再抄一遍，而是把“能改什么、改了会坏在哪里、工程上该怎么查”串成一条线。</p>
+
+          <div class="course-links">
+            <a href="../05_实验结果与消融_主结论怎么读/学习页.html">回到第 05 节</a><a href="../index.html">课程地图</a>
           </div>
-        
-    </section>
+        </div>
+        <div class="box soft">
+          <h3>这页结束时，你能做什么</h3>
+          <ul>
+  <li>把索引热替换、K 值变化、null document 和 retrieval collapse 分开讲清，不把它们混成一类“RAG 边界问题”。</li>
+  <li>能用状态账本说明一个 RAG 系统读什么、写什么、失配时会出现什么症状。</li>
+  <li>能把一条实验结论拆成“支持什么、不能推出什么、下一步该查什么”。</li>
+</ul>
 
-    <section id="null">
-      <div class="head"><h2>Null document：资料缺失时该怎么处理</h2><span class="tag">NULL DOC</span></div>
-      
-          <p>附录 F 讨论了 null document。直觉很合理：有些输入可能检索不到有用文档，那就额外加入一个空文档，让模型可以选择“没有资料可用”。形式上，如果检索 k 个文档，就再加一个 empty document，对 k+1 个结果边际化。</p>
-          <p>论文尝试了三种 null document logit：学习一个空文档 embedding、学习一个静态 bias、用神经网络预测 logit。但这些方法没有提升表现，所以主模型省略。对 Open MS-MARCO 这类经常检索不到有用 Wikipedia 文档的问题，模型似乎会学会检索一组固定文档，作为不依赖检索的信号。</p>
-          <p>这段很值得读，因为它提醒你：论文不是没有考虑“资料不足”，而是当时的机制没有带来收益。今天工程 RAG 仍然需要无答案处理，只是可能用阈值、拒答策略、证据充分性评估，而不是论文里的 null document。</p>
-          <div class="codebar"><span class="label">错误示例：把没有证据的问题硬答掉</span><span class="kind">Text</span></div>
-          <pre><code>检索结果为空。
-模型回答：根据资料，答案是 2018 年的 X。
+        </div>
+      </div>
 
-问题：资料里根本没有这个答案，回答却伪装成有依据。</code></pre>
-          <div class="checkpoint">判断句：没有有用文档时，系统应该显式处理证据不足，而不是让生成器自由补。</div>
-        
-    </section>
-
-    <section id="collapse">
-      <div class="head"><h2>Retrieval collapse：检索器可能学坏</h2><span class="tag">COLLAPSE</span></div>
-      
-          <p>附录 H 提到，早期实验中某些任务会出现 retrieval collapse：检索组件学会对不同输入取回同一批文档。随后生成器学会忽略这些文档，整个 RAG 表现退化得像 BART。</p>
-          <p>可能原因有两个。第一，有些任务对事实知识的需求不明确，检索文档对目标输出帮助不稳定。第二，长输出序列可能给检索器更模糊的梯度。生成器很强时，它可能绕开检索，靠参数记忆和语言模式完成任务。</p>
-          <p>这说明 RAG 不适合盲目套到所有任务上。任务必须让检索有用，训练目标也要能给检索器足够清楚的信号。否则你只是多接了一个索引，模型却没真正用它。</p>
-          <div class="viz-panel">
-            <h3>坍塌前后的症状</h3>
-            <div class="viz-grid">
-              <div class="viz-cell"><b>正常检索</b><p>不同输入取回不同文档，候选和问题语义相关。</p><div class="bar"><strong style="width:82%">输入相关</strong></div></div>
-              <div class="viz-cell"><b>检索坍塌</b><p>不同输入反复取回同一批文档，生成器逐渐忽略检索。</p><div class="bar"><strong style="width:32%">输入相关</strong></div></div>
-            </div>
-          </div>
-        
-    </section>
-
-    <section id="impact">
-      <div class="head"><h2>Broader Impact：更事实也不等于无风险</h2><span class="tag">IMPACT</span></div>
-      
-          <p>论文的 broader impact 很克制。积极面是：RAG 更接近真实知识，生成时幻觉更少，访问过的知识可以被检查，也可以更容易控制和更新。它可以用于医学、工作辅助等知识密集场景。</p>
-          <p>风险也直接来自这份能力。外部知识源可能有错误和偏见，Wikipedia 也不是完全事实、完全中立。RAG 作为语言模型也可能被用来生成误导内容、冒充他人、自动生产垃圾信息或钓鱼内容。检索增强让内容看起来更有依据，滥用时反而更危险。</p>
-          <p>所以 RAG 的安全边界不只在模型，还在资料源、检索策略、引用呈现、拒答机制、审计日志和使用场景。对于高风险领域，只说“我们接了知识库”远远不够。</p>
-          <table class="metric-table">
-            <thead><tr><th>收益</th><th>对应风险</th><th>需要的控制</th></tr></thead>
-            <tbody>
-              <tr><td>更事实</td><td>错误资料也会被放大</td><td>资料治理、版本记录、来源权重</td></tr>
-              <tr><td>可溯源</td><td>伪引用或误读引用</td><td>引用验证、证据片段展示</td></tr>
-              <tr><td>易更新</td><td>新索引引入偏见或污染</td><td>索引审核、回滚、变更记录</td></tr>
-            </tbody>
-          </table>
-        
-    </section>
-
-    <section id="takeaway">
-      <div class="head"><h2>整篇论文的最终抓手</h2><span class="tag">SYNTHESIS</span></div>
-      
-          <p>读完这篇论文，你要带走的不是“RAG 等于检索加生成”这句空话，而是一条完整链路：外部文档作为非参数记忆，DPR 给出文档分布，BART 在文档条件下生成，训练时对潜在文档边际化，测试时用近似解码产生输出，最后通过多任务实验、消融和热替换验证收益与边界。</p>
-          <p>RAG 的强处是把知识从模型权重里拿出一部分，放到可查、可换的外部文本中。它的难处是检索和生成之间的信用分配：哪个文档该被取回，生成器该多信文档，资料不足时怎么停下来，任务不需要事实时检索会不会坍塌。</p>
-          <p>这也是今天做 RAG 工程时仍然绕不开的问题。不同的是，今天很多系统不再训练论文式的 RAG 概率模型，而是用 embedding、reranker、prompt、long context 和工具调用搭流程。但论文里的核心判断仍然有用：外部记忆是否真的被访问、是否可更新、是否减少幻觉、是否能被评估。</p>
-          <div class="checkpoint">你现在应该能做什么：看到一个 RAG 系统，能分别检查知识源、检索、生成、更新、拒答和评估，而不是只看最终回答。</div>
-        
-    </section>
-
-    <section id="pitfalls">
-      <div class="head"><h2>最后一块常见误区</h2><span class="tag">PITFALLS</span></div>
-      
-          <div class="grid2">
-            <div class="box redsoft"><h3>误区 1：换索引等于万事更新</h3><p>换索引只更新外部知识源，query encoder、生成器和 prompt 仍可能出错。</p></div>
-            <div class="box redsoft"><h3>误区 2：没有 null document 就不用拒答</h3><p>论文没采用 null document，不代表工程系统可以强行回答无证据问题。</p></div>
-            <div class="box redsoft"><h3>误区 3：RAG 适合所有生成任务</h3><p>检索需求不明确的任务可能出现 retrieval collapse。</p></div>
-            <div class="box redsoft"><h3>误区 4：外部知识天然可信</h3><p>知识源可能错误、过时、有偏见。RAG 会继承并放大这些问题。</p></div>
-          </div>
-        
-    </section>
-    <section id="code">
-      <div class="head"><h2>最小例子</h2><span class="tag">CODE</span></div>
-      <p>这段伪代码不是论文实现，只用来固定本块的输入输出关系。真正理解时，重点看每一行读什么、写什么、为什么在这个顺序。</p>
-      <div class="codebar"><span class="label">最小检查清单：一个 RAG 系统能不能放心更新</span><span class="kind">pseudo</span></div>
-      <pre><code>checklist = [
-    &quot;索引有版本号和更新时间&quot;,
-    &quot;检索结果能回溯到来源文档&quot;,
-    &quot;资料不足时有拒答或降级策略&quot;,
-    &quot;替换索引后跑固定回归问题集&quot;,
-    &quot;记录 query、topK、最终上下文和回答&quot;,
-    &quot;监控是否出现同一批文档反复被检索&quot;
-]</code></pre>
-    </section>
-    <section id="compare">
-      <div class="head"><h2>易混概念</h2><span class="tag">COMPARE</span></div>
-      <table class="metric-table"><thead><tr><th>易混概念</th><th>前者</th><th>后者</th><th>判断方法</th></tr></thead><tbody><tr><td>hot-swapping / retraining</td><td>替换外部索引。</td><td>更新模型参数。</td><td>知识源变了还是行为能力变了。</td></tr><tr><td>null document / refusal</td><td>模型结构里的空文档候选。</td><td>系统层面的无证据回答策略。</td><td>发生在模型概率里还是产品流程里。</td></tr><tr><td>retrieval collapse / poor retrieval</td><td>总检索同一批文档。</td><td>检索不到当前问题所需文档。</td><td>错误是否随输入变化。</td></tr><tr><td>source factuality / model factuality</td><td>资料本身是否正确。</td><td>模型是否忠于资料回答。</td><td>先查知识源，再查生成。</td></tr></tbody></table>
-    </section>
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">PRACTICE</span></div>
-      
-    <div class="practice-intro">
-      <div class="review-card"><strong>作答前先抓主线</strong><p>替换索引、回归测试、证据不足处理、监控坍塌和偏见。</p></div>
-      <div class="review-card"><strong>检查答案的方式</strong><p>概念题看边界，诊断题写错因、后果和修法，费曼题要把本块关键词串成一条完整解释。</p></div>
-    </div>
-    <div class="practice-check">
-      <div class="check-item"><b>概念</b>index hot-swapping、null document、retrieval collapse、external memory version、bias、misuse risk。</div>
-      <div class="check-item"><b>流程</b>替换索引、回归测试、证据不足处理、监控坍塌和偏见。</div>
-      <div class="check-item"><b>诊断</b>误以为换索引万能、没有拒答、RAG 适合所有任务、外部资料天然可信。</div>
-      <div class="check-item"><b>表达</b>能把本块讲给没读论文的人听。</div>
-    </div>
-    <div class="practice-group">
-      <div class="group-head"><div><h3>一、基础概念</h3><p>先确认本块关键词是否分得清。</p></div><div class="quick-review"><b>REMIND</b>index hot-swapping、null document、retrieval collapse、external memory version、bias、misuse risk。</div></div>
-      <div class="drill-grid">
-        <div class="q" data-role="homework" data-title="1. 核心定位"><div class="q-meta"><span class="pill">选择</span></div><h3>1. 本块最核心的判断是哪一个？</h3><div class="choices"><label><input type="radio" name="q1" value="检索和生成各有职责，必须看概率或流程连接">检索和生成各有职责，必须看概率或流程连接</label><label><input type="radio" name="q1" value="只要模型更大就不需要外部知识">只要模型更大就不需要外部知识</label><label><input type="radio" name="q1" value="检索出来的第一篇文档就是最终答案">检索出来的第一篇文档就是最终答案</label></div></div>
-        <div class="q" data-role="homework" data-title="2. 边界判断"><div class="q-meta"><span class="pill">判断</span></div><h3>2. RAG 的检索结果可检查，所以最终生成一定事实正确。</h3><div class="choices"><label><input type="radio" name="q2" value="对">对</label><label><input type="radio" name="q2" value="错">错</label></div></div>
-        <div class="q short" data-role="homework" data-title="3. 术语解释" >
-    <div class="q-meta"><span class="pill">简答</span></div>
-    <h3>3. 用自己的话解释：index hot-swapping。</h3>
-    <textarea name="q3"></textarea>
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goals</span>
   </div>
-        <div class="q short" data-role="homework" data-title="4. 术语区分" >
-    <div class="q-meta"><span class="pill">填空/解释</span></div>
-    <h3>4. 写出本块中你最容易混淆的一组概念，并说明差别。</h3>
-    <textarea name="q4"></textarea>
+  <div class="grid2">
+    <div class="box">
+      <h3>先抓住三件事</h3>
+      <p>先把索引热替换和模型重训分开；再把 K 值变化、空文档和检索坍塌分开；最后把“更事实”与“更安全”分开。</p>
+    </div>
+    <div class="box info">
+      <h3>这一页的边界</h3>
+      <p>这里不再回头重讲训练公式，也不把 FEVER 或检索实现展开成别的单元。你只需要把边界实验、状态账本和风险控制读通。</p>
+    </div>
   </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先看主线：这一页到底在守什么边界</h2>
+    <span class="tag">overview</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>把这页读成一张边界图</h3>
+      <p>前几页已经把 RAG 的主流程讲完了：检索器找文档，生成器在文档条件下回答，训练时把潜在文档边际化。第 06 页要补的是另一半，先看系统什么时候能靠换索引更新知识，再看什么时候会因为证据不足、检索退化或任务不匹配而失去作用。</p>
+      <p>论文在这里没有继续堆主结果，而是把边界摊开：热替换告诉你外部记忆是可编辑的，K 值变化告诉你检索条数和性能、成本一起变，null document 告诉你作者考虑过“找不到证据”的情况，retrieval collapse 告诉你检索器也会学坏。把这四件事连起来，才知道 RAG 的能力边界在哪里。</p>
+    </div>
+    <div class="box info">
+      <h3>这页先别混在一起的东西</h3>
+      <p>先别把索引版本、拒答策略、检索坍塌和安全风险混成一个词。前两个更像“资源和流程怎么处理”，后两个更像“系统什么时候会失灵”。它们常常一起出现，但排查顺序不同。</p>
+      <p>如果你把这页读顺了，后面看任何 RAG 系统都会先问四个问题：知识源有没有换，K 取多少，证据不足时怎么走，检索有没有真的在起作用。</p>
+    </div>
+  </div>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语和边界：先给每个问题一个位置</h2>
+    <span class="tag">terms</span>
+  </div>
+  <div class="grid3">
+    <div class="box">
+      <h3>index hot-swapping</h3>
+      <p>替换外部索引，让模型接触到新的文档版本。这里改的是记忆源，不是参数权重。</p>
+    </div>
+    <div class="box">
+      <h3>null document</h3>
+      <p>给“没有有用证据”留一个显式候选。论文尝试过，但没有拿到收益，所以主模型省略了它。</p>
+    </div>
+    <div class="box warn">
+      <h3>retrieval collapse</h3>
+      <p>检索器对不同输入总是拿回同一批文档，随后生成器把这些文档当成噪声，系统退化到接近纯生成。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="06 页术语边界表" data-export-lang="table">
+      <thead>
+        <tr><th>术语</th><th>读的时候先看什么</th><th>容易误会成什么</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>索引热替换</td><td>外部知识版本怎么换</td><td>把模型整体重新训练了一遍</td></tr>
+        <tr><td>空文档</td><td>证据不足时有没有显式出口</td><td>没有这个机制就不能做拒答</td></tr>
+        <tr><td>检索坍塌</td><td>不同输入是否仍能检到不同证据</td><td>只是某一次检索失误</td></tr>
+        <tr><td>K 值变化</td><td>更多候选对召回、噪声和开销的共同影响</td><td>K 越大越好</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="state-ledger">
+  <div class="head">
+    <h2>状态账本：这一页最该盯住的读写关系</h2>
+    <span class="tag">ledger</span>
+  </div>
+  <p>RAG 在这一页里最有用的理解方式，不是“概念记忆”，而是“状态如何交接”。索引、检索器、生成器和候选文档每一步都在读别人的结果，也在写下一步能不能继续工作。下面这张账本把每个步骤拆成读什么、写什么、失配时会出现什么。</p>
+  <div class="table-wrap">
+    <table data-export-context="RAG 状态账本" data-export-lang="table">
+      <thead>
+        <tr><th>步骤</th><th>读什么</th><th>写什么 / 改什么</th><th>出错症状</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>换索引</td><td>当前文档库、时间版本、问题集合</td><td>替换外部记忆版本</td><td>答案变旧，或新旧版本混答</td></tr>
+        <tr><td>调 K</td><td>检索得分、上下文长度、任务类型</td><td>改变候选数和上下文密度</td><td>噪声变多，成本上升，效果未必更好</td></tr>
+        <tr><td>加空文档</td><td>是否有证据、空文档 logit 设计</td><td>给“没资料可用”留出口</td><td>模型硬答，或者学到一个没有收益的额外分支</td></tr>
+        <tr><td>训练检索器</td><td>下游损失、问题表示、候选证据</td><td>更新 query encoder / 检索分布</td><td>retrieval collapse，检索结果不再随输入变化</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>这张表的用法</h3>
+      <p>先看“读什么”，就知道一个步骤依赖谁的状态。再看“写什么”，就知道它会把什么信息带到下一步。最后看“出错症状”，你就能把论文里的实验结论直接翻译成排查动作：先查索引，再查 K，再查证据出口，最后查检索是否失效。</p>
+    </div>
+    <div class="box">
+      <h3>为什么要这样读</h3>
+      <p>因为这页讲的不是抽象理念，而是“资源切换后系统会不会继续对”。当你把它读成状态交接，很多结论就自然了：热替换说明外部记忆可换，空文档说明系统需要拒答分支，坍塌说明检索训练也会失败。</p>
+    </div>
+  </div>
+</section>
+
+<section id="hotswap">
+  <div class="head">
+    <h2>热替换：知识更新为什么可以只换索引</h2>
+    <span class="tag">hot-swap</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>论文怎么做这个实验</h3>
+      <p>作者用 2016 年和 2018 年的 Wikipedia 索引回答世界领导人的问题，样例格式很简单，例如 “Who is the President of Peru?”。问题本身不变，变的是索引版本。这样就能看出系统回答变化来自外部记忆，而不是重新训练整个模型。</p>
+      <p>结果也很直接：2016 索引对 2016 领导人问题的准确率高，2018 索引对 2018 领导人问题的准确率也高；一旦索引和年份错配，准确率会掉得很明显。这个实验说明，RAG 的外部记忆可以像一个可替换的数据层那样更新。</p>
+    </div>
+    <div class="box info">
+      <h3>这件事真正证明了什么</h3>
+      <p>它证明的是“知识可以通过换索引更新”，而不是“换索引之后一切行为都会自动正确”。如果 query encoder 没把问题检到对的文档，或者生成器学会忽略证据，外部记忆换得再新也没用。</p>
+      <p>所以热替换的价值是有限而明确的：它把知识更新从重训模型里拆出来了，但系统仍然要靠检索、生成和评估一起配合。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="热替换对照表" data-export-lang="table">
+      <thead>
+        <tr><th>场景</th><th>读到的索引</th><th>最可能看到的现象</th><th>该怎么解释</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>年份匹配</td><td>2016 索引配 2016 人物</td><td>答案较稳</td><td>外部记忆和问题时间点对上了</td></tr>
+        <tr><td>年份匹配</td><td>2018 索引配 2018 人物</td><td>答案较稳</td><td>新索引反映了更新后的世界知识</td></tr>
+        <tr><td>年份错配</td><td>2018 索引配 2016 人物，或反过来</td><td>准确率明显下降</td><td>检索到的是不对应的时间版本</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="math-block" data-export-context="热替换的直觉" data-export-lang="text">
+    $$\text{答案稳定} \approx \text{问题时间点} + \text{索引版本} + \text{检索命中}$$
+    <p>这里的三个项都要对得上。索引版本只负责外部知识来源，后两项决定这份知识有没有被找到、有没有被用上。</p>
+  </div>
+</section>
+
+<section id="trace-lab">
+  <div class="head">
+    <h2>一条问句的三种结局：同一句问题怎么暴露三个状态</h2>
+    <span class="tag">failure lab</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>固定一个锚点问题</h3>
+      <p>为了看清边界，最好固定一个不变的问句。论文里最典型的例子就是 “Who is the President of Peru?”。这句话本身不复杂，复杂的是它对索引版本非常敏感：如果索引和时间点一致，系统更容易检到正确领导人；如果索引和问题时间点错配，答案就会偏向另一批事实。</p>
+      <p>这个锚点问题很适合拿来排查，因为它把三种状态分得很开。第一种是热替换后正常命中，第二种是年份错配，第三种是检索坍塌。三种状态都可能回答得很像，但它们的根因完全不同。</p>
+    </div>
+    <div class="box info">
+      <h3>看日志时先盯住这几项</h3>
+      <p>先看问题时间点和索引版本是不是一致，再看 top-K 文档是不是围着同一个实体转，最后看删掉这些文档后答案会不会变。只要这三件事能分开，你就能把“模型有点错”拆成“索引错了”“检索弱了”或“生成器没用证据”。</p>
+    </div>
+  </div>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="match"><code>问题 + 匹配索引</code><span>正常链路</span></button>
+      <button class="trace-line" data-trace-step="mismatch"><code>问题 + 错配索引</code><span>版本不一致</span></button>
+      <button class="trace-line" data-trace-step="collapse"><code>不同问题 + 同一批文档</code><span>检索坍塌</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="match">
+        <b>读到的状态</b>
+        <span>query 与索引版本一致</span>
+        <p>检索器把问句带到对应年份的文档，生成器看到的是和问题时间点匹配的证据，答案通常能对上事实。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="mismatch">
+        <b>读到的状态</b>
+        <span>query 正常，索引版本不对</span>
+        <p>检索到的是别的年份的领导人条目。模型没有坏，但它读到的是错时间点的外部记忆，所以答案会跟着偏。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="collapse">
+        <b>读到的状态</b>
+        <span>不同输入都检到相似文档</span>
+        <p>检索器不再区分输入，生成器也开始忽略文档。表面上答案还能流畅输出，底层却已经接近纯参数生成。</p>
       </div>
     </div>
-    <div class="practice-group">
-      <div class="group-head"><div><h3>二、流程与公式</h3><p>把本块链路写成可检查步骤。</p></div><div class="quick-review"><b>REMIND</b>替换索引、回归测试、证据不足处理、监控坍塌和偏见。</div></div>
-      <div class="drill-grid">
-        <div class="q short" data-role="homework" data-title="5. 流程排序" >
-    <div class="q-meta"><span class="pill">排序</span></div>
-    <h3>5. 按顺序写出本块链路中的 5-6 个关键动作。</h3>
-    <textarea name="q5"></textarea>
   </div>
-        <div class="q short" data-role="homework" data-title="6. 输入输出" >
-    <div class="q-meta"><span class="pill">解释</span></div>
-    <h3>6. 选链路中的一个组件，写清它读取什么、输出什么、改变什么。</h3>
-    <textarea name="q6"></textarea>
-  </div>
-        <div class="q short" data-role="homework" data-title="7. 公式/伪代码含义" >
-    <div class="q-meta"><span class="pill">解释</span></div>
-    <h3>7. 解释页面中公式或伪代码最关键的一行。</h3>
-    <textarea name="q7"></textarea>
-  </div>
-        <div class="q short" data-role="homework" data-title="8. 边界条件" >
-    <div class="q-meta"><span class="pill">边界</span></div>
-    <h3>8. 这个方法或结论在什么情况下可能不适用？</h3>
-    <textarea name="q8"></textarea>
-  </div>
-      </div>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="match-2016">2016 匹配</button>
+      <button class="ghost" data-terminal-case="match-2018">2018 匹配</button>
+      <button class="ghost" data-terminal-case="mismatch">年份错配</button>
+      <button class="ghost" data-terminal-case="collapse">检索坍塌</button>
     </div>
-    <div class="practice-group">
-      <div class="group-head"><div><h3>三、错误诊断</h3><p>按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b>误以为换索引万能、没有拒答、RAG 适合所有任务、外部资料天然可信。</div></div>
-      <div class="drill-grid">
-        <div class="q short" data-role="homework" data-title="9. 错误诊断：概念误读" data-type="diagnostic">
-    <div class="q-meta"><span class="pill">诊断</span></div>
-    <h3>9. 有人把本块内容简化成“接一个向量库就行”。错因、后果、修法分别是什么？</h3>
-    <textarea name="q9"></textarea>
+    <pre class="terminal-output" aria-live="polite">[case: 2016 匹配]
+query: Who is the President of Peru?
+index: Wikipedia 2016
+top-K: [Peru president 2016, leader biography, related entity page]
+answer: aligns with the 2016 world-state</pre>
+    <template data-terminal-output="match-2016">[case: 2016 匹配]
+query: Who is the President of Peru?
+index: Wikipedia 2016
+top-K: [Peru president 2016, leader biography, related entity page]
+answer: aligns with the 2016 world-state
+signal: question time and index version agree</template>
+    <template data-terminal-output="match-2018">[case: 2018 匹配]
+query: Who is the President of Peru?
+index: Wikipedia 2018
+top-K: [Peru president 2018, current office holder, related entity page]
+answer: aligns with the 2018 world-state
+signal: answer changes because the memory source changed</template>
+    <template data-terminal-output="mismatch">[case: 年份错配]
+query: Who is the President of Peru?
+index: Wikipedia 2018
+top-K: [2018 office holder, adjacent entity, older page]
+answer: low accuracy for a 2016 question
+signal: mismatched index gives the wrong world-state</template>
+    <template data-terminal-output="collapse">[case: 检索坍塌]
+query A: different question
+query B: another question
+top-K: same small set of generic documents
+answer: generator ignores retrieved evidence and behaves like BART
+signal: retrieval no longer changes with the input</template>
   </div>
-        <div class="q short" data-role="homework" data-title="10. 错误诊断：只看最终回答" data-type="diagnostic">
-    <div class="q-meta"><span class="pill">诊断</span></div>
-    <h3>10. 系统回答错了，但你只看最终文本不看检索和中间概率，会漏掉什么？怎么查？</h3>
-    <textarea name="q10"></textarea>
+  <div class="table-wrap">
+    <table data-export-context="一条问句的三种结局" data-export-lang="table">
+      <thead>
+        <tr><th>状态</th><th>看起来像什么</th><th>真正原因</th><th>下一步</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>正常命中</td><td>回答跟着索引版本变化</td><td>问题、索引和检索都对齐</td><td>保留这条链路，继续做回归</td></tr>
+        <tr><td>年份错配</td><td>答案还是像真的</td><td>索引版本和问题时间点不一致</td><td>先修版本，再查检索</td></tr>
+        <tr><td>检索坍塌</td><td>答案顺滑但不看证据</td><td>检索器输出不再随输入变化</td><td>查训练信号和任务是否适配</td></tr>
+      </tbody>
+    </table>
   </div>
-        <div class="q short" data-role="homework" data-title="11. 错误诊断：过度外推" data-type="diagnostic">
-    <div class="q-meta"><span class="pill">诊断</span></div>
-    <h3>11. 把论文结论直接外推到所有 RAG 工程系统，问题在哪里？</h3>
-    <textarea name="q11"></textarea>
+</section>
+
+<section id="demo">
+  <div class="head">
+    <h2>输入-输出演示：同一个问句，换三种索引会得到什么</h2>
+    <span class="tag">demo</span>
   </div>
-        <div class="q short" data-role="homework" data-title="12. 错误诊断：忽略资料版本" data-type="diagnostic">
-    <div class="q-meta"><span class="pill">诊断</span></div>
-    <h3>12. 如果外部资料过时，本块链路里哪些地方会受影响？怎么修？</h3>
-    <textarea name="q12"></textarea>
-  </div>
-      </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>为什么要单独做这个演示</h3>
+      <p>很多人读到热替换时只记住“换索引可以更新知识”，但没把输入、索引和输出三件事拆开。这个小演示把它们放到一起：问题保持不变，索引版本变化，输出和 top-K 也会跟着变化。这样一来，你看到的不是抽象结论，而是具体的输入-输出关系。</p>
+      <p>如果你把这个演示放到自己的系统里，最重要的不是某个具体答案，而是能不能一眼看出“版本一致时更稳、错配时更偏、坍塌时更钝”。这比单看一个总分更有诊断价值。</p>
     </div>
-    <div class="practice-group">
-      <div class="group-head"><div><h3>四、场景迁移</h3><p>把论文里的判断迁移到实际系统。</p></div><div class="quick-review"><b>REMIND</b>必须说明任务、知识源、检索和评估。</div></div>
-      <div class="drill-grid">
-        <div class="q short" data-role="homework" data-title="13. 企业知识库" >
-    <div class="q-meta"><span class="pill">场景</span></div>
-    <h3>13. 如果把本块思想用到企业制度问答，你会保留哪些中间日志？</h3>
-    <textarea name="q13"></textarea>
-  </div>
-        <div class="q short" data-role="homework" data-title="14. 课程笔记问答" >
-    <div class="q-meta"><span class="pill">场景</span></div>
-    <h3>14. 如果知识源是你的 Obsidian 笔记，本块提醒你怎么设计检索或更新？</h3>
-    <textarea name="q14"></textarea>
-  </div>
-        <div class="q short" data-role="homework" data-title="15. 评估样例" >
-    <div class="q-meta"><span class="pill">应用</span></div>
-    <h3>15. 为本块设计 3 个测试问题，分别检查概念、流程和边界。</h3>
-    <textarea name="q15"></textarea>
-  </div>
-        <div class="q short" data-role="homework" data-title="16. 风险控制" >
-    <div class="q-meta"><span class="pill">清单</span></div>
-    <h3>16. 写 4 条检查清单，避免本块相关误区进入真实系统。</h3>
-    <textarea name="q16"></textarea>
-  </div>
-      </div>
+    <div class="box info">
+      <h3>演示说明</h3>
+      <p>左边输入保持同一句问题；右边输出区展示三种索引状态下的典型结果。没有 JS 的时候，静态行也能看；脚本运行后，输入框会驱动输出换行。对学习这页来说，重要的是把“问句没变、证据变了、答案也变了”这条关系看见。</p>
     </div>
-    <div class="practice-group">
-      <div class="group-head"><div><h3>五、面试追问</h3><p>短答，重点说清边界。</p></div><div class="quick-review"><b>REMIND</b>先给直觉，再给术语。</div></div>
-      <div class="drill-grid">
-        <div class="q short" data-role="homework" data-title="17. 面试：一句话概括" >
-    <div class="q-meta"><span class="pill">面试</span></div>
-    <h3>17. 用 2-3 句话概括本块在 RAG 论文里的作用。</h3>
-    <textarea name="q17"></textarea>
   </div>
-        <div class="q short" data-role="homework" data-title="18. 面试：为什么这样设计" >
-    <div class="q-meta"><span class="pill">面试</span></div>
-    <h3>18. 面试官问：论文为什么不采用更简单的单文档生成？</h3>
-    <textarea name="q18"></textarea>
-  </div>
-        <div class="q short" data-role="homework" data-title="19. 面试：局限性" >
-    <div class="q-meta"><span class="pill">面试</span></div>
-    <h3>19. 面试官问：本块方法有什么局限？</h3>
-    <textarea name="q19"></textarea>
-  </div>
-        <div class="q short" data-role="homework" data-title="20. 面试：工程启发" >
-    <div class="q-meta"><span class="pill">面试</span></div>
-    <h3>20. 面试官问：这块内容对今天做 RAG 工程有什么启发？</h3>
-    <textarea name="q20"></textarea>
-  </div>
-      </div>
+  <div class="shift-demo" data-input-demo>
+    <label>固定问句
+      <input type="text" value="Who is the President of Peru?" aria-label="固定问句">
+    </label>
+    <div class="shift-rows" aria-live="polite">
+      <div class="shift-row x"><b>2016 索引</b><div class="shift-cells">检到 2016 年领导人条目，答案更接近 2016 world-state。</div></div>
+      <div class="shift-row y"><b>2018 索引</b><div class="shift-cells">检到 2018 年领导人条目，答案更接近 2018 world-state。</div></div>
+      <div class="shift-row y"><b>错配或坍塌</b><div class="shift-cells">要么年份不对，要么总是检到同一批泛文档，答案看着顺但证据已经不敏感。</div></div>
     </div>
-    <div class="practice-group">
-      <div class="group-head"><div><h3>六、完整表达</h3><p>最后两题检查能不能讲成完整主线。</p></div><div class="quick-review"><b>REMIND</b>index hot-swapping、2016索引、2018索引、null document、retrieval collapse、外部记忆、偏见、拒答、回归测试、边界</div></div>
-      <div class="drill-grid">
-        <div class="q full" data-role="homework" data-title="21. 费曼解释" data-type="feynman" data-keywords="index hot-swapping、2016索引、2018索引、null document、retrieval collapse、外部记忆、偏见、拒答、回归测试、边界"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>21. 用 7-10 句话解释本块内容，讲给没读过论文的人听。</h3><div class="solve-note">必须串联关键词：index hot-swapping、2016索引、2018索引、null document、retrieval collapse、外部记忆、偏见、拒答、回归测试、边界</div><textarea name="q21"></textarea></div>
-        <div class="q full" data-role="homework" data-title="22. 论文复述" >
-    <div class="q-meta"><span class="pill">综合</span></div>
-    <h3>22. 回到论文原文，说明这一块支撑了论文总论点的哪一部分。</h3>
-    <textarea name="q22"></textarea>
   </div>
-      </div>
+  <div class="table-wrap">
+    <table data-export-context="输入-输出关系表" data-export-lang="table">
+      <thead>
+        <tr><th>输入</th><th>索引状态</th><th>输出</th><th>你要检查的点</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>同一个问句</td><td>2016 索引</td><td>较稳的 2016 事实回答</td><td>版本和问题时间是否对齐</td></tr>
+        <tr><td>同一个问句</td><td>2018 索引</td><td>较稳的 2018 事实回答</td><td>换索引后答案是否随之变化</td></tr>
+        <tr><td>不同问句</td><td>同一批泛文档</td><td>答案顺滑但证据不变</td><td>检索器是否已经坍塌</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="k-tradeoff">
+  <div class="head">
+    <h2>K 值变化：更多文档不一定更好</h2>
+    <span class="tag">k-tradeoff</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>论文里在看什么</h3>
+      <p>作者训练时用 5 个或 10 个检索文档，但测试时可以调 K。结果显示，更多文档常常会提高召回，也会带来更多噪声和更长上下文。对 RAG-Sequence 来说，开放域 QA 的曲线更像单调受益；对 RAG-Token 来说，收益到某个点就会见顶，甚至在某些指标上开始换方向。</p>
+      <p>这说明 K 不是一个纯粹的“越多越安全”的旋钮。它既影响性能，也影响运行代价，还会改变生成器看到的上下文密度。你在调 K 的时候，实际上是在调“证据够不够”和“噪声会不会盖过去”之间的平衡。</p>
     </div>
-    </section>
-    <section id="export">
-      <div class="head"><h2>导出练习记录</h2><span class="tag">EXPORT</span></div>
-      <p class="muted">完成练习后生成记录，方便之后复盘自己的理解和错题。</p>
-      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
-    </section>
-  </main>
+    <div class="box warn">
+      <h3>调 K 时常见的错误</h3>
+      <p>第一种错误是只盯召回，忽略生成质量。第二种错误是只盯最终分数，不看上下文长度和延迟。第三种错误是把一个任务上的 K 经验直接抄到另一个任务上。论文在这里给你的不是固定最优值，而是一个判断框架。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="K 值变化读表" data-export-lang="table">
+      <thead>
+        <tr><th>维度</th><th>K 小</th><th>K 大</th><th>你该看什么</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>召回</td><td>可能漏掉证据</td><td>一般更容易捞到证据</td><td>有没有把关键文档找上来</td></tr>
+        <tr><td>噪声</td><td>较少</td><td>更容易混进无关文档</td><td>无关文档会不会稀释答案</td></tr>
+        <tr><td>成本</td><td>上下文短</td><td>上下文长、运行慢</td><td>推理成本和延迟是否可接受</td></tr>
+        <tr><td>任务差异</td><td>短答案可能够用</td><td>长生成有时更需要证据覆盖</td><td>先按任务看，不要先按习惯看</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>这页对工程的直接提醒</h3>
+    <p>如果你在自己的系统里试 K，别只记录一个最佳点。至少把“K、准确率、延迟、上下文长度、错误类型”放在同一张表里。这样你才知道是证据不够、噪声太多，还是单纯成本过高。</p>
+  </div>
+</section>
+
+<section id="nulldoc">
+  <div class="head">
+    <h2>空文档：证据不足时怎么留出口</h2>
+    <span class="tag">null doc</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>论文为什么要试这个机制</h3>
+      <p>作者在附录里讨论了 null document。直觉很简单：有些输入确实找不到有用文档，那就给模型一个空证据候选，让它可以选择“这里没有可用资料”，然后再对 k+1 个候选边际化。这样做的目标，是把“没有证据”变成一个可以建模的状态，而不是让生成器自己硬补。</p>
+      <p>作者试了三种方式：给空文档学一个 embedding，给它一个静态 bias，或者用一个小网络去预测这个 logit。结果都没有带来稳定收益，所以主模型没有采用。</p>
+    </div>
+    <div class="box info">
+      <h3>这段话最容易被误读的地方</h3>
+      <p>论文没把 null document 纳入主模型，不等于工程系统就可以不处理证据不足。相反，这一节提醒你，拒答、阈值、证据充分性判断都还是要有，只是论文尝试的那个结构没带来额外收益。</p>
+      <p>换句话说，问题在场景和机制的匹配，不在“要不要管无答案”这个层面上。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="空文档机制对照表" data-export-lang="table">
+      <thead>
+        <tr><th>做法</th><th>想解决什么</th><th>论文结果</th><th>工程上可以怎么想</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>null embedding</td><td>给空证据一个可学表示</td><td>没有明显收益</td><td>实现上可行，不代表收益一定出现</td></tr>
+        <tr><td>static bias</td><td>用简单偏置表示无证据状态</td><td>没有明显收益</td><td>可作为简化候选，但仍要看任务</td></tr>
+        <tr><td>neural logit</td><td>让模型预测是否该走空文档</td><td>没有明显收益</td><td>要更谨慎地看校准和误拒答</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>空证据的最小判断</span><button class="copy" data-copy="null-doc-code">复制</button></div>
+  <pre id="null-doc-code" data-export-context="空文档判断伪码" data-export-lang="text"><code class="language-text">if no_document_is_useful:
+    keep an explicit refusal path
+else:
+    continue with retrieved evidence
+
+# 关键点：不要让生成器替你假装证据足够。</code></pre>
+</section>
+
+<section id="collapse">
+  <div class="head">
+    <h2>检索坍塌：检索器也会学坏</h2>
+    <span class="tag">collapse</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>附录 H 里的信号很明确</h3>
+      <p>作者在一些任务上观察到 retrieval collapse。检索器开始对不同输入总检到同一批文档，生成器随后学会忽略这些文档，最后整个系统的表现接近 BART。这个现象说明，端到端训练并不天然保证检索模块真的学会服务任务。</p>
+      <p>这里最值得记住的不是“坍塌很糟”，而是“坍塌会长成什么样”。如果你看到不同输入的 top-K 主题越来越像，或者删掉检索文档以后答案几乎没变，那就该怀疑检索环节已经失去作用。</p>
+    </div>
+    <div class="box warn">
+      <h3>为什么会发生</h3>
+      <p>论文给出的解释很朴素：有些任务对事实知识的需求并不强，检索文档对输出帮助不稳定；另外，长目标序列可能让给检索器的梯度变得不够清楚。生成器一旦足够强，就可能绕开检索，靠自己的参数记忆完成任务。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="检索坍塌诊断表" data-export-lang="table">
+      <thead>
+        <tr><th>排查信号</th><th>正常状态</th><th>坍塌风险</th><th>下一步</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>top-K 多样性</td><td>不同输入检到不同文档</td><td>总是同一批主题</td><td>看 query encoder 和召回策略</td></tr>
+        <tr><td>证据依赖</td><td>删掉证据后答案会变</td><td>删掉后几乎不变</td><td>查生成器是否忽略文档</td></tr>
+        <tr><td>任务适配</td><td>检索对任务有用</td><td>检索对目标帮助弱</td><td>确认这个任务是否真的需要检索</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>这段对今天做 RAG 的意思</h3>
+    <p>如果一个系统的评估只看最终文本，很容易把“模型会说”误当成“模型用到了检索”。这一页提醒你，检索是不是在工作，得看输入变化、候选变化和删除证据后的响应变化，而不是只看答案顺不顺。</p>
+  </div>
+</section>
+
+<section id="log-bridge">
+  <div class="head">
+    <h2>把论文变成自己的回归日志</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>工程里最有用的不是解释，而是可重复的记录</h3>
+      <p>如果你要把这一页用到自己的 RAG 系统，最该学的不是某个特定数值，而是记录方式。你至少要知道每次回答用了哪个索引版本、检到了哪几篇文档、K 取了多少、删掉证据后答案会不会变。这样当回答出问题时，你就能判断问题在索引、检索、生成还是评估。</p>
+      <p>这个记录方式也正好对应论文的四个边界：热替换看版本，K 值看噪声和成本，null document 看无证据处理，retrieval collapse 看检索模块有没有真的在起作用。论文给的是判断框架，不是固定配置。</p>
+    </div>
+    <div class="box info">
+      <h3>回归测试该怎么排</h3>
+      <p>先放一个时间敏感问题，检查索引版本；再放一个证据不足问题，检查拒答；再放一组输入变化很大的问题，检查 top-K 是否仍有区分力；最后把 K 变一档，看性能和延迟是否一起变。这样一组测试，比单独记一个总分更有诊断价值。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="RAG 最小日志字段" data-export-lang="table">
+      <thead>
+        <tr><th>字段</th><th>为什么要记</th><th>出错时怎么看</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>question</td><td>确认输入本身是否敏感于时间或实体</td><td>问题是否需要查最新知识</td></tr>
+        <tr><td>index_version</td><td>确认热替换有没有真的发生</td><td>旧知识是不是还在被读</td></tr>
+        <tr><td>top_k_docs</td><td>确认检索器是否随输入变化</td><td>是不是总落到同一批文档</td></tr>
+        <tr><td>answer_before / after evidence drop</td><td>确认生成器有没有用证据</td><td>删掉文档后答案是否几乎不变</td></tr>
+        <tr><td>latency / k</td><td>确认性能代价有没有超标</td><td>K 变大后是不是只剩噪声和慢</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>最小日志样例</span><button class="copy" data-copy="rag-log-sample">复制</button></div>
+  <pre id="rag-log-sample" data-export-context="RAG 最小日志样例" data-export-lang="json"><code class="language-json">{
+  "question": "Who is the President of Peru?",
+  "index_version": "Wikipedia 2018",
+  "k": 5,
+  "top_k_docs": ["Peru president 2018", "leader biography", "related entity page"],
+  "answer": "aligned with 2018 world-state",
+  "after_drop_answer": "almost unchanged",
+  "diagnosis": "review index version and retrieval usage"
+}</code></pre>
+  <div class="box">
+    <h3>怎么读这份日志</h3>
+    <p>如果问题是时间敏感的，先看 index_version；如果 top_k_docs 始终差不多，先查检索器；如果删掉证据后答案几乎不变，先查生成器；如果 K 变大只有延迟变高，先查上下文噪声。把这些字段记在一起，排查时就不会只剩“模型好像不对劲”这种模糊感觉。</p>
+  </div>
+</section>
+
+<section id="impact">
+  <div class="head">
+    <h2>影响与风险：更事实的系统也会放大问题</h2>
+    <span class="tag">impact</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>论文的正面判断</h3>
+      <p>RAG 让模型更接近真实知识，幻觉有机会减少，访问过的知识也更容易检查。它可以用于知识密集场景，比如问答、工作辅助、医学和其他需要查证的任务。外部知识一旦更新，系统也更容易跟着更新。</p>
+    </div>
+    <div class="box warn">
+      <h3>风险并没有消失</h3>
+      <p>外部知识源可能有错误、偏见或过时内容。系统一旦把这些内容接进来，问题就会被放大，而不是自动修好。更重要的是，RAG 会让回答更像“有依据”，所以被滥用时反而更容易骗过人。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="收益与风险对照表" data-export-lang="table">
+      <thead>
+        <tr><th>收益</th><th>对应风险</th><th>该加的控制</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>更容易更新知识</td><td>错误索引会快速进入系统</td><td>版本记录、回滚、审核</td></tr>
+        <tr><td>更容易检查证据</td><td>伪引用和误读引用</td><td>证据片段展示、引用核验</td></tr>
+        <tr><td>更接近事实回答</td><td>偏见会被检索和生成共同放大</td><td>来源权重、风险场景限制</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="math-block" data-export-context="RAG 风险判断" data-export-lang="text">
+    $$\text{可更新} + \text{可检索} \;\not\Rightarrow\; \text{可信且安全}$$
+    <p>更新和检索只是能力层。可信、安全、可审计，还要看资料源治理、证据呈现、拒答规则和使用场景。</p>
+  </div>
+</section>
+
+<section id="compare">
+  <div class="head">
+    <h2>三种边界：热替换、空文档、坍塌到底差在哪</h2>
+    <span class="tag">compare</span>
+  </div>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>热替换</h3>
+      <p>在问“知识源换了以后，系统能不能跟着换”。它关心的是外部记忆版本。</p>
+    </div>
+    <div class="box soft">
+      <h3>空文档</h3>
+      <p>在问“找不到证据时，系统有没有显式出口”。它关心的是无答案路径。</p>
+    </div>
+    <div class="box soft">
+      <h3>检索坍塌</h3>
+      <p>在问“检索器是不是还在按输入工作”。它关心的是训练出来的检索模块有没有失效。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="三种边界对照表" data-export-lang="table">
+      <thead>
+        <tr><th>问题</th><th>核心对象</th><th>可观察信号</th><th>最容易犯的错</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>知识更新</td><td>索引版本</td><td>答案是否随新旧索引变化</td><td>把换索引当成重训</td></tr>
+        <tr><td>证据不足</td><td>空文档出口</td><td>无证据时是否硬答</td><td>把拒答当成额外功能</td></tr>
+        <tr><td>检索失效</td><td>query encoder 与候选分布</td><td>不同输入是否总检到同一批文档</td><td>只看最终输出</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>边界读法</h3>
+    <p>这三件事放在一起看，才能判断一个 RAG 系统到底是“知识源更新慢”，还是“证据不足没出口”，还是“检索模块已经失效”。问题不同，改法也不同。</p>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>先知道，先别钻</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="box">
+    <h3>这一页先放在旁边的东西</h3>
+    <p>先别追 Appendix A 的完整实现细节、也先别把 FEVER 的证据句抽取展开到工程级别。更不用在这一页里把所有检索方法、所有拒答策略、所有安全评估都拉进来。它们会在别的单元重新出现，但此刻你只需要记住：索引版本、证据出口、检索稳定性和风险控制是四条不同的线。</p>
+    <p>如果你后面做自己的 RAG 系统，先把这四条线分开记录，再决定该在哪一步加日志、加回归测试、加拒答或加审计。先把问题分清，比先上复杂机制更有用。</p>
+  </div>
+  <div class="codebar"><span>本页的最小排查顺序</span><button class="copy" data-copy="boundary-checklist">复制</button></div>
+  <pre id="boundary-checklist" data-export-context="RAG 边界排查顺序" data-export-lang="text"><code class="language-text">1. 先看索引版本有没有对上问题时间点
+2. 再看 K 值是否把噪声一起放大了
+3. 接着查证据不足时有没有显式出口
+4. 最后看检索是否已经对不同输入失去区分力</code></pre>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box">
+    <strong>作答前先抓主线</strong>
+    <p>这一页最容易错的地方，是把热替换、空文档、K 值和检索坍塌都当成“RAG 的边界问题”，但不去分它们各自解决什么。先按“谁在读什么”“谁在写什么”“出错时会看到什么”来答，再写原因和修法。</p>
+  </div>
+  <div class="box info">
+    <strong>检查重点</strong>
+    <p>选择题看你能不能分清索引版本、无答案出口和检索失效；诊断题看你能不能把症状往回追到状态交接；综合题看你能不能把热替换、K 值、空文档和坍塌串成一条判断线。</p>
+  </div>
 </div>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";let current=sections[0]?.id;for(const section of sections){if(section.getBoundingClientRect().top<innerHeight*.36)current=section.id;}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";navigator.clipboard.writeText(code).then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});bar.appendChild(btn);});
-function valueOfQuestion(q){const checks=[...q.querySelectorAll("input[type=checkbox]:checked")].map(x=>x.value);if(checks.length)return checks.join("、");const radio=q.querySelector("input[type=radio]:checked");if(radio)return radio.value;const text=q.querySelector("textarea,input[type=text],select");return text?text.value.trim():"";}
-function questionGroup(q){const group=q.closest(".practice-group");return group?.querySelector(".group-head h3,h3")?.innerText.trim()||"综合练习";}
-function generateRecord(){const qs=[...document.querySelectorAll('[data-role="homework"]')];const groups={};const warnings=[];qs.forEach((q,i)=>{const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";const hint=q.querySelector(".solve-note,.hint")?.innerText.trim()||"";const answer=valueOfQuestion(q);if(!answer)warnings.push("第 "+(i+1)+" 题未填写："+title);const typeText=(q.dataset.type||"")+" "+title+" "+q.innerText;if(/诊断|错误/.test(typeText)&&answer&&!(/错因|原因|问题/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer)))warnings.push("第 "+(i+1)+" 题建议按“错因 / 后果 / 修法”补全。");if(/费曼/.test(typeText)){const keys=(q.dataset.keywords||document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);if(answer&&answer.length<140)warnings.push("第 "+(i+1)+" 题解释偏短，建议至少写 140 个中文字符。");if(answer&&keys.length){const lack=keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase()));if(lack.length)warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");}}const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});});const pageTitle=(document.querySelector(".brand strong,h1")?.innerText||document.title).replace(/\s+/g," ").trim();let out="# "+pageTitle+"｜练习记录\n\n";Object.keys(groups).forEach(group=>{out+="## "+group+"\n\n";groups[group].forEach(item=>{out+="### "+item.title+"\n";if(item.hint)out+="提示摘要："+item.hint+"\n\n";out+=item.answer+"\n\n";});});document.getElementById("record").textContent=out;const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以用于复盘。";}
-function copyRecord(){const text=document.getElementById("record").textContent||"";navigator.clipboard.writeText(text).catch(()=>alert("复制失败，请手动复制页面中的记录。"));}
-</script>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、边界识别</h3>
+      <p>先把四个边界问题分开。</p>
+    </div>
+    <div class="quick-review">关键词：热替换、空文档、K 值、检索坍塌、外部记忆。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="边界识别" data-title="1. 核心定位" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">boundary</span></div>
+      <h3>1. 下列哪一句最准确？</h3>
+      <label><input type="radio" name="q1" value="A"> 索引热替换主要说明外部记忆可以更新，但不保证整个系统自动正确。</label>
+      <label><input type="radio" name="q1" value="B"> 空文档机制证明任何任务都应该强制加一个拒答分支。</label>
+      <label><input type="radio" name="q1" value="C"> 检索坍塌只是一次检索结果偶然重复，不代表系统失效。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q2" data-group="边界识别" data-title="2. 术语判断" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">k</span></div>
+      <h3>2. K 取大一点一定更稳，因为证据越多越不容易错。</h3>
+      <label><input type="radio" name="q2" value="对"> 对</label>
+      <label><input type="radio" name="q2" value="错"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q full" data-question="q3" data-group="边界识别" data-title="3. 术语解释" data-type="summary">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">hot-swap</span></div>
+      <h3>3. 用自己的话解释：index hot-swapping。</h3>
+      <textarea name="q3"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>答案要点：换掉外部索引版本，让模型接触到新的知识库，而不重新训练参数。最好再补一句：它更新的是记忆源，不是模型本身。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、状态追踪</h3>
+      <p>把步骤、读写和症状对上。</p>
+    </div>
+    <div class="quick-review">关键词：读什么、写什么、失配症状、检索结果、证据出口。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q4" data-group="状态追踪" data-title="4. 状态账本" data-type="diagnostic">
+      <div class="q-meta"><span class="pill">diagnostic</span><span class="pill">state ledger</span></div>
+      <h3>4. 如果换了索引，但回答还是老知识味很重，你会先查哪两项状态？为什么？</h3>
+      <textarea name="q4"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>先查索引版本是否真的换了，再查检索结果是否命中了新文档。因为热替换只改外部记忆，答案老旧通常意味着问题出在索引没更新到位，或者检索器根本没把新内容取出来。</p>
+      </details>
+    </div>
+    <div class="q full" data-question="q5" data-group="状态追踪" data-title="5. 证据不足" data-type="diagnostic">
+      <div class="q-meta"><span class="pill">diagnostic</span><span class="pill">null doc</span></div>
+      <h3>5. 如果系统在没有证据时仍然给出很像真的答案，错因、后果、修法分别是什么？</h3>
+      <textarea name="q5"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>错因：没有显式处理证据不足，生成器在补空白。后果：答案看起来自信，实际上可能是硬编。修法：加拒答或降级路径，至少记录何时没有检索到可用证据。</p>
+      </details>
+    </div>
+    <div class="q full" data-question="q6" data-group="状态追踪" data-title="6. 空文档机制" data-type="summary">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">null doc</span></div>
+      <h3>6. 为什么论文尝试 null document，但最后没有放进主模型？</h3>
+      <p class="solve-note">答题时至少说到“它想解决什么”“试了哪些实现”“为什么最后没收益”。</p>
+      <textarea name="q6"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>要点：它想给“没有有用证据”留一个显式候选；作者试了 embedding、bias 和 neural logit 三种方式，但没有带来稳定收益，所以省略。说明问题不是没考虑无答案，而是这个结构在论文任务上没占到便宜。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、检索质量与任务适配</h3>
+      <p>把 K、坍塌和任务形态连起来。</p>
+    </div>
+    <div class="quick-review">关键词：retrieval collapse、任务适配、top-K、多样性、噪声。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q7" data-group="检索质量与任务适配" data-title="7. 错误诊断：把 K 当常数" data-type="diagnostic">
+      <div class="q-meta"><span class="pill">diagnostic</span><span class="pill">K</span></div>
+      <h3>7. 如果某个任务上 K 变大反而更差，你先怀疑什么？</h3>
+      <textarea name="q7"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>先怀疑噪声、上下文长度和任务形态，而不是把问题简单归到模型坏了。K 变大带来更多证据，也带来更多无关内容和更高成本，任务不一定吃得下。</p>
+      </details>
+    </div>
+    <div class="q full" data-question="q8" data-group="检索质量与任务适配" data-title="8. 坍塌诊断" data-type="diagnostic">
+      <div class="q-meta"><span class="pill">diagnostic</span><span class="pill">collapse</span></div>
+      <h3>8. 有人说“只要最后答案对了，就说明检索器在工作”。错在哪？</h3>
+      <textarea name="q8"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>错在只看最终文本，不看输入变化、top-K 是否变化、删掉证据后答案是否还一样。检索器可能已经坍塌，生成器也可能学会无视检索；最后答案对，不代表中间链路真的在工作。</p>
+      </details>
+    </div>
+    <div class="q full" data-question="q9" data-group="检索质量与任务适配" data-title="9. 场景判断" data-type="summary">
+      <div class="q-meta"><span class="pill">scenario</span><span class="pill">fit</span></div>
+      <h3>9. 如果你要把这一页的结论用到一个新任务里，先检查哪三件事？</h3>
+      <textarea name="q9"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>先检查任务是否真的需要外部检索，再检查证据不足时有没有出口，最后检查 K、检索器和生成器是否会在这个任务上出现坍塌或噪声放大的问题。顺序比结论更重要。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、完整表达</h3>
+      <p>把四个边界问题串成一段完整说明。</p>
+    </div>
+    <div class="quick-review">关键词：热替换、K 值、空文档、检索坍塌、风险控制。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q10" data-group="完整表达" data-title="10. 费曼解释" data-type="feynman">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">boundary</span></div>
+      <h3>10. 用 7-10 句话解释本页内容，讲给没读过论文的人听。</h3>
+      <p class="solve-note">必须串联关键词：热替换、2016 / 2018 索引、K 值、空文档、检索坍塌、外部记忆、拒答、回归测试、风险控制。</p>
+      <textarea name="q10"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案会先说外部索引能更新知识，再说 K 值会影响召回和噪声，然后说论文尝试过空文档来处理证据不足，但没得到收益，最后说检索器也可能坍塌，导致系统退化。收尾要提到：更事实的系统不等于安全，仍然需要版本管理、拒答、回归测试和风险控制。</p>
+      </details>
+    </div>
+    <div class="q full" data-question="q11" data-group="完整表达" data-title="11. 论文复述" data-type="summary">
+      <div class="q-meta"><span class="pill">summary</span><span class="pill">paper reading</span></div>
+      <h3>11. 回到论文原文，说明这一页支撑了论文总论点的哪一部分。</h3>
+      <textarea name="q11"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>这一页支撑的是“RAG 的外部记忆可编辑，但要把边界一起读”的部分。它用热替换说明知识可以跟着索引版本更新，用 K 值说明性能和代价会一起变化，用 null document 和 retrieval collapse 说明模型在证据不足和任务不匹配时会失效，最后把结果、消融和风险合成一条完整主张。</p>
+      </details>
+    </div>
+    <div class="q full" data-question="q12" data-group="完整表达" data-title="12. 边界提醒" data-type="diagnostic">
+      <div class="q-meta"><span class="pill">diagnostic</span><span class="pill">bridge</span></div>
+      <h3>12. 如果你把本页结论直接搬到一个没有外部检索监督、而且任务答案很长的系统里，最该先补什么检查？</h3>
+      <textarea name="q12"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>先补任务边界和错误分析：确认检索是否真能把证据送到候选里，再确认长生成任务该看什么指标，最后决定是否需要更大的 K、不同检索器或额外的人评。不能直接拿论文里的边界结论当通用答案。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <div class="grid2">
+  <div class="box">
+    <h3>主要来源</h3>
+    <ul class="source-list">
+      <li><a href="https://arxiv.org/abs/2005.11401">Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks</a></li>
+      <li><a href="../../../../../50_资源/论文/2005.11401v4.pdf">本地 PDF 副本</a></li>
+      <li><a href="../../../../../50_资源/论文/2005.11401v4.txt">本地抽取文本</a></li>
+    </ul>
+  </div>
+  <div class="box info">
+    <h3>这页怎么用来源</h3>
+    <p>Index hot-swapping 负责讲外部记忆更新；Figure 3 负责讲 K 值变化；Appendix F 负责讲 null document；Appendix H 负责讲 retrieval collapse；Broader Impact 负责讲收益和风险。课程顺序是教学顺序，不是原文目录。</p>
+  </div>
+</div>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
 </body>
 </html>

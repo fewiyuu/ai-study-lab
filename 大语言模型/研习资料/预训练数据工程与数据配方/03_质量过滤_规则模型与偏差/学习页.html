@@ -1,0 +1,1026 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>质量过滤：规则、模型与偏差</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="预训练数据工程与数据配方" data-unit="单元 03">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>预训练数据工程与数据配方</strong>
+        <span>单元 03</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>概念骨架</a>
+        <a href="#signals"><span class="dot"></span>质量信号</a>
+        <a href="#rules"><span class="dot"></span>规则过滤</a>
+        <a href="#classifier"><span class="dot"></span>分类器过滤</a>
+        <a href="#threshold"><span class="dot"></span>阈值与留存</a>
+        <a href="#bias"><span class="dot"></span>偏差审计</a>
+        <a href="#audit"><span class="dot"></span>案例回查</a>
+        <a href="#cases"><span class="dot"></span>案例推演</a>
+        <a href="#boundary"><span class="dot"></span>边界说明</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先看信号，再选规则或分类器，最后回到阈值和偏差审计。偏差没看清之前，不要急着把过滤结果当成结论。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">质量过滤</div>
+          <h1>质量过滤：规则、模型与偏差</h1>
+          <p>这一页只处理过滤前半段：先把质量信号看清，再决定用规则过滤还是分类器过滤，最后把阈值和偏差审计补上。等你能说出一条样本为什么被留、为什么被删、删掉后会偏向什么，这一单元才算真正接住了后面的去重和配方。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../02_获取解析与标准化/学习页.html">上一单元</a><a href="../04_去重去污染与泄漏控制/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完这一页，你应该能做什么</h3>
+          <ul>
+  <li>能把质量信号分成规则可见、语义可见和需要人工复核三类。</li>
+  <li>能说明规则过滤、分类器过滤和阈值选择分别改了什么。</li>
+  <li>能按分桶删除率、来源覆盖和样本上下文做一轮偏差审计。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>先认信号</h3>
+      <p>这一页先判断文本里有哪些信号能直接看见：长度、乱码、字符比例、语言混杂、模板痕迹和重复片段。</p>
+    </div>
+    <div class="box info">
+      <h3>再认机制</h3>
+      <p>规则过滤负责可解释、可快速批处理的问题；分类器过滤负责语义质量判断；阈值负责把分数变成保留、删除和复核动作。</p>
+    </div>
+    <div class="box warn">
+      <h3>最后认偏差</h3>
+      <p>任何过滤器都会改变数据分布。你需要能看出删掉了什么、对谁删得更多、上下文是否被误伤，以及这会把训练预算推向哪里。</p>
+    </div>
+  </div>
+</section>
+
+<section id="map">
+  <div class="head">
+    <h2>概念骨架</h2>
+    <span class="tag">trace</span>
+  </div>
+  <p>这页的主线只有一条：先看输入里能被检查的信号，再选择规则或模型，再把输出变成保留、删除、降权或复核。中间每一步都应该留下能回看的证据，不然过滤就只剩一个黑盒决定。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" type="button" data-trace-step="signal">
+        <code>document signals</code><span>可见质量信号</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="rule">
+        <code>rule pass</code><span>显式规则筛查</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="model">
+        <code>classifier score</code><span>语义分数</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="action">
+        <code>keep / drop / review</code><span>动作落点</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="signal">
+        <b>document signals</b>
+        <span>读取长度、字符组成、语言线索、模板痕迹和来源字段。</span>
+        <p>这里回答的是“这段文本看起来像什么”。如果信号层都不稳，后面的模型和阈值只会放大噪声。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="rule">
+        <b>rule pass</b>
+        <span>读取 blocklist、格式约束、长度阈值和占比规则。</span>
+        <p>这里写出可解释的删除条件。规则适合处理显式噪声，但也最容易误杀长尾内容。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="model">
+        <b>classifier score</b>
+        <span>读取已标注样本、特征和模型输出分数。</span>
+        <p>这里处理“看起来像高质量但很难手写规则”的样本。分数不是真值，它只是在某个标注定义下的近似判断。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="action">
+        <b>keep / drop / review</b>
+        <span>读取规则命中、模型分数和阈值。</span>
+        <p>这里把分数变成动作。阈值一改，预算、留存比例和偏差都会改，所以它从来不只是技术参数。</p>
+      </div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="质量过滤主线表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>层</th>
+          <th>读取什么</th>
+          <th>输出什么</th>
+          <th>失败信号</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>信号层</td>
+          <td>长度、字符比例、语言线索、来源字段</td>
+          <td>可见的质量特征</td>
+          <td>把噪声、乱码和模板都混成一个“低质”标签</td>
+        </tr>
+        <tr>
+          <td>规则层</td>
+          <td>blocklist、格式约束、阈值</td>
+          <td>显式删除或保留</td>
+          <td>规则写得太硬，误杀长尾知识</td>
+        </tr>
+        <tr>
+          <td>分类器层</td>
+          <td>人工标注、特征、模型参数</td>
+          <td>质量分数</td>
+          <td>分数看起来稳定，实际继承了标注偏差</td>
+        </tr>
+        <tr>
+          <td>动作层</td>
+          <td>规则命中、分数、阈值</td>
+          <td>keep / drop / review</td>
+          <td>只看整体留存率，不看分桶偏差</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="signals">
+  <div class="head">
+    <h2>质量信号</h2>
+    <span class="tag">signals</span>
+  </div>
+  <p>先看信号，意思是先看文本里真正能被稳定检查的东西。长度太短、字符分布极端、乱码、模板痕迹、语言混杂、重复片段和明显的 blocklist 命中，这些都属于能直接观察的信号。</p>
+  <div class="grid2">
+    <div class="box">
+      <h3>最先看的四类信号</h3>
+      <ul>
+        <li>结构信号：段落数、标题层级、列表和引用是否完整。</li>
+        <li>字符信号：非字母数字比例、标点密度、重复字符和乱码。</li>
+        <li>语言信号：语言识别分布、混语比例、脚本混杂。</li>
+        <li>来源信号：域名、路径、站点类型和抓取批次。</li>
+      </ul>
+    </div>
+    <div class="box warn">
+      <h3>容易误读的信号</h3>
+      <p>短文本不一定差，长文本也不一定好；非字母数字比例高不一定是噪声，也可能是代码、公式或表格。信号的作用是提示你去看上下文，而不是替你直接下结论。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="信号层判断表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>信号</th>
+          <th>常见触发</th>
+          <th>优先动作</th>
+          <th>可能误伤</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>过短</td>
+          <td>标题、导航、评论碎片</td>
+          <td>标记为低信息密度</td>
+          <td>短知识卡、目录、代码注释</td>
+        </tr>
+        <tr>
+          <td>乱码</td>
+          <td>解码失败或字符集错配</td>
+          <td>回查编码和抓取记录</td>
+          <td>含特殊符号的正式文本</td>
+        </tr>
+        <tr>
+          <td>模板痕迹</td>
+          <td>页眉、页脚、推荐阅读、导航</td>
+          <td>进入规则过滤候选</td>
+          <td>带重复结构的教学页</td>
+        </tr>
+        <tr>
+          <td>语言混杂</td>
+          <td>多语言站点、代码片段、引用</td>
+          <td>拆分来源或降权</td>
+          <td>技术文档里的合法英文术语</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="rules">
+  <div class="head">
+    <h2>规则过滤</h2>
+    <span class="tag">rule-based</span>
+  </div>
+  <p>规则过滤适合处理能清楚写出来的问题：长度阈值、blocklist、字符占比、格式约束、域名白名单和模板结构。它的优势是快、便宜、可解释；它的代价是写得太粗时很容易把真正有价值的长尾文本一起删掉。</p>
+  <div class="codebar">
+    <span>rule_config.yaml</span>
+    <button class="copy" data-copy="code-rules">复制</button>
+  </div>
+  <pre id="code-rules" data-export-context="规则过滤配置示例" data-export-lang="yaml"><code class="language-yaml">filters:
+  - name: min_length
+    keep_if: text_length &gt;= 180
+  - name: blocklist
+    delete_if_any:
+      - "登录"
+      - "广告"
+      - "推荐阅读"
+  - name: punctuation_ratio
+    review_if: punctuation_ratio &gt; 0.35
+  - name: language_gate
+    keep_if: lang_confidence &gt;= 0.80
+actions:
+  low_confidence: review
+  hard_hit: drop
+  pass: keep</code></pre>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1" type="button">短导航页</button>
+      <button class="ghost" data-terminal-case="case-2" type="button">技术正文</button>
+      <button class="ghost" data-terminal-case="case-3" type="button">混语段落</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">case 1: text_length=42, blocklist_hit=1, action=drop</pre>
+    <template data-terminal-output="case-1">case 1: text_length=42, blocklist_hit=1, action=drop
+说明：短导航页被规则直接删掉，原因是信息密度太低。</template>
+    <template data-terminal-output="case-2">case 2: text_length=860, blocklist_hit=0, punctuation_ratio=0.18, action=keep
+说明：这是一段技术正文，规则层没有明显删除理由。</template>
+    <template data-terminal-output="case-3">case 3: text_length=310, language_mix=0.27, review_flag=1, action=review
+说明：混语段落不应直接删，先交给复核或后续模型。</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="规则层读写表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>规则</th>
+          <th>读取什么</th>
+          <th>输出什么</th>
+          <th>失败信号</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>长度阈值</td>
+          <td>文本字符数</td>
+          <td>keep / drop / review</td>
+          <td>把短但重要的标题、注释或代码解释删掉</td>
+        </tr>
+        <tr>
+          <td>blocklist</td>
+          <td>关键词和上下文窗口</td>
+          <td>硬删除或人工复核</td>
+          <td>词命中但语境正常的样本被误删</td>
+        </tr>
+        <tr>
+          <td>字符占比</td>
+          <td>标点、数字、非字母数字比例</td>
+          <td>异常标记</td>
+          <td>代码、公式、表格被当成噪声</td>
+        </tr>
+        <tr>
+          <td>语言门控</td>
+          <td>语言识别和置信度</td>
+          <td>保留、降权或拆分</td>
+          <td>多语技术文档被粗暴切碎</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="classifier">
+  <div class="head">
+    <h2>分类器过滤</h2>
+    <span class="tag">classifier</span>
+  </div>
+  <p>规则处理的是“说得清”的问题，分类器处理的是“很难一条条写规则”的质量判断。教育性、回答完整性、信息密度、语义连贯性和事实性，常常更适合让分类器给分，但前提是你知道它是按什么标注标准训练出来的。</p>
+  <div class="grid2">
+    <div class="box">
+      <h3>分类器链条</h3>
+      <p>标注定义决定什么叫“高质量”，训练样本决定模型学到什么，输出分数决定后续怎么切阈值。三者里任何一个偏了，分数都不再只是“客观评价”。</p>
+    </div>
+    <div class="box info">
+      <h3>你需要记录的东西</h3>
+      <p>至少要记：标注来源、标签定义、正负样本构成、训练版本、分数含义和哪个阈值对应哪个动作。没有这些字段，分数就没法回查。</p>
+    </div>
+  </div>
+  <div class="codebar">
+    <span>classifier flow</span>
+    <button class="copy" data-copy="code-classifier">复制</button>
+  </div>
+  <pre id="code-classifier" data-export-context="分类器过滤流程示意" data-export-lang="text"><code class="language-text">document -> feature extraction -> quality classifier -> score
+score >= retain_threshold   -> keep
+score between bands         -> review
+score < reject_threshold    -> drop</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="分类器读写表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>环节</th>
+          <th>读取什么</th>
+          <th>写什么</th>
+          <th>失败信号</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>标注定义</td>
+          <td>质量标准、写作目标、样本边界</td>
+          <td>可训练标签</td>
+          <td>同一句文本在不同标注者手里标准不一致</td>
+        </tr>
+        <tr>
+          <td>训练样本</td>
+          <td>人工标注和筛选规则</td>
+          <td>模型参数</td>
+          <td>模型学会了标注风格，不是质量本身</td>
+        </tr>
+        <tr>
+          <td>推理分数</td>
+          <td>新 document</td>
+          <td>质量分</td>
+          <td>整体 AUC 好看，边界桶很差</td>
+        </tr>
+        <tr>
+          <td>动作映射</td>
+          <td>分数和阈值</td>
+          <td>keep / drop / review</td>
+          <td>阈值一改，留存和偏差一起变</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="threshold">
+  <div class="head">
+    <h2>阈值与留存</h2>
+    <span class="tag">threshold</span>
+  </div>
+  <p>阈值就是把分数变成动作的分界线。更高的阈值会更严，留下来的样本更少，但也更容易把边缘知识一并删掉；更低的阈值会更宽松，保留更多样本，但也更可能把噪声放进训练预算。</p>
+  <div class="math-block" data-export-context="阈值与留存公式" data-export-lang="math">
+    $$
+    r_t = \frac{n_{\text{keep},t}}{n_{\text{total},t}},\qquad
+    \Delta r = r_{t_2} - r_{t_1}
+    $$
+    <p>这里的 <code>r_t</code> 是第 <code>t</code> 个分桶的留存率，<code>n_{\text{keep},t}</code> 是保留下来的样本数，<code>n_{\text{total},t}</code> 是该分桶总数。看阈值时，不能只看整体留存率，还要看各分桶的 <code>\Delta r</code> 是否明显倾斜。</p>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>调阈值的直觉</h3>
+      <p>把阈值想成保守程度：阈值上调，模型更难通过；阈值下调，模型更容易通过。真正要比较的不是“哪个数更大”，而是每个数背后损失了哪些内容。</p>
+    </div>
+    <div class="box warn">
+      <h3>人工复核放在哪里</h3>
+      <p>边界分数段最值得复核。它们最容易出现模型不确定、标注歧义和规则冲突，也最能帮助你改进阈值而不是单纯改模型。</p>
+    </div>
+  </div>
+</section>
+
+<section id="bias">
+  <div class="head">
+    <h2>偏差审计</h2>
+    <span class="tag">audit</span>
+  </div>
+  <p>偏差审计的核心问题很直接：删掉了什么，删得有没有分布性，剩下来的内容是否还代表原始语料。最有用的审计不是一个总删除率，而是一组分桶、来源和上下文的删除率。</p>
+  <div class="table-wrap">
+    <table data-export-context="偏差审计分桶表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>审计维度</th>
+          <th>应该看什么</th>
+          <th>高风险信号</th>
+          <th>下一步</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>来源分桶</td>
+          <td>域名、站点类型、语言</td>
+          <td>某些域名被系统性删得更多</td>
+          <td>回看规则是否偏向特定站点结构</td>
+        </tr>
+        <tr>
+          <td>内容分桶</td>
+          <td>主题、长度、格式、符号密度</td>
+          <td>代码、数学或对话被连带删掉</td>
+          <td>把规则拆成更细的条件</td>
+        </tr>
+        <tr>
+          <td>上下文分桶</td>
+          <td>被删样本前后文</td>
+          <td>命中词语义正常，但上下文被误判</td>
+          <td>增加语境判断或改用复核</td>
+        </tr>
+        <tr>
+          <td>保留动作</td>
+          <td>keep / drop / review 比例</td>
+          <td>复核队列长期挤满边缘样本</td>
+          <td>调整阈值或重写规则</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>为什么总删除率不够</h3>
+    <p>总删除率只能告诉你删了多少，不能告诉你删的是谁。一个看起来“更干净”的语料，可能只是把某类内容、某些来源或某些写作风格系统性挤掉了。</p>
+  </div>
+</section>
+
+<section id="cases">
+  <div class="head">
+    <h2>案例推演</h2>
+    <span class="tag">cases</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>案例 1：短页面为什么先走规则</h3>
+      <p>一个只有标题和导航的页面，通常不需要分类器先判断教育性。长度、模板痕迹和 blocklist 就足够说明它更像噪声，先走规则更快也更省算力。</p>
+    </div>
+    <div class="box">
+      <h3>案例 2：教育性分类器为什么要看阈值</h3>
+      <p>同一批样本里，阈值越高，保留下来的往往越像“课堂式文本”；但如果阈值太高，代码说明、例子、反例和边缘领域文档也会跟着掉出去。</p>
+    </div>
+    <div class="box">
+      <h3>案例 3：blocklist 命中为什么要看上下文</h3>
+      <p>词命中不等于内容有害。句子可能在解释、引用、比较或教学。只要上下文还给了它正常语义，直接删除就会把真正的教学语境一起删掉。</p>
+    </div>
+    <div class="box warn">
+      <h3>桥接下一单元</h3>
+      <p>这一页只讲过滤决策本身。去重、去污染和泄漏控制会在下一单元继续处理“同一批文本为什么不能重复进入训练预算”这个问题。</p>
+    </div>
+  </div>
+</section>
+
+<section id="audit">
+  <div class="head">
+    <h2>案例回查</h2>
+    <span class="tag">audit</span>
+  </div>
+  <p>这一段把前面的机制放到一个完整回查案例里。假设一批教育性网页里，有一类段落总被删得更多，原因不是分类器本身，而是规则先碰到了导航词、页脚词和模板结构。你要做的不是立刻调大阈值，而是把命中的信号、动作和后果拆开看。这个案例的价值在于，它能把“结果”重新翻译成“机制”，让你知道删掉的不是一个抽象的低质文本，而是一条有具体来源、具体上下文和具体触发条件的样本。</p>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>案例设定</h3>
+      <p>样本来自公开网页抽样。它们都带有稳定正文，但其中一部分页面的页眉、目录和推荐阅读比正文更显眼。规则层把这些块当成噪声删了以后，留下的正文数量看起来少了，教育性分类器的平均分却反而更高。这个变化很容易被误读成“更干净了”，其实它可能只是把结构更复杂、上下文更多的内容先删掉了。</p>
+    </div>
+    <div class="box info">
+      <h3>第一轮判断</h3>
+      <p>这里最容易犯的错，是看到分数提高就认为过滤更好。实际上，分数变高可能只是因为最复杂的长尾内容被先删掉了，留下来的只剩更像课堂文本的样本。这个时候你要回看的是命中的规则和被删样本的上下文，而不是先改训练目标。你现在应该能做的，是把这一类样本的来源、段落位置和命中信号记到同一张表里，再决定下一步是复核、改规则还是重算阈值。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="案例回查读写表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>读取什么</th>
+          <th>写什么</th>
+          <th>错误时的症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>先看规则命中</td>
+          <td>blocklist、长度、字符占比</td>
+          <td>删除原因</td>
+          <td>把 blocklist 误当成内容质量结论</td>
+        </tr>
+        <tr>
+          <td>再看被删上下文</td>
+          <td>前后句、段落位置、标题关系</td>
+          <td>语义上下文</td>
+          <td>教学解释、引用或例子被误删</td>
+        </tr>
+        <tr>
+          <td>然后看分桶</td>
+          <td>来源、主题、格式、语言</td>
+          <td>删除分布</td>
+          <td>某类站点或内容被系统性削掉</td>
+        </tr>
+        <tr>
+          <td>最后再调阈值</td>
+          <td>分数段和留存率</td>
+          <td>keep / drop / review</td>
+          <td>阈值调整掩盖了真正的规则问题</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar">
+    <span>audit note</span>
+    <button class="copy" data-copy="code-audit">复制</button>
+  </div>
+  <pre id="code-audit" data-export-context="案例回查伪代码" data-export-lang="text"><code class="language-text">if rule_hit:
+    record(rule_name, matched_signal, source, context_window)
+    if matched_signal is only a word:
+        inspect(context_window)
+        route = "review"
+    else:
+        route = "drop"
+
+if bucket_drop_rate diverges:
+    compare(source_bucket, content_bucket, context_bucket)
+    refine(rule or threshold)</code></pre>
+  <div class="box warn">
+    <h3>回查时的错误顺序</h3>
+    <p>不要先问模型是不是太小，也不要先问阈值是不是太高。先把命中的规则、上下文和分桶拉出来，确认到底是规则写得太粗、上下文没看见，还是阈值把边界样本推走了。只有这一步稳，后面的改动才有依据。</p>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>边界说明</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="grid2">
+    <div class="box info">
+      <h3>这一页先不展开的内容</h3>
+      <p>先不讲去重、近似重复、污染检测、训练泄漏、分词器版本和混合配方；这些都需要下一单元和后面的数据配方单元接着处理。你现在只需要把过滤层的读写对象看准。</p>
+    </div>
+    <div class="box warn">
+      <h3>这页的判断标准</h3>
+      <p>如果一个样本被删，你能说出是哪个信号、哪条规则、哪个阈值或哪个分类器分数触发的，就说明这页学到位了。说不出来，就还没从“结果”退回到“机制”。</p>
+    </div>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>操作桥接</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <p>这一段把前面的判断链翻成一次可执行的人工回查。假设你拿到一批样本日志：每条日志都列出 source、命中的规则、分类器分数、阈值和最终动作。你发现某个来源的保留率比别的来源低很多，但这不代表它一定更差。真正要做的是把同一批日志放在一起，看看它们到底是被规则删掉、被分数压掉，还是因为阈值太严而进了复核队列。</p>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>样本日志长什么样</h3>
+      <p>好的日志至少要能回答四个问题：这个样本来自哪里，命中了哪条规则，分类器给了多少分，最后为什么被留、被删或被复核。只要这四个问题里有一个答不上来，后面的偏差审计就只能靠猜。</p>
+    </div>
+    <div class="box info">
+      <h3>失败后果</h3>
+      <p>如果日志里没有上下文，你看到的就只有一个删除结果；如果没有分桶，你看不到谁被删得更多；如果没有阈值版本，你也不知道今天的留存率和上周是不是同一个策略。这样改规则就很容易把原来的偏差藏起来。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="操作桥接日志表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>日志字段</th>
+          <th>它帮你确认什么</th>
+          <th>缺了会怎样</th>
+          <th>下一步查什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>source</td>
+          <td>来源域名、站点类型、语言</td>
+          <td>看不出是不是某类来源被系统性删除</td>
+          <td>来源分桶删除率</td>
+        </tr>
+        <tr>
+          <td>matched signal</td>
+          <td>命中的长度、blocklist 或字符比例</td>
+          <td>不知道到底是哪条规则触发</td>
+          <td>规则本身是否写得太粗</td>
+        </tr>
+        <tr>
+          <td>classifier score</td>
+          <td>语义质量在标注定义下的大致位置</td>
+          <td>不知道边界样本为什么进了复核</td>
+          <td>边界分数段抽样</td>
+        </tr>
+        <tr>
+          <td>final action</td>
+          <td>keep / drop / review</td>
+          <td>看不到阈值和动作的映射</td>
+          <td>阈值版本和留存曲线</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar">
+    <span>review_log.tsv</span>
+    <button class="copy" data-copy="code-bridge">复制</button>
+  </div>
+  <pre id="code-bridge" data-export-context="操作桥接日志示例" data-export-lang="text"><code class="language-text">source	matched_signal	score	threshold	action
+site-a	blocklist:登录 0.12	0.78	0.70	drop
+site-b	length 0.04	0.68	0.70	review
+site-c	language_mix 0.09	0.91	0.70	keep</code></pre>
+  <div class="box warn">
+    <h3>从日志回到动作</h3>
+    <p>看到这张表，你应该能立刻做三件事：先判断删样本是规则删的还是分数压下去的，再看留存是否在某个来源上明显倾斜，最后再决定是改规则、改阈值，还是把边界样本送回人工复核。这个顺序比先调模型参数更稳，因为它先处理的是证据，而不是猜测。做完这三步以后，你才能把一次过滤故障真正收束成一个可修正的问题，而不是停留在“感觉不对”的层面。</p>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>一个样本怎么回查</h3>
+      <p>样本 A 来自一个教程页，正文里出现了“登录”这个词，但它是在解释权限边界。规则层只看到这个词，就把整段打成了删除候选；分类器层并没有单独否定它，因为这段内容在语义上是清楚的。这个时候，真正需要修改的不是训练目标，而是规则解释范围和上下文读取方式。</p>
+      <p>把前后两句放回来以后，你会发现它是在讲“为什么不能把登录入口直接塞进正文”。这说明命中的不是有害内容，而是一个在教学里合法出现的词。若继续硬删，训练集会慢慢偏向更短、更模板化、上下文更少的文本，导致后面模型更难学到解释型内容。</p>
+      <p>如果你把这条样本继续往下追，还会看到一个常见连锁：同样的站点结构在其他页面上也会反复触发同一条规则，于是来源分桶会一起下滑。那时你需要的不是把删除率拉高，而是把规则限定得更具体，让它只打真正的模板噪声，而不是把教学正文一起卷进去。</p>
+    </div>
+    <div class="box info">
+      <h3>练习钩子</h3>
+      <ul>
+        <li>从删除桶里抽 3 条样本，把 source、matched_signal、context、score、threshold、action 写进同一张小表。</li>
+        <li>如果某条样本只有词命中、没有语境命中，就把它标成 review，再补上下文窗口。</li>
+        <li>如果某个来源的保留率低得异常，就同时看来源分桶和内容分桶，不要只看总删除率。</li>
+        <li>如果同一规则在多个页面上重复触发，就把它升级成一轮规则修订，而不是先去动模型分数。</li>
+      </ul>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="样本回查清单" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>回查项</th>
+          <th>要写什么</th>
+          <th>缺了会怎样</th>
+          <th>下一步动作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>source</td>
+          <td>来源、站点类型、语言</td>
+          <td>看不到是否存在来源偏差</td>
+          <td>做来源分桶删除率</td>
+        </tr>
+        <tr>
+          <td>matched_signal</td>
+          <td>命中的长度、词或格式规则</td>
+          <td>不知道为什么触发删除</td>
+          <td>检查规则写得是否太粗</td>
+        </tr>
+        <tr>
+          <td>context</td>
+          <td>前后句、段落位置、标题关系</td>
+          <td>会把教学解释当成噪声</td>
+          <td>加上下文窗口或改成 review</td>
+        </tr>
+        <tr>
+          <td>threshold / action</td>
+          <td>分数、阈值、最终动作</td>
+          <td>看不出是模型还是阈值的问题</td>
+          <td>回到边界分数段抽样</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box">
+    <h3>阈值扫例：同一批样本换三次阈值</h3>
+    <p>如果你只看一次过滤结果，很容易把偏差误判成整体质量变化。更稳妥的做法，是把同一批样本固定住，只改阈值，然后比较整体留存和重点分桶留存。这样做的好处是，所有变化都来自阈值，不来自输入漂移。下面这组数字是一个很典型的形态：阈值越高，整体留存越低，但教育性来源的下降更快，说明被挤掉的是边界内容而不是纯噪声。</p>
+    <div class="table-wrap">
+      <table data-export-context="阈值扫例对照表" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>阈值</th>
+            <th>整体留存</th>
+            <th>教育性来源留存</th>
+            <th>解释</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>0.60</td>
+            <td>0.84</td>
+            <td>0.79</td>
+            <td>阈值宽，复核压力小</td>
+          </tr>
+          <tr>
+            <td>0.70</td>
+            <td>0.76</td>
+            <td>0.61</td>
+            <td>边界解释段开始被压掉</td>
+          </tr>
+          <tr>
+            <td>0.80</td>
+            <td>0.67</td>
+            <td>0.42</td>
+            <td>保守过头，长尾内容损失明显</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="codebar">
+      <span>threshold_scan.py</span>
+      <button class="copy" data-copy="code-threshold-scan">复制</button>
+    </div>
+    <pre id="code-threshold-scan" data-export-context="阈值扫例伪代码" data-export-lang="text"><code class="language-text">for threshold in [0.60, 0.70, 0.80]:
+    keep_rate = retained / total
+    edu_rate = retained_edu / total_edu
+    log(threshold, keep_rate, edu_rate)
+    if edu_rate drops faster than keep_rate:
+        route = "inspect boundary samples"</code></pre>
+    <p>如果这一步已经看出教育性来源掉得更快，就不要继续把阈值往上推了。先把边界样本抽出来复核，再回看命中的规则是否过宽，最后才是考虑模型重训。这样你会得到一条稳定的修正路径：先保住该留的，再收紧真正的噪声。</p>
+    <p>复核时要把同一来源、同一时间段、同一类段落放在一起看，避免把来源差异误当成阈值差异。只要这一步做对了，你就能把“保留率变化”还原成一个能继续修正的工程问题，也能把复核样本重新分回来源桶和内容桶。这也方便你把同类样本按来源再切一刀，避免混桶。</p>
+    <p>失败后果也很具体：阈值太高会让复核队列被边界样本塞满，人工时间花得更多，却不一定留下更好的内容；阈值太低会让噪声混进训练预算，去重和配方阶段还得再付一次成本。你现在应该能做的，不是盯着一个总留存率下判断，而是拿一张分桶表，把这三档阈值复扫一遍，再决定改阈值还是改规则。</p>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>怎么答才算会</h3>
+    <p>先说信号，再说动作，再说偏差。能把“为什么删”和“删掉后会偏什么”一起讲明白，才算真的看懂这一页。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>选择题看对象边界；填空题看术语是否稳定；开放题看原因、后果和回查对象。答案不需要长，但要能指向下一步检查什么。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、信号和对象</h3>
+      <p>先把文档里的信号和对象层说清楚。质量过滤的第一步不是删，而是判断你到底在看什么。</p>
+    </div>
+    <div class="quick-review">先认信号，再决定动作。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、信号和对象" data-title="哪一层最适合先做质量判断？" data-answer="document">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">boundary</span></div>
+      <h3>哪一层最适合先做质量判断？</h3>
+      <label><input type="radio" name="q1" value="raw bytes"> raw bytes</label>
+      <label><input type="radio" name="q1" value="document"> document</label>
+      <label><input type="radio" name="q1" value="token"> token</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、信号和对象" data-title="True or false: 字符数很短一定表示低质量文本。" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">signal</span></div>
+      <h3>True or false: 字符数很短一定表示低质量文本。</h3>
+      <label><input type="radio" name="q2" value="对"> 对</label>
+      <label><input type="radio" name="q2" value="错"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q3" data-group="一、信号和对象" data-title="哪一项最适合先做规则过滤？" data-answer="blocklist 命中">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">signal</span></div>
+      <h3>哪一项最适合先做规则过滤？</h3>
+      <label><input type="radio" name="q3" value="blocklist 命中"> blocklist 命中</label>
+      <label><input type="radio" name="q3" value="教育性边界分数"> 教育性边界分数</label>
+      <label><input type="radio" name="q3" value="来源分桶留存率"> 来源分桶留存率</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q4" data-group="一、信号和对象" data-title="说说为什么信号层要先于分类器层。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">ordering</span></div>
+      <h3>说说为什么信号层要先于分类器层。</h3>
+      <p class="solve-note">至少说出一个快查原因和一个偏差原因。</p>
+      <textarea name="q4" placeholder="先写信号，再写为什么分类器不能代替它。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>合格答案要说清：信号层先做，是因为长度、乱码、blocklist 命中和语言混杂这类问题可以快速批量处理；分类器再强也要建立在稳定输入上。更重要的是，信号层能把显式噪声先分流出去，减少分类器被无关噪声带偏。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、规则和分类器</h3>
+      <p>把显式规则和语义模型区分开。它们都能过滤，但读的对象、给出的证据和失误方式不同。</p>
+    </div>
+    <div class="quick-review">规则看显式条件，分类器看语义分数。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q5" data-group="二、规则和分类器" data-title="哪一项最适合先用规则过滤？" data-answer="导航和页脚">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">rule</span></div>
+      <h3>哪一项最适合先用规则过滤？</h3>
+      <label><input type="radio" name="q5" value="导航和页脚"> 导航和页脚</label>
+      <label><input type="radio" name="q5" value="教育性段落"> 教育性段落</label>
+      <label><input type="radio" name="q5" value="长尾代码解释"> 长尾代码解释</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q6" data-group="二、规则和分类器" data-title="True or false: 分类器分数本身就是真值。" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">score</span></div>
+      <h3>True or false: 分类器分数本身就是真值。</h3>
+      <label><input type="radio" name="q6" value="对"> 对</label>
+      <label><input type="radio" name="q6" value="错"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q7" data-group="二、规则和分类器" data-title="哪一种动作最适合教育性边界分数？" data-answer="review">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">routing</span></div>
+      <h3>哪一种动作最适合教育性边界分数？</h3>
+      <label><input type="radio" name="q7" value="drop"> drop</label>
+      <label><input type="radio" name="q7" value="review"> review</label>
+      <label><input type="radio" name="q7" value="keep"> keep</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q8" data-group="二、规则和分类器" data-title="解释为什么 blocklist 命中后仍要看上下文。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">context</span></div>
+      <h3>解释为什么 blocklist 命中后仍要看上下文。</h3>
+      <p class="solve-note">写出一个误杀场景和一个更稳妥的处理动作。</p>
+      <textarea name="q8" placeholder="先说语境，再说动作。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>blocklist 命中的是词，不是最终结论。一个词可能出现在教学、引用、比较或说明里，语义并没有问题。合格答案应写出误杀场景，并说明更稳妥的动作是复核、降权或细化上下文条件，而不是直接硬删。</p></details>
+    </div>
+
+    <div class="q full" data-question="q8b" data-group="二、规则和分类器" data-title="回查：一个样本被删掉时，你要记录哪些线索？">
+      <div class="q-meta"><span class="pill">diagnosis</span><span class="pill">evidence</span></div>
+      <h3>回查：一个样本被删掉时，你要记录哪些线索？</h3>
+      <p class="solve-note">写出至少 4 项，尽量覆盖信号、规则、阈值和上下文。</p>
+      <textarea name="q8b" placeholder="例如：来源、命中的规则、分数、上下文片段。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>合格答案至少包含来源字段、命中的信号或规则、对应的阈值或分数、被删前后的上下文片段。更好的答案还会写出复核动作和版本信息。这样后面才知道删的是哪一类内容，而不是只看到一个删除结果。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、阈值和偏差</h3>
+      <p>阈值不是一个孤立数字。它会改变留存率、误杀范围和来源分布，所以必须和审计一起看。</p>
+    </div>
+    <div class="quick-review">阈值一变，留存和偏差一起变。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q9" data-group="三、阈值和偏差" data-title="True or false: 阈值越高，通常越容易保留样本。" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">threshold</span></div>
+      <h3>True or false: 阈值越高，通常越容易保留样本。</h3>
+      <label><input type="radio" name="q9" value="对"> 对</label>
+      <label><input type="radio" name="q9" value="错"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q10" data-group="三、阈值和偏差" data-title="哪个分数段最值得人工复核？" data-answer="边界分数段">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">review</span></div>
+      <h3>哪个分数段最值得人工复核？</h3>
+      <label><input type="radio" name="q10" value="边界分数段"> 边界分数段</label>
+      <label><input type="radio" name="q10" value="最高分段"> 最高分段</label>
+      <label><input type="radio" name="q10" value="最低分段"> 最低分段</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q11" data-group="三、阈值和偏差" data-title="填写偏差审计时最该看的三个维度。">
+      <div class="q-meta"><span class="pill">mini-fields</span><span class="pill">audit</span></div>
+      <h3>填写偏差审计时最该看的三个维度。</h3>
+      <div class="mini-fields">
+        <label>一个维度<input type="text" data-answer="source" name="q11_source" placeholder="例如：source"></label>
+        <label>第二个维度<input type="text" data-answer="content" name="q11_content" placeholder="例如：content"></label>
+        <label>第三个维度<input type="text" data-answer="context" name="q11_context" placeholder="例如：context"></label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="三、阈值和偏差" data-title="如果某个域名被系统性删得更多，你会怎么判断？">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">bias</span></div>
+      <h3>如果某个域名被系统性删得更多，你会怎么判断？</h3>
+      <p class="solve-note">先勾出最先看的两项，再用一句话说明为什么。</p>
+      <label><input type="checkbox" name="q12" value="规则是否依赖站点结构"> 规则是否依赖站点结构</label>
+      <label><input type="checkbox" name="q12" value="该域名是否包含常见模板或脚本"> 该域名是否包含常见模板或脚本</label>
+      <label><input type="checkbox" name="q12" value="模型隐藏层是否足够大"> 模型隐藏层是否足够大</label>
+      <label><input type="checkbox" name="q12" value="该域名的上下文是否被误伤"> 该域名的上下文是否被误伤</label>
+      <details><summary>参考答案 / 评分要点</summary><p>先看规则是否依赖站点结构，再看该域名的上下文是否被误伤。若删得更多，往往说明规则对特定站点布局或格式过于敏感。模型大小不是第一轮审计对象。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、综合诊断</h3>
+      <p>把前面的主线合起来，检查你能不能用“机制”解释一个过滤决策，而不是只背结论。</p>
+    </div>
+    <div class="quick-review">说出触发信号、动作和偏差，才算闭环。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q13" data-group="四、综合诊断" data-title="为什么总删除率高，不一定说明过滤更好？">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">metric</span></div>
+      <h3>为什么总删除率高，不一定说明过滤更好？</h3>
+      <p class="solve-note">至少写出一个质量风险和一个偏差风险。</p>
+      <textarea name="q13" placeholder="先写总删除率，再写它会掩盖什么。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>总删除率高可能只是规则更激进，不能证明留下来的内容更好。它会掩盖两类风险：一是误杀了长尾知识、代码、公式或技术解释，二是对某些来源、语言或格式删得更多，导致训练分布偏掉。好的答案要把这两类风险都说出来。</p></details>
+    </div>
+
+    <div class="q full" data-question="q13b" data-group="四、综合诊断" data-title="给一个被误删的教育性段落写回查说明。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">audit note</span></div>
+      <h3>给一个被误删的教育性段落写回查说明。</h3>
+      <p class="solve-note">至少写出命中的规则、为什么误判、以及下一步怎么改。</p>
+      <textarea name="q13b" placeholder="例如：blocklist 命中但语境是教学解释，应该改成复核或加上下文条件。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>合格答案应写明：命中了哪条规则，误判来自什么上下文，为什么这个段落其实是教育性内容，下一步怎么修。修正动作可以是增加上下文窗口、拆分规则、改成 review 或补人工抽样。这样才算真的会做偏差审计。</p></details>
+    </div>
+
+    <div class="q" data-question="q14" data-group="四、综合诊断" data-title="哪一种动作最适合边界分数样本？" data-answer="review">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">action</span></div>
+      <h3>哪一种动作最适合边界分数样本？</h3>
+      <label><input type="radio" name="q14" value="drop"> drop</label>
+      <label><input type="radio" name="q14" value="review"> review</label>
+      <label><input type="radio" name="q14" value="keep"> keep</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q15" data-group="四、综合诊断" data-title="给一个过滤器上线前检查清单。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">checklist</span></div>
+      <h3>给一个过滤器上线前检查清单。</h3>
+      <p class="solve-note">至少写 4 项，必须包含一项阈值检查和一项偏差检查。</p>
+      <textarea name="q15" placeholder="例如：阈值、分桶删除率、误杀样本、复核队列。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>合格清单至少包含：规则是否可解释、阈值是否在分桶上稳定、来源/内容/上下文删除率是否有偏差、边界分数是否已复核、误杀样本是否有例子、上线后是否保留版本记录。清单要能执行，不能只写口号。</p></details>
+    </div>
+
+    <div class="q full" data-question="q16" data-group="四、综合诊断" data-title="把这一页讲给一个还没做过数据过滤的人。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">teach-back</span></div>
+      <h3>把这一页讲给一个还没做过数据过滤的人。</h3>
+      <p class="solve-note">用 120-200 字，必须包含 rule、classifier、threshold、bias 四个词。</p>
+      <textarea name="q16" placeholder="先讲主线，再讲一个误杀风险。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>优秀答案会先把 rule、classifier、threshold、bias 串成一条链：rule 处理显式噪声，classifier 处理语义质量，threshold 把分数变成动作，bias 则提醒你检查删掉了谁。能把“为什么要这么做”和“做错会怎样”一起说出来，就说明你真的理解了这一页。</p></details>
+    </div>
+
+    <div class="q full" data-question="q17" data-group="四、综合诊断" data-title="解释一个域名被系统性删得更多时，你会怎么做。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">domain audit</span></div>
+      <h3>解释一个域名被系统性删得更多时，你会怎么做。</h3>
+      <p class="solve-note">写出三步：先看什么，再看什么，最后怎么改。</p>
+      <textarea name="q17" placeholder="例如：先看规则依赖的结构，再看上下文误杀，最后改成 review 或细化条件。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>合格答案应先看规则是否依赖站点结构，再看该域名的上下文是否被误伤，最后决定是细化规则、增加复核还是保留。只要能把“删得更多”解释成可回查的问题，就不是停留在结果层。</p></details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><a href="https://cs336.stanford.edu/spring2025/index.html">Stanford CS336 Spring 2025 课程资料</a>：支撑课程级数据流程、质量和验证主线。</li>
+  <li><a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb">FineWeb 数据集页</a>：支撑大规模网页清洗、筛选和质量比较。</li>
+  <li><a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu">FineWeb-Edu 数据集页</a>：支撑教育性分类器与阈值示例。</li>
+  <li><a href="https://huggingface.co/HuggingFaceFW/fineweb-edu-classifier">FineWeb-Edu classifier</a>：支撑教育性分类器训练来源与分数解释。</li>
+  <li><a href="https://huggingfacefw-blogpost-fineweb-v1.static.hf.space/">FineWeb 技术博客</a> 与 <a href="https://arxiv.org/abs/2406.17557">FineWeb 论文</a>：支撑过滤、验证和数据配方讨论。</li>
+  <li><a href="https://docs.nvidia.com/nemo/curator/latest/">NeMo Curator</a>：支撑过滤、去重和文本策展的工程视角。</li>
+  <li><a href="https://github.com/huggingface/datatrove">DataTrove</a>：支撑面向流水线的过滤和去重组织方式。</li>
+  <li><a href="https://arxiv.org/abs/2104.08758">C4 case study</a>：支撑 blocklist、偏差和误杀讨论。</li>
+</ul>
+<p class="muted">资料快照按 2026-06-21 记录；本页的结论只要求和这些公开来源一致。</p>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

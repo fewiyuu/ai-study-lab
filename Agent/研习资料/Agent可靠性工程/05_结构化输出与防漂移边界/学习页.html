@@ -1,0 +1,849 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>05 结构化输出与防漂移边界｜智能体可靠性工程</title>
+  <meta name="description" content="学会把结构化输出、边界校验、追踪语义和 Temporal 恢复放到一条可靠执行链里，避免模型漂移污染后续工具和流程。">
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="智能体可靠性工程" data-unit="05 结构化输出与防漂移边界">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>智能体可靠性工程</strong>
+        <span>05 结构化输出与防漂移边界</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>先抓主线</a>
+        <a href="#terms"><span class="dot"></span>术语与误区</a>
+        <a href="#lesson-1"><span class="dot"></span>漂移从哪里来</a>
+        <a href="#lesson-2"><span class="dot"></span>Schema 边界</a>
+        <a href="#lesson-3"><span class="dot"></span>交接边界</a>
+        <a href="#lesson-4"><span class="dot"></span>追踪语义</a>
+        <a href="#lesson-5"><span class="dot"></span>Temporal 边界</a>
+        <a href="#lesson-6"><span class="dot"></span>失败处理</a>
+        <a href="#bridge"><span class="dot"></span>落地链路</a>
+        <a href="#case"><span class="dot"></span>案例</a>
+        <a href="#terminal-check"><span class="dot"></span>终端检查</a>
+        <a href="#mistakes"><span class="dot"></span>常见错误</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">
+        这一页先把结构钉住，再看业务正确性。输出形状、边界位置、追踪字段和恢复事实，四层各管一层。
+      </div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">Structured Outputs · Tracing · Temporal</div>
+          <h1>用结构化边界阻止智能体漂移污染执行链路</h1>
+          <p>模型可以生成内容，但边界必须由系统定义。只要后续工具、队列、工作流或评测器要消费输出，模型就不再只是“写一句话”，而是在填一个接口。</p>
+          <div class="course-links">
+            <a href="../04_工具失败超时与重试策略/学习页.html">回到 04 工具失败</a>
+            <a href="../06_追踪指标与事件语义/学习页.html">继续看 06 追踪语义</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完这一页，能直接做的事</h3>
+          <ol>
+            <li>区分格式漂移、字段漂移、语义漂移和流程漂移。</li>
+            <li>把 schema 边界、业务校验和追踪字段放到正确层。</li>
+            <li>说明为什么重放时不能重新发明已验证的结构化决策。</li>
+            <li>为失败、修复和人工接管写出最小可执行流程。</li>
+          </ol>
+        </div>
+      </div>
+
+      <section id="goals">
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">goal</span>
+        </div>
+        <div class="grid3">
+          <div class="box">
+            <b>钉住形状</b>
+            <p>用结构化输出限制字段、类型、枚举和版本，先让后续程序能稳定解析。</p>
+          </div>
+          <div class="box soft">
+            <b>钉住语义</b>
+            <p>用业务规则、权限、风险分流和 trace 字段，防止“看起来合法”的输出继续扩散错误。</p>
+          </div>
+          <div class="box warn">
+            <b>钉住恢复</b>
+            <p>在 Temporal 这类持久执行系统里，把已验证的结构化决策保存成历史事实，而不是每次重放都重新生成。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="map">
+        <div class="head">
+          <h2>先抓主线</h2>
+          <span class="tag">map</span>
+        </div>
+        <p>这一单元的主线很短：先让输出有结构，再让结构过校验，再把校验结果写进追踪，最后把已验证的事实放进可恢复的执行系统。只要任意一层开始漂，后面的工具、回放和评测都会跟着歪。</p>
+        <div class="shape-tracer" data-shape-tracer>
+          <div class="trace-lines">
+            <button class="trace-line active" data-trace-step="shape">
+              <code>shape</code><span>输出必须可解析</span>
+            </button>
+            <button class="trace-line" data-trace-step="semantic">
+              <code>semantic</code><span>业务含义必须可校验</span>
+            </button>
+            <button class="trace-line" data-trace-step="trace">
+              <code>trace</code><span>失败要可定位</span>
+            </button>
+            <button class="trace-line" data-trace-step="replay">
+              <code>replay</code><span>恢复要可复用</span>
+            </button>
+          </div>
+          <div class="trace-canvas">
+            <div class="tensor-card active" data-trace-target="shape">
+              <b>Schema</b>
+              <span>先把允许的字段形状钉住</span>
+              <p>对象、类型、必填项、枚举和值域先明确，再谈业务对错。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="semantic">
+              <b>业务校验</b>
+              <span>再判断字段含义是否成立</span>
+              <p>同样合法的 JSON，也可能是错误订单、越权动作或不可执行状态。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="trace">
+              <b>Trace</b>
+              <span>把验证结果写进可排查记录</span>
+              <p>schema 名称、版本、失败字段、重试次数和模型版本都应可查。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="replay">
+              <b>Temporal</b>
+              <span>把已验证事实交给恢复系统</span>
+              <p>重放时复用已接受的结果，不重新发明决策，也不重复副作用。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="terms">
+        <div class="head">
+          <h2>术语与误区</h2>
+          <span class="tag">terms</span>
+        </div>
+        <div class="grid2">
+          <div class="box soft-blue">
+            <b>直觉</b>
+            <p>“按 JSON 输出”只是希望，不是接口契约。契约要能被程序检查、版本化和记录。</p>
+          </div>
+          <div class="box soft-gold">
+            <b>边界</b>
+            <p>边界不是让模型少说话，而是明确哪里必须拒绝、哪里必须修复、哪里必须人工确认。</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="05 漂移类型对照表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>漂移类型</th>
+                <th>表现</th>
+                <th>后果</th>
+                <th>先补什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>格式漂移</td>
+                <td>JSON 混入解释文字，字段层级乱掉</td>
+                <td>程序解析失败</td>
+                <td>schema、strict 输出、拒绝额外字段</td>
+              </tr>
+              <tr>
+                <td>字段漂移</td>
+                <td>字段名、类型、枚举值改了</td>
+                <td>映射层和工具调用变脆</td>
+                <td>版本号、封闭枚举、兼容策略</td>
+              </tr>
+              <tr>
+                <td>语义漂移</td>
+                <td>字段还合法，但含义变了</td>
+                <td>业务动作跑偏</td>
+                <td>业务校验、权限校验、风险分流</td>
+              </tr>
+              <tr>
+                <td>流程漂移</td>
+                <td>模型越过确认、审批或接管边界</td>
+                <td>越权、重复副作用或不可恢复</td>
+                <td>流程边界、人工接管、幂等键</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="lesson-1">
+        <div class="head">
+          <h2>一、漂移不是玄学，是接口契约被模型侵蚀</h2>
+          <span class="tag">lesson 1</span>
+        </div>
+        <p>先给直觉：只要后续程序要消费模型输出，模型就不再只是“写一段话”，而是在填一个接口。如果接口没有被系统明确定义，模型会按语言习惯补全、解释、压缩或改写字段。</p>
+        <p>漂移至少有四种。格式漂移是结构不对；字段漂移是名称和类型变了；语义漂移是字段值看似合法但业务含义错了；流程漂移是模型跳过确认、审批或权限边界，直接把动作推到执行层。</p>
+        <div class="grid4">
+          <div class="box soft-red"><b>格式</b><p>解析失败，后续程序拿不到稳定结构。</p></div>
+          <div class="box soft-gold"><b>字段</b><p>字段名或类型变化，映射层变脆。</p></div>
+          <div class="box soft-violet"><b>语义</b><p>字段合法，但业务含义变了。</p></div>
+          <div class="box soft-blue"><b>流程</b><p>模型越过确认或权限边界。</p></div>
+        </div>
+      </section>
+
+      <section id="lesson-2">
+        <div class="head">
+          <h2>二、Structured Outputs：先把输出形状钉住</h2>
+          <span class="tag">lesson 2</span>
+        </div>
+        <p>结构化输出的价值，是把“请尽量按这个格式”升级成“这个接口只接受这种结构”。对象字段明确、必填项明确、类型明确、枚举封闭，才能让下游程序稳定解析和校验。</p>
+        <p>但是 schema 只能约束形状，不能证明事实正确。一个 JSON 可能完全合法，却仍然是错误订单、越权动作或不该执行的金额。形状是入口，业务校验才是门禁。</p>
+        <div class="codebar"><span>Schema 边界示例</span><span>JSON Schema</span><button class="copy" data-copy="code-schema-boundary">复制</button></div>
+        <pre id="code-schema-boundary" data-export-context="05 Schema 边界示例" data-export-lang="json"><code class="language-json">{
+  "name": "agent_plan_gate",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schema_version", "decision", "risk_level", "requires_human_approval"],
+    "properties": {
+      "schema_version": { "type": "string", "enum": ["plan_gate.v1"] },
+      "decision": { "type": "string", "enum": ["allow", "revise", "block"] },
+      "risk_level": { "type": "string", "enum": ["low", "medium", "high"] },
+      "requires_human_approval": { "type": "boolean" }
+    }
+  },
+  "strict": true
+}</code></pre>
+        <div class="grid2">
+          <div class="box info">
+            <b>这层负责什么</b>
+            <p>限制字段、类型、枚举、版本和额外字段。它解决“程序能不能读”的问题。</p>
+          </div>
+          <div class="box warn">
+            <b>这层不负责什么</b>
+            <p>不负责判断退款是否允许、用户是否有权限、金额是否在窗口内。那些是业务校验。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="lesson-3">
+        <div class="head">
+          <h2>三、边界要放在每一次系统交接处</h2>
+          <span class="tag">lesson 3</span>
+        </div>
+        <p>很多人只给最终回答做结构化输出，这不够。真正危险的地方常在中间交接：计划交给执行器、路由器交给子 Agent、模型参数交给工具、工具结果交给下一轮模型、失败摘要交给重试策略。每一次交接都可能漂移。</p>
+        <div class="flowline">
+          <span class="node">输入边界</span><span class="arrow">-></span>
+          <span class="node">计划边界</span><span class="arrow">-></span>
+          <span class="node">工具边界</span><span class="arrow">-></span>
+          <span class="node">输出边界</span>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="05 系统交接边界表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>边界位置</th>
+                <th>要约束什么</th>
+                <th>失败时怎么办</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>输入边界</td>
+                <td>用户意图、来源可信度、敏感数据、任务范围</td>
+                <td>拒绝、脱敏、澄清或转人工</td>
+              </tr>
+              <tr>
+                <td>计划边界</td>
+                <td>动作类型、顺序、风险等级、是否需要确认</td>
+                <td>要求重规划，或阻止高风险动作</td>
+              </tr>
+              <tr>
+                <td>工具边界</td>
+                <td>参数类型、资源 ID、权限、幂等键、超时和重试</td>
+                <td>不调用工具，返回结构化错误</td>
+              </tr>
+              <tr>
+                <td>输出边界</td>
+                <td>最终状态、证据、下一步、用户摘要</td>
+                <td>保留 trace，进入补救流程</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="lesson-4">
+        <div class="head">
+          <h2>四、追踪让漂移可定位：span 要记录边界结果</h2>
+          <span class="tag">lesson 4</span>
+        </div>
+        <p>trace 和 span 的作用，不是把“模型说了什么”原样塞进去，而是把一次步骤变成可排查的记录。它要能回答：哪一步坏了、哪个 schema 失败、哪个字段错了、哪次重试发生了、哪个版本引入了变化。</p>
+        <div class="codebar"><span>Trace 事件示例</span><span>JSON</span><button class="copy" data-copy="code-trace-event">复制</button></div>
+        <pre id="code-trace-event" data-export-context="05 Trace 事件示例" data-export-lang="json"><code class="language-json">{
+  "trace_id": "run_2026_06_09_042",
+  "span_name": "agent.plan_gate.validate",
+  "attributes": {
+    "gen_ai.operation.name": "chat",
+    "agent.schema.name": "agent_plan_gate",
+    "agent.schema.version": "plan_gate.v1",
+    "agent.schema.validation": "failed",
+    "agent.schema.error_field": "decision",
+    "agent.model": "configured-model-id",
+    "agent.retry.count": 1
+  },
+  "events": [
+    { "name": "schema_validation_failed", "reason": "enum_value_not_allowed" }
+  ]
+}</code></pre>
+        <div class="grid2">
+          <div class="box soft">
+            <b>span 里放什么</b>
+            <p>模型名、工具名、步骤名、版本、尝试次数、耗时和父子关系。它们是长期有用的排查字段。</p>
+          </div>
+          <div class="box info">
+            <b>event 里放什么</b>
+            <p>一次工具调用的局部证据、脱敏后的参数、拒绝原因、澄清原因和短期采样结果。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="lesson-5">
+        <div class="head">
+          <h2>五、Temporal 视角：重放时不要重新发明决策和副作用</h2>
+          <span class="tag">lesson 5</span>
+        </div>
+        <p>持久执行系统关心的是：任务中断后，能不能从历史里恢复，而不是从头再猜一次。Workflow 里保留确定性的编排状态，Activity 承担外部 I/O，模型输出进入系统前先结构化和校验。</p>
+        <div class="grid3">
+          <div class="box soft-green"><b>Workflow</b><p>保存确定性的任务状态和已验证决策引用。</p></div>
+          <div class="box soft-blue"><b>Activity</b><p>执行外部 I/O：调用模型、访问 API、写数据库、发送消息。</p></div>
+          <div class="box soft-gold"><b>幂等键</b><p>让重试或恢复不会重复制造副作用。</p></div>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="05 Temporal 恢复表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>对象</th>
+                <th>读什么</th>
+                <th>写什么</th>
+                <th>错了会怎样</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Workflow</td>
+                <td>确定性状态、分支、已验证决策</td>
+                <td>恢复后的流程位置</td>
+                <td>如果塞进随机模型决策，重放会漂</td>
+              </tr>
+              <tr>
+                <td>Activity</td>
+                <td>外部输入、参数、幂等键</td>
+                <td>真实副作用</td>
+                <td>如果重复执行，会产生双重写入</td>
+              </tr>
+              <tr>
+                <td>Replay</td>
+                <td>历史事件、已记录结果</td>
+                <td>复用结果，不重复动作</td>
+                <td>如果重新发明决策，结果不稳定</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="lesson-6">
+        <div class="head">
+          <h2>六、拒绝、修复、降级：结构化失败也要有流程</h2>
+          <span class="tag">lesson 6</span>
+        </div>
+        <p>结构化输出失败不是终点，而是可设计的分支。先拒绝非法结构，再把错误定位到字段，再决定是否让模型修复。如果涉及权限、金额、删除、发送、提交等高风险动作，不要让模型自动修复后直接执行。</p>
+        <div class="flowline">
+          <span class="node">生成结构化输出</span><span class="arrow">-></span>
+          <span class="node">Schema 校验</span><span class="arrow">-></span>
+          <span class="node">业务校验</span><span class="arrow">-></span>
+          <span class="node">风险分流</span><span class="arrow">-></span>
+          <span class="node">执行 / 草稿 / 人审 / 拒绝</span>
+        </div>
+        <div class="codebar"><span>失败处理骨架</span><span>TypeScript-like</span><button class="copy" data-copy="code-failure-flow">复制</button></div>
+        <pre id="code-failure-flow" data-export-context="05 失败处理骨架" data-export-lang="json"><code class="language-ts">async function handlePlan(rawModelOutput) {
+  const parsed = validateSchema("agent_plan_gate.v1", rawModelOutput);
+  if (!parsed.ok) {
+    recordSpanEvent("schema_validation_failed", parsed.errorSummary);
+    return { status: "retry_or_repair", reason: parsed.errorSummary };
+  }
+
+  const checked = await validateBusinessRules(parsed.value);
+  if (!checked.ok) {
+    recordSpanEvent("business_validation_failed", checked.reason);
+    return { status: "blocked", reason: checked.reason };
+  }
+
+  if (checked.value.risk_level === "high" || checked.value.requires_human_approval) {
+    return { status: "draft_waiting_for_approval", plan: checked.value };
+  }
+
+  return { status: "ready_to_execute", plan: checked.value };
+}</code></pre>
+      </section>
+
+      <section id="bridge">
+        <div class="head">
+          <h2>七、把边界落到真实项目：最小上线链路</h2>
+          <span class="tag">bridge</span>
+        </div>
+        <p>如果你在做客服、退款、工单或审批 Agent，这一页的边界应该直接落到代码里。最小链路通常是：先让模型只产出结构化评估，再把结构化结果交给业务校验器，最后把通过与否写进 trace，并把可恢复的决策交给持久执行系统。这个顺序不能倒，因为每一步失败的含义不同。</p>
+        <p>先看一个真实感更强的场景。用户要求“把发票改到新邮箱”，系统收到的不是一句普通回复，而是一个会影响外部写入的动作提议。这里最容易写坏的地方不是模型能不能理解用户，而是程序有没有把“合法结构”“权限合法”“状态合法”和“恢复合法”分开。只要把它们混在一起，排障时就会只剩下一句“结果不对”，却不知道错在 schema、权限还是幂等。</p>
+        <div class="table-wrap">
+          <table data-export-context="05 最小落地链路表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>层</th>
+                <th>读什么</th>
+                <th>写什么</th>
+                <th>错了会怎样</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>模型输出</td>
+                <td>用户意图、上下文、候选动作</td>
+                <td>结构化评估结果</td>
+                <td>如果没有版本，后面无法对齐</td>
+              </tr>
+              <tr>
+                <td>schema 校验</td>
+                <td>字段、类型、枚举、额外字段</td>
+                <td>解析通过或可读错误</td>
+                <td>如果混入业务逻辑，错误会变得模糊</td>
+              </tr>
+              <tr>
+                <td>业务校验</td>
+                <td>权限、状态、金额、窗口、幂等键</td>
+                <td>允许、拒绝、草稿或接管</td>
+                <td>如果交回模型决定，越权会继续扩散</td>
+              </tr>
+              <tr>
+                <td>Trace / History</td>
+                <td>版本、字段、重试、恢复位置</td>
+                <td>可追踪、可复盘、可重放的事实</td>
+                <td>如果只留聊天记录，问题很难还原</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>这张表的读法很简单。第一行告诉你，模型输出只是候选，不是执行命令；第二行告诉你，解析错误是接口层问题，不是业务层问题；第三行告诉你，业务系统有权覆盖模型的“建议”；第四行告诉你，追踪和历史不是日志备份，而是以后恢复和排障的依据。把四层混在一起，系统就会在最小错误上放大成生产事故。</p>
+        <div class="codebar"><span>最小落地链路骨架</span><span>pseudo</span><button class="copy" data-copy="code-bridge-flow">复制</button></div>
+        <pre id="code-bridge-flow" data-export-context="05 最小落地链路骨架" data-export-lang="json"><code class="language-ts">const plan = validateSchema("refund_assessment.v1", modelOutput);
+if (!plan.ok) {
+  recordSpanEvent("schema_validation_failed", plan.errorSummary);
+  return { status: "retry_or_repair" };
+}
+
+const checked = await validateBusinessRules(plan.value);
+recordSpanEvent("business_validation_result", checked.ok ? "passed" : checked.reason);
+
+if (!checked.ok) {
+  return { status: "blocked", reason: checked.reason };
+}
+
+if (checked.value.requires_human_approval || checked.value.risk_level === "high") {
+  return { status: "draft_waiting_for_approval", plan: checked.value };
+}
+
+return { status: "ready_to_execute", plan: checked.value };</code></pre>
+        <div class="grid2">
+          <div class="box soft">
+            <b>这条链路先读什么</b>
+            <p>先读结构化结果，再读业务上下文，再读当前权限和幂等状态。这样每一层的错误都能被单独定位。</p>
+          </div>
+          <div class="box warn">
+            <b>这条链路先写什么</b>
+            <p>先写验证结果，再写 trace 事件，再决定是否进入草稿、人审或执行。不要反过来先做副作用。</p>
+          </div>
+        </div>
+        <p>如果你把这条链路写对，后面的课程会自然连起来：06 里你会知道应该把哪几个字段写进 span，07 里你会知道哪些失败样本必须回放，08 里你会知道该在什么点暂停、回滚或接管。换句话说，这不是一页独立教程，而是一条可复用的执行边界。</p>
+        <p class="checkpoint">你现在应该能做什么：把一个自然语言执行请求拆成“结构化评估、schema 校验、业务校验、trace 记录、恢复保存”五步，并指出每步的输入和输出。</p>
+      </section>
+
+      <section id="diagnosis">
+        <div class="head">
+          <h2>八、看一条失败链：先判断是结构、语义还是恢复问题</h2>
+          <span class="tag">diagnosis</span>
+        </div>
+        <p>同样是“系统没按预期做事”，原因可能完全不同。结构失败说明程序连结果都读不进来；语义失败说明结果能读，但业务不成立；恢复失败说明前面的结果都对了，却在重放和副作用边界上出了问题。把这三类分开，是后面做排障、回放和门禁的前提。</p>
+        <p>拿“发票改邮箱”来举例。模型可能已经输出了合法 JSON，但如果 <code>search_vendor</code> 结果为空，而系统继续走写接口，这不是格式问题，而是决策问题。相反，如果输出里混入了解释文字，程序连 JSON 都解析不出来，那就应该先回到 schema 边界，而不是去猜用户到底想干什么。</p>
+        <div class="table-wrap">
+          <table data-export-context="05 失败链诊断表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>症状</th>
+                <th>先看哪里</th>
+                <th>下一步动作</th>
+                <th>最常见误判</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>输出无法解析</td>
+                <td>schema、额外字段、类型和枚举</td>
+                <td>拒绝、修复或重试一次</td>
+                <td>误当成“模型不聪明”</td>
+              </tr>
+              <tr>
+                <td>输出合法但业务不成立</td>
+                <td>权限、状态、金额、窗口、幂等键</td>
+                <td>阻断、草稿或人工确认</td>
+              </tr>
+              <tr>
+                <td>重放后结果变了</td>
+                <td>workflow 历史、Activity、replay 标记</td>
+                <td>把已验证决策保存为历史事实</td>
+                <td>误当成“偶发抖动”</td>
+              </tr>
+              <tr>
+                <td>外部副作用重复发生</td>
+                <td>幂等键、重试策略、边界位置</td>
+                <td>停止写路径，先修边界再重放</td>
+                <td>误当成“再跑一次就好”</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="codebar"><span>最小诊断函数</span><span>pseudo</span><button class="copy" data-copy="code-diagnosis-flow">复制</button></div>
+        <pre id="code-diagnosis-flow" data-export-context="05 最小诊断函数" data-export-lang="json"><code class="language-ts">function classifyFailure(trace) {
+  if (!trace.schema_valid) return "shape";
+  if (!trace.business_valid) return "semantic";
+  if (trace.replay && trace.side_effect_executed) return "replay";
+  if (trace.side_effect_repeated) return "idempotency";
+  return "other";
+}
+
+const kind = classifyFailure(currentTrace);
+if (kind === "shape") {
+  return "先回 schema 和字段，不要修业务";
+}
+if (kind === "semantic") {
+  return "先看权限、状态和幂等键，不要只改 prompt";
+}
+if (kind === "replay" || kind === "idempotency") {
+  return "先停写路径，再检查历史和 Activity 边界";
+}</code></pre>
+        <p>这个函数的意义不在于你真的照搬它，而在于它逼你先回答“问题属于哪一层”。如果你把结构错误当业务错误，修复会绕远；如果把业务错误当结构错误，你会不停重试；如果把恢复错误当普通失败，你会重复制造副作用。</p>
+        <p>更实用的判断是：<code>shape</code> 先看 schema 和字段，<code>semantic</code> 先看权限和状态，<code>replay</code> 先看 history 和 Activity 边界。只要这三步顺序写对，工单、回放和上线门禁就能共用同一条诊断链，而不是每个团队各写一套猜测规则。</p>
+        <p>这也是为什么一个好的诊断页不会只给结论，而是给你下一次该打开的表、该看的字段和该停的路径。</p>
+        <p>这条判断链也能直接沿用到 06、07、08。</p>
+        <p class="checkpoint">你现在应该能做什么：拿到一条 trace，先判断它是结构、语义还是恢复问题，再决定是拒绝、修复、阻断还是停写路径。</p>
+      </section>
+
+      <section id="case">
+        <div class="head">
+          <h2>防漂移案例：退款智能体的结构化边界</h2>
+          <span class="tag">case</span>
+        </div>
+        <p>场景：客服智能体根据用户对话判断是否退款。没有边界时，模型可能把“建议退款”直接变成“执行退款”，把订单号脑补成某个格式，或者把高风险动作绕过确认。</p>
+        <div class="case-grid">
+          <div class="case-card soft-red">
+            <h3>坏设计：自然语言计划直接执行</h3>
+            <ul>
+              <li>模型输出退款结论。</li>
+              <li>程序从文本里抽金额和订单号。</li>
+              <li>没有检查订单状态、权限、窗口和幂等键。</li>
+              <li>失败后重试，可能重复退款。</li>
+            </ul>
+          </div>
+          <div class="case-card soft-green">
+            <h3>好设计：四层防漂移边界</h3>
+            <ul>
+              <li>模型只能输出 <code>refund_assessment.v1</code> schema。</li>
+              <li>枚举只允许 <code>deny</code>、<code>draft_refund</code>、<code>needs_human_review</code>。</li>
+              <li>业务系统校验订单、金额、权限、政策和幂等键。</li>
+              <li>trace 记录 schema 版本、业务校验、Activity id 和最终状态。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="codebar"><span>退款案例：模型不能直接表达执行副作用</span><span>JSON</span><button class="copy" data-copy="code-refund-case">复制</button></div>
+        <pre id="code-refund-case" data-export-context="05 退款案例" data-export-lang="json"><code class="language-json">{
+  "schema_version": "refund_assessment.v1",
+  "decision": "draft_refund",
+  "confidence": "medium",
+  "customer_visible_summary": "订单可能符合部分退款条件，建议人工确认。",
+  "proposed_refund": {
+    "order_id": "ord_7788",
+    "amount": 98,
+    "currency": "CNY",
+    "reason_code": "service_unavailable"
+  },
+  "required_checks": [
+    "order_exists",
+    "operator_can_refund",
+    "within_refund_window",
+    "idempotency_key_reserved"
+  ]
+}</code></pre>
+      </section>
+
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见错误</h2>
+          <span class="tag">mistakes</span>
+        </div>
+        <div class="grid2">
+          <div class="mistake"><b>字段太自由</b><p>把 <code>action</code> 写成任意字符串，模型会创造程序不认识的动作。</p></div>
+          <div class="mistake"><b>没有 schema 版本</b><p>上线后改字段，旧 trace 和新执行器混在一起，排查时不知道失败来自模型还是接口变更。</p></div>
+          <div class="mistake"><b>把安全判断交给模型</b><p>模型可以建议风险等级，但不能自己决定越权执行。</p></div>
+          <div class="mistake"><b>修复循环无限重试</b><p>结构化失败后不断要求模型重写，会消耗成本并掩盖系统缺陷。</p></div>
+          <div class="mistake"><b>trace 字段无法统计</b><p>只记录一段文本日志，后续无法按 schema、模型、工具和错误字段聚合。</p></div>
+          <div class="mistake"><b>恢复时重新调用模型</b><p>长任务恢复时再次生成计划，可能得到不同结果。</p></div>
+        </div>
+      </section>
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <p>这组题不是背概念，而是让你把字段、校验、trace 和恢复连成一条能执行的链。先辨认对象，再写分流，最后写出可以交给团队的方案。</p>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>一、结构与语义</h3>
+              <p>先判断你会不会把结构化输出和业务正确性分开。</p>
+            </div>
+            <div class="quick-review">快速回顾：schema 只管形状，业务校验才管正确性。</div>
+          </div>
+        <div class="drill-grid">
+            <div class="q" data-question="q1_shape_value" data-group="一、结构与语义" data-title="Structured Outputs 最准确的作用是什么？"
+              data-answer="B" data-explain="Structured Outputs 让输出更符合给定 schema，便于程序解析和校验。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">schema</span></div>
+              <h3>Structured Outputs 最准确的作用是什么？</h3>
+              <label><input type="radio" name="q1_shape_value" value="A">保证模型生成的事实一定正确</label>
+              <label><input type="radio" name="q1_shape_value" value="B">让输出更符合给定 schema，便于程序解析和校验</label>
+              <label><input type="radio" name="q1_shape_value" value="C">自动完成权限检查和业务规则</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q" data-question="q2_boundary_mix" data-group="一、结构与语义" data-title="哪些属于防漂移边界？">
+              <div class="q-meta"><span class="pill">checkbox</span><span class="pill">boundary</span></div>
+              <h3>哪些属于防漂移边界？</h3>
+              <label><input type="checkbox" name="q2_boundary_mix" value="A">JSON Schema 和枚举</label>
+              <label><input type="checkbox" name="q2_boundary_mix" value="B">业务规则与权限校验</label>
+              <label><input type="checkbox" name="q2_boundary_mix" value="C">结构化 trace/span 字段</label>
+              <label><input type="checkbox" name="q2_boundary_mix" value="D">只在 prompt 里说“请不要犯错”</label>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>应选 A、B、C。D 只是提示，不是边界。边界必须能被程序检查、记录和追踪。</p>
+              </details>
+            </div>
+            <div class="q full" data-question="q3_notify_fields" data-group="一、结构与语义" data-title="给一个“发送客户通知”的 Agent 设计最小结构化输出字段">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">design</span></div>
+              <h3>给一个“发送客户通知”的 Agent 设计最小结构化输出字段</h3>
+              <p>至少包含版本、动作、风险、是否需要人工确认和证据字段。</p>
+              <p class="solve-note">答题目标：字段要能直接给程序消费，不要只写“更谨慎一点”。</p>
+              <textarea name="q3_notify_fields" placeholder="写出字段名、类型、枚举或示例值。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>合格答案至少要写出 schema_version、decision、risk_level、requires_human_approval 和 evidence_fields 之类字段，并说明字段值域。重点是“能执行、能校验、能追踪”。</p>
+              </details>
+            </div>
+            <div class="q full" data-question="q4_refund_checks" data-group="一、结构与语义" data-title="合法 JSON 为什么还不能直接执行退款？">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">business validation</span></div>
+              <h3>合法 JSON 为什么还不能直接执行退款？</h3>
+              <p>请列出至少 4 个业务校验。</p>
+              <p class="solve-note">答题目标：至少覆盖权限、订单、金额、窗口和幂等键中的四项。</p>
+              <textarea name="q4_refund_checks" placeholder="例如：客户归属、订单状态、金额上限、幂等键……"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>可以写客户归属、订单状态、金额上限、退款窗口、幂等键、审批记录等。关键是要说明“合法 JSON ≠ 业务可执行”。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>二、追踪与恢复</h3>
+              <p>这组题看你会不会把 trace 和 Temporal 放到同一个恢复链上。</p>
+            </div>
+            <div class="quick-review">快速回顾：trace 负责定位，history 负责恢复。</div>
+          </div>
+        <div class="drill-grid">
+            <div class="q full" data-question="q5_trace_fields" data-group="二、追踪与恢复" data-title="一次结构化输出失败后，你会记录哪些 trace/span 属性？">
+              <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">trace</span></div>
+              <h3>一次结构化输出失败后，你会记录哪些 trace/span 属性？</h3>
+              <p>至少写 6 个字段。</p>
+              <label><input type="checkbox" name="q5_trace_fields" value="schema_version"> schema_version</label>
+              <label><input type="checkbox" name="q5_trace_fields" value="schema_name"> schema_name</label>
+              <label><input type="checkbox" name="q5_trace_fields" value="error_field"> error_field</label>
+              <label><input type="checkbox" name="q5_trace_fields" value="model_version"> model_version</label>
+              <label><input type="checkbox" name="q5_trace_fields" value="retry_count"> retry_count</label>
+              <label><input type="checkbox" name="q5_trace_fields" value="tool_name"> tool_name</label>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>这些字段里，至少要有 schema 名称、版本、失败字段、模型版本、重试次数和工具名。它们要能直接帮助你查“哪一步、哪一版、哪一类失败”。</p>
+              </details>
+            </div>
+            <div class="q full" data-question="q6_temporal_plan" data-group="二、追踪与恢复" data-title="为什么长任务恢复时不应该重新让模型生成计划？">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">replay</span></div>
+              <h3>为什么长任务恢复时不应该重新让模型生成计划？</h3>
+              <p>如何保存这个计划才更可靠？</p>
+              <p class="solve-note">答题目标：至少提到重放、确定性、Activity、副作用和幂等键中的三项。</p>
+              <textarea name="q6_temporal_plan" placeholder="从重放、确定性、Activity、副作用和幂等角度回答。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>重放时重新生成计划会引入不确定性，所以已接受的结构化决策应作为历史事实保存到 workflow 状态或事件历史里。外部副作用放到 Activity，并通过幂等键保护。</p>
+              </details>
+            </div>
+            <div class="q full" data-question="q7_rewrite_flow" data-group="二、追踪与恢复" data-title="把一句自然语言执行计划改造成可靠流程">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">flow rewrite</span></div>
+              <h3>把这句话改造成可靠流程：“模型判断用户应该退款，于是调用 refund API。”</h3>
+              <p class="solve-note">答题目标：写出结构化评估、schema 校验、业务校验、人工确认或幂等执行、trace 记录这条链。</p>
+              <textarea name="q7_rewrite_flow" placeholder="建议按：结构化评估 -> schema 校验 -> 业务校验 -> 人工确认/幂等执行 -> trace 记录。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>合格答案会把“模型说要退款”改成“先评估，再校验，再确认，最后执行”。如果风险高或权限不足，必须停在草稿或人工确认阶段。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>三、执行与接管</h3>
+              <p>这组题看你会不会把失败后的动作写成可执行分流。</p>
+            </div>
+            <div class="quick-review">快速回顾：不是所有失败都修复，有些应该直接拒绝或接管。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q8_version_field" data-group="三、执行与接管" data-title="哪个字段最该放进结构化输出里，作为版本钩子？">
+              <div class="q-meta"><span class="pill">fill</span><span class="pill">version</span></div>
+              <h3>哪个字段最该放进结构化输出里，作为版本钩子？</h3>
+              <input type="text" name="q8_version_field" data-answer="schema_version,agent.schema.version" placeholder="例如：schema_version">
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q" data-question="q9_gate_choice" data-group="三、执行与接管" data-title="哪一句最像可执行的门禁说明？"
+              data-answer="B" data-explain="门禁要说清样本、阈值和阻断条件，不能只有抽象原则。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">gate</span></div>
+              <h3>哪一句最像可执行的门禁说明？</h3>
+              <label><input type="radio" name="q9_gate_choice" value="A">回归总体不错，继续观察</label>
+              <label><input type="radio" name="q9_gate_choice" value="B">incident_regressions/* 必须通过，且 cost 和 latency 不能越线</label>
+              <label><input type="radio" name="q9_gate_choice" value="C">报告看起来还行，先发版</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q full" data-question="q10_handoff_rule" data-group="三、执行与接管" data-title="写一条最小可执行的人工接管规则">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">handoff</span></div>
+              <h3>写一条最小可执行的人工接管规则</h3>
+              <p>至少说明触发条件、接收人、暂停动作、以及需要附带的上下文。</p>
+              <p class="solve-note">答题目标：不是“找人处理”，而是写出谁接、接什么、先停什么。</p>
+              <textarea name="q10_handoff_rule" placeholder="写一条最小可执行的人工接管规则。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>合格答案要包括触发信号、值班或负责人、暂停哪个自动化路径、接管时要带哪些上下文。没有这些，就只是口号，不是流程。</p>
+              </details>
+            </div>
+            <div class="q" data-question="q11_terminal_state" data-group="三、执行与接管" data-title="哪个终端状态最像“修复后仍要继续拦住”">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">terminal</span></div>
+              <h3>哪个终端状态最像“修复后仍要继续拦住”？</h3>
+              <label><input type="radio" name="q11_terminal_state" value="A">ready_to_execute</label>
+              <label><input type="radio" name="q11_terminal_state" value="B">retry_or_repair</label>
+              <label><input type="radio" name="q11_terminal_state" value="C">blocked</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="terminal-check">
+        <div class="head">
+          <h2>终端检查</h2>
+          <span class="tag">terminal lab</span>
+        </div>
+        <p>这个小终端用来观察“验证通过 / 验证失败 / 进入重放”三种状态。你切换按钮时，应该能看到对应的边界结果。</p>
+        <div class="terminal-lab" data-terminal-lab>
+          <div class="terminal-controls">
+            <button class="ghost active" data-terminal-case="case-1">schema 通过</button>
+            <button class="ghost" data-terminal-case="case-2">schema 失败</button>
+            <button class="ghost" data-terminal-case="case-3">replay 复用</button>
+          </div>
+          <pre class="terminal-output" aria-live="polite">[schema] validation=passed
+[trace] agent.schema.validation=passed
+[decision] ready_to_execute</pre>
+          <template data-terminal-output="case-1">[schema] validation=passed
+[trace] agent.schema.validation=passed
+[decision] ready_to_execute</template>
+          <template data-terminal-output="case-2">[schema] validation=failed
+[trace] agent.schema.error_field=decision
+[decision] retry_or_repair</template>
+          <template data-terminal-output="case-3">[history] replay=true
+[activity] side_effect_not_executed
+[decision] reused_activity_result=true</template>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <p>导出会保留题目标题、你的答案和上面的核心复盘上下文。它的作用是把这页的边界判断带走，方便之后和 06、07、08 连起来复看。</p>
+        <div class="actions">
+          <button class="action" type="button" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" type="button" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">sources</span>
+        </div>
+        <p>以下链接按 2026-06-21 访问。这里的公开资料主要是为了核对边界概念和追踪语义，不是让你回去再读一遍全文。</p>
+        <ul class="source-list">
+          <li><a href="https://platform.openai.com/docs/guides/structured-outputs">OpenAI Structured Outputs</a>：结构化输出和 schema 边界。</li>
+          <li><a href="https://openai.github.io/openai-agents-python/tracing/">OpenAI Agents SDK Tracing</a>：trace、span、event 和 guardrail 边界。</li>
+          <li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">OpenTelemetry GenAI Semantic Conventions</a>：模型调用和指标语义。</li>
+          <li><a href="https://docs.temporal.io/workflows">Temporal Workflows</a> 与 <a href="https://docs.temporal.io/workflow-execution/event">Temporal Events and Event History</a>：恢复、回放、Activity 和副作用边界。</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

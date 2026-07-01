@@ -1,0 +1,1062 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>运行承载为什么重要</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="智能体运行承载工程" data-unit="01">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>智能体运行承载工程</strong>
+        <span>01</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#mechanism"><span class="dot"></span>核心机制</a>
+        <a href="#tools"><span class="dot"></span>工具与权限</a>
+        <a href="#state"><span class="dot"></span>状态与会话</a>
+        <a href="#trace"><span class="dot"></span>运行记录</a>
+        <a href="#example"><span class="dot"></span>例子</a>
+        <a href="#diagnosis"><span class="dot"></span>排查路径</a>
+        <a href="#migration"><span class="dot"></span>迁移边界</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#updates"><span class="dot"></span>更新信号</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">本页把学习目标压到能动手检查的最小闭环。先顺着主线读，再回头看状态表和追踪表。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">运行承载工程 · 第 01 单元</div>
+          <h1>运行承载为什么重要</h1>
+          <p>本页先把运行承载层说清楚。它负责把模型输出接成受控行动，管住工具权限、状态保存、恢复点和追踪记录。读完这一页，你应该能把一个智能体故障先分到“模型判断”“工具执行”还是“承载边界”三类里，再决定下一步看哪里。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../02_运行循环与控制边界/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页你应该能做什么</h3>
+          <ul>
+  <li>能画出模型、运行承载层、工具、状态和追踪之间的分工，不把所有责任都塞给提示词。</li>
+  <li>能读懂一段智能体循环伪代码，指出终止条件、工具回填、恢复点和副作用边界。</li>
+  <li>能为一个长任务列出最小状态表和追踪字段，判断哪里会重复写入、哪里会丢上下文。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goal</span>
+  </div>
+  <p>这一单元不讲模型训练，也不讲提示词技巧。它只回答一件事：当模型要连续调用工具、跨步骤保留上下文，并在失败后继续工作时，外层系统要守住哪些边界。</p>
+  <div class="table-wrap">
+    <table data-export-context="运行承载分工对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>主要负责</th>
+          <th>不负责</th>
+          <th>没做好时的症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>模型</td>
+          <td>理解目标、选择下一步、生成工具意图、解释结果。</td>
+          <td>权限隔离、持久状态、幂等写入、故障恢复。</td>
+          <td>答案看起来连贯，动作却不稳定。</td>
+        </tr>
+        <tr>
+          <td>运行承载层</td>
+          <td>调度循环、执行工具、保存状态、控制恢复、记录 trace。</td>
+          <td>直接替模型思考。</td>
+          <td>系统能说话，却接不住长任务。</td>
+        </tr>
+        <tr>
+          <td>工具</td>
+          <td>完成受限动作，例如读文件、查库、发请求、写入外部系统。</td>
+          <td>自己决定权限边界和恢复策略。</td>
+          <td>参数错、输出长、重试重复副作用。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="solve-note">你现在应该能做什么：拿到一段智能体描述时，先把模型、承载层和工具拆开，再讨论它为什么稳或不稳。</p>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">overview</span>
+  </div>
+  <p>这一页用一个固定的锚点例子：文档审阅智能体。它要读几份资料，调用检索或解析工具，把中间结果压缩后喂回模型，再决定下一步。这个例子足够小，能把分工看清，也足够大，能把恢复、状态和追踪的问题露出来。</p>
+  <p>外层要把一次行动变成可控流程。承载层接住的是意图、状态、工具结果和外部副作用。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" type="button" data-trace-step="step-1">
+        <code>用户输入 + 目标</code><span>任务边界</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="step-2">
+        <code>模型输出工具意图</code><span>要做什么</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="step-3">
+        <code>承载层执行工具</code><span>权限、超时、错误</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="step-4">
+        <code>状态 + trace + 副作用记录</code><span>能恢复、能排查</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="step-5">
+        <code>压缩后的下一轮输入</code><span>继续还是结束</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1">
+        <b>输入</b>
+        <span>用户目标、资料范围、允许访问的资源。</span>
+        <p>承载层先接住边界，再把消息送进模型。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-2">
+        <b>模型输出</b>
+        <span>工具名、参数、继续推理还是结束。</span>
+        <p>这里还只是意图，不代表动作已经发生。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-3">
+        <b>工具执行</b>
+        <span>参数校验、权限检查、超时、失败返回。</span>
+        <p>承载层决定这一步能不能做、做多久、做完回传什么。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-4">
+        <b>记录</b>
+        <span>checkpoint、call_id、error、latency、approval。</span>
+        <p>这些字段让中断恢复和排查变成可能。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-5">
+        <b>下一轮输入</b>
+        <span>摘要后的工具结果、状态变化、剩余目标。</span>
+        <p>外层把结果压缩成模型真正该看见的内容。</p>
+      </div>
+    </div>
+  </div>
+  <p class="solve-note">你现在应该能做什么：看到一条运行链时，先说清每一步是意图、执行、记录，还是回填，不要把它们混成一句“模型做完了”。</p>
+</section>
+
+<section id="mechanism">
+  <div class="head">
+    <h2>核心机制</h2>
+    <span class="tag">trace</span>
+  </div>
+  <p>运行循环是这门课的骨架。模型只负责输出下一步，承载层负责解释输出、决定是否执行工具、把工具结果回填，再判断是否继续。只要这层逻辑没定好，系统就会在无限循环、提前结束或者重复动作里打转。</p>
+  <div class="codebar"><span>外层循环伪代码</span><button class="copy" type="button" data-copy="loop-code">复制</button></div>
+  <pre id="loop-code" data-export-context="外层循环伪代码" data-export-lang="python"><code class="language-python">while turn_count &lt; max_turns:
+    model_output = call_model(agent, input_items, state)
+
+    if has_final_output(model_output) and not has_tool_calls(model_output):
+        return final_result(model_output)
+
+    if has_handoff(model_output):
+        agent = next_agent(model_output)
+        input_items = build_handoff_input(model_output)
+        continue
+
+    if has_tool_calls(model_output):
+        tool_results = run_tools_with_limits(model_output.tool_calls)
+        input_items = append_tool_results(input_items, tool_results)
+        continue
+
+raise MaxTurnsExceeded()</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="循环分支职责表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>分支</th>
+          <th>承载层在看什么</th>
+          <th>常见误解</th>
+          <th>真正的排查点</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>最终输出</td>
+          <td>有没有可交付的答案，且没有再要工具。</td>
+          <td>模型只要说“完成”就能结束。</td>
+          <td>先看是否还有未执行的工具意图。</td>
+        </tr>
+        <tr>
+          <td>交接</td>
+          <td>下一步是不是要换到别的智能体或处理器。</td>
+          <td>交接只是换个提示词前缀。</td>
+          <td>输入要重建，状态要带过去。</td>
+        </tr>
+        <tr>
+          <td>工具调用</td>
+          <td>参数、权限、超时、错误格式、回填长度。</td>
+          <td>把工具当成普通文本补充。</td>
+          <td>先看工具执行器，再看模型。</td>
+        </tr>
+        <tr>
+          <td>轮数上限</td>
+          <td>是否已经反复修正到失去收敛。</td>
+          <td>多跑几轮总会好。</td>
+          <td>看 max_turns 和失败重试策略。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="solve-note">你现在应该能做什么：打开一段智能体循环代码，先找结束条件、交接条件、工具回填和上限控制，再看谁在决定下一步。</p>
+</section>
+
+<section id="tools">
+  <div class="head">
+    <h2>工具与权限</h2>
+    <span class="tag">tools</span>
+  </div>
+  <p>工具面决定模型能做什么，也决定它不能做什么。一个稳的工具需要契约、限制、回传和追责四层约束；缺一层，长任务就很容易把错误放大成外部副作用。</p>
+  <div class="table-wrap">
+    <table data-export-context="工具契约与权限表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>层面</th>
+          <th>要写清楚的东西</th>
+          <th>对应的保护动作</th>
+          <th>错了会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>输入契约</td>
+          <td>字段、类型、必填项、默认值、错误格式。</td>
+          <td>结构化校验，失败早返回。</td>
+          <td>模型拼出来的半结构化文本被工具硬猜。</td>
+        </tr>
+        <tr>
+          <td>执行边界</td>
+          <td>超时、并发、重试、输出长度、资源上限。</td>
+          <td>限制每次调用的成本和时长。</td>
+          <td>一次工具调用拖垮整轮循环。</td>
+        </tr>
+        <tr>
+          <td>权限边界</td>
+          <td>工作空间、只读/可写范围、账户、网络。</td>
+          <td>把动作放进受限环境。</td>
+          <td>工具能碰到它不该碰的东西。</td>
+        </tr>
+        <tr>
+          <td>回填策略</td>
+          <td>摘要、来源、时间、版本、幂等键。</td>
+          <td>只把后续判断需要的部分送回模型。</td>
+          <td>全文回填把上下文塞满。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>工具结果回填示例</span><button class="copy" type="button" data-copy="tool-json">复制</button></div>
+  <pre id="tool-json" data-export-context="工具结果回填示例" data-export-lang="json"><code class="language-json">{
+  "source": "internal_doc_v3",
+  "timestamp": "2026-06-21T10:15:00+08:00",
+  "status": "ok",
+  "idempotency_key": "report-20260621-001",
+  "summary": "提取到 3 条结论，2 条待核对项"
+}</code></pre>
+  <p>这种回填更稳。模型下一轮看到的是来源、时间、状态和摘要，原文不会直接挤满上下文。它做判断时依然有上下文，但不会被噪声压住。</p>
+  <p class="solve-note">你现在应该能做什么：给一个工具写出输入契约、执行上限、权限范围和回填字段，而不是只给它一个函数名。</p>
+</section>
+
+<section id="state">
+  <div class="head">
+    <h2>状态与会话</h2>
+    <span class="tag">state</span>
+  </div>
+  <p>会话负责记住上下文，检查点负责记住执行位置。两者常常一起出现，但用途不同。前者帮模型理解“刚才说到哪了”，后者帮系统回答“任务已经走到哪一步了”。</p>
+  <div class="table-wrap">
+    <table data-export-context="状态类型与读写边界" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>状态类型</th>
+          <th>读取什么</th>
+          <th>写入什么</th>
+          <th>什么时候会过期</th>
+          <th>典型症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>对话状态</td>
+          <td>消息历史、摘要、用户偏好。</td>
+          <td>新消息、压缩后的摘要、目标说明。</td>
+          <td>上下文窗口被挤掉时。</td>
+          <td>模型忘了前文，但还在继续答。</td>
+        </tr>
+        <tr>
+          <td>任务状态</td>
+          <td>当前步骤、分支、等待点。</td>
+          <td>下一步、人工审批结果、子任务进度。</td>
+          <td>任务完成或被放弃时。</td>
+          <td>重启后不知道该接哪一步。</td>
+        </tr>
+        <tr>
+          <td>工具状态</td>
+          <td>调用 ID、参数、返回、错误、耗时。</td>
+          <td>调用记录、重试次数、结果摘要。</td>
+          <td>调用结束后仍要保留供排查。</td>
+          <td>只知道结果，不知道哪里出了错。</td>
+        </tr>
+        <tr>
+          <td>副作用状态</td>
+          <td>操作 ID、外部确认号、幂等键。</td>
+          <td>写库、发信、付款、文件改动的确认。</td>
+          <td>外部动作发生后立刻变成关键记录。</td>
+          <td>一重试就重复发信或重复写入。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>当系统要跨进程、跨等待、跨重启继续运行时，状态不能只存在线程内存里。内存变量适合当前轮推理，不适合恢复；检查点适合恢复，不适合替代工具契约。</p>
+  <p class="solve-note">你现在应该能做什么：看到一个状态表时，能区分哪些字段只给模型看，哪些字段要给恢复逻辑看，哪些字段必须保留给审计。</p>
+</section>
+
+<section id="trace">
+  <div class="head">
+    <h2>运行记录</h2>
+    <span class="tag">trace</span>
+  </div>
+  <p>最终答案通常不能解释失败。要排查智能体，得看它看到了什么、调用了什么、返回了什么、花了多久、在哪一步被拒绝、有没有重复执行副作用。trace 的作用，就是把这一串事件拆成能检查的层。</p>
+  <div class="table-wrap">
+    <table data-export-context="追踪字段与排查价值表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>字段</th>
+          <th>建议内容</th>
+          <th>能帮你看什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>run_id</td>
+          <td>一次完整运行的稳定编号。</td>
+          <td>把一整次任务串起来。</td>
+        </tr>
+        <tr>
+          <td>agent_version / model</td>
+          <td>版本号、模型名、发布时间。</td>
+          <td>判断是不是升级后变了行为。</td>
+        </tr>
+        <tr>
+          <td>tool_name / call_id</td>
+          <td>工具名、调用编号。</td>
+          <td>判断问题出在模型还是工具。</td>
+        </tr>
+        <tr>
+          <td>args / result 摘要</td>
+          <td>入参摘要、出参摘要、来源标记。</td>
+          <td>判断回填是否太长、来源是否混了。</td>
+        </tr>
+        <tr>
+          <td>error / timeout / retry_count</td>
+          <td>错误信息、超时、重试次数。</td>
+          <td>判断循环是否卡住或重复执行。</td>
+        </tr>
+        <tr>
+          <td>checkpoint_id / approval</td>
+          <td>检查点编号、人工批准状态。</td>
+          <td>判断恢复点和等待点是不是完整。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>好的运行记录只保留关键路径。出问题时能还原路径，才能分清该修模型、工具，还是承载边界。</p>
+  <p class="solve-note">你现在应该能做什么：为一次运行列出最小追踪字段，并说明其中两个字段分别帮你排查什么问题。</p>
+</section>
+
+<section id="failure-chain">
+  <div class="head">
+    <h2>一条完整故障链</h2>
+    <span class="tag">case</span>
+  </div>
+  <p>把运行承载层想清楚，最有效的方法不是再背一遍定义，而是看一条完整故障怎么一路走偏。还是用文档审阅智能体来演示：系统先进入人工批准等待，随后服务重启。恢复逻辑只知道当前停在 <code>waiting_at</code>，却不知道下一步动作和副作用状态。它重新回到 <code>send_email</code>，结果第二次发送被当成新动作，收件人收到重复邮件。</p>
+  <div class="table-wrap">
+    <table data-export-context="完整故障链读写表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>阶段</th>
+          <th>系统读什么</th>
+          <th>系统写什么</th>
+          <th>如果缺了会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>等待前</td>
+          <td>step、waiting_at</td>
+          <td>checkpoint、next_action</td>
+          <td>重启后只能回到“在等什么”，回不到“下一步做什么”。</td>
+        </tr>
+        <tr>
+          <td>副作用前</td>
+          <td>approval、operation_id</td>
+          <td>外部确认号、幂等键</td>
+          <td>重试时识别不出这是同一动作。</td>
+        </tr>
+        <tr>
+          <td>副作用后</td>
+          <td>result、error、retry_count</td>
+          <td>trace、状态摘要</td>
+          <td>只剩结果，不知道动作是否已经发生过。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>断点与副作用的位置</span><button class="copy" type="button" data-copy="failure-chain-code">复制</button></div>
+  <pre id="failure-chain-code" data-export-context="断点与副作用的位置" data-export-lang="python"><code class="language-python">if approval_ok:
+    checkpoint(step="before_send", waiting_at="approval_wait", next_action="send_email")
+    send_email(to=user_email, operation_id=operation_id)
+    checkpoint(step="after_send", result="sent", operation_id=operation_id)
+    trace("email_sent", operation_id=operation_id)</code></pre>
+  <p>这段顺序里最关键的点，是把恢复点放在副作用前面，把副作用结果写进可追踪状态里。只要 checkpoint 只记到等待点，没记 <code>next_action</code>，重启后就会回到错误分支；只要 <code>operation_id</code> 没进确认表，重试就可能被当成新动作。</p>
+  <p class="solve-note">你现在应该能做什么：看到“重启后重复执行”的故障时，先检查恢复点有没有覆盖 <code>next_action</code>，再检查幂等键有没有进入确认表。</p>
+</section>
+
+<section id="example">
+  <div class="head">
+    <h2>例子</h2>
+    <span class="tag">example</span>
+  </div>
+  <p>还是看同一个文档审阅智能体。它可能在三类地方出错：重复写副作用、回填太多噪声、重启后丢步骤。下面这组案例是为了让你把“故障现象”直接对到“承载层缺口”。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" type="button" data-terminal-case="case-1">重复发信</button>
+      <button class="ghost" type="button" data-terminal-case="case-2">上下文污染</button>
+      <button class="ghost" type="button" data-terminal-case="case-3">无法恢复</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">[run 01] send_email() completed
+[run 01] timeout while waiting for ack
+[run 01] retrying same side effect
+[warn] duplicate confirmation mail sent</pre>
+    <template data-terminal-output="case-1">[run 01] send_email() completed
+[run 01] timeout while waiting for ack
+[run 01] retrying same side effect
+[warn] duplicate confirmation mail sent</template>
+    <template data-terminal-output="case-2">[run 08] search_tool returned 18 pages of raw text
+[run 08] model input grew to 42k tokens
+[warn] source A and source B are now mixed in one reply</template>
+    <template data-terminal-output="case-3">[run 12] waiting for human approval
+[run 12] service restarted
+[error] no checkpoint found for step=approval_wait
+[hint] cannot resume because next step was only in memory</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="案例诊断与修法表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>现象</th>
+          <th>承载层缺口</th>
+          <th>先补什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>重试后同一客户收到两封确认邮件。</td>
+          <td>写操作没有幂等键，也没有外部确认状态。</td>
+          <td>先记录 operation_id 和确认号，再做恢复判断。</td>
+        </tr>
+        <tr>
+          <td>模型开始混淆来源，答复里塞进很多原文。</td>
+          <td>工具输出没有摘要、来源标记和长度上限。</td>
+          <td>先压缩工具结果，再把关键字段回填给模型。</td>
+        </tr>
+        <tr>
+          <td>人工审批一半时重启，系统不知道接哪一步。</td>
+          <td>等待点没有 checkpoint，任务状态只存在内存。</td>
+          <td>先保存当前步骤、等待点和下一步动作。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="solve-note">你现在应该能做什么：看到一个“系统不稳”的现象时，先问它是不是副作用、回填或恢复缺了一层，而不是先改提示词。</p>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见误区</h2>
+    <span class="tag">debug</span>
+  </div>
+  <p>下面这些问题经常被说成“智能体不行”，实际上更像是承载层没定住。它们会直接变成线上故障的缺口。</p>
+  <div class="table-wrap">
+    <table data-export-context="常见错误与修法表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>错误做法</th>
+          <th>表面症状</th>
+          <th>更稳的修法</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>用提示词代替权限。</td>
+          <td>看起来有约束，实际还是能乱读乱写。</td>
+          <td>把工具和工作空间限制写进程序层。</td>
+        </tr>
+        <tr>
+          <td>只保存最终答案。</td>
+          <td>出错时不知道问题出在模型、工具还是网络。</td>
+          <td>保存 run、tool、error 和状态变化。</td>
+        </tr>
+        <tr>
+          <td>把会话当恢复机制。</td>
+          <td>聊天历史还在，执行位置却丢了。</td>
+          <td>把检查点和会话分开设计。</td>
+        </tr>
+        <tr>
+          <td>工具输出全文回填。</td>
+          <td>上下文很快被噪声塞满。</td>
+          <td>只回填摘要、来源、版本和必要结果。</td>
+        </tr>
+        <tr>
+          <td>没有最大轮数。</td>
+          <td>循环卡在自我修正或反复重试。</td>
+          <td>设置轮数上限、超时和升级点。</td>
+        </tr>
+        <tr>
+          <td>重试写操作。</td>
+          <td>重复发信、重复扣款、重复提交。</td>
+          <td>先做幂等键和副作用确认，再谈重试。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这些误区都把外部动作、状态和记录当成了模型记忆的一部分。模型可以参与判断，但承载层要把边界定住。</p>
+  <p class="solve-note">你现在应该能做什么：看到“智能体不稳”的反馈时，先按权限、状态、恢复、回填、轮数、幂等六个方向排查。</p>
+</section>
+
+<section id="updates">
+  <div class="head">
+    <h2>更新信号与边界</h2>
+    <span class="tag">updates</span>
+  </div>
+  <p>公开更新里反复出现的词，基本都是这门课的信号：沙箱、工作空间、会话、检查点、恢复、追踪、版本迁移。它们说明智能体工程已经从“模型会说话”走向“系统能长期工作”。</p>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>沙箱与工作空间</h3>
+      <p>关注文件、目录、挂载和权限边界。这个层面决定动作在哪个世界里发生。</p>
+    </div>
+    <div class="box info">
+      <h3>会话与记忆</h3>
+      <p>关注消息、摘要和上下文压缩。这个层面决定模型还能记住什么。</p>
+    </div>
+    <div class="box warn">
+      <h3>恢复与编排</h3>
+      <p>关注 checkpoint、等待点、重试和人工介入。这个层面决定任务中断后怎么继续。</p>
+    </div>
+  </div>
+  <p>这一页先把循环、工具、状态和追踪放稳；外部协议、可靠性和版本迁移放到后面单元再展开。</p>
+  <p class="solve-note">你现在应该能做什么：读下一单元前，先把“这次讨论的是循环、工具、状态、追踪还是迁移”分清，再往下看。</p>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>操作桥接：把概念接到一个最小任务</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <p>把这一页真正落到工作里，可以从一个文档审阅智能体开始。它的目标很普通：读资料、提炼结论、保留来源、等待批准、再写入结果。这个任务之所以适合拿来练，是因为它同时包含可重放步骤和不可重复副作用，最容易看出承载层哪里该管、哪里不该管。</p>
+  <div class="table-wrap">
+    <table data-export-context="文档审阅智能体操作桥接表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>承载层做什么</th>
+          <th>要留下什么</th>
+          <th>如果漏掉会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1. 接收任务</td>
+          <td>分配 run_id，记录资料范围和权限。</td>
+          <td>任务编号、目标、允许访问的工作空间。</td>
+          <td>后面出了问题，找不到是哪一次运行。</td>
+        </tr>
+        <tr>
+          <td>2. 读资料</td>
+          <td>调用检索或解析工具，限制输出长度。</td>
+          <td>来源、时间、版本、摘要、置信度。</td>
+          <td>上下文被原文塞满，来源开始混。</td>
+        </tr>
+        <tr>
+          <td>3. 形成草稿</td>
+          <td>把工具结果压缩成下一轮输入。</td>
+          <td>草稿版本、引用列表、待核对点。</td>
+          <td>模型看见的是噪声，不是可判断信息。</td>
+        </tr>
+        <tr>
+          <td>4. 等待批准</td>
+          <td>写 checkpoint，记住停在哪一步。</td>
+          <td>step、waiting_at、next_action、approval 状态。</td>
+          <td>服务重启后接不上步骤。</td>
+        </tr>
+        <tr>
+          <td>5. 写外部系统</td>
+          <td>执行有副作用的动作时加幂等键。</td>
+          <td>operation_id、确认号、重试结果。</td>
+          <td>重试一次就可能写两次。</td>
+        </tr>
+        <tr>
+          <td>6. 运行复盘</td>
+          <td>保留 trace，按 run、tool、state 三层回看。</td>
+          <td>run_id、call_id、error、latency、checkpoint_id。</td>
+          <td>只剩最终答案，无法判断错在哪层。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>关键在每一步留下什么。如果你只记结果，不记来源和状态，后面就会把恢复、排查和审计混成一件事。只要把这六步写清楚，一个智能体方案能不能上生产，基本就有判断依据了。</p>
+  <div class="codebar"><span>最小上线清单</span><button class="copy" type="button" data-copy="launch-check">复制</button></div>
+  <pre id="launch-check" data-export-context="最小上线清单" data-export-lang="text"><code>1. 工作空间和权限边界写清楚
+2. tool 输入契约和超时写清楚
+3. run_id / call_id / checkpoint_id 写清楚
+4. 写操作加幂等键
+5. 工具结果只回填摘要和来源
+6. 版本变更前先做回归
+7. 出现等待点前先落 checkpoint</code></pre>
+  <p class="solve-note">你现在应该能做什么：把一个“能跑”的智能体需求改写成一份可检查的上线清单，里面至少要包含权限、状态、恢复、幂等和 trace。</p>
+</section>
+
+<section id="diagnosis">
+  <div class="head">
+    <h2>排查路径</h2>
+    <span class="tag">diagnosis</span>
+  </div>
+  <p>如果一个文档审阅智能体在重试后重复发信，先别从提示词改起。先复现同一条 run，再看是哪一个 tool call 触发了副作用，接着确认 checkpoint 是不是写在副作用之前，最后再看 operation_id 和 retry 策略有没有真正约束重复动作。</p>
+  <div class="codebar"><span>失败日志片段</span><button class="copy" type="button" data-copy="diagnosis-log">复制</button></div>
+  <pre id="diagnosis-log" data-export-context="失败日志片段" data-export-lang="text"><code>[run 42] step=send_notification
+[run 42] tool=send_email
+[run 42] timeout waiting_ack
+[run 42] retry=1
+[warn] duplicate confirmation mail</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="重复发信排查表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>排查顺序</th>
+          <th>看什么</th>
+          <th>说明什么</th>
+          <th>对应修法</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1. 复现 run</td>
+          <td>run_id、step、触发时机。</td>
+          <td>问题是不是稳定发生在同一步。</td>
+          <td>先固定一条最小复现路径。</td>
+        </tr>
+        <tr>
+          <td>2. 看 tool call</td>
+          <td>call_id、args、result、error。</td>
+          <td>是不是工具返回慢，还是调用参数有问题。</td>
+          <td>先缩短工具输出，再补结构化错误。</td>
+        </tr>
+        <tr>
+          <td>3. 看 checkpoint</td>
+          <td>checkpoint_id、waiting_at、next_action。</td>
+          <td>恢复点是不是在副作用之前。</td>
+          <td>把 checkpoint 写到外部动作前。</td>
+        </tr>
+        <tr>
+          <td>4. 看副作用</td>
+          <td>operation_id、确认号、幂等键。</td>
+          <td>重复动作有没有被显式识别。</td>
+          <td>让写操作先检查 operation_id。</td>
+        </tr>
+        <tr>
+          <td>5. 看 trace</td>
+          <td>latency、retry_count、版本号。</td>
+          <td>问题是不是升级或重试引起的。</td>
+          <td>版本回归和重试上限一起收紧。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这条路径的目标，是把“看起来像模型失误”的现象拆回承载层问题。重复发信往往要从恢复点、幂等键和重试策略一起查。提示词只能影响模型判断，不能阻止重复副作用。</p>
+  <p class="solve-note">你现在应该能做什么：拿到一条故障日志时，先找 run、tool、checkpoint、operation_id、trace，再决定先补哪一层。</p>
+</section>
+
+<section id="migration">
+  <div class="head">
+    <h2>迁移边界</h2>
+    <span class="tag">migration</span>
+  </div>
+  <p>这一页引用的公开资料都是可变的。只要 SDK 版本、release note、工具接口或者 checkpoint 结构一变，运行承载层的行为就可能跟着变。学习这部分时，不要只记住结论，要记住哪些字段必须重新核对。</p>
+  <div class="table-wrap">
+    <table data-export-context="迁移核对表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>变动项</th>
+          <th>先核对什么</th>
+          <th>为什么会影响承载层</th>
+          <th>上线前补什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>SDK 版本</td>
+          <td>Runner、会话、追踪和错误类型是否变了。</td>
+          <td>循环和记录入口可能换了。</td>
+          <td>更新回归任务和 shell 校验。</td>
+        </tr>
+        <tr>
+          <td>工具返回格式</td>
+          <td>来源、时间、状态、摘要字段是否还在。</td>
+          <td>回填字段变了，模型下一轮看到的东西就变了。</td>
+          <td>重新写工具契约和回填模板。</td>
+        </tr>
+        <tr>
+          <td>checkpoint 结构</td>
+          <td>step、waiting_at、next_action 是否还能恢复。</td>
+          <td>恢复分支依赖这些字段。</td>
+          <td>补恢复测试和断点恢复样例。</td>
+        </tr>
+        <tr>
+          <td>trace 语义</td>
+          <td>run_id、call_id、latency、error 是否仍可映射。</td>
+          <td>排查视图和审计字段会跟着受影响。</td>
+          <td>更新排查手册和日志脱敏规则。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>迁移时的最小检查</span><button class="copy" type="button" data-copy="migration-check">复制</button></div>
+  <pre id="migration-check" data-export-context="迁移时的最小检查" data-export-lang="text"><code>1. 先对照 release note
+2. 再核对工具返回字段
+3. 再核对 checkpoint 是否可恢复
+4. 再看 trace 字段是否还能映射
+5. 最后跑一遍重复副作用回归</code></pre>
+  <p>迁移时最容易犯的错，是只看“新 API 能不能编译”，却没看承载层有没有丢状态、丢幂等、丢 trace。编译通过不等于运行边界还稳，尤其是长任务和副作用动作，任何字段缺失都会变成真实故障。</p>
+  <p class="solve-note">你现在应该能做什么：遇到 SDK 或工具升级时，先拿这张表逐项核对，再决定要不要放行。</p>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>怎么答才算会</h3>
+    <p>先说清楚对象，再说边界，再说症状。选择题用来分辨责任归属，短答题用来补状态和恢复路径，开放题用来检查你能不能把这些东西连成一套。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>重点看你有没有把模型、承载层、工具、状态、追踪和副作用分开；有没有把会话和检查点分开；有没有把重试和幂等分开。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、概念辨析</h3>
+      <p>先确认你能把运行承载层和相邻概念分开。</p>
+    </div>
+    <div class="quick-review">答题时先想一句话：这一项是在“思考”、在“执行”，还是在“记录”。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1_runtime_role" data-group="概念辨析" data-title="运行承载层的职责" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">概念辨析</span></div>
+      <h3>1. 下列哪项最像运行承载层的职责？</h3>
+      <label><input type="radio" name="q1_runtime_role" value="A">让模型参数更大。</label>
+      <label><input type="radio" name="q1_runtime_role" value="B">调度模型、工具、状态、权限和记录。</label>
+      <label><input type="radio" name="q1_runtime_role" value="C">把最终回答写得更长。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q2_durable" data-group="概念辨析" data-title="会话和持久执行" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">概念辨析</span></div>
+      <h3>2. 只要保存聊天历史，就已经实现了可靠的持久执行。</h3>
+      <label><input type="radio" name="q2_durable" value="对">对</label>
+      <label><input type="radio" name="q2_durable" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q3_boundary" data-group="概念辨析" data-title="哪些属于承载层职责">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">概念辨析</span></div>
+      <h3>3. 下列哪些更像运行承载层应该直接负责的内容？</h3>
+      <label><input type="checkbox" name="q3_boundary" value="最大轮数">最大轮数</label>
+      <label><input type="checkbox" name="q3_boundary" value="工具超时">工具超时</label>
+      <label><input type="checkbox" name="q3_boundary" value="幂等键">幂等键</label>
+      <label><input type="checkbox" name="q3_boundary" value="情绪鼓励">给模型写更多情绪鼓励语句</label>
+      <details>
+        <summary>展开反馈</summary>
+        <p>应该保留的是最大轮数、工具超时和幂等键。它们都属于承载层的硬边界。情绪鼓励不会替代权限、状态或恢复。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>五、操作桥接</h3>
+      <p>把概念落到一份最小上线清单上。</p>
+    </div>
+    <div class="quick-review">这组题只看一件事：你能不能把步骤、状态和副作用串起来。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q13_launch_order" data-group="操作桥接" data-title="最先补哪一层">
+      <div class="q-meta"><span class="pill">scenario transfer</span><span class="pill">操作桥接</span></div>
+      <h3>13. 一个文档审阅智能体已经能跑通，但上线后经常重试。你最先补哪一层，为什么？</h3>
+      <p class="solve-note">参考答案应该先说幂等键或副作用确认，再说为什么不是先堆更多提示词。</p>
+      <textarea name="q13_launch_order" placeholder="建议写成：先补什么 / 为什么 / 先看哪几个字段。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案会先补幂等键和副作用确认，因为重试导致重复写入是最危险的外部后果。其次才是补 trace 和 checkpoint。提示词只能影响模型判断，不能阻止重复副作用。</p>
+      </details>
+    </div>
+    <div class="q" data-question="q14_bridge_fields" data-group="操作桥接" data-title="桥接里哪些字段最关键">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">操作桥接</span></div>
+      <h3>14. 在文档审阅智能体的上线清单里，下列哪些字段必须保留？</h3>
+      <label><input type="checkbox" name="q14_bridge_fields" value="run_id">run_id</label>
+      <label><input type="checkbox" name="q14_bridge_fields" value="checkpoint_id">checkpoint_id</label>
+      <label><input type="checkbox" name="q14_bridge_fields" value="operation_id">operation_id</label>
+      <label><input type="checkbox" name="q14_bridge_fields" value="按钮颜色">按钮颜色</label>
+      <details>
+        <summary>展开反馈</summary>
+        <p>应保留 run_id、checkpoint_id 和 operation_id。按钮颜色不影响恢复、幂等或排查。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>六、故障排查</h3>
+      <p>把重复发信这类故障拆回 run、tool、checkpoint 和幂等键。</p>
+    </div>
+    <div class="quick-review">先找哪一步发生了副作用，再找为什么会重试。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q15_diag_order" data-group="故障排查" data-title="排查顺序" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">故障排查</span></div>
+      <h3>15. 重复发信后，哪一种排查顺序最合理？</h3>
+      <label><input type="radio" name="q15_diag_order" value="A">先复现 run，再看 tool call、checkpoint、operation_id 和 trace。</label>
+      <label><input type="radio" name="q15_diag_order" value="B">先改按钮颜色，再加长提示词。</label>
+      <label><input type="radio" name="q15_diag_order" value="C">先把所有日志都删掉。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q full" data-question="q16_diag_steps" data-group="故障排查" data-title="先查哪三项">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">故障排查</span></div>
+      <h3>16. 用三句话写出你对“重复发信”故障的第一轮排查，要求包含至少三个字段名。</h3>
+      <p class="solve-note">参考答案要先讲顺序，再讲字段，再讲为什么这些字段能定位副作用重复。</p>
+      <textarea name="q16_diag_steps" placeholder="建议写成：先看...，再看...，最后看..."></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案通常会先复现 run，再看 tool call、checkpoint、operation_id 和 retry_count，最后把结果和 trace 对齐。重点不是记住某个字段名字，而是知道先确认副作用在哪里发生，再确认为什么会重复。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、循环与工具</h3>
+      <p>看伪代码时，先找停机条件，再找工具回填，再找异常分支。</p>
+    </div>
+    <div class="quick-review">把“执行工具”和“把结果交给模型”分成两步想。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q4_loop_stop" data-group="循环与工具" data-title="哪一项控制停机" data-answer="A">
+      <div class="q-meta"><span class="pill">code reading</span><span class="pill">循环与工具</span></div>
+      <h3>4. 在外层循环伪代码里，哪一项直接防止无限循环？</h3>
+      <label><input type="radio" name="q4_loop_stop" value="A">turn_count &lt; max_turns</label>
+      <label><input type="radio" name="q4_loop_stop" value="B">append_tool_results</label>
+      <label><input type="radio" name="q4_loop_stop" value="C">next_agent(model_output)</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q5_idempotency" data-group="循环与工具" data-title="工具结果回填前要保留什么">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">循环与工具</span></div>
+      <h3>5. 工具结果回填给模型前，至少应该保留来源、时间或版本、错误状态，以及 ______。</h3>
+      <input type="text" name="q5_idempotency" data-answer="幂等键,idempotency key,operation id,操作 id,操作ID" placeholder="写一个关键字段">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q full" data-question="q6_tool_noise" data-group="循环与工具" data-title="为什么全文回填会出问题">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">循环与工具</span></div>
+      <h3>6. 用“读了什么 / 写了什么 / 会造成什么问题”解释为什么工具输出全文回填会污染后续推理。</h3>
+      <p class="solve-note">参考答案里至少要提到两件事：回填目标是给下一轮判断用，不是把原始数据原封不动塞回去；全文会让上下文变长、来源变混、关键信息变稀。</p>
+      <textarea name="q6_tool_noise" placeholder="建议从来源、长度、噪声、后续判断四个角度回答。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案会说明：工具返回的原始内容往往太长，模型下一轮真正需要的是来源、版本、时间、状态和摘要。全文回填会把上下文窗口塞满，还可能把多个来源混在一起，导致后续判断失真。更稳的做法是先压缩，再回填必要字段。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、状态与恢复</h3>
+      <p>把“上下文还在”与“任务还能继续”分开。</p>
+    </div>
+    <div class="quick-review">恢复题先写步骤号，再写 checkpoint，再写副作用确认。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q7_state_type" data-group="状态与恢复" data-title="哪一项属于任务状态" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">状态与恢复</span></div>
+      <h3>7. 以下哪一项更像任务状态，而不是对话状态？</h3>
+      <label><input type="radio" name="q7_state_type" value="A">用户的长期偏好。</label>
+      <label><input type="radio" name="q7_state_type" value="B">当前等待人工批准的步骤号。</label>
+      <label><input type="radio" name="q7_state_type" value="C">模型的温度参数。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q8_checkpoint" data-group="状态与恢复" data-title="恢复时要补哪些记录">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">状态与恢复</span></div>
+      <h3>8. 一个长任务在等待人工批准时服务重启，系统不知道该继续哪一步。应该补哪些记录？</h3>
+      <label><input type="checkbox" name="q8_checkpoint" value="thread_id">thread_id / run_id</label>
+      <label><input type="checkbox" name="q8_checkpoint" value="checkpoint">checkpoint_id</label>
+      <label><input type="checkbox" name="q8_checkpoint" value="waiting">等待点和下一步动作</label>
+      <label><input type="checkbox" name="q8_checkpoint" value="model_size">模型参数规模</label>
+      <details>
+        <summary>展开反馈</summary>
+        <p>应该保留 thread_id 或 run_id、checkpoint_id、等待点和下一步动作。模型参数规模不是恢复所需信息。</p>
+      </details>
+    </div>
+    <div class="q full" data-question="q9_checkpoint" data-group="状态与恢复" data-title="设计一个最小 checkpoint 记录">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">状态与恢复</span></div>
+      <h3>9. 设计一个最小 checkpoint 记录，至少写出 4 个字段，并说明哪一个字段负责恢复分支。</h3>
+      <p class="solve-note">评分时看四件事：有没有任务编号、步骤号、等待点、下一步动作；有没有说明哪个字段决定恢复分支；有没有提到副作用确认。</p>
+      <textarea name="q9_checkpoint" placeholder="建议写成字段列表，再补一段恢复说明。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案至少包含 task_id / run_id、step、waiting_at、next_action、effect_status 这类字段。负责恢复分支的通常是 step 或 waiting_at，因为它告诉系统当前停在哪一步，应该往哪条路径继续。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、追踪与上线判断</h3>
+      <p>看见失败先找 trace，再想版本，最后才是提示词。</p>
+    </div>
+    <div class="quick-review">把“能复现”当成最低要求，把“能定位”当成目标。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q10_trace_fields" data-group="追踪与上线判断" data-title="哪组字段最有排查价值" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">追踪与上线判断</span></div>
+      <h3>10. 哪一组字段最适合排查一次工具调用到底是模型错了还是工具错了？</h3>
+      <label><input type="radio" name="q10_trace_fields" value="A">tool_name、call_id、args 摘要、result 摘要、error</label>
+      <label><input type="radio" name="q10_trace_fields" value="B">用户头像、页面配色、按钮圆角</label>
+      <label><input type="radio" name="q10_trace_fields" value="C">模型的所有原始 token</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q11_version_fields" data-group="追踪与上线判断" data-title="版本升级后先看什么">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">追踪与上线判断</span></div>
+      <h3>11. 当版本升级后行为变化，先看哪两个字段？</h3>
+      <input type="text" name="q11_version_fields" data-answer="agent_version,model,tool_version,版本,model version" placeholder="写两个最先要看的字段">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q full" data-question="q12_launch_check" data-group="追踪与上线判断" data-title="上线前检查清单">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">追踪与上线判断</span></div>
+      <h3>12. 给一个“文档审阅智能体”写一份 120 字以内的上线前检查清单。</h3>
+      <p class="solve-note">参考答案要覆盖至少三类内容：权限或工作空间、状态或恢复、追踪或版本。重点是能执行，不是写得好看。</p>
+      <textarea name="q12_launch_check" placeholder="建议用清单形式写，先边界后记录。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案会提到工作空间或权限边界、checkpoint 或副作用确认、run_id / call_id / version / error 之类的追踪字段。最好还能补一句：重试前先看幂等键，升级后先做回归。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li>
+    <b>OpenAI Agents SDK 文档</b>
+    <p>用来理解运行循环、工具执行、会话、沙箱工作空间和追踪这些词各自负责什么。访问日期：2026-06-21。<a href="https://openai.github.io/openai-agents-python/">官方文档</a></p>
+  </li>
+  <li>
+    <b>OpenAI Agents SDK 发布记录</b>
+    <p>用来观察沙箱、持久工作空间、快照、恢复和版本变化的工程方向。访问日期：2026-06-21。<a href="https://openai.github.io/openai-agents-python/release/">发布与变更说明</a></p>
+  </li>
+  <li>
+    <b>LangGraph Durable Execution</b>
+    <p>用来理解检查点、线程标识、恢复和副作用隔离。访问日期：2026-06-21。<a href="https://docs.langchain.com/oss/python/langgraph/durable-execution">持久执行文档</a></p>
+  </li>
+  <li>
+    <b>Temporal 文档</b>
+    <p>用来补充长运行工作流、崩溃恢复和工作流/活动拆分的通用语义。访问日期：2026-06-21。<a href="https://docs.temporal.io/">平台文档</a></p>
+  </li>
+  <li>
+    <b>MCP 规范</b>
+    <p>用来理解外部工具、资源、传输、授权和协议边界。访问日期：2026-06-21。<a href="https://modelcontextprotocol.io/specification">规范入口</a></p>
+  </li>
+  <li>
+    <b>OpenTelemetry GenAI 语义约定</b>
+    <p>用来设计 trace、span、输入输出、成本和排查字段。访问日期：2026-06-21。<a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">语义约定</a></p>
+  </li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

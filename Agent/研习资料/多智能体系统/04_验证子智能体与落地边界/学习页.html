@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>验证子智能体与落地边界</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="多智能体系统" data-unit="04｜验证子智能体与落地边界">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>多智能体系统</strong>
+        <span>04｜验证子智能体与落地边界</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>课程地图</a>
+        <a href="#goal"><span class="dot"></span>学习目标</a>
+        <a href="#verifier"><span class="dot"></span>验证职责</a>
+        <a href="#blackbox"><span class="dot"></span>黑盒验证</a>
+        <a href="#criteria"><span class="dot"></span>验证标准</a>
+        <a href="#early"><span class="dot"></span>早期胜利</a>
+        <a href="#report"><span class="dot"></span>验证报告</a>
+        <a href="#flow"><span class="dot"></span>验证回路</a>
+        <a href="#diagnosis"><span class="dot"></span>失败诊断</a>
+        <a href="#bridge"><span class="dot"></span>交接桥</a>
+        <a href="#applications"><span class="dot"></span>适用场景</a>
+        <a href="#check"><span class="dot"></span>采用清单</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#example"><span class="dot"></span>示例</a>
+        <a href="#boundary"><span class="dot"></span>落地边界</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">验证子智能体只做黑盒检查；标准要具体，报告要写出未执行项，放行前先看边界。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">验证与放行</div>
+          <h1>验证子智能体与落地边界</h1>
+          <p>这一页收束这门课最后一个判断：当主智能体已经能做事时，什么情况下值得再拆出一个验证子智能体，什么情况下先停在单体基线更稳。你会把验证、负例、未执行项和放行边界写清楚，最后能判断“通过”到底是不是可证明的通过。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a>
+        <a href="../03_并行化与专业化/学习页.html">上一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+  <li>能说清验证子智能体只负责检查，不负责重新实现，也不负责参与主流程的解释。</li>
+  <li>能把“看看是否正常”改成可执行的验证标准，至少包含完整测试、边界输入和负例。</li>
+  <li>能写出一个带未执行项、失败项和放行判断的验证报告，并据此判断是否该回退。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goal">
+  <div class="head"><h2>0. 学习目标</h2><span class="tag">goal</span></div>
+  <p>这一页只回答一个工程判断：主智能体已经能跑起来以后，什么情况下值得再拆一个验证子智能体，什么情况下先停在单体基线更稳。你需要先看懂验证为什么适合黑盒检查，再把标准写成可执行清单，接着识别早期胜利问题，最后判断多智能体到底是在放大质量，还是在增加表面通过的错觉。</p>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>先看职责</h3>
+      <p>验证者只读产出和标准，不参与实现过程。</p>
+    </div>
+    <div class="box soft">
+      <h3>再看标准</h3>
+      <p>标准要能跑、能测、能报告，不能只写一句“看看是否正常”。</p>
+    </div>
+    <div class="box soft">
+      <h3>最后看边界</h3>
+      <p>能说清什么时候放行，什么时候回退到单智能体或自动测试。</p>
+    </div>
+  </div>
+</section>
+
+<section id="verifier">
+  <div class="head"><h2>1. 验证子智能体负责什么</h2><span class="tag">verifier</span></div>
+  <p>验证子智能体的职责很窄：测试或验证主智能体的产出。它不负责重新规划，不负责顺手改代码，也不负责替主智能体解释为什么这样做。职责窄反而是优势，因为验证通常只需要输入、输出、规格和检查标准，不需要完整的实现历史。</p>
+  <p>这类拆分有一个好处：主智能体可以继续保留复杂上下文，验证子智能体只拿外部可观察的结果来判定。只要它能回答“结果是否满足规格、测试是否真的跑过、边界情况是否覆盖、该失败的输入有没有失败”，它就可以独立工作。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="artifact">
+        <code>读产出</code><span>只读取最终代码、文档或结构化结果</span>
+      </button>
+      <button class="trace-line" data-trace-step="criteria">
+        <code>对标准</code><span>把规格、测试和规则逐项对齐</span>
+      </button>
+      <button class="trace-line" data-trace-step="check">
+        <code>做检查</code><span>跑完整检查，包含边界和负例</span>
+      </button>
+      <button class="trace-line" data-trace-step="report">
+        <code>报结果</code><span>列出失败项、未执行项和放行判断</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="artifact">
+        <b>输入</b><span>读：主智能体产出</span><p>写：可检查的对象。症状：如果还要追问实现过程，说明边界不够干净。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="criteria">
+        <b>标准</b><span>读：规格、测试、schema、规则</span><p>写：一组明确检查项。症状：如果标准仍然模糊，验证者会偷懒到只测成功路径。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="check">
+        <b>检查</b><span>读：产出与标准</span><p>写：通过、失败、未执行三类结果。症状：如果只写“基本正常”，早期胜利就会出现。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="report">
+        <b>回传</b><span>读：所有检查结果</span><p>写：下一步是否放行。症状：如果没写未执行项，读者会把没测过的部分误读成通过。</p>
+      </div>
+    </div>
+  </div>
+  <div class="codebar"><span class="label">验证子智能体伪代码</span><button class="copy" data-copy="verifier-code">复制</button></div>
+  <pre id="verifier-code" data-export-context="验证子智能体伪代码" data-export-lang="python"><code class="language-python">verifier.run(
+    artifact="主智能体生成的代码、文档或结构化结果",
+    criteria=[
+        "运行完整测试套件",
+        "检查 lint 和类型错误",
+        "验证输出 schema",
+        "尝试边界输入和负例",
+        "列出所有失败项和未执行项"
+    ]
+)</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="验证读写矩阵" data-export-lang="table">
+      <thead>
+        <tr><th>步骤</th><th>主要读取什么</th><th>主要写出什么</th><th>如果做错会怎样</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>读产出</td><td>最终代码、报告、schema 或结果文件。</td><td>待验证对象。</td><td>如果把实现历史也背进来，验证者会跟着参与实现。</td></tr>
+        <tr><td>对标准</td><td>规格、测试、约束和规则。</td><td>检查清单。</td><td>如果标准只有一句“看看能不能用”，验证者会偷懒。</td></tr>
+        <tr><td>做检查</td><td>对象和检查清单。</td><td>通过、失败、未执行三类结果。</td><td>如果只测成功路径，早期胜利就会发生。</td></tr>
+        <tr><td>报结果</td><td>完整检查记录。</td><td>可放行或需回退的判断。</td><td>如果没写未执行项，读者会误以为全部都通过了。</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="blackbox">
+  <div class="head"><h2>2. 为什么黑盒验证有效</h2><span class="tag">blackbox</span></div>
+  <p>黑盒验证的意思很直接：验证者不依赖完整实现过程，只根据外部可观察行为判断结果。软件里，它看测试、lint、类型检查和 schema；内容里，它看引用、事实和格式；流程里，它看是否满足交付条件。只要结果可观察，验证就不必知道每一步是怎么写出来的。</p>
+  <p>这也是验证子智能体适合拆出来的根本原因。它的上下文可以比主智能体短得多，不需要带着所有历史权衡一起走。上下文少了，验证者就更像测试系统，而不是又一个会点头的聊天者。</p>
+  <div class="table-wrap">
+    <table data-export-context="黑盒验证适用表" data-export-lang="table">
+      <thead>
+        <tr><th>场景</th><th>验证者读什么</th><th>不该读什么</th><th>常见失败症状</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>代码检查</td><td>测试输出、lint 结果、类型错误、schema。</td><td>实现时的每次重构原因。</td><td>验证者开始替实现者找理由。</td></tr>
+        <tr><td>文档核对</td><td>引用、事实、格式和政策规则。</td><td>长篇写作过程。</td><td>最后只剩“读起来顺”这种主观判断。</td></tr>
+        <tr><td>流程放行</td><td>是否满足交付条件、权限条件、审批条件。</td><td>无关的中间草稿。</td><td>没有正式条件，却口头宣布通过。</td></tr>
+        <tr><td>结果比对</td><td>输入、输出和预期差异。</td><td>内部思考链路。</td><td>把调试过程误当成验证结果。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span class="label">黑盒检查模板</span><button class="copy" data-copy="blackbox-prompt">复制</button></div>
+  <pre id="blackbox-prompt" data-export-context="黑盒检查模板" data-export-lang="text"><code class="language-text">请只根据外部产出做检查，不要参与实现。
+检查项：
+1. 跑完整测试套件。
+2. 检查边界输入和负例。
+3. 报告所有失败项和未执行项。
+4. 任何未执行的检查都不能默认通过。
+输出格式：
+- 通过项
+- 失败项
+- 未执行项
+- 放行判断</code></pre>
+</section>
+
+<section id="criteria">
+  <div class="head"><h2>3. 验证标准要具体到能执行</h2><span class="tag">criteria</span></div>
+  <p>验证质量，最先看的是标准写得够不够硬。模糊标准会把验证者推向捷径。比如“检查这个功能是否正常”太松，它很可能只跑一个成功样例就宣布通过。更好的标准是把范围、动作和报告都写出来，连没有执行的检查也要列出来。</p>
+  <p>好的验证标准通常分成四类：具体标准、全面检查、负例测试、明确禁止偷懒。只要其中一类缺位，验证者就容易把“看起来可以”误读成“已经稳定可用”。</p>
+  <div class="table-wrap">
+    <table data-export-context="验证标准对照表" data-export-lang="table">
+      <thead>
+        <tr><th>标准类型</th><th>好写法</th><th>差写法</th><th>风险</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>具体标准</td><td>运行完整测试套件，并报告所有失败。</td><td>看看能不能跑。</td><td>语句过松，验证者会偷懒。</td></tr>
+        <tr><td>全面检查</td><td>覆盖正常、边界、异常和权限场景。</td><td>试一两个例子。</td><td>覆盖面太窄，隐藏问题会留下来。</td></tr>
+        <tr><td>负例测试</td><td>输入无效参数，确认系统拒绝。</td><td>只测成功路径。</td><td>很多问题只在失败输入上露出来。</td></tr>
+        <tr><td>禁止偷懒</td><td>未完成全部检查前不得标记通过。</td><td>通过了就说一声。</td><td>早期胜利会直接被放行。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span class="label">可执行验证指令</span><button class="copy" data-copy="criteria-prompt">复制</button></div>
+  <pre id="criteria-prompt" data-export-context="可执行验证指令" data-export-lang="text"><code class="language-text">请运行完整测试套件，报告所有失败。
+额外测试：空输入、超长输入、权限不足、网络失败。
+如果任何检查未执行，请不要标记通过。
+输出格式：通过项、失败项、未执行项、复现步骤。</code></pre>
+  <p>你现在应该能做什么：把“检查一下”改写成一份具体到动作的验证清单，而不是一段礼貌但空洞的话。</p>
+</section>
+
+<section id="early">
+  <div class="head"><h2>4. 最大失败模式：早期胜利问题</h2><span class="tag">early victory</span></div>
+  <p>验证子智能体最容易犯的错，是跑了一两个测试，看到通过，就提前宣布成功。问题不在于它“还不够认真”，而在于规则没写死。只要完整测试、边界输入、负例和报告格式没有被强制列出，早期胜利就会变成默认行为。</p>
+  <p>要压住这个问题，最有效的方法不是加一点耐心，而是把“必须做什么”写成顺序明确的检查链。只跑成功路径不够，必须让验证者把没做的事情也写出来。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1">只跑成功路径</button>
+      <button class="ghost" data-terminal-case="case-2">补上完整测试</button>
+      <button class="ghost" data-terminal-case="case-3">完整检查并放行</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">只跑成功路径：还不能宣布通过。没有边界、负例和未执行项，验证结论不成立。</pre>
+    <template data-terminal-output="case-1">只跑成功路径：还不能宣布通过。没有边界、负例和未执行项，验证结论不成立。</template>
+    <template data-terminal-output="case-2">补上完整测试：核心检查开始完整了，但还要确认边界输入和未执行项都写进报告。</template>
+    <template data-terminal-output="case-3">完整检查并放行：成功路径、完整测试、边界、负例和报告都覆盖了，可以进入下一步。</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="早期胜利症状表" data-export-lang="table">
+      <thead>
+        <tr><th>观察到什么</th><th>问题在哪里</th><th>应该怎么改</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>只跑一个正常例子就通过。</td><td>验证标准太松。</td><td>强制完整测试和负例。</td></tr>
+        <tr><td>报告里没有未执行项。</td><td>没测过的内容被默认通过。</td><td>把未执行项单独列出来。</td></tr>
+        <tr><td>边界输入没测。</td><td>成功路径掩盖了脆弱点。</td><td>补空输入、超长输入、权限不足等边界。</td></tr>
+        <tr><td>结论只写“基本正常”。</td><td>没有可复现的判断依据。</td><td>写出通过项、失败项、复现步骤和放行判断。</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="report">
+  <div class="head"><h2>5. 验证报告必须写出没做什么</h2><span class="tag">report</span></div>
+  <p>可靠验证不是一句“通过”就够了。报告至少要让读者看出四件事：检查了什么、怎么检查、哪些通过、哪些没做。特别是未执行项，它能直接暴露验证盲区。没有这部分，读者很容易把“没测过”当成“没问题”。</p>
+  <p>所以验证报告最好写成结构化格式，而不是自由发挥。结构化不是为了显得正式，而是为了让主智能体可以继续判断下一步应该修哪里、补哪里、回退到哪里。</p>
+  <div class="codebar"><span class="label">验证报告模板</span><button class="copy" data-copy="report-template">复制</button></div>
+  <pre id="report-template" data-export-context="验证报告模板" data-export-lang="text"><code class="language-text">验证结论：通过 / 不通过 / 无法判断
+
+已执行检查：
+- 检查项：
+  方法：
+  结果：
+  证据：
+
+失败项：
+- 失败描述：
+  复现步骤：
+  可能影响：
+  建议修复位置：
+
+未执行项：
+- 未执行原因：
+  需要补充的环境、权限或数据：
+
+放行判断：
+- 是否允许放行：
+- 如果不允许，阻塞原因：</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="报告字段表" data-export-lang="table">
+      <thead>
+        <tr><th>字段</th><th>作用</th><th>不写会怎样</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>验证结论</td><td>告诉主智能体能否继续。</td><td>读者只看到细节，不知道是否阻塞。</td></tr>
+        <tr><td>已执行检查</td><td>证明验证不是主观感觉。</td><td>无法复现检查过程。</td></tr>
+        <tr><td>失败项</td><td>指出具体修复目标。</td><td>主智能体只能猜哪里坏了。</td></tr>
+        <tr><td>未执行项</td><td>暴露验证盲区。</td><td>没测的内容被误认为通过。</td></tr>
+        <tr><td>放行判断</td><td>把失败和阻塞程度连起来。</td><td>小问题和阻塞问题混在一起。</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="flow">
+  <div class="head"><h2>6. 验证回路：从请求到放行</h2><span class="tag">flow</span></div>
+  <p>验证子智能体真正有用的地方，不是“多一个角色”，而是把验证回路做短做硬。主智能体先给出产出，验证子智能体只看产出和标准，最后把结果压成可以决策的报告。这个回路一旦拉长，就会重新回到传话游戏：实现者解释自己、验证者追问自己、主智能体再补上下文，最后没人真的在做检查。</p>
+  <p>把它拆成四步看会更清楚。第一步是准备验证对象，只保留最终结果和必要的规格；第二步是执行检查，完整测试、边界和负例都要覆盖；第三步是写报告，把通过、失败、未执行分开；第四步是决定放行或回退。每一步都只做自己该做的那部分，才不会把验证者变成另一个实现者。</p>
+  <div class="table-wrap">
+    <table data-export-context="验证回路表" data-export-lang="table">
+      <thead>
+        <tr><th>步骤</th><th>读什么</th><th>写什么</th><th>常见失败症状</th><th>修法</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>准备对象</td><td>最终产出、规格、测试入口。</td><td>验证范围。</td><td>把实现过程也带进去，范围开始膨胀。</td><td>只保留验证必须知道的最小字段。</td></tr>
+        <tr><td>执行检查</td><td>检查清单、边界输入、负例。</td><td>通过、失败、未执行。</td><td>只测成功路径，验证者急着放行。</td><td>把负例和边界写成强制步骤。</td></tr>
+        <tr><td>生成报告</td><td>完整检查记录和证据。</td><td>可复现的结论。</td><td>只写“基本正常”，看不出哪里没测。</td><td>把未执行项和复现步骤单独列出。</td></tr>
+        <tr><td>决定放行</td><td>报告、失败项、成本和回退条件。</td><td>放行或回退决策。</td><td>有失败还硬放行，或不清楚何时回退。</td><td>把阻塞项和停止线提前写好。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span class="label">验证回路伪代码</span><button class="copy" data-copy="flow-code">复制</button></div>
+  <pre id="flow-code" data-export-context="验证回路伪代码" data-export-lang="python"><code class="language-python">artifact = lead_agent.build(task)
+
+verification_plan = {
+    "checks": [
+        "run full test suite",
+        "cover edge inputs",
+        "cover negative inputs",
+        "check schema or policy rules"
+    ],
+    "report": [
+        "passed items",
+        "failed items",
+        "not executed items",
+        "evidence"
+    ],
+    "stop_rules": [
+        "any blocking failure",
+        "any skipped required check",
+        "cost exceeds trial budget",
+        "summary keeps expanding without new evidence"
+    ]
+}
+
+report = verifier.run(artifact, verification_plan)
+
+if report.blocking_failures:
+    return lead_agent.repair(report)
+if report.not_executed:
+    return lead_agent.fill_gaps(report)
+return lead_agent.release(report)</code></pre>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>回路里的三种信号</h3>
+      <ul>
+        <li>通过项说明当前检查已经满足最低门槛，但不代表可以放弃报告中的其他字段。</li>
+        <li>失败项说明系统需要修正，主智能体应该回到具体问题，而不是重新讲故事。</li>
+        <li>未执行项说明验证还没有闭环，没测过的内容不能被自动视为没问题。</li>
+      </ul>
+    </div>
+    <div class="box warn">
+      <h3>回路里最容易坏的地方</h3>
+      <p>最常见的坏法有三个：一是验证者把对象带得太多，变成实现者的影子；二是检查写得太松，成功路径一通过就想结束；三是报告没写未执行项，结果读者误判放行条件。只要这三点任何一个没收住，验证回路就又会变长。</p>
+    </div>
+  </div>
+</section>
+
+<section id="diagnosis">
+  <div class="head"><h2>7. 失败诊断：验证放行为什么会错</h2><span class="tag">diagnosis</span></div>
+  <p>最常见的失败，不是验证者完全没干活，而是它只干了最容易干的那一小段。比如主智能体做了一个 CSV 导入功能，验证者先跑正常样例，看到成功就放行。问题往往不是“这次测试没过”，而是“没测的地方被误判成过了”。空文件、缺列、重复用户、超大文件、非法编码，这些才是验证回路真正要抓住的边界。</p>
+  <p>诊断这种问题时，先别急着改实现。先看验证对象有没有带太多实现历史，检查清单是不是漏了边界输入，报告里有没有把未执行项写出来，放行判断有没有对应停止线。只要这四个位置里有一个断掉，验证者就会把“看起来正常”当成“已经可以放行”。</p>
+  <div class="table-wrap">
+    <table data-export-context="失败诊断表" data-export-lang="table">
+      <thead>
+        <tr><th>观察到的信号</th><th>更可能的原因</th><th>下一步先查什么</th><th>如果还不行怎么办</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>只跑成功样例就通过。</td><td>检查标准太松。</td><td>验证任务里有没有强制完整测试和负例。</td><td>把负例和边界写成硬性步骤。</td></tr>
+        <tr><td>报告里没有未执行项。</td><td>验证者默认没测过也算过。</td><td>报告模板是否要求未执行项单独列出。</td><td>重新定义报告结构，再跑一次。</td></tr>
+        <tr><td>边界输入没被测到。</td><td>验证任务没有覆盖空、缺、重、超、错这类输入。</td><td>检查清单是否真的包含边界输入。</td><td>补一轮边界测试，不要直接放行。</td></tr>
+        <tr><td>失败后主智能体只能重新讲一遍背景。</td><td>回传字段太长，关键证据丢了。</td><td>报告里有没有失败项、证据和复现步骤。</td><td>把回传字段压短，只保留决策信息。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span class="label">失败诊断函数</span><button class="copy" data-copy="diagnosis-code">复制</button></div>
+  <pre id="diagnosis-code" data-export-context="失败诊断函数" data-export-lang="python"><code class="language-python">def diagnose(report):
+    if report.passed_only_sample:
+        return "标准太松：补完整测试和负例"
+    if report.missing_not_executed:
+        return "报告不硬：把未执行项写进模板"
+    if report.skipped_edges:
+        return "边界没跑全：补空、缺、重、超、错"
+    if report.summary_sprawls:
+        return "回传太长：压缩成通过、失败、未执行"
+    return "继续放行前，先看是否有阻塞项"
+
+def next_action(report):
+    diagnosis = diagnose(report)
+    if "补" in diagnosis:
+        return lead_agent.repair(report)
+    if "压缩" in diagnosis:
+        return lead_agent.trim_report(report)
+    return lead_agent.release(report)</code></pre>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>诊断顺序</h3>
+      <ol>
+        <li>先看检查有没有跑全，再看报告有没有写全。</li>
+        <li>再看边界输入有没有覆盖。</li>
+        <li>最后看回传是不是太长，导致主智能体读不到关键判断。</li>
+      </ol>
+    </div>
+    <div class="box warn">
+      <h3>失败后的正确动作</h3>
+      <p>如果问题出在标准，回到验证指令；如果问题出在报告，回到模板；如果问题出在边界，补测试；如果问题出在回退条件，先写停止线。真正的修复不是把结论改成“暂时通过”，而是把下一轮检查变得更硬。</p>
+    </div>
+  </div>
+  <p>你现在应该能做什么：拿到一份验证报告时，先判断它是在证明通过，还是只是在证明“跑过一遍”。只要你能从报告里分出标准、边界、未执行项和回退条件，就能很快判断问题应该回到哪一步。</p>
+</section>
+
+<section id="bridge">
+  <div class="head"><h2>8. 交接桥：验证结果怎么回到主智能体</h2><span class="tag">bridge</span></div>
+  <p>验证子智能体不是终点，它的结果要交回主智能体做下一步。这里最容易犯的错，是把整份验证记录原样倒回去。那样主智能体又会被细节淹没，最后还得自己重新抽结论。更稳的做法，是把结果分成三层：可以直接放行的通过项、需要修正的失败项、以及暂时不能下结论的未执行项。</p>
+  <p>这个交接桥的核心是压缩，不是省略。压缩意味着你保留足够做判断的信息，例如复现步骤、失败原因、阻塞级别和建议修复位置；省略则会把关键证据丢掉。只要主智能体接收到的还是长段的解释、背景和过程，它就会重新被拉回实现细节里，验证子智能体的价值也会被削弱。</p>
+  <div class="table-wrap">
+    <table data-export-context="交接桥表" data-export-lang="table">
+      <thead>
+        <tr><th>返回层级</th><th>要保留什么</th><th>要丢掉什么</th><th>主智能体接收到后怎么用</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>通过项</td><td>已确认的检查、证据和通过条件。</td><td>无关的实现细节和重复说明。</td><td>确认是否可以继续放行。</td></tr>
+        <tr><td>失败项</td><td>失败原因、复现步骤、建议修复位置。</td><td>冗长的探索过程。</td><td>回到具体问题，安排修复。</td></tr>
+        <tr><td>未执行项</td><td>未执行原因、缺失环境或权限。</td><td>没有验证依据的主观推测。</td><td>决定补测还是回退。</td></tr>
+        <tr><td>阻塞项</td><td>会阻止放行的条件和停止线。</td><td>只有“感觉不稳”这种模糊表述。</td><td>明确下一轮是否还能继续拆分。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span class="label">交接桥伪代码</span><button class="copy" data-copy="bridge-code">复制</button></div>
+  <pre id="bridge-code" data-export-context="交接桥伪代码" data-export-lang="python"><code class="language-python">def handoff(report):
+    payload = {
+        "passed": report.passed_items,
+        "failed": [
+            {
+                "item": item.name,
+                "reason": item.reason,
+                "evidence": item.evidence,
+                "fix": item.fix_point,
+            }
+            for item in report.failed_items
+        ],
+        "not_executed": [
+            {
+                "item": item.name,
+                "reason": item.reason,
+                "missing": item.missing_input,
+            }
+            for item in report.not_executed_items
+        ],
+        "decision": report.blocking_reason,
+    }
+    return payload
+
+def lead_agent_next_step(payload):
+    if payload["failed"]:
+        return lead_agent.repair(payload)
+    if payload["not_executed"]:
+        return lead_agent.schedule_retest(payload)
+    return lead_agent.release(payload)</code></pre>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>压缩原则</h3>
+      <ul>
+        <li>把长报告变成短决策，但不要丢掉证据。</li>
+        <li>把失败项和未执行项分开，避免放行时混淆。</li>
+        <li>把修复位置写出来，主智能体才能直接回到问题点。</li>
+      </ul>
+    </div>
+    <div class="box warn">
+      <h3>交接错误的后果</h3>
+      <p>如果交接桥做得太长，主智能体会重新读实现历史；如果交接桥做得太短，关键证据会消失；如果交接桥没有阻塞项，验证者就会把“没测完”伪装成“基本通过”。所以交接桥本身也要被验证。</p>
+    </div>
+  </div>
+</section>
+
+<section id="applications">
+  <div class="head"><h2>9. 验证子智能体适合哪些场景</h2><span class="tag">applications</span></div>
+  <p>验证子智能体最适合标准明确、检查动作独立的场景。软件里，它检查测试、lint、类型和 schema；合规里，它检查政策、权限和审批条件；内容里，它检查引用和事实。关键不是任务看起来多重要，而是检查条件能不能写清。</p>
+  <p>如果标准本身很主观、验证者必须理解完整实现权衡、或者任务小到同一智能体配一份清单就能做完，那就不一定要单独拆验证者。先把标准补清，再决定是否需要拆分。</p>
+  <div class="table-wrap">
+    <table data-export-context="应用场景矩阵" data-export-lang="table">
+      <thead>
+        <tr><th>场景</th><th>适合验证什么</th><th>不适合交给验证者什么</th><th>典型收益</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>质量保障</td><td>测试套件、lint、类型检查、schema。</td><td>完整的实现思路和重构理由。</td><td>把是否可用变成可复现的检查。</td></tr>
+        <tr><td>合规检查</td><td>政策规则、敏感内容、审批条件。</td><td>流程里无关的草稿和闲聊。</td><td>把放行条件写成规则。</td></tr>
+        <tr><td>输出验证</td><td>结构是否完整、字段是否齐全。</td><td>主观的“写得顺不顺”。</td><td>让结构问题先被发现。</td></tr>
+        <tr><td>事实核验</td><td>引用是否存在、是否支撑结论。</td><td>长篇写作过程和内部动机。</td><td>把事实和判断拆开看。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>不适合单独拆验证者的情况</h3>
+    <p>如果验证标准很主观、验证者必须理解完整实现权衡、检查环境无法给到子智能体，或者任务小到同一智能体配一份检查清单就能完成，就先别拆。先把规则写硬，再看是否真的需要一个独立检查者。</p>
+  </div>
+</section>
+
+<section id="check">
+  <div class="head"><h2>10. 多智能体落地前的采用清单</h2><span class="tag">check</span></div>
+  <p>多智能体强大，但不是默认选择。落地前至少确认五件事：约束是否真实、拆分边界是否按上下文、验证是否明确、成本是否可接受、回退条件是否写清。只要有一项说不清，就先做小试点，不要直接把整个流程重构成多角色。</p>
+  <p>这一页的最后判断不是“能不能拆”，而是“拆了以后是否比单体更值得”。如果质量没有明显提升、成本和维护反而上升，就应该回退，而不是继续加角色名。</p>
+  <div class="table-wrap">
+    <table data-export-context="采用清单" data-export-lang="table">
+      <thead>
+        <tr><th>问题</th><th>通过标准</th><th>答不上来时怎么做</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>约束是否真实？</td><td>有失败案例、指标或上下文证据。</td><td>先跑单智能体基线。</td></tr>
+        <tr><td>边界是否按上下文？</td><td>子任务共享背景少，接口清楚。</td><td>重新合并或改边界。</td></tr>
+        <tr><td>验证是否明确？</td><td>有具体、全面、含负例的检查。</td><td>先补验证标准。</td></tr>
+        <tr><td>成本是否可接受？</td><td>token、耗时和维护成本都记录了。</td><td>做小试点，不要直接全量改造。</td></tr>
+        <tr><td>回退条件是什么？</td><td>知道何时回到单智能体或工具搜索。</td><td>先定义停止线。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>上线后看什么</h3>
+    <p>至少记录任务成功率、失败类型、总 token、平均耗时、未执行项、误放行次数和人工介入次数。没有这些记录，就很难判断多智能体是在帮忙，还是只是在制造更多协作痕迹。</p>
+  </div>
+</section>
+
+<section id="mistakes">
+  <div class="head"><h2>11. 常见误区、后果和修法</h2><span class="tag">mistakes</span></div>
+  <p>验证子智能体最怕两件事：一是边界不清，二是报告不硬。前者会让它悄悄参与实现，后者会让它把没测过的东西当成通过。下面这张表把常见偏差写成可操作的修法。</p>
+  <div class="table-wrap">
+    <table data-export-context="常见误区表" data-export-lang="table">
+      <thead>
+        <tr><th>误区</th><th>错因</th><th>后果</th><th>修法</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>验证者参与实现</td><td>职责边界不清。</td><td>失去独立检查视角。</td><td>只检查产出和标准，不碰实现过程。</td></tr>
+        <tr><td>只测成功路径</td><td>默认第一个通过就够了。</td><td>边界问题被隐藏。</td><td>强制完整测试、边界和负例。</td></tr>
+        <tr><td>没有未执行项</td><td>报告只写通过，不写没测什么。</td><td>用户误以为全部通过。</td><td>把未执行项单独列出来。</td></tr>
+        <tr><td>标准太主观</td><td>缺少可检查条件。</td><td>不同验证者结论不一致。</td><td>改成测试、schema、规则和来源核验。</td></tr>
+        <tr><td>不记录成本</td><td>只看架构是否能跑。</td><td>无法判断是否值得继续拆。</td><td>持续记录 token、耗时、失败率和回退次数。</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="example">
+  <div class="head"><h2>12. 例子：怎么写验证任务</h2><span class="tag">example</span></div>
+  <p>场景：主智能体生成了一个用户导入功能。你要让验证子智能体检查它是否可靠。差的写法是“检查导入功能是否正常”。好的写法会告诉它输入范围、检查动作、失败报告格式和禁止提前通过的规则。</p>
+  <div class="grid2">
+    <div class="box redsoft">
+      <h3>差写法</h3>
+      <p>“帮我看一下导入功能有没有问题。”这会导致验证者只上传一个正常 CSV，看到成功就放行。</p>
+    </div>
+    <div class="box ok">
+      <h3>好写法</h3>
+      <p>“用正常 CSV、空文件、缺列、重复用户、超大文件和非法编码测试导入。记录每项结果，未执行项单独列出，任何失败都不得标记通过。”</p>
+    </div>
+  </div>
+  <div class="codebar"><span class="label">CSV 导入验证伪代码</span><button class="copy" data-copy="csv-check">复制</button></div>
+  <pre id="csv-check" data-export-context="CSV 导入验证伪代码" data-export-lang="python"><code class="language-python">verifier.run(
+    artifact="CSV 导入功能",
+    criteria=[
+        "正常 CSV 能通过",
+        "空文件被拒绝",
+        "缺列被拒绝",
+        "重复用户被标出",
+        "超大文件有明确处理",
+        "非法编码有明确错误"
+    ],
+    report=["通过项", "失败项", "未执行项", "复现步骤"]
+)</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="导入检查清单" data-export-lang="table">
+      <thead>
+        <tr><th>检查项</th><th>为什么要测</th><th>没测会怎样</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>正常 CSV</td><td>先确认主路径真的能跑。</td><td>连基本功能都不通，却误以为通过。</td></tr>
+        <tr><td>空文件</td><td>确认空输入不会静默成功。</td><td>空数据被当成有效输入。</td></tr>
+        <tr><td>缺列</td><td>确认 schema 校验存在。</td><td>字段不全的文件混进系统。</td></tr>
+        <tr><td>重复用户</td><td>确认重复冲突有明确处理。</td><td>脏数据被直接写入。</td></tr>
+        <tr><td>超大文件</td><td>确认容量边界有明确策略。</td><td>性能和稳定性问题被忽略。</td></tr>
+        <tr><td>非法编码</td><td>确认异常编码不会悄悄破坏导入。</td><td>编码问题在生产里才暴露。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>判断结果很简单：验证任务能不能独立拆出来，取决于它是否有清晰标准。标准越清楚，验证子智能体越像可靠检查点；标准越模糊，它越像另一个会点头的聊天者。</p>
+</section>
+
+<section id="boundary">
+  <div class="head"><h2>13. 落地边界：这一页先停在哪里</h2><span class="tag">boundary</span></div>
+  <p>这一页先把四件事收住：黑盒验证、具体标准、负例测试、未执行项。再往外延伸，就会碰到评测平台、自动化编排、框架实现、多人协作和上线运维。这些都很重要，但不该和“验证子智能体是否值得拆出来”混在同一层判断里。</p>
+  <div class="box info">
+    <h3>先别展开的相邻议题</h3>
+    <ul>
+      <li>评测平台和基准分数：后面可以接，但不是本页的判断核心。</li>
+      <li>框架与库名：实现层细节先放后面，别拿工具名代替边界判断。</li>
+      <li>自动化流水线：先把验证规则写硬，再考虑怎么编排执行。</li>
+      <li>多人协作流程：团队怎么分工是组织问题，不是本页的主线。</li>
+      <li>红队和对抗测试：属于更后面的质量强化，不影响本页的基本采用判断。</li>
+    </ul>
+  </div>
+  <p>你现在应该能做什么：拿到一个验证任务时，先检查它是不是能黑盒、能写标准、能列负例、能报未执行项。只要这四件事有一件说不清，就先别急着拆成独立验证者。</p>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>先抓住一句话</strong>
+    <p>验证子智能体的价值，在于它用更少的上下文做更硬的检查；它不负责实现，也不该把没测过的内容当成通过。</p>
+  </div>
+  <div class="review-card">
+    <strong>答题时别漏的检查项</strong>
+    <ul>
+      <li>验证标准是不是足够具体？</li>
+      <li>有没有完整测试、边界和负例？</li>
+      <li>报告里有没有未执行项？</li>
+      <li>有没有明确放行和回退条件？</li>
+    </ul>
+  </div>
+</div>
+
+<div class="practice-check">
+  <div class="check-item"><b>职责</b>只检查，不实现。</div>
+  <div class="check-item"><b>标准</b>跑什么、测什么、怎么报都要写清。</div>
+  <div class="check-item"><b>放行</b>没做完不能直接通过。</div>
+  <div class="check-item"><b>回退</b>成本不值时回到单体或工具测试。</div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div><h3>一、基础职责</h3><p>先确认你能说清验证子智能体的边界，再判断它和黑盒检查是不是同一件事。</p></div>
+    <div class="quick-review"><b>复习一下</b>验证者看的是产出和标准。<span>它不该先去理解实现故事，再回来下结论。</span></div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="基础职责" data-title="核心职责" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">verifier</span></div>
+      <h3>1. 验证子智能体的核心职责是什么？</h3>
+      <label><input type="radio" name="q1" value="A"> A. 测试或验证主智能体产出</label>
+      <label><input type="radio" name="q1" value="B"> B. 接管所有实现</label>
+      <label><input type="radio" name="q1" value="C"> C. 只给主观评价</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q2" data-group="基础职责" data-title="黑盒判断" data-answer="对">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">blackbox</span></div>
+      <h3>2. 黑盒验证通常不需要完整实现过程，也可以检查外部行为是否满足规格。</h3>
+      <label><input type="radio" name="q2" value="对"> 对</label>
+      <label><input type="radio" name="q2" value="错"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q3" data-group="基础职责" data-title="早期胜利" data-answer="宣布通过">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">risk</span></div>
+      <h3>3. 早期胜利问题指验证者跑了一两个测试就 ______。</h3>
+      <input type="text" name="q3" data-answer="宣布通过,放行" data-explain="早期胜利的危险在于把少量成功误读成完整通过。">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q4" data-group="基础职责" data-title="职责判断">
+      <div class="q-meta"><span class="pill">short answer</span><span class="pill">reasoning</span></div>
+      <h3>4. 用 2-4 句话说明为什么验证任务常常适合拆成子智能体。</h3>
+      <p class="solve-note">回答时要同时提到“黑盒可检查”和“上下文更少”。</p>
+      <textarea name="q4"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好的答案会说到：验证通常只需要看结果、规格和测试，不需要完整实现过程；验证子智能体拿更少的上下文就能做独立检查；把验证和实现分开，还能减少主智能体被污染的机会。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div><h3>二、验证标准与报告</h3><p>这一组训练你把模糊检查改成可执行检查，再把报告写成能回看、能复现的格式。</p></div>
+    <div class="quick-review"><b>复习一下</b>标准要能跑，报告要写未执行项。<span>只写“基本正常”并不能支撑放行。</span></div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q5" data-group="验证标准与报告" data-title="好标准" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">criteria</span></div>
+      <h3>5. 下列哪种写法更像可执行的验证标准？</h3>
+      <label><input type="radio" name="q5" value="A"> A. 运行完整测试套件，报告所有失败项和未执行项</label>
+      <label><input type="radio" name="q5" value="B"> B. 看看这个功能是否正常</label>
+      <label><input type="radio" name="q5" value="C"> C. 先跑一个成功样例再说</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q6" data-group="验证标准与报告" data-title="报告字段">
+      <div class="q-meta"><span class="pill">mini-fields</span><span class="pill">report</span></div>
+      <h3>6. 验证报告至少要写哪四类信息？</h3>
+      <div class="mini-fields">
+        <label>已执行检查<input type="text" data-answer="已执行检查,检查项" placeholder="已执行检查"></label>
+        <label>失败项<input type="text" data-answer="失败项,失败" placeholder="失败项"></label>
+        <label>未执行项<input type="text" data-answer="未执行项,未执行" placeholder="未执行项"></label>
+        <label>放行判断<input type="text" data-answer="放行判断,是否允许放行" placeholder="放行判断"></label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q7" data-group="验证标准与报告" data-title="未执行项" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">report</span></div>
+      <h3>7. 验证报告为什么必须写出未执行项？</h3>
+      <label><input type="radio" name="q7" value="A"> A. 这样报告会更长</label>
+      <label><input type="radio" name="q7" value="B"> B. 因为没测过的内容不能默认通过</label>
+      <label><input type="radio" name="q7" value="C"> C. 因为主智能体喜欢看长文</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q8" data-group="验证标准与报告" data-title="报告改写">
+      <div class="q-meta"><span class="pill">short answer</span><span class="pill">rewrite</span></div>
+      <h3>8. 把“看看有没有问题”改写成一段具体验证指令。</h3>
+      <p class="solve-note">要包含完整测试、边界输入、负例和报告格式。</p>
+      <textarea name="q8"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案会写清楚：要跑什么测试、要补哪些边界、要测哪些负例、报告里要列哪些字段，以及没有执行的检查不能被默认当成通过。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div><h3>三、场景判断</h3><p>把验证者放进代码、文档和事实核验场景。答案里要说清检查什么，不检查什么。</p></div>
+    <div class="quick-review"><b>复习一下</b>越能被规则约束的场景，越适合拆验证者。<span>越主观的场景，越要先补标准。</span></div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q9" data-group="场景判断" data-title="CSV测试" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">scenario</span></div>
+      <h3>9. 主智能体生成了导入 CSV 功能，验证子智能体更应该先测什么？</h3>
+      <label><input type="radio" name="q9" value="A"> A. 先问主智能体当时为什么这么设计</label>
+      <label><input type="radio" name="q9" value="B"> B. 正常 CSV、空文件、缺列、重复用户、超大文件和非法编码</label>
+      <label><input type="radio" name="q9" value="C"> C. 只测一个成功样例就好</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q10" data-group="场景判断" data-title="合规检查">
+      <div class="q-meta"><span class="pill">short answer</span><span class="pill">compliance</span></div>
+      <h3>10. 一份文档需要满足政策规则，验证子智能体可以怎么检查？</h3>
+      <p class="solve-note">从规则、引用和格式三个角度回答。</p>
+      <textarea name="q10"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>答案可以写成：先列出政策规则，再逐条检查内容是否触犯规则，最后核对引用是否存在、事实是否支持结论、格式是否满足要求。重点是让检查动作可复现。</p>
+      </details>
+    </div>
+    <div class="q" data-question="q11" data-group="场景判断" data-title="事实核验">
+      <div class="q-meta"><span class="pill">short answer</span><span class="pill">facts</span></div>
+      <h3>11. 报告里有多个事实声明，验证子智能体应如何核验引用？</h3>
+      <p class="solve-note">回答时要说清“声明对应来源”和“来源是否支撑结论”。</p>
+      <textarea name="q11"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案会提到：先把每个事实声明拆出来，再为每个声明找到对应来源，检查来源是否真的支撑这个结论，最后把无法核验或来源缺失的部分列成失败项。</p>
+      </details>
+    </div>
+    <div class="q" data-question="q12" data-group="场景判断" data-title="不适合拆分" data-answer="C">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">boundary</span></div>
+      <h3>12. 哪种情况最不适合单独拆出验证子智能体？</h3>
+      <label><input type="radio" name="q12" value="A"> A. 标准明确、可黑盒检查的代码验证</label>
+      <label><input type="radio" name="q12" value="B"> B. 只需要跑一套固定测试的放行检查</label>
+      <label><input type="radio" name="q12" value="C"> C. 标准很主观、必须理解完整实现权衡的任务</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div><h3>四、落地判断</h3><p>最后几题把整页串起来。回答时要把放行、成本、回退和边界一起说清。</p></div>
+    <div class="quick-review"><b>复习一下</b>先有基线，再有验证，再谈拆分。<span>没有成本记录，就很难判断是不是值得。</span></div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q13" data-group="落地判断" data-title="采用清单">
+      <div class="q-meta"><span class="pill">short answer</span><span class="pill">checklist</span></div>
+      <h3>13. 多智能体落地前，你会检查哪 5 件事？</h3>
+      <p class="solve-note">把真实约束、边界、验证、成本和回退条件都放进去。</p>
+      <textarea name="q13"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案通常会列出：约束是否真实、边界是否按上下文、验证是否明确、成本是否可接受、回退条件是否写清。只要其中一项答不上来，就不该直接全量拆分。</p>
+      </details>
+    </div>
+    <div class="q full" data-question="q14" data-group="落地判断" data-title="费曼总结">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">summary</span></div>
+      <h3>14. 用 6-9 句话讲清：验证子智能体为什么有效，以及多智能体落地前要检查什么。</h3>
+      <div class="solve-note">请串联黑盒验证、具体标准、负例测试、早期胜利问题、真实约束、上下文拆分、成本和回退条件。</div>
+      <textarea name="q14"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>回答不需要背句子，但要把整条逻辑说完整：验证子智能体能用更少上下文做黑盒检查；标准必须具体到可执行；负例和边界不能少；未执行项要写出来；落地前还要确认真实约束、拆分边界、成本和回退条件。只要这条链断了，多智能体就容易从工程判断变成表面协作。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <div class="source-list">
+  <div class="source">
+    <b>Claude 官方文章</b>
+    <p><a href="https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them">Building multi-agent systems: When and how to use them</a> 是本单元的主来源，支撑验证子智能体、黑盒检查、负例和放行边界的判断。</p>
+  </div>
+  <div class="source">
+    <b>仓内整理笔记</b>
+    <p>《资料熔炼》把原文拆成四个学习块，并补了术语顺序、课程结构和单元对应关系。</p>
+  </div>
+  <div class="source">
+    <b>课程索引</b>
+    <p><a href="../index.html">课程地图</a>说明本单元在整门课里的位置，以及它和前后单元的衔接关系。</p>
+  </div>
+  <div class="source">
+    <b>现有草稿页</b>
+    <p>旧的学习页保留了黑盒验证、完整测试、负例、报告模板和落地清单，这次重构把它迁到共享学习页壳里，并补足了练习反馈、导出上下文和边界说明。</p>
+  </div>
+  <div class="source">
+    <b>来源时间</b>
+    <p>页面内容的整理时间是 2026-06-21，访问日期也是 2026-06-21。原文是工程经验文章，不是形式化论文；其中的成本判断和边界判断应当按经验规则理解。</p>
+  </div>
+</div>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

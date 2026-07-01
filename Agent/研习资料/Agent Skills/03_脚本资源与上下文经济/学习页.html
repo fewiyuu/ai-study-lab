@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>脚本资源与上下文经济</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="Agent Skills" data-unit="03">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>Agent Skills</strong>
+        <span>03</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#problem"><span class="dot"></span>为什么要脚本</a>
+        <a href="#boundary"><span class="dot"></span>正文、命令与脚本</a>
+        <a href="#interface"><span class="dot"></span>脚本接口</a>
+        <a href="#output"><span class="dot"></span>输出与上下文</a>
+        <a href="#safety"><span class="dot"></span>安全与重试</a>
+        <a href="#eval"><span class="dot"></span>评估闭环</a>
+        <a href="#bridge"><span class="dot"></span>下一步</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">脚本接住重复、稳定、可验证的部分；正文保留判断、边界和阅读顺序。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">脚本、上下文与评估</div>
+          <h1>脚本资源与上下文经济</h1>
+          <p>这一节处理一个实际问题：当 Skill 里的某一步总被临时重写、总要复制粘贴、又总把上下文塞满时，应该把它收进 <code>scripts/</code>，还是继续留在正文里。先学判断，再学接口，再学评估。</p><p>锚定例子：校验 200 个字段、提取重复文件的结构化摘要、把一条脆弱 shell 命令变成稳定接口。它们考的不是“写得更漂亮”，而是“怎样把重复逻辑变成稳定资源”。</p>
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../02_SKILL.md结构与触发/学习页.html">上一节：SKILL.md 结构与触发</a><a href="../04_评估安全与跨平台发布/学习页.html">下一节：评估、安全与跨平台发布</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读前准备</h3>
+          <ul><li>先在 02 页把 Skill 的触发边界想清楚；这里继续问“哪些重复逻辑该进 <code>scripts/</code>”。</li><li>你会看到一次性命令、自包含脚本和正文说明之间的分界。</li><li>练习先做结构判断，再做接口和评估，不会一上来就丢长答题墙。</li></ul>
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head"><h2>先抓住这节在解决什么</h2><span class="tag">学习目标</span></div>
+  <p>这一节只问一个问题：Skill 里某一步到底该留在正文里，还是该下沉到 <code>scripts/</code>。判断对了，Skill 读取时的上下文会更短，逻辑会更稳，后面的评估也更容易做。</p>
+  <div class="table-wrap">
+    <table data-export-context="脚本化判断清单" data-export-lang="table">
+      <thead><tr><th>对象</th><th>这节要你判断什么</th><th>出错时会怎样</th></tr></thead>
+      <tbody>
+        <tr><td>正文</td><td>是不是只负责判断、步骤和边界</td><td>内容越写越长，阅读成本吞掉上下文</td></tr>
+        <tr><td>一次性命令</td><td>是不是只是在调用一个成熟工具</td><td>版本和环境一变，命令就漂了</td></tr>
+        <tr><td><code>scripts/</code></td><td>是不是承接重复、易错、可验证的处理</td><td>每次都临时拼流程，错误会反复出现</td></tr>
+        <tr><td>评估</td><td>能不能证明脚本真的省了上下文</td><td>只看一次漂亮输出，看不出是否真的更稳</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>先把一个任务分到“说明、命令、脚本、评估”里的某一层，再继续往下看。</p>
+</section>
+
+<section id="problem">
+  <div class="head"><h2>为什么要把一部分逻辑交给脚本</h2><span class="tag">mechanism</span></div>
+  <p>把重复逻辑收进脚本的前提，是先看到它是重复、稳定、可验证的。<code>scripts/</code> 不负责“想清楚问题”，它负责把已经想清楚的规则固定下来，避免模型每次临场重写。</p>
+  <p>锚定例子可以很朴素：校验 200 个 JSON 字段是否符合 schema。这个任务不是在考表达，而是在考输入、输出、错误和上下文预算怎么分。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1"><code>正文</code><span>读意图，写规则</span></button>
+      <button class="trace-line" data-trace-step="step-2"><code>scripts/</code><span>读参数，写结果</span></button>
+      <button class="trace-line" data-trace-step="step-3"><code>stdout / stderr</code><span>读输出预算，写数据和诊断</span></button>
+      <button class="trace-line" data-trace-step="step-4"><code>评估</code><span>读样例，写证据</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1"><b>正文层</b><span>保留判断和顺序。</span><p>正文回答“为什么做、先做什么、边界在哪”，不承担重复计算。</p></div>
+      <div class="tensor-card" data-trace-target="step-2"><b>脚本层</b><span>保留稳定接口。</span><p>脚本读取参数、stdin 或文件，给出固定格式的结果。</p></div>
+      <div class="tensor-card" data-trace-target="step-3"><b>输出层</b><span>压缩上下文占用。</span><p>stdout 留给可继续处理的数据，stderr 留给诊断和警告。</p></div>
+      <div class="tensor-card" data-trace-target="step-4"><b>评估层</b><span>把价值写成证据。</span><p>要能比较触发、输出和安全边界，而不是只看一次好看的结果。</p></div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="脚本资源生命周期" data-export-lang="table">
+      <thead><tr><th>位置</th><th>读什么</th><th>写什么</th><th>失败症状</th></tr></thead>
+      <tbody>
+        <tr><td>正文</td><td>任务目标、约束、顺序</td><td>步骤、边界、默认做法</td><td>越写越厚，模型读完已经没空间了</td></tr>
+        <tr><td><code>scripts/</code></td><td>参数、stdin、文件</td><td>稳定结果、结构化输出</td><td>总要临场拼 shell，或者一上来就问人</td></tr>
+        <tr><td>输出通道</td><td>结果大小和诊断需求</td><td>数据、警告、摘要、文件</td><td>日志把上下文塞满，真正的信号被冲掉</td></tr>
+        <tr><td>评估</td><td>真实查询和失败样例</td><td>触发证据、断言、对照结果</td><td>只能说明“看起来不错”，不能说明“真的更稳”</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>当一条流程每次都要临场拼出来时，脚本是在压缩重复工作，不是在给技能加花样。</p>
+</section>
+
+<section id="boundary">
+  <div class="head"><h2>什么时候只写说明，什么时候该脚本化</h2><span class="tag">boundary</span></div>
+  <p>一条简单规则：如果任务主要靠判断、取舍、写法，就放正文；如果任务主要靠稳定输入输出、重复处理和机械验证，就考虑脚本。一次性命令适合调用成熟工具，脚本适合把脆弱流程变成稳定接口。</p>
+  <div class="codebar"><span>命令示例</span><button class="copy" data-copy="command-sample">复制</button></div>
+  <pre id="command-sample" data-export-context="一次性命令与自包含脚本" data-export-lang="bash"><code class="language-bash">uvx ruff@0.8.0 check .
+uv run scripts/extract.py input.html</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="任务归类表" data-export-lang="table">
+      <thead><tr><th>任务</th><th>更适合</th><th>原因</th></tr></thead>
+      <tbody>
+        <tr><td>把一段结论写得更自然</td><td>正文</td><td>需要判断和表达，不是固定算法</td></tr>
+        <tr><td>校验 200 个字段是否符合 schema</td><td><code>scripts/</code></td><td>规则明确、可重复、可自动报错</td></tr>
+        <tr><td>解析 10MB 日志并统计错误</td><td><code>scripts/</code></td><td>数据太大，模型直接读会浪费上下文</td></tr>
+        <tr><td>决定报告结论如何措辞</td><td>正文</td><td>需要综合语境和取舍</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这里先不把 subagent、MCP 或多智能体调度混进来；这一节只看脚本资源本身怎么摆、怎么跑、怎么省上下文。</p>
+  <p>先把重复步骤和判断步骤分开，再决定是留在正文里，还是收进脚本。</p>
+</section>
+
+<section id="interface">
+  <div class="head"><h2>脚本接口要让 agent 一次看懂</h2><span class="tag">interface</span></div>
+  <p>智能体运行脚本时通常没有交互式终端。脚本如果问“要不要继续”，它就会卡住。输入应该放在参数、stdin 或环境变量里；<code>--help</code> 要短，写用途、参数、默认值和例子；错误要说收到什么、该是什么；退出码要能分失败类型。</p>
+  <div class="codebar"><span>PEP 723 脚本骨架</span><button class="copy" data-copy="script-skeleton">复制</button></div>
+  <pre id="script-skeleton" data-export-context="自包含脚本骨架" data-export-lang="python"><code class="language-python"># /// script
+# requires-python = "&gt;=3.12"
+# dependencies = [
+#   "beautifulsoup4&gt;=4.12,&lt;5",
+# ]
+# ///
+
+from bs4 import BeautifulSoup
+import argparse
+
+parser = argparse.ArgumentParser(description="Extract fields from HTML.")
+parser.add_argument("html_file")
+parser.add_argument("--limit", type=int, default=20)
+parser.add_argument("--dry-run", action="store_true")
+args = parser.parse_args()</code></pre>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1">会卡住</button>
+      <button class="ghost" data-terminal-case="case-2">可继续</button>
+      <button class="ghost" data-terminal-case="case-3">诊断清楚</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">Target environment:
+[blocked waiting for input]</pre>
+    <template data-terminal-output="case-1">Target environment:
+[blocked waiting for input]</template>
+    <template data-terminal-output="case-2">usage: script.py --input FILE --limit 20
+--dry-run only previews changes</template>
+    <template data-terminal-output="case-3">{"missing": 3, "duplicates": 1}
+Warning: 2 rows skipped because dates were empty</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="脚本接口要素" data-export-lang="table">
+      <thead><tr><th>接口要素</th><th>推荐做法</th><th>原因</th></tr></thead>
+      <tbody>
+        <tr><td>输入</td><td>参数、stdin、环境变量</td><td>不会阻塞</td></tr>
+        <tr><td><code>--help</code></td><td>简短帮助 + 一个例子</td><td>agent 能快速学会怎么调用</td></tr>
+        <tr><td>错误</td><td>说明收到什么、期望什么、下一步怎么改</td><td>便于自我修正</td></tr>
+        <tr><td>退出码</td><td>不同失败类型分开</td><td>便于分支处理</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>把“输入怎么来、帮助怎么写、错误怎么说”这三件事一次摆对。</p>
+</section>
+
+<section id="output">
+  <div class="head"><h2>stdout、stderr 和输出大小</h2><span class="tag">output</span></div>
+  <p>脚本输出会进入上下文，所以它不是越多越好。更稳的写法是把可继续处理的数据放到 stdout，把进度、警告和诊断放到 stderr。大结果默认只给摘要，必要时写文件，不要把几万行直接吐到终端。</p>
+  <div class="codebar"><span>stdout / stderr 分流</span><button class="copy" data-copy="io-sample">复制</button></div>
+  <pre id="io-sample" data-export-context="stdout 与 stderr 分流" data-export-lang="python"><code class="language-python">print(json.dumps({"missing": 3, "duplicates": 1}))
+print("Warning: 2 rows skipped because dates were empty", file=sys.stderr)</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="输出通道对照" data-export-lang="table">
+      <thead><tr><th>输出通道</th><th>放什么</th><th>什么时候用</th></tr></thead>
+      <tbody>
+        <tr><td>stdout</td><td>结构化数据、摘要、下一步要处理的结果</td><td>要让后续步骤继续消费时</td></tr>
+        <tr><td>stderr</td><td>警告、进度、诊断、失败原因</td><td>要保留调试线索时</td></tr>
+        <tr><td>文件</td><td>完整结果、大表、日志、可下载产物</td><td>结果太大，不适合直接塞进上下文时</td></tr>
+        <tr><td>摘要</td><td>最少但足够的判断信号</td><td>想先看结论，再决定要不要展开时</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>如果一个脚本会产出大结果，默认应该输出摘要和文件路径，而不是把所有内容直接打印出来。</p>
+  <p>把数据、诊断和大结果分开，不再让日志替你做决策。</p>
+</section>
+
+<section id="safety">
+  <div class="head"><h2>重试、幂等和 dry-run</h2><span class="tag">safety</span></div>
+  <p>智能体看到错误后可能再次运行命令，所以脚本要假设自己会被重试、传错参数、走到边界。幂等性意思是：同一命令重复运行，不会额外制造副作用。能 <em>create-or-update</em> 的脚本，通常比单纯 append 更适合自动化流程。</p>
+  <div class="codebar"><span>先预览，再执行</span><button class="copy" data-copy="dry-run-sample">复制</button></div>
+  <pre id="dry-run-sample" data-export-context="dry-run 与确认" data-export-lang="bash"><code class="language-bash">plan_delete.py --dry-run
+plan_delete.py --confirm</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="脚本安全护栏" data-export-lang="table">
+      <thead><tr><th>风险</th><th>脚本护栏</th><th>Skill 正文怎么写</th></tr></thead>
+      <tbody>
+        <tr><td>重复运行</td><td>幂等 create-or-update</td><td>允许重试，但检查输出</td></tr>
+        <tr><td>破坏性操作</td><td><code>--dry-run</code> + <code>--confirm</code></td><td>先预览计划，再执行</td></tr>
+        <tr><td>模糊输入</td><td>枚举参数和清晰错误</td><td>不要猜用户意图</td></tr>
+        <tr><td>输出过大</td><td><code>--limit</code> / <code>--output</code></td><td>默认摘要，必要时写文件</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>安全默认不是一句“请谨慎”。它要写进接口里，写成默认值、确认门和范围限制。</p>
+  <p>看出哪些动作必须先预览，哪些动作可以直接更新，哪些动作应该默认拒绝。</p>
+</section>
+
+<section id="eval">
+  <div class="head"><h2>怎么证明脚本真的有用</h2><span class="tag">eval</span></div>
+  <p>脚本的价值要能被测出来。Agent Skills 的评估通常分两层：先看会不会触发，再看输出是否达标。触发评估用 <code>should-trigger</code> 和 <code>should-not-trigger</code> 查询；质量评估看 <code>with-skill</code> / <code>without-skill</code> 对照、可观察断言和证据评分。</p>
+  <div class="codebar"><span>最小 eval 样例</span><button class="copy" data-copy="eval-sample">复制</button></div>
+  <pre id="eval-sample" data-export-context="最小 eval 样例" data-export-lang="json"><code class="language-json">[
+  {"query": "帮我把这份逐字稿整理成决策和待办", "should_trigger": true},
+  {"query": "给我写一封邀请同事开会的邮件", "should_trigger": false}
+]</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="评估层级对照" data-export-lang="table">
+      <thead><tr><th>评估层</th><th>看什么</th><th>证据是什么</th></tr></thead>
+      <tbody>
+        <tr><td>触发评估</td><td>相关任务会不会加载 Skill</td><td>should-trigger / should-not-trigger 的命中率</td></tr>
+        <tr><td>输出评估</td><td>结果有没有固定字段、格式和边界</td><td>断言、截图、文件内容、命令输出</td></tr>
+        <tr><td>基线对照</td><td>有没有比没有 Skill 时更稳</td><td>with-skill / without-skill 的对比结果</td></tr>
+        <tr><td>评分记录</td><td>失败到底缺了什么</td><td>PASS/FAIL 之外的文字证据</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>失败时先别补关键词。先问是边界太窄、太宽，还是流程缺字段，再决定改正文、脚本、模板还是评估样例。</p>
+  <p>把“能不能触发、输出是否达标、改完是否真的更稳”这三件事分开看。</p>
+</section>
+
+<section id="case-study">
+  <div class="head"><h2>一个完整案例：把脆弱命令收进脚本</h2><span class="tag">worked case</span></div>
+  <p>看一个更像真实工作的例子。你有一个“整理会议逐字稿”的 Skill，正文里原本写了三段 shell 说明：先找文件、再抽标题、最后把结果写成 Markdown。第一次看，这样已经能做事；第二次、第三次、第四次做同一类任务时，它就开始浪费上下文，因为模型每次都在重组那几段说明。</p>
+  <p>这时应该问的不是“还能不能继续写在正文里”，而是“哪一段规则已经稳定到可以单独执行”。如果文件选择、标题抽取和结果格式都已经固定，就该把这三步做成脚本，正文只保留读取顺序、边界和例外情况。</p>
+  <div class="table-wrap">
+    <table data-export-context="会议摘要脚本化案例" data-export-lang="table">
+      <thead><tr><th>步骤</th><th>正文保留什么</th><th>脚本接住什么</th><th>如果写反了会怎样</th></tr></thead>
+      <tbody>
+        <tr><td>找输入</td><td>说明优先看最近修改的 transcript</td><td>按参数读取一个明确文件</td><td>每次都临场猜文件，路径一变就错</td></tr>
+        <tr><td>抽结构</td><td>告诉 agent 要找决策、待办、风险</td><td>把标题、段落和表格转成固定字段</td><td>模型手工整理，结果在不同轮次里漂移</td></tr>
+        <tr><td>输出结果</td><td>说明最终报告需要哪些小节</td><td>输出 Markdown 文件或 stdout 摘要</td><td>内容太长，噪声塞满上下文</td></tr>
+        <tr><td>失败处理</td><td>说明缺输入时先报错，不要补编造内容</td><td>返回清晰错误和退出码</td><td>脚本沉默失败，agent 继续向下走错路</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>从正文到脚本的切口</span><button class="copy" data-copy="case-code">复制</button></div>
+  <pre id="case-code" data-export-context="从正文切到脚本的切口" data-export-lang="text"><code class="language-text">正文：
+1. 读取 transcript 文件。
+2. 提取 decisions / actions / risks。
+3. 把结果写成 Markdown。
+
+脚本：
+1. 接收 --input / --output。
+2. 统一字段名和输出形状。
+3. 保证重复运行不会改坏已有结果。</code></pre>
+  <p>这个切口的判断很重要：正文里还是要告诉 agent 先看什么、后看什么；脚本里只负责把已经稳定的规则执行得一模一样。</p>
+  <p>如果你把这一步放反了，就会出现两种坏味道。第一种是正文变成半个程序，读起来像说明书堆代码；第二种是脚本变成临时补丁，每次都要跟着 prompt 一起改。两种都会吃上下文，而且都不稳。</p>
+  <p>你现在应该能把一个“看起来能做”的流程，拆成“正文讲清楚、脚本固定住、输出能继续接”的三段。</p>
+</section>
+
+<section id="threshold">
+  <div class="head"><h2>一个更细的阈值：什么时候已经该下沉了</h2><span class="tag">decision threshold</span></div>
+  <p>很多人卡住，不是因为不会写脚本，而是因为不确定“重复到什么程度才该脚本化”。这节给一个更可执行的阈值：当一段流程已经满足下面三条里的两条，就该认真考虑下沉到 <code>scripts/</code>。</p>
+  <div class="table-wrap">
+    <table data-export-context="脚本化阈值表" data-export-lang="table">
+      <thead><tr><th>阈值</th><th>判断问题</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>重复出现</td><td>同一个流程是不是每次都要写</td><td>如果每次都会临时重写，说明正文已经在承担实现层工作</td></tr>
+        <tr><td>错误代价高</td><td>写错一次会不会把结果带偏</td><td>比如字段漏一个、路径写错、输出截断，都会直接影响结果</td></tr>
+        <tr><td>输入输出稳定</td><td>参数、文件、输出形状是不是已经固定</td><td>固定了以后，脚本比正文更能压住差异</td></tr>
+        <tr><td>能被检查</td><td>有没有办法用断言或文件比较确认结果</td><td>能检查，就有理由让脚本接管</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>把这三条放在一起看，会更接近真实判断。不是所有“看起来复杂”的东西都该脚本化；也不是所有“写起来麻烦”的东西都该留在正文里。真正的分界线，是它会不会反复吞上下文、反复出错、又能不能被固定检查。</p>
+  <div class="codebar"><span>阈值判断草图</span><button class="copy" data-copy="threshold-code">复制</button></div>
+  <pre id="threshold-code" data-export-context="脚本化阈值草图" data-export-lang="text"><code class="language-text">if repeated and high_cost and stable_io:
+    move_to_scripts()
+else:
+    keep_in_body()</code></pre>
+  <p>这个草图不是算法，只有一个用途：在写 Skill 时帮你做决策。它提醒你先看重复、再看代价、再看输入输出是否稳定。只要其中两个已经成立，正文就不该继续背实现。</p>
+  <p>如果你现在要判断一条流程是不是该下沉，先用这个阈值筛一遍，再看它要不要脚本、要不要只做一次性命令，或者其实留在正文里就够了。</p>
+  <p>你现在应该能把“该不该下沉”从一种模糊感觉，变成一组可以检查的条件。</p>
+</section>
+
+<section id="migration">
+  <div class="head"><h2>迁移规则：怎么把正文里的步骤搬进脚本</h2><span class="tag">migration rule</span></div>
+  <p>真正把事情做稳，靠的不是“我知道要脚本化”，而是知道怎么搬。最稳的迁移顺序通常是：先把原正文里重复出现的步骤列出来，再找它们的输入、输出、错误和确认点，最后才决定哪一段进脚本，哪一段继续留在正文。</p>
+  <p>还是拿“整理会议逐字稿”这个例子。原正文里可能写着：先找 transcript，再抽 decision、action、risk，最后写成 Markdown。迁移时不要直接整段搬走，而是拆成四个问题：文件从哪来、字段怎么定、输出写到哪里、失败时要不要停住。这样拆完，脚本和正文的分工就清楚了。</p>
+  <div class="table-wrap">
+    <table data-export-context="正文到脚本的迁移顺序" data-export-lang="table">
+      <thead><tr><th>原步骤</th><th>先问什么</th><th>放哪一层</th><th>最常见的坏结果</th></tr></thead>
+      <tbody>
+        <tr><td>找文件</td><td>输入是否已经能通过参数明确给出</td><td>脚本</td><td>正文每次都在猜路径</td></tr>
+        <tr><td>抽字段</td><td>字段名和输出形状是否稳定</td><td>脚本</td><td>结果在不同轮次里漂</td></tr>
+        <tr><td>写结果</td><td>结果是摘要还是完整文件</td><td>脚本 + 输出约定</td><td>stdout 被长内容淹没</td></tr>
+        <tr><td>解释例外</td><td>什么时候不能自动继续</td><td>正文</td><td>脚本自己替用户做决定</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>迁移前后对照</span><button class="copy" data-copy="migration-code">复制</button></div>
+  <pre id="migration-code" data-export-context="正文到脚本的迁移对照" data-export-lang="text"><code class="language-text">迁移前：
+正文里写完整 shell 步骤，模型每次都要重新拼一遍。
+
+迁移后：
+正文只保留目标、顺序、例外；
+脚本接收输入、稳定执行、输出结果；
+评估负责证明这条链路确实更稳。</code></pre>
+  <p>这条迁移规则有个关键点：正文不该消失。它还要保留顺序、边界和例外，因为脚本只负责稳定执行，不负责替代判断。</p>
+  <p>如果迁移后正文突然只剩一句“运行脚本即可”，那就迁过头了。这样的 Skill 看起来更短，实际上把最需要人理解的部分也删掉了。</p>
+  <p>你现在应该能从一段正文里，先找重复步骤，再决定哪些搬进脚本，哪些留在正文，哪些交给评估去证明。</p>
+</section>
+
+<section id="trace-path">
+  <div class="head"><h2>请求追踪：一条需求怎么落到脚本资源</h2><span class="tag">trace path</span></div>
+  <p>看一条更真实的请求：<code>帮我把这段会议逐字稿整理成决策、待办和风险</code>。这类请求不是直接冲进脚本，而是先经过正文的判断层。正文先确认它是“整理逐字稿”而不是“写邮件”或“改文案”，再决定是否要读脚本资源、模板和输出约定。</p>
+  <div class="table-wrap">
+    <table data-export-context="请求追踪表" data-export-lang="table">
+      <thead><tr><th>请求阶段</th><th>正在看什么</th><th>要做什么</th><th>错了会发生什么</th></tr></thead>
+      <tbody>
+        <tr><td>识别任务</td><td>请求是不是重复、稳定、可验证</td><td>判断要不要脚本化</td><td>把一次性判断当成脚本需求</td></tr>
+        <tr><td>进入正文</td><td>目标、边界、例外</td><td>决定读取顺序和默认做法</td><td>正文太短，脚本没有上下文</td></tr>
+        <tr><td>调用脚本</td><td>输入文件、参数、输出形状</td><td>执行固定规则</td><td>临场拼 shell，格式漂移</td></tr>
+        <tr><td>失败处理</td><td>输入是否缺失、输出是否过大</td><td>返回错误或摘要</td><td>agent 以为成功，继续走错路</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>请求到脚本的顺序</span><button class="copy" data-copy="trace-path-code">复制</button></div>
+  <pre id="trace-path-code" data-export-context="请求到脚本的顺序" data-export-lang="text"><code class="language-text">1. 识别请求是不是重复流程。
+2. 看正文能不能把边界说清楚。
+3. 确认脚本接收什么输入、产出什么结果。
+4. 检查失败时是不是会停在正确位置。</code></pre>
+  <p>这个追踪告诉你：脚本不是第一层响应，正文才是。脚本只是把正文已经决定好的稳定处理接过去。</p>
+  <p>如果你把请求直接扔给脚本而跳过正文，最常见的后果就是参数不全、输出不稳，或者失败时没有人知道该回哪一层修。</p>
+  <p>你现在应该能把一条需求，从“看起来很像自动化”一路追到“要不要脚本、脚本怎么接、失败怎么回”。</p>
+</section>
+
+<section id="failure-lab">
+  <div class="head"><h2>失败诊断：卡住、刷屏、误删分别怎么看</h2><span class="tag">failure lab</span></div>
+  <p>脚本资源最容易出问题的地方，不是在“能不能写”，而是在“遇到边界时会不会把 agent 卡住”。这节把三种最常见的故障放在一起看：交互式阻塞、输出过大、破坏性动作没有护栏。它们的修法不一样，但都能从同一条检查链开始。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1">卡住</button>
+      <button class="ghost" data-terminal-case="case-2">刷屏</button>
+      <button class="ghost" data-terminal-case="case-3">误删</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">Target environment:
+[blocked waiting for input]</pre>
+    <template data-terminal-output="case-1">Target environment:
+[blocked waiting for input]
+symptom: the script waits for human input instead of accepting parameters
+next check: replace input() with args, stdin, or env vars</template>
+    <template data-terminal-output="case-2">processing...
+row 1 ...
+row 2 ...
+row 3 ...
+row 4 ...
+...
+next check: move details to a file and keep stdout to a summary</template>
+    <template data-terminal-output="case-3">rm -rf target
+[no preview shown]
+next check: add --dry-run, require explicit confirmation, and keep the default non-destructive</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="脚本失败诊断链" data-export-lang="table">
+      <thead><tr><th>症状</th><th>最可能的根因</th><th>下一步检查</th></tr></thead>
+      <tbody>
+        <tr><td>脚本卡在等待输入</td><td>把交互式提问写进了流程</td><td>看是否用了 <code>input()</code>、隐藏确认或需要人工回车的步骤</td></tr>
+        <tr><td>stdout 爆满</td><td>把诊断、进度和数据混在一起了</td><td>把诊断移到 <code>stderr</code>，把大结果改成文件或摘要</td></tr>
+        <tr><td>重复运行后结果变乱</td><td>脚本不是幂等的</td><td>看是不是在 append、重复创建或覆盖已有结果</td></tr>
+        <tr><td>误删、误发、误写</td><td>破坏性动作没有预览和确认</td><td>先上 <code>--dry-run</code>，再要求显式确认</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>诊断顺序</span><button class="copy" data-copy="failure-chain">复制</button></div>
+  <pre id="failure-chain" data-export-context="脚本失败诊断顺序" data-export-lang="text"><code class="language-text">1. 看输入是不是阻塞。
+2. 看 stdout 是否被噪声占满。
+3. 看是否有重复运行会放大的副作用。
+4. 看破坏性动作是否先预览。</code></pre>
+  <p>这个顺序之所以有用，是因为它从最容易让 agent 停住的地方开始：先看输入，再看输出，再看副作用。只要这三层过了，脚本大多就能继续走。</p>
+  <p>如果你把这条诊断链放到真实 Skill 里，先能快速定位的是“为什么卡”，而不是“到底该不该再补一段说明”。</p>
+  <p>你现在应该能拿到一个失败脚本，先判断它是卡住、刷屏，还是副作用失控，然后再决定修哪一层。</p>
+</section>
+
+<section id="review">
+  <div class="head"><h2>怎么读导出的练习记录</h2><span class="tag">review hook</span></div>
+  <p>导出记录不是为了把答案塞进一个 Markdown 文件就结束。它的作用，是让你在离开页面之后还能看出自己错在判断、接口、输出，还是评估。这一层很重要，因为脚本化的错误通常不是知识点不会，而是层次混了。</p>
+  <div class="table-wrap">
+    <table data-export-context="练习记录复盘表" data-export-lang="table">
+      <thead><tr><th>记录里看到什么</th><th>说明什么</th><th>回到哪一节修</th></tr></thead>
+      <tbody>
+        <tr><td>把重复任务选成正文</td><td>还没分清判断层和执行层</td><td><a href="#boundary">正文、命令与脚本</a></td></tr>
+        <tr><td>知道要脚本化，但输入还写成 <code>input()</code></td><td>接口还在阻塞</td><td><a href="#interface">脚本接口</a></td></tr>
+        <tr><td>答对了判断题，短答却说不清输出分流</td><td>知道概念，但没把 stdout / stderr 分开</td><td><a href="#output">输出与上下文</a></td></tr>
+        <tr><td>会说 dry-run，却没写出幂等和确认门</td><td>安全只停在口头提醒</td><td><a href="#safety">安全与重试</a></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>读记录时，先看错因属于哪一层，再回对应小节重读，不要从头重看整页。这样复盘才快，也更接近实际工作里的修 bug。</p>
+  <div class="codebar"><span>读记录的顺序</span><button class="copy" data-copy="review-code">复制</button></div>
+  <pre id="review-code" data-export-context="练习记录复盘顺序" data-export-lang="text"><code class="language-text">1. 看哪类题错得最多。
+2. 判断错在边界、接口、输出还是评估。
+3. 回到对应 section 只重读那一层。
+4. 用下一次练习验证修正。</code></pre>
+  <p>如果一份记录里总是同一类题错，不要急着背答案。先找这一类题共同指向的层，再把那一层补稳。</p>
+  <p>你现在应该能拿到一份导出记录，先判断它暴露的是哪类错误，再决定回到哪一节重读。</p>
+</section>
+
+<section id="bridge">
+  <div class="head"><h2>下一步怎么接到真实 Skill</h2><span class="tag">bridge</span></div>
+  <p>如果你要把这节落到真实 Skill 里，下一步不是先写一堆脚本，而是先找一条每次都在重写的流程，问它是否稳定、重复、可验证。是的话，就给它脚本接口；不是的话，留在正文里就够了。</p>
+  <div class="table-wrap">
+    <table data-export-context="从课堂到实作" data-export-lang="table">
+      <thead><tr><th>现在先做</th><th>下一步补什么</th><th>到 04 再看什么</th></tr></thead>
+      <tbody>
+        <tr><td>找出一条重复流程</td><td>判断它是否该进 <code>scripts/</code></td><td>触发、评估、安全边界</td></tr>
+        <tr><td>给脚本补参数和 <code>--help</code></td><td>非交互输入、结构化输出、退出码</td><td>跨平台可运行性</td></tr>
+        <tr><td>给大输出加摘要和文件</td><td><code>stdout</code> / <code>stderr</code> / <code>--limit</code></td><td>结果是否能稳定复现</td></tr>
+        <tr><td>先做最小 eval</td><td>触发和输出对照</td><td>安全和发布前检查</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这里先不追 subagent、MCP 或多智能体编排；它们是更高一层的协作问题，不是本节的脚本问题。</p>
+  <p>把一条临场拼出来的步骤，改写成一条可调用、可检查的脚本资源。</p>
+</section>
+
+<section id="mistakes">
+  <div class="head"><h2>常见误区与边界</h2><span class="tag">review</span></div>
+  <p>这节最容易犯的错，不是少写脚本，而是把脚本写成另一种更啰嗦的正文。脚本只接住稳定、重复、可验证的处理；判断、取舍和语义边界仍然应该留在正文里。</p>
+  <div class="table-wrap">
+    <table data-export-context="常见误区与修法" data-export-lang="table">
+      <thead><tr><th>误区</th><th>风险</th><th>更稳的做法</th></tr></thead>
+      <tbody>
+        <tr><td>见到重复就脚本化</td><td>过度工程，反而增加维护面</td><td>先问是否稳定、重复、可验证</td></tr>
+        <tr><td>脚本里继续问人</td><td>智能体会卡住，无法继续</td><td>改成参数、环境变量或 stdin</td></tr>
+        <tr><td>stdout 打太多</td><td>上下文被噪声占满</td><td>默认摘要，必要时写文件</td></tr>
+        <tr><td>只看一次漂亮输出</td><td>不知道改动是否真的更稳</td><td>做 <code>with-skill</code> / <code>without-skill</code> 对照</td></tr>
+        <tr><td>安全只写一句提醒</td><td>破坏性操作仍然会被误触发</td><td>把 <code>--dry-run</code>、<code>--confirm</code> 和幂等写进接口</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>把“留正文、做一次性命令、收进 <code>scripts/</code>”这三种选择分开，不再把所有自动化都塞进同一层。</p>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、脚本化判断</h3>
+      <p>先判断哪些任务适合脚本化，再看什么时候只写说明就够了。</p>
+    </div>
+    <div class="quick-review">先问重复、稳定、可验证，再决定是否进 <code>scripts/</code>。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="script-boundary" data-title="最该脚本化的任务" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">boundary</span></div>
+      <h3>1. 下面哪个任务最适合放进 <code>scripts/</code>？</h3>
+      <label><input type="radio" name="q1" value="A"> 把一段结论写得更自然</label>
+      <label><input type="radio" name="q1" value="B"> 校验 200 个 JSON 字段是否符合 schema</label>
+      <label><input type="radio" name="q1" value="C"> 给用户解释一个概念</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q2" data-group="script-boundary" data-title="脚本不是必选项" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">boundary</span></div>
+      <h3>2. 所有 Skill 都必须有 <code>scripts/</code> 目录，否则就不完整。</h3>
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q3" data-group="script-boundary" data-title="语言推理">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">language</span></div>
+      <h3>3. 脚本把可重复、可验证、容易写错的部分从 ______ 中拿出来。</h3>
+      <input type="text" name="q3" data-answer="语言推理,推理" data-explain="脚本接住稳定处理，正文保留判断和顺序。">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、接口与依赖</h3>
+      <p>这一组检查你能不能写出可复现的一次性命令和自包含脚本。</p>
+    </div>
+    <div class="quick-review">接口越短越稳：参数、<code>--help</code>、固定依赖、非交互输入。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q4" data-group="interface" data-title="更可复现的命令" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">reproducible</span></div>
+      <h3>4. 哪个命令更可复现？</h3>
+      <label><input type="radio" name="q4" value="A"> <code>npx eslint .</code></label>
+      <label><input type="radio" name="q4" value="B"> <code>npx eslint@9 --fix .</code></label>
+      <label><input type="radio" name="q4" value="C"> <code>npm run anything</code></label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q5" data-group="interface" data-title="uv run" data-answer="uv run">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">uv</span></div>
+      <h3>5. 带 PEP 723 依赖声明的 Python 脚本，推荐用 ______ <code>scripts/extract.py</code> 运行。</h3>
+      <input type="text" name="q5" data-answer="uv run" data-explain="在这门课里，Python 相关脚本优先用 uv 管理运行环境。">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q full" data-question="q6" data-group="interface" data-title="依赖为什么要写进脚本">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">dependency</span></div>
+      <h3>6. 为什么把依赖写进脚本元数据，比要求用户提前装好全局包更适合 Skill？</h3>
+      <p class="solve-note">回答时至少说到：可迁移、可复现、单命令运行，以及为什么这会减少环境漂移。</p>
+      <textarea name="q6" placeholder="先说依赖，再说迁移和复现。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好的回答会说清：依赖写进脚本元数据后，脚本在不同机器、不同项目和不同客户端里仍然有同一套运行条件；智能体只要一个命令就能启动，不需要先猜用户有没有装包；这样能减少环境漂移，也更容易缓存和复现。只说“方便”还不够，要点出“稳定、迁移、单命令”这三个面。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、输出与安全</h3>
+      <p>这一组检查脚本是否会阻塞、刷屏，或者把破坏性动作藏起来。</p>
+    </div>
+    <div class="quick-review">先保数据，再保诊断，副作用默认要能退。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q7" data-group="output" data-title="输入方式" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">non-interactive</span></div>
+      <h3>7. 下面哪种输入方式最适合 agent 调用？</h3>
+      <label><input type="radio" name="q7" value="A"><code>input()</code> 逐个问人</label>
+      <label><input type="radio" name="q7" value="B">用参数、stdin 或环境变量</label>
+      <label><input type="radio" name="q7" value="C">先弹出“是否继续”</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q8" data-group="output" data-title="dry-run" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">safety</span></div>
+      <h3>8. 一个删除文件脚本应该先支持什么，让 agent 先看到会发生什么？</h3>
+      <label><input type="radio" name="q8" value="A"> <code>--force</code></label>
+      <label><input type="radio" name="q8" value="B"> <code>--dry-run</code></label>
+      <label><input type="radio" name="q8" value="C"> <code>--silent</code></label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q9" data-group="output" data-title="安全默认清单">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">safety</span></div>
+      <h3>9. 下面哪些属于面向 agent 的安全默认？</h3>
+      <label><input type="checkbox" name="q9" value="非交互输入">非交互输入</label>
+      <label><input type="checkbox" name="q9" value="create-or-update">create-or-update</label>
+      <label><input type="checkbox" name="q9" value="输出上限">输出上限</label>
+      <label><input type="checkbox" name="q9" value="破坏性操作先 dry-run">破坏性操作先 dry-run</label>
+      <label><input type="checkbox" name="q9" value="启动后再问人要不要继续">启动后再问人要不要继续</label>
+      <details><summary>展开反馈</summary><p>更稳的选择是前四项。最后一项会把脚本重新变成阻塞式流程。安全默认要落在接口里，而不是写在一句提醒里。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、评估与回看</h3>
+      <p>这一组检查你能不能用最小评估证明脚本真的有用。</p>
+    </div>
+    <div class="quick-review">先测触发，再测输出，最后看对照和证据。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q10" data-group="eval" data-title="stdout/stderr 分工" data-answer="对">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">output</span></div>
+      <h3>10. <code>stdout</code> 应该放数据，<code>stderr</code> 应该放诊断，这样更适合 agent 处理。</h3>
+      <label><input type="radio" name="q10" value="对">对</label>
+      <label><input type="radio" name="q10" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q11" data-group="eval" data-title="最有用的 eval 方式" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">baseline</span></div>
+      <h3>11. 下面哪种 eval 方式最能看出脚本是否真的帮上忙？</h3>
+      <label><input type="radio" name="q11" value="A">只看一次漂亮输出</label>
+      <label><input type="radio" name="q11" value="B"><code>with-skill</code> / <code>without-skill</code> 对照 + 可观察断言</label>
+      <label><input type="radio" name="q11" value="C">只测最明显的正例</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q full" data-question="q12" data-group="eval" data-title="脚本完整设计">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">eval</span></div>
+      <h3>12. 用 6-9 句话讲清楚：一个脚本应该怎样设计输入、输出、错误、依赖和安全护栏。</h3>
+      <p class="solve-note">请串联参数或 stdin、<code>--help</code>、版本化依赖 / <code>uv run</code>、<code>stdout</code> / <code>stderr</code>、退出码、幂等、<code>--dry-run</code> 和输出上限。</p>
+      <textarea name="q12" placeholder="先写输入，再写输出和安全。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好的回答应该把这几件事串起来：输入不阻塞，所以尽量用参数、stdin 或环境变量；<code>--help</code> 要短，能让 agent 快速学会调用；依赖要跟脚本一起声明，运行方式尽量单命令；stdout 放数据，stderr 放诊断；退出码要能分失败类型；破坏性操作要先 dry-run、再显式确认；脚本最好幂等，能重试；大输出要有限制或写文件。只要这条链路讲通，就说明你不是在背概念，而是在设计一个能被 agent 直接用的接口。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><strong>课程索引</strong>：<a href="../index.html">Agent Skills｜课程地图</a>。它固定了这节在课程里的位置和前后顺序。</li>
+  <li><strong>前置单元</strong>：<a href="../02_SKILL.md结构与触发/学习页.html">02 SKILL.md 结构与触发</a>。先把触发与支持文件分层，再讨论脚本资源。</li>
+  <li><strong>后续单元</strong>：<a href="../04_评估安全与跨平台发布/学习页.html">04 评估、安全与跨平台发布</a>。它接住本节留下的评估与兼容性问题。</li>
+  <li><strong>课内资料</strong>：<a href="../README.md">README.md</a>、<a href="../资源熔炼.md">资源熔炼.md</a>。</li>
+  <li><strong>公开来源</strong>：Claude Blog <em>Equipping agents for the real world with Agent Skills</em>，Claude Platform Docs <em>Agent Skills overview</em>，Agent Skills Open Standard <em>Agent Skills</em>，以及 <em>Specification</em>、<em>Best practices</em>、<em>Using scripts</em>、<em>Optimizing descriptions</em>、<em>Evaluating skills</em>。访问日期：2026-06-21。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

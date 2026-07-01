@@ -1,0 +1,997 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>获取、解析与标准化</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="预训练数据工程与数据配方" data-unit="单元 02">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>预训练数据工程与数据配方</strong>
+        <span>单元 02</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>对象链</a>
+        <a href="#ingest"><span class="dot"></span>获取入口</a>
+        <a href="#extract"><span class="dot"></span>正文抽取</a>
+        <a href="#walkthrough"><span class="dot"></span>案例走读</a>
+        <a href="#normalize"><span class="dot"></span>编码标准化</a>
+        <a href="#schema"><span class="dot"></span>元数据记录</a>
+        <a href="#trace"><span class="dot"></span>故障回查</a>
+        <a href="#examples"><span class="dot"></span>案例与修正</a>
+        <a href="#boundary"><span class="dot"></span>边界说明</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把网页变成可追溯的 document，再谈后面的过滤、去重和配方。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">基础单元</div>
+          <h1>获取、解析与标准化</h1>
+          <p>这一页只处理一条入口链：把网页、WARC 记录或导出文件变成可追溯的 document。先抓住原始记录，再抽正文并保留元数据，最后把编码和字段标准化成后续过滤能直接接手的输入；质量过滤、去重和配方留到后面的单元。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../01_数据工程全景_从网页到token/学习页.html">上一单元</a><a href="../03_质量过滤_规则模型与偏差/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完这一页，你应该能做什么</h3>
+          <ul>
+  <li>分清 raw data、document 和后续训练样本，不把网页直接当语料。</li>
+  <li>用状态表说明正文抽取、编码标准化和元数据记录各自读什么、写什么。</li>
+  <li>拿着一份抽取失败的记录，能判断先回查哪一步。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head"><h2>学习目标</h2><span class="tag">foundation</span></div>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>先认入口</h3>
+      <p>这一页关注网页进入数据管线时，哪些东西必须原样留下，哪些东西要先抽成 document。</p>
+    </div>
+    <div class="box info">
+      <h3>先认边界</h3>
+      <p>正文抽取、编码标准化和元数据记录是这一页的中心。质量过滤、去重、配方和 tokenization 都不在这一页里展开。</p>
+    </div>
+    <div class="box warn">
+      <h3>先留证据</h3>
+      <p>只要后面还要回到原始页面、抓取记录或抽取版本，就必须保留 source_url、charset、fetched_at、extractor_version 和 content_hash 这类字段。</p>
+    </div>
+  </div>
+  <div class="box">
+    <h3>这一页的使用方式</h3>
+    <p>先顺着对象链读，再看抽取和标准化怎么改对象，最后用回查表判断问题应该落在哪一步。你如果一开始就跳到过滤规则，往往会把输入层的问题误判成质量问题。</p>
+  </div>
+</section>
+
+<section id="map">
+  <div class="head"><h2>对象链</h2><span class="tag">trace</span></div>
+  <p>这条链只看四个可检查的状态：原始字节、解析后的页面结构、抽取后的正文记录、标准化后的 document。四个状态各有读写关系，混在一起就会丢掉回查入口。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" type="button" data-trace-step="raw">
+        <code>raw bytes</code><span>来源记录</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="dom">
+        <code>parsed DOM</code><span>页面结构</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="doc">
+        <code>document</code><span>正文 + 元数据</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="norm">
+        <code>normalized doc</code><span>统一编码</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="later">
+        <code>later filter</code><span>后续输入</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="raw">
+        <b>raw bytes</b>
+        <span>读取 URL、响应头、抓取时间和原始字节。</span>
+        <p>写入原始记录。这里最常见的失误是把模板、脚本、乱码和重定向结果一起带进来。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="dom">
+        <b>parsed DOM</b>
+        <span>读取 HTML 解析器和字符集提示。</span>
+        <p>写入页面结构。这里如果解码错了，后面的抽取看到的就是一棵坏树。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="doc">
+        <b>document</b>
+        <span>读取正文抽取器和元数据保留规则。</span>
+        <p>写入正文、来源、时间、语言候选和抽取版本。后面的过滤和去重都依赖它是否干净。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="norm">
+        <b>normalized doc</b>
+        <span>读取统一编码、NFKC 和空白整理规则。</span>
+        <p>写入可比较、可检索、可切分的文本。没有这一步，重复检测和字符级统计会漂。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="later">
+        <b>later filter</b>
+        <span>读取已经标准化的 document。</span>
+        <p>写入质量过滤、去重和配方的输入。这里不该再回头做正文抽取。</p>
+      </div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="获取解析链路表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>状态</th>
+          <th>前一步读什么</th>
+          <th>这一层写什么</th>
+          <th>错了会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>raw bytes</code></td>
+          <td>URL、响应头、抓取时间</td>
+          <td>原始记录</td>
+          <td>后面不知道原页长什么样</td>
+        </tr>
+        <tr>
+          <td><code>parsed DOM</code></td>
+          <td>HTML 和 charset 提示</td>
+          <td>页面结构</td>
+          <td>乱码会把结构一起带歪</td>
+        </tr>
+        <tr>
+          <td><code>document</code></td>
+          <td>正文抽取器、保留字段规则</td>
+          <td>正文 + 元数据</td>
+          <td>正文抽错后，后面的判断都不稳</td>
+        </tr>
+        <tr>
+          <td><code>normalized doc</code></td>
+          <td>统一编码、NFKC、空白规则</td>
+          <td>可比较、可检索的文本</td>
+          <td>重复和统计都容易失真</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="ingest">
+  <div class="head"><h2>获取入口</h2><span class="tag">source boundary</span></div>
+  <p>这一层先回答“你拿到的到底是什么”。有些来源给你的是网页字节，有些给你的是导出 CSV，有些给你的是 WARC 或 JSONL。不要一上来就把它们都叫成网页文本。</p>
+  <div class="table-wrap">
+    <table data-export-context="输入形态对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>来源形态</th>
+          <th>先留什么</th>
+          <th>容易漏掉什么</th>
+          <th>为什么这一步重要</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>网页 HTML / WARC</td>
+          <td>URL、响应头、抓取时间、原始字节</td>
+          <td>charset、重定向、正文之外的脚本与导航</td>
+          <td>抽取和标准化都要回到原始记录</td>
+        </tr>
+        <tr>
+          <td>站点导出 / CMS 导出</td>
+          <td>栏目、更新时间、作者、原站链接</td>
+          <td>字段语义和权限边界</td>
+          <td>导出内容常常已经被预处理过</td>
+        </tr>
+        <tr>
+          <td>论坛页 / 讨论串</td>
+          <td>主帖、回复顺序、楼层、时间戳</td>
+          <td>引用嵌套和签名块</td>
+          <td>后面做正文抽取时要知道层次</td>
+        </tr>
+        <tr>
+          <td>本地文件 / JSONL</td>
+          <td>schema、版本、生成时间</td>
+          <td>生成脚本和字段约定</td>
+          <td>后面回查时要知道是谁产出的</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>这一层不做什么</h3>
+    <p>这里不判断内容好坏，也不做质量过滤。先把对象和记录留住，再决定值不值得保留。输入边界没定清，后面每一步都容易偏题。</p>
+  </div>
+</section>
+
+<section id="extract">
+  <div class="head"><h2>正文抽取</h2><span class="tag">mechanism</span></div>
+  <p>抽取要把网页里真正进入 document 的正文找出来，同时把来源和版本信息留住。导航、推荐阅读、广告、脚注和重复块常常混在同一页里，抽取器要给它们划清边界。</p>
+  <div class="codebar"><span>extract_document.py</span><button class="copy" data-copy="code-extract">复制</button></div>
+  <pre id="code-extract" data-export-context="正文抽取伪代码" data-export-lang="python"><code class="language-python">def build_document(raw):
+    dom = parse_html(raw.bytes, charset_hint=raw.charset_hint)
+    main_text = extract_main_text(dom)
+    doc = {
+        "source_url": raw.url,
+        "fetched_at": raw.fetched_at,
+        "extractor_version": "main_text_v1",
+        "text": normalize_text(main_text),
+    }
+    return doc</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="正文抽取读写表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>典型症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>解析 HTML</td>
+          <td>原始字节和 charset 提示</td>
+          <td>页面树</td>
+          <td>乱码把整页结构带歪</td>
+        </tr>
+        <tr>
+          <td>找主文</td>
+          <td>DOM 结构、段落密度、链接密度</td>
+          <td>正文文本</td>
+          <td>只剩导航或空白</td>
+        </tr>
+        <tr>
+          <td>保留元数据</td>
+          <td>URL、抓取时间、抽取版本</td>
+          <td>document 记录</td>
+          <td>后面回不去原页</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>一个最小对照</h3>
+      <p>原始页里可能有“首页 / 分类 / 登录 / 推荐阅读 / 正文 / 评论区”。抽取后，document 应该留下正文和必要元数据，避免把所有块原封不动存进去。</p>
+    </div>
+    <div class="box warn">
+      <h3>别把这里做成过滤</h3>
+      <p>正文抽取关心“哪一块是正文”。质量过滤关心“正文值不值得保留”。把这两件事混在一起，会让坏抽取看起来像坏数据质量。</p>
+    </div>
+  </div>
+</section>
+
+<section id="walkthrough">
+  <div class="head"><h2>案例走读：从一个旧网页到 document</h2><span class="tag">walkthrough</span></div>
+  <p>下面把前面的概念压进一个可检查的小案例。假设数据源是一批旧站点页面，页面来自 WARC 或离线 HTML 归档，编码标注不稳定，正文周围还有导航、登录入口、推荐阅读、评论和页脚。目标不是马上判断这篇文章好不好，而是先产出一条可以回到原始页面、可以复现实验、可以交给后续过滤器的 document。</p>
+  <p>走读时只问三件事：当前步骤读的对象是什么，写出的对象是什么，失败以后第一轮应该回到哪里。只要这三件事没有写清，后面的过滤、去重、配方和训练统计都会缺少解释力。</p>
+  <div class="codebar"><span>raw_legacy_page.html</span><button class="copy" data-copy="code-walkthrough-raw">复制</button></div>
+  <pre id="code-walkthrough-raw" data-export-context="旧网页原始输入示例" data-export-lang="html"><code class="language-html">&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+  &lt;meta charset="gb2312"&gt;
+  &lt;title&gt;如何整理训练语料&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;nav&gt;首页 | 模型 | 数据集 | 登录&lt;/nav&gt;
+  &lt;main&gt;
+    &lt;h1&gt;如何整理训练语料&lt;/h1&gt;
+    &lt;p&gt;预训练数据工程的第一步，是把不同来源的网页变成结构稳定的文档记录。&lt;/p&gt;
+    &lt;p&gt;记录里要保留来源、抓取时间、抽取器版本和正文哈希，方便后续过滤与回查。&lt;/p&gt;
+  &lt;/main&gt;
+  &lt;aside&gt;相关阅读：十个数据集清洗技巧&lt;/aside&gt;
+  &lt;footer&gt;版权声明 | 站点地图 | 联系我们&lt;/footer&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="旧网页到 document 的对象变换表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>检查点</th>
+          <th>输入对象</th>
+          <th>输出对象</th>
+          <th>验收信号</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>获取</td>
+          <td>URL、响应头、原始字节、抓取时间</td>
+          <td>raw record</td>
+          <td>能看到字节长度、HTTP 状态、charset 提示和抓取批次</td>
+        </tr>
+        <tr>
+          <td>解析</td>
+          <td>raw record 里的字节与编码线索</td>
+          <td>DOM 或文本块列表</td>
+          <td>标题、段落、导航、页脚被分成可检查的块</td>
+        </tr>
+        <tr>
+          <td>正文抽取</td>
+          <td>DOM、块密度、链接密度、标签位置</td>
+          <td>main_text</td>
+          <td>正文段落被保留，导航、aside、footer 没有混进主文本</td>
+        </tr>
+        <tr>
+          <td>标准化</td>
+          <td>main_text、字符编码、Unicode 形态、空白符</td>
+          <td>normalized_text</td>
+          <td>中文可读，空白稳定，同一内容在不同抓取批次里便于比较</td>
+        </tr>
+        <tr>
+          <td>封装</td>
+          <td>normalized_text 加来源字段</td>
+          <td>document</td>
+          <td>包含 source_url、fetched_at、charset、extractor_version、content_hash</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这张表的作用是把“页面处理成功了吗”拆成五个可验证的小问题。获取成功，只说明你拿到了字节；解析成功，只说明字节能被拆成结构；抽取成功，才说明主文进入记录；标准化成功，才说明字符层面稳定；封装成功，才说明这条记录以后可以被解释。很多数据事故出在这里：团队只保存了最终文本，几周后发现训练样本里混入大量导航，却无法知道是哪一版抽取器产生的。</p>
+  <div class="grid2">
+    <div class="box info">
+      <h3>第一轮输出长什么样</h3>
+      <p>第一轮 document 可以很朴素，但字段必须承担职责。`source_url` 负责回到原页，`fetched_at` 负责定位抓取批次，`charset` 负责解释解码路径，`extractor_version` 负责对照规则变化，`content_hash` 负责后续重复检测，`text` 才是模型最终可能看到的主体内容。</p>
+    </div>
+    <div class="box warn">
+      <h3>这一步最怕什么</h3>
+      <p>最怕把“看起来能读”当作完成。页面能读，不等于 document 稳定；正文能看到，不等于元数据完整；当前样本正常，不等于下一批旧页面也能按同样规则处理。学习这一单元时，判断标准要落在对象、字段和回查路径上。</p>
+    </div>
+  </div>
+  <div class="codebar"><span>normalized_document.json</span><button class="copy" data-copy="code-walkthrough-doc">复制</button></div>
+  <pre id="code-walkthrough-doc" data-export-context="标准化 document 示例" data-export-lang="json"><code class="language-json">{
+  "source_url": "https://example.org/archive/data-engineering.html",
+  "fetched_at": "2026-06-20T09:31:12+08:00",
+  "raw_format": "html",
+  "charset": "gb2312",
+  "parser_version": "html5lib-2026-06",
+  "extractor_version": "main-text-density-v1",
+  "normalizer_version": "unicode-nfkc-space-v1",
+  "content_hash": "sha256:7c6d...",
+  "text": "如何整理训练语料\n预训练数据工程的第一步，是把不同来源的网页变成结构稳定的文档记录。\n记录里要保留来源、抓取时间、抽取器版本和正文哈希，方便后续过滤与回查。"
+}</code></pre>
+  <p>这个 JSON 示例故意保留了处理版本。版本字段会让很多后续问题变得可回答：同一 URL 两次抽取得到不同正文，先看 `extractor_version`；同一篇文章的哈希变化，先看标准化规则和空白处理；某批旧站点大面积乱码，先看 `charset` 记录和解析日志。没有这些字段，排查只能靠猜。</p>
+  <div class="table-wrap">
+    <table data-export-context="走读故障回查表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>看到的故障</th>
+          <th>第一轮回查</th>
+          <th>第二轮回查</th>
+          <th>暂缓处理</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>正文出现“Ã¥Â­Â¦”一类乱码</td>
+          <td>charset_hint、HTTP header、meta charset</td>
+          <td>解码错误策略和原始字节样本</td>
+          <td>质量过滤阈值</td>
+        </tr>
+        <tr>
+          <td>document 里只有首页、登录、站点地图</td>
+          <td>正文抽取规则和 DOM 块密度</td>
+          <td>解析器是否把 main 区域拆坏</td>
+          <td>去重策略</td>
+        </tr>
+        <tr>
+          <td>同一文章多次出现且文本略有差异</td>
+          <td>标准化规则、空白处理、Unicode 形态</td>
+          <td>content_hash 的计算位置</td>
+          <td>训练采样权重</td>
+        </tr>
+        <tr>
+          <td>样本无法解释来自哪个页面</td>
+          <td>source_url、crawl_id、fetched_at</td>
+          <td>raw record 是否仍能索引到</td>
+          <td>模型效果归因</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>注意这张故障表的顺序。它把问题放回最早可能出错的对象层：字符异常先查获取和解析，主文异常先查抽取，重复异常先查标准化与哈希，来源缺失先查 schema。这个顺序会让排查成本下降，也能避免把入口层的坏记录误判成后续算法问题。</p>
+  <div class="box">
+    <h3>怎么把走读迁移到自己的数据</h3>
+    <p>拿到一个新来源时，先挑 20 到 50 个样本人工走一遍这张链。每个样本都记录原始 URL、抓取时间、编码线索、抽取文本、标准化文本和最终 document。然后专门挑异常样本：乱码页、空正文页、超短页、导航占比高的页、重复标题页。只要异常样本能被字段解释，后面的批处理才值得扩大规模。</p>
+    <p>完成这个练习后，你应该能做两件事：第一，读懂一个数据管线日志时能指出它处理的是 raw、DOM、text 还是 document；第二，看到一个坏样本时能写出第一轮回查路径，而不是直接调过滤器、去重器或训练脚本。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="抽样验收放行表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>抽样检查</th>
+          <th>合格信号</th>
+          <th>失败时动作</th>
+          <th>能不能放大批处理</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>随机样本</td>
+          <td>大多数 document 字段完整，正文可读</td>
+          <td>补齐 schema 或修正基础解析</td>
+          <td>字段不完整时不放大</td>
+        </tr>
+        <tr>
+          <td>异常样本</td>
+          <td>乱码、空正文、导航混入都能定位到具体步骤</td>
+          <td>把失败类型写进日志和回归样本集</td>
+          <td>异常无法解释时不放大</td>
+        </tr>
+        <tr>
+          <td>重复样本</td>
+          <td>同文不同 URL 的哈希关系可解释</td>
+          <td>检查标准化位置和哈希计算规则</td>
+          <td>哈希漂移时不放大</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>release_gate.yml</span><button class="copy" data-copy="code-release-gate">复制</button></div>
+  <pre id="code-release-gate" data-export-context="抽取标准化放行清单" data-export-lang="yaml"><code class="language-yaml">sample_gate:
+  random_docs: 50
+  required_fields:
+    - source_url
+    - fetched_at
+    - charset
+    - extractor_version
+    - normalizer_version
+    - content_hash
+    - text
+  fail_fast:
+    - unreadable_text_rate_over_2_percent
+    - missing_source_url
+    - extractor_version_not_recorded
+    - navigation_blocks_in_main_text</code></pre>
+  <div class="box info">
+    <h3>放行标准要写成可执行问题</h3>
+    <p>“页面看起来差不多”不是放行标准。更稳的写法是：50 个随机样本里缺 source_url 的比例是多少，乱码样本能不能回到原始字节，抽取器版本有没有写入每条 document，导航块是否进入 main_text，哈希是在标准化前还是标准化后计算。每个问题都对应一个字段或一步处理动作，回答不出来就说明这批数据还没有准备好交给过滤和去重。</p>
+    <p>一个可操作的抽样记录可以这样写：样本 17 来自旧站点新闻页，raw 里 charset 是 gb2312，解析后 main 区域存在两个段落，抽取后混入页脚版权，标准化文本可读但 content_hash 已生成。这个样本的结论不是“丢掉”，而是“抽取器回归样本 + 暂停放大批处理”。练习时你可以照这个格式写三条异常记录，每条都要指出读什么字段、查哪一步、修完以后用什么信号验收。修复后再跑同一组异常样本，确认旧问题没有重新进入 document。</p>
+    <p>这也是本单元和后续单元的交界线。完成获取、解析、抽取和标准化后，你手里应该有一批“可解释的 document”。下一单元才开始讨论哪些 document 应该留下，哪些要丢掉，以及过滤规则会带来什么偏差。把放行标准写清，后面的质量判断才不会替入口层的问题背锅。</p>
+  </div>
+</section>
+
+<section id="normalize">
+  <div class="head"><h2>编码标准化</h2><span class="tag">stability</span></div>
+  <p>抽取完成以后，还要把字符层面的不稳定压下去。这里处理的是可比较、可检索、可重复的文本形态，不改写内容含义。字符解码错了，后面的去重、匹配和统计都会跟着错。</p>
+  <div class="codebar"><span>normalize_text.py</span><button class="copy" data-copy="code-normalize">复制</button></div>
+  <pre id="code-normalize" data-export-context="编码标准化伪代码" data-export-lang="python"><code class="language-python">import unicodedata
+
+def normalize_text(raw_bytes, charset_hint=None):
+    text = raw_bytes.decode(charset_hint or "utf-8", errors="replace")
+    text = unicodedata.normalize("NFKC", text)
+    text = " ".join(text.split())
+    return text</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="标准化问题表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>问题</th>
+          <th>这一步在读什么</th>
+          <th>这一步写什么</th>
+          <th>不做会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>错误解码</td>
+          <td>原始字节和 charset 提示</td>
+          <td>可读文本</td>
+          <td>乱码进入 document</td>
+        </tr>
+        <tr>
+          <td>全角半角混用</td>
+          <td>字符形式</td>
+          <td>统一表示</td>
+          <td>重复检测和关键词匹配漂移</td>
+        </tr>
+        <tr>
+          <td>空白不一致</td>
+          <td>换行、制表、多个空格</td>
+          <td>稳定的分隔方式</td>
+          <td>切分和统计结果不稳</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>这一步为什么放在抽取之后</h3>
+    <p>先抽取正文，再统一字符，顺序更稳。你如果先做字符清理再找正文，很多页面的结构线索会被抹掉，抽取器反而更难判断哪一块是正文。</p>
+  </div>
+</section>
+
+<section id="schema">
+  <div class="head"><h2>元数据记录</h2><span class="tag">schema</span></div>
+  <p>document 是一条能回查的记录。正文之外的字段承担解释职责，它们决定你以后能不能说明这条记录从哪里来、是谁抽的、什么时候抽的、用什么规则抽的。</p>
+  <div class="codebar"><span>document-record.json</span><button class="copy" data-copy="code-schema">复制</button></div>
+  <pre id="code-schema" data-export-context="文档记录示例" data-export-lang="json"><code class="language-json">{
+  "source_url": "https://example.org/article",
+  "fetched_at": "2026-06-20T10:15:00Z",
+  "raw_format": "html",
+  "charset": "utf-8",
+  "extractor_version": "main_text_v1",
+  "language": "zh",
+  "content_hash": "sha256:...",
+  "text": "..."
+}</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="元数据字段表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>字段</th>
+          <th>作用</th>
+          <th>缺了会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>source_url</code></td>
+          <td>回到原始页面</td>
+          <td>你不知道这条正文从哪来</td>
+        </tr>
+        <tr>
+          <td><code>fetched_at</code></td>
+          <td>标记抓取时间</td>
+          <td>无法判断页面是否后来改过</td>
+        </tr>
+        <tr>
+          <td><code>charset</code></td>
+          <td>帮助解码和排错</td>
+          <td>乱码问题很难回溯</td>
+        </tr>
+        <tr>
+          <td><code>extractor_version</code></td>
+          <td>记录正文抽取版本</td>
+          <td>没法比较新旧抽取器差异</td>
+        </tr>
+        <tr>
+          <td><code>content_hash</code></td>
+          <td>做去重和回查</td>
+          <td>同文不同名时很难发现重复</td>
+        </tr>
+        <tr>
+          <td><code>language</code></td>
+          <td>做后续路由和过滤</td>
+          <td>语言混杂会被拖到后面才暴露</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="tools">
+  <div class="head"><h2>工具视角</h2><span class="tag">source-to-tool</span></div>
+  <p>工具在这里承担可重复流程的角色。看工具时，只问它在链路里改了什么对象，不要把工具名当成结论。</p>
+  <div class="table-wrap">
+    <table data-export-context="工具映射表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>资料</th>
+          <th>主要看哪一层</th>
+          <th>适合借鉴什么</th>
+          <th>暂时别扩到哪里</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Stanford CS336 data materials</td>
+          <td>课程主线和对象链</td>
+          <td>从网页到语料的层次感</td>
+          <td>不要把它当作实现细节文档</td>
+        </tr>
+        <tr>
+          <td>DataTrove</td>
+          <td>raw files 到 document 的 pipeline</td>
+          <td>reader / filter / writer 的组织方式</td>
+          <td>不要把它和模型训练超参混在一起</td>
+        </tr>
+        <tr>
+          <td>NeMo Curator</td>
+          <td>document 后的策展和清理</td>
+          <td>过滤、分布式执行和数据整形的思路</td>
+          <td>不要直接把它当抽取器来讲</td>
+        </tr>
+        <tr>
+          <td>FineWeb</td>
+          <td>验证和数据配方案例</td>
+          <td>从数据决策回到训练效果</td>
+          <td>不要把它当成唯一 recipe</td>
+        </tr>
+        <tr>
+          <td>OLMo 2</td>
+          <td>来源透明和训练记录</td>
+          <td>记录字段和发布边界的写法</td>
+          <td>不要把它误读成数据处理库</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box">
+    <h3>工具名的正确用法</h3>
+    <p>当你看到一个框架或案例，先把它放回 document、sample、token 或 shard 的哪一层，再看它的实现。层次清楚以后，工具名只是一张索引卡，答案仍然在对象层。</p>
+  </div>
+</section>
+
+<section id="trace">
+  <div class="head"><h2>故障回查</h2><span class="tag">diagnosis</span></div>
+  <p>这一段的目标很直接：看到问题时先回到哪一层。下面这张回查表，专门把症状和最先检查的对象对上，减少在模型、训练脚本或数据规模上绕路的时间。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" type="button" data-terminal-case="case-1">乱码</button>
+      <button class="ghost" type="button" data-terminal-case="case-2">正文为空</button>
+      <button class="ghost" type="button" data-terminal-case="case-3">缺 source_url</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite" data-export-context="回查输出示例" data-export-lang="text"># case 1
+doc-0187: mojibake after decode
+=> check charset_hint, raw bytes, and the decode step before touching the extractor.</pre>
+    <template data-terminal-output="case-1"># case 1
+doc-0187: mojibake after decode
+=> check charset_hint, raw bytes, and the decode step before touching the extractor.</template>
+    <template data-terminal-output="case-2"># case 2
+doc-0412: main text is empty but nav text is present
+=> check the extraction rule, not the filtering rule.</template>
+    <template data-terminal-output="case-3"># case 3
+doc-0999: source_url missing from record
+=> the schema is incomplete; recovery is impossible without the origin field.</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="回查路径表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>先查什么</th>
+          <th>它读什么</th>
+          <th>它写什么</th>
+          <th>常见根因</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>乱码</td>
+          <td>charset_hint 和原始字节</td>
+          <td>解码前的字符提示</td>
+          <td>文本字符串</td>
+          <td>字符集猜错或解码顺序不对</td>
+        </tr>
+        <tr>
+          <td>正文为空</td>
+          <td>抽取规则</td>
+          <td>DOM 结构和正文密度</td>
+          <td>document.text</td>
+          <td>把导航当正文，或把正文误删了</td>
+        </tr>
+        <tr>
+          <td>缺 source_url</td>
+          <td>schema</td>
+          <td>记录字段定义</td>
+          <td>document 记录</td>
+          <td>设计时就没留回查入口</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="examples">
+  <div class="head"><h2>案例与修正</h2><span class="tag">worked case</span></div>
+  <p>同一页网页，最少会有三种结果：原始页面、错误抽取后的 document、修正后的 document。你要会区分它们，不然会把“页面本来就这样”误判成“处理已经完成”。</p>
+  <div class="table-wrap">
+    <table data-export-context="同页三态对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>状态</th>
+          <th>看到什么</th>
+          <th>留下什么</th>
+          <th>下一步该查什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>原始页面</td>
+          <td>导航、正文、脚注、广告都在</td>
+          <td>网页字节和抓取记录</td>
+          <td>先确认解析和编码是否正常</td>
+        </tr>
+        <tr>
+          <td>错误 document</td>
+          <td>正文被裁掉，或者只剩导航</td>
+          <td>一条坏记录</td>
+          <td>回到抽取规则，不要先改过滤器</td>
+        </tr>
+        <tr>
+          <td>修正后 document</td>
+          <td>正文清楚，元数据完整，字符稳定</td>
+          <td>可以交给后续过滤的输入</td>
+          <td>再进入质量过滤和去重单元</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>论坛页和新闻页的差别</h3>
+      <p>论坛页要更看重主帖、回复、楼层和引用嵌套；新闻页更看重正文、时间、栏目和作者。抽取规则如果对两类页面一视同仁，结果通常会偏。</p>
+    </div>
+    <div class="box warn">
+      <h3>这页的终点</h3>
+      <p>做到这里，你应该能把一条网页记录变成可追溯的 document，并知道问题该回到哪一层。下一页才开始谈质量过滤、规则和偏差。</p>
+    </div>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head"><h2>边界说明</h2><span class="tag">boundary</span></div>
+  <div class="grid2">
+    <div class="box info">
+      <h3>这一页已经覆盖的</h3>
+      <p>获取入口、正文抽取、编码标准化、元数据 schema 和回查顺序。你现在可以把 raw data 和 document 分开，也能解释为什么记录字段不能省。</p>
+    </div>
+    <div class="box warn">
+      <h3>下一页才会继续的</h3>
+      <p>质量过滤、规则模型、偏差、去重、污染控制、数据配方和 tokenization。它们都建立在这里产出的 document 之上，不应该在这页里提前展开。</p>
+    </div>
+  </div>
+  <p>如果你在实作时发现 document 里还残留大量导航和脚注，先回到正文抽取；如果字符已经错了，先回到编码标准化；如果根本回不了原页，说明 schema 没留 source_url。顺序错了，后面每一层都会替你放大错误。</p>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>怎么答才算会</h3>
+    <p>先分对象，再讲转换，再回到记录。能说出输入、输出、读写关系和一个常见故障，才算真的会。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>选择题看对象边界；填空题看术语是否稳定；开放题看原因、后果和回查对象。答案不用长，但要能指向下一步检查什么。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、对象和边界</h3>
+      <p>先把 raw data、document 和后续训练输入分开。对象一旦混掉，后面的工具都会看错层。</p>
+    </div>
+    <div class="quick-review">先把对象说准，再谈流程。不要把网页、正文和训练样本混成一层。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、对象和边界" data-title="哪一个对象最适合承接正文抽取结果并保留元数据？" data-answer="document">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">对象边界</span></div>
+      <h3>哪一个对象最适合承接正文抽取结果并保留元数据？</h3>
+      <label><input type="radio" name="q1" value="raw data"> raw data</label>
+      <label><input type="radio" name="q1" value="document"> document</label>
+      <label><input type="radio" name="q1" value="sample"> sample</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、对象和边界" data-title="raw HTML 可以直接当 document 吗？" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">入口边界</span></div>
+      <h3>raw HTML 可以直接当 document 吗？</h3>
+      <label><input type="radio" name="q2" value="对"> 对</label>
+      <label><input type="radio" name="q2" value="错"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q3" data-group="一、对象和边界" data-title="把入口记录写清楚：输入形态、保留字段、输出对象。">
+      <div class="q-meta"><span class="pill">mini-fields</span><span class="pill">record</span></div>
+      <h3>把入口记录写清楚：输入形态、保留字段、输出对象。</h3>
+      <div class="mini-fields">
+        <label>输入形态<input type="text" data-answer="html bytes;raw bytes;warc record" name="q3_input" placeholder="例如：HTML bytes"></label>
+        <label>保留字段<input type="text" data-answer="source_url;charset;fetched_at;response headers" name="q3_keep" placeholder="例如：source_url, charset"></label>
+        <label>输出对象<input type="text" data-answer="document" name="q3_output" placeholder="例如：document"></label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q4" data-group="一、对象和边界" data-title="用两句话解释 document 和 sample 的区别">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">概念区分</span></div>
+      <h3>用两句话解释 document 和 sample 的区别</h3>
+      <p class="solve-note">至少讲清楚：谁给治理看，谁给训练看；一个 document 怎样变出多个 sample。</p>
+      <textarea name="q4" placeholder="先写对象，再写用途，再写边界。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>合格答案应包含三点：document 是抽取后的治理对象，sample 是训练输入；sample 可以由一个 document 切窗，也可以把多个短 document pack 到一起；不要把二者说成同一层。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、抽取和标准化</h3>
+      <p>把页面噪声、字符问题和正文抽取分开。这里最容易的错误，是把“文本变少了”误判成“数据质量变差了”。</p>
+    </div>
+    <div class="quick-review">抽取决定哪块是正文，标准化决定字符是否稳定。两步不能互相替代。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q5" data-group="二、抽取和标准化" data-title="只删除 HTML 标签的问题是什么？" data-answer="仍会把导航、脚注和广告留在文本里">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">extract</span></div>
+      <h3>只删除 HTML 标签的问题是什么？</h3>
+      <label><input type="radio" name="q5" value="仍会把导航、脚注和广告留在文本里"> 仍会把导航、脚注和广告留在文本里</label>
+      <label><input type="radio" name="q5" value="一定能抓出正文"> 一定能抓出正文</label>
+      <label><input type="radio" name="q5" value="会自动修好乱码"> 会自动修好乱码</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q6" data-group="二、抽取和标准化" data-title="错误解码后再做分词，通常能自动修回来吗？" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">decode</span></div>
+      <h3>错误解码后再做分词，通常能自动修回来吗？</h3>
+      <label><input type="radio" name="q6" value="对"> 对</label>
+      <label><input type="radio" name="q6" value="错"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q7" data-group="二、抽取和标准化" data-title="正文抽取要找网页中的哪一块？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">main text</span></div>
+      <h3>正文抽取要找网页中的哪一块？</h3>
+      <input type="text" name="q7" data-answer="正文;主文;main text" placeholder="一个词或短语">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、元数据和 schema</h3>
+      <p>字段承担回查职责。只要还要回到原始页面、对照抽取版本或做去重，元数据就得先写好。</p>
+    </div>
+    <div class="quick-review">能回查、能复现、能比较，是这个 schema 的三件事。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q8" data-group="三、元数据和 schema" data-title="哪个字段最直接帮助回到原始页面？" data-answer="source_url">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">traceability</span></div>
+      <h3>哪个字段最直接帮助回到原始页面？</h3>
+      <label><input type="radio" name="q8" value="source_url"> source_url</label>
+      <label><input type="radio" name="q8" value="content_hash"> content_hash</label>
+      <label><input type="radio" name="q8" value="extractor_version"> extractor_version</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q9" data-group="三、元数据和 schema" data-title="用于记录抽取器版本的字段通常叫什么？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">versioning</span></div>
+      <h3>用于记录抽取器版本的字段通常叫什么？</h3>
+      <input type="text" name="q9" data-answer="extractor_version;extractor version;extractor" placeholder="例如：extractor_version">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q10" data-group="三、元数据和 schema" data-title="设计一份最小 document schema，至少写出 5 个字段。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">schema</span></div>
+      <h3>设计一份最小 document schema，至少写出 5 个字段。</h3>
+      <p class="solve-note">必须说明每个字段的作用。只列字段名不够，要写出它帮助回查、比较还是复现。</p>
+      <textarea name="q10" placeholder="例如：source_url、fetched_at、charset、extractor_version、content_hash。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>合格答案至少要覆盖：回到原页的字段、抓取时间、字符集、抽取版本、内容哈希。更完整的答案还会补 language、raw_format、crawl_id 或 similar fields。解释里要说清每个字段服务于什么后续动作。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、回查和迁移</h3>
+      <p>看到故障时，先回到哪一层、再查什么字段，是这一页最值钱的能力。</p>
+    </div>
+    <div class="quick-review">先查 charset，再查抽取，再查 schema。不要先动后面的过滤和训练参数。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q11" data-group="四、回查和迁移" data-title="看到乱码时，第一轮先查什么？" data-answer="charset_hint">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">decode</span></div>
+      <h3>看到乱码时，第一轮先查什么？</h3>
+      <label><input type="radio" name="q11" value="charset_hint"> charset_hint</label>
+      <label><input type="radio" name="q11" value="content_hash"> content_hash</label>
+      <label><input type="radio" name="q11" value="source_url"> source_url</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="四、回查和迁移" data-title="如果 document 里只剩导航和广告，你会先回查哪一步？">
+      <div class="q-meta"><span class="pill">diagnosis</span><span class="pill">extract</span></div>
+      <h3>如果 document 里只剩导航和广告，你会先回查哪一步？</h3>
+      <p class="solve-note">写出第一步、第二步和为什么要按这个顺序查。不要一上来就怀疑过滤器。</p>
+      <textarea name="q12" placeholder="先说抽取，再说明第一轮为什么暂不查过滤或训练。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>先回到正文抽取，再看解析和编码是否正常。导航和广告占比过高，说明抽取规则出了问题；如果字符都错了，先修解码，再看正文。过滤器要等 document 本身可信以后再查。</p></details>
+    </div>
+
+    <div class="q" data-question="q13" data-group="四、回查和迁移" data-title="抽取后还有大量导航和脚注，下一轮最该先动哪里？" data-answer="正文抽取">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">boundary</span></div>
+      <h3>抽取后还有大量导航和脚注，下一轮最该先动哪里？</h3>
+      <label><input type="radio" name="q13" value="正文抽取"> 正文抽取</label>
+      <label><input type="radio" name="q13" value="训练超参"> 训练超参</label>
+      <label><input type="radio" name="q13" value="tokenizer 词表"> tokenizer 词表</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q14" data-group="四、回查和迁移" data-title="放大批处理前，哪个条件最该先满足？" data-answer="字段完整且异常可解释">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">release gate</span></div>
+      <h3>放大批处理前，哪个条件最该先满足？</h3>
+      <label><input type="radio" name="q14" value="字段完整且异常可解释"> 字段完整且异常可解释</label>
+      <label><input type="radio" name="q14" value="模型 loss 已经下降"> 模型 loss 已经下降</label>
+      <label><input type="radio" name="q14" value="数据文件已经压缩"> 数据文件已经压缩</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q15" data-group="四、回查和迁移" data-title="写一条你会放进抽样验收清单的规则。">
+      <div class="q-meta"><span class="pill">open</span><span class="pill">checklist</span></div>
+      <h3>写一条你会放进抽样验收清单的规则。</h3>
+      <p class="solve-note">规则要能被检查，最好包含字段、阈值或失败动作。</p>
+      <textarea name="q15" placeholder="例如：50 个随机样本里 source_url 必须全部存在；乱码样本要能回到原始字节。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>合格规则要可执行，例如要求 source_url、extractor_version、content_hash 全部存在；随机样本乱码率超过阈值就停止；导航块进入正文时回查抽取器版本。只写“质量要好”不算合格。</p></details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><a href="https://cs336.stanford.edu/spring2025/index.html">Stanford CS336 Spring 2025 data materials</a>，支撑课程主线、对象链和这页的边界。</li>
+  <li><a href="https://github.com/huggingface/datatrove">DataTrove</a> 与 <a href="https://docs.nvidia.com/nemo/curator/latest/">NeMo Curator</a>，支撑抽取、清理和流水线组织的工具视角。</li>
+  <li><a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb">FineWeb 数据集</a>、<a href="https://huggingfacefw-blogpost-fineweb-v1.static.hf.space/">FineWeb 技术博客</a> 和 <a href="https://arxiv.org/abs/2406.17557">FineWeb 论文</a>，支撑从 document 到后续验证的过渡。</li>
+  <li><a href="https://arxiv.org/abs/2501.00656">OLMo 2</a>，支撑来源透明、记录字段和发布边界的写法。</li>
+</ul>
+<p class="muted">来源快照：access date 2026-06-20。这里只用公开来源讲课程主线，不扩展未在源材料里出现的实现细节。</p>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

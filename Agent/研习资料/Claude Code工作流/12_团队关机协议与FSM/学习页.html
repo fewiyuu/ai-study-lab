@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>12 团队关机协议与FSM｜Claude Code 工作流</title>
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand"><strong>Claude Code 工作流</strong><span>12｜团队关机协议与FSM</span></div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>目标与主线</a>
+      <a href="#protocol"><span class="dot"></span>协议是什么</a>
+      <a href="#request"><span class="dot"></span>shutdown_request</a>
+      <a href="#response"><span class="dot"></span>shutdown_response</a>
+      <a href="#fsm"><span class="dot"></span>状态机</a>
+      <a href="#confirm"><span class="dot"></span>确认与查询</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>导出学习记录</a>
+    </nav>
+    <div class="side-note">关机协议不是把线程粗暴杀掉，而是请求、确认、退出 loop、更新状态、回信给 lead。</div>
+  </aside>
+  <main>
+    <header class="hero" id="goal">
+      <div>
+        <div class="kicker">Team protocol</div>
+        <h1>团队关机协议与FSM</h1>
+        <p class="muted">在 Agent team 中，lead 不能只是强行停止队员。关机协议把“请 Alice 退出”变成一个可确认的状态机：lead 创建 shutdown request，写入 Alice inbox；Alice 读到后调用 `shutdown_response`；如果 approve，teammate loop 设置 `should_exit`，退出循环，把成员状态从 working 写成 shutdown，并向 lead inbox 发送确认消息。</p>
+        <div class="map">
+          <span class="node">request id</span><span class="arrow">→</span>
+          <span class="node">pending</span><span class="arrow">→</span>
+          <span class="node">alice inbox</span><span class="arrow">→</span>
+          <span class="node">approved</span><span class="arrow">→</span>
+          <span class="node">shutdown</span>
+        </div>
+        <p>学完本页，你应该能解释 shutdown request 的生命周期、为什么要 request_id、`should_exit` 如何让 teammate loop 停止，以及 lead 如何确认 Alice 已经关机。</p>
+      </div>
+      <div class="box soft">
+        <h3>来源材料</h3>
+        <p>视频：《Learn Claude Code 源码详解》团队协议（上）- 关机，开发实战分享屋，2026-03-27。</p>
+        <p>本页聚焦关机请求、响应确认、FSM 状态转换、teammate 退出和 lead 收到确认。</p>
+      </div>
+    </header>
+
+    <section id="protocol">
+      <div class="head"><h2>1. 团队协议让协作可确认</h2><span class="tag">request / response</span></div>
+      <p>第 11 块的 Agent team 已经有成员和消息总线，但那只是通信底座。团队协议是在通信之上定义“这类消息应该怎样被处理”。关机协议就是其中一种：lead 不是简单说一句“你停下”，而是创建一个请求，等待 teammate 响应，再根据响应更新状态。</p>
+      <p>这种设计的好处是可追踪。请求有 `request_id`，状态从 pending 变成 approved 或 rejected；队员退出前可以发送确认；lead 后续可以查询请求状态。协议让团队动作不再是散乱消息，而是一条有状态的流程。</p>
+      <div class="grid2">
+        <div class="box warn">
+          <h3>没有协议的问题</h3>
+          <ul>
+            <li>lead 不知道队员是否真的收到消息。</li>
+            <li>队员是否退出没有确认。</li>
+            <li>状态只靠自然语言猜。</li>
+            <li>多个请求时难以对应。</li>
+          </ul>
+        </div>
+        <div class="box ok">
+          <h3>关机协议提供</h3>
+          <ul>
+            <li>唯一 request id。</li>
+            <li>pending / approved / rejected 状态。</li>
+            <li>teammate 主动响应。</li>
+            <li>lead inbox 中的确认消息。</li>
+          </ul>
+        </div>
+      </div>
+      <p>FSM 是 finite state machine，也就是有限状态机。它强调系统只允许在有限状态之间按规则跳转。</p>
+    </section>
+
+    <section id="request">
+      <div class="head"><h2>2. `shutdown_request`：lead 发起关机请求</h2><span class="tag">pending request</span></div>
+      <p>当用户要求“spawn Alice as coder and request her shutdown”，lead 先创建 Alice，然后再调用 `shutdown_request`。本地函数会生成 request id，把请求登记到 `shutdown_requests` 字典里，初始状态是 pending，target 是 Alice。</p>
+      <p>随后 MessageBus 把一条 shutdown 请求写入 Alice 的 inbox。消息里除了 type、from、content、timestamp，还会带上 request_id。这个 id 很重要：Alice 后续响应时，必须说明自己响应的是哪一个请求。</p>
+      <div class="grid2">
+        <div class="box soft">
+          <h3>流程图式文字</h3>
+          <ol>
+            <li>lead 创建 `request_id`，登记 pending 请求。</li>
+            <li>lead 把 `shutdown_request` 写入 Alice inbox。</li>
+            <li>Alice 下一轮读取 inbox，把请求交给模型判断。</li>
+            <li>Alice 调用 `shutdown_response`，返回 approve 和 reason。</li>
+            <li>系统更新请求状态，并把确认写回 lead inbox。</li>
+            <li>若批准，Alice 设置 `should_exit`，自然退出 loop。</li>
+          </ol>
+        </div>
+        <div class="box ok">
+          <h3>协议验收清单</h3>
+          <ul>
+            <li>每个请求都有唯一 `request_id`。</li>
+            <li>请求状态只在合法状态间跳转。</li>
+            <li>批准和拒绝都要给 lead 回信。</li>
+            <li>线程退出前有机会保存状态和结果。</li>
+            <li>成员最终状态能在 config 中查到。</li>
+          </ul>
+        </div>
+      </div>
+      <div class="codebar"><span class="label">逐行拆解：创建 shutdown request</span><span>Python</span></div>
+      <pre><code>def shutdown_request(teammate):
+    request_id = str(uuid.uuid4())[:8]
+
+    with lock:
+        shutdown_requests[request_id] = {
+            "target": teammate,
+            "status": "pending",
+        }
+
+    bus.send(
+        to=teammate,
+        sender="lead",
+        message_type="shutdown_request",
+        content="Please shutdown gracefully.",
+        extra={"request_id": request_id},
+    )
+    return f"shutdown request {request_id} sent to {teammate}"</code></pre>
+      <div class="codebar"><span class="label">Alice 收件箱中的消息</span><span>JSONL</span></div>
+      <pre><code>{"type":"shutdown_request","from":"lead","content":"Please shutdown gracefully.","request_id":"a13f29c0"}</code></pre>
+      <p>这里用 lock 是为了保护 `shutdown_requests`。团队系统里 lead 和 teammate 可能运行在不同线程，状态字典被同时读写时要避免竞态。</p>
+    </section>
+
+    <section id="response">
+      <div class="head"><h2>3. `shutdown_response`：Alice 读 inbox 后响应</h2><span class="tag">approve / reject</span></div>
+      <p>Alice 的 teammate loop 每轮开始会读自己的 `alice.jsonl`。读到 shutdown request 后，这条消息被加入 Alice 的 messages。模型看到“请优雅关机”和 request_id，应该调用 `shutdown_response`，输入包括 `request_id`、`approve` 和 `reason`。</p>
+      <p>如果 `approve` 为 true，执行函数会把 `shutdown_requests[request_id].status` 从 pending 改为 approved，并设置 `should_exit = True`。这不是立即杀掉线程，而是让 teammate loop 在当前工具结果处理完后自然 break。</p>
+      <div class="codebar"><span class="label">正确示例：Alice 的响应工具调用</span><span>JSON</span></div>
+      <pre><code>{
+  "name": "shutdown_response",
+  "input": {
+    "request_id": "a13f29c0",
+    "approve": true,
+    "reason": "Acknowledged. I will shut down gracefully."
+  }
+}</code></pre>
+      <div class="codebar"><span class="label">逐行拆解：处理 shutdown_response</span><span>Python</span></div>
+      <pre><code>def handle_shutdown_response(sender, request_id, approve, reason):
+    with lock:
+        req = shutdown_requests.get(request_id)
+        if not req:
+            return False, "unknown request"
+
+        req["status"] = "approved" if approve else "rejected"
+
+    bus.send(
+        to="lead",
+        sender=sender,
+        message_type="shutdown_response",
+        content=reason,
+        extra={"request_id": request_id, "approved": approve},
+    )
+    return approve, reason</code></pre>
+      <p>如果 Alice 拒绝，状态会变成 rejected，teammate loop 不应该退出。拒绝也要回信给 lead，因为 lead 需要知道请求没有成功。</p>
+    </section>
+
+    <section id="fsm">
+      <div class="head"><h2>4. FSM：状态跳转比自然语言更可靠</h2><span class="tag">finite state machine</span></div>
+      <p>关机协议可以看成一个小型有限状态机。请求刚创建时是 pending；Alice 同意后变成 approved；Alice 拒绝后变成 rejected。teammate 成员状态也会变化：Alice 创建时是 working，正常完成任务可变 idle，如果批准关机并退出 loop，则保存为 shutdown。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>当前状态</th><th>触发事件</th><th>下一状态</th><th>必须产生的副作用</th></tr></thead>
+          <tbody>
+            <tr><td>无请求</td><td>lead 调用 `shutdown_request`</td><td>pending</td><td>写入请求字典和 Alice inbox。</td></tr>
+            <tr><td>pending</td><td>Alice approve=true</td><td>approved</td><td>设置 `should_exit`，回信 lead。</td></tr>
+            <tr><td>pending</td><td>Alice approve=false</td><td>rejected</td><td>保存拒绝原因，回信 lead。</td></tr>
+            <tr><td>approved</td><td>teammate loop 收尾完成</td><td>shutdown</td><td>把成员状态保存到 config。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="viz-panel">
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <h3>状态机切换</h3>
+            <div class="viz-actions">
+              <button data-case="pending" class="active">请求已发送</button>
+              <button data-case="approved">Alice 批准</button>
+              <button data-case="shutdown">线程退出</button>
+              <button data-case="rejected">Alice 拒绝</button>
+            </div>
+            <div class="state-flow">
+              <span class="state" data-state="pending">pending</span><span class="arrow">→</span>
+              <span class="state" data-state="approved">approved</span><span class="arrow">→</span>
+              <span class="state" data-state="shutdown">shutdown</span>
+            </div>
+            <p class="mini">拒绝路径：pending → rejected，成员状态不进入 shutdown。</p>
+          </div>
+          <div class="viz-cell">
+            <h3 id="caseTitle">请求等待响应</h3>
+            <p id="caseText">lead 已经创建 request，并把 shutdown_request 写入 Alice inbox。此时请求状态是 pending，Alice config 仍是 working。</p>
+            <div class="mailbox" id="caseBox"></div>
+          </div>
+        </div>
+      </div>
+      <p>状态机的价值是减少含糊。系统不需要猜“Alice 是不是差不多要关了”，而是看字段：request status 是 approved 还是 pending，member status 是 working 还是 shutdown。</p>
+    </section>
+
+    <section id="confirm">
+      <div class="head"><h2>5. lead 通过 inbox 和查询工具确认结果</h2><span class="tag">confirmation</span></div>
+      <p>Alice 批准关机后，除了设置 `should_exit`，还会通过 MessageBus 给 lead 发送一条 shutdown_response 消息。lead 下一轮 loop 开头读取 `lead.jsonl`，就能把“Alice 已确认关机”的消息加入 messages。这样模型后续决策时知道队员已经退出。</p>
+      <p>还有一个工具用于查询 shutdown status。lead 可以查看 `shutdown_requests` 字典，知道某个请求仍然 pending，还是已经 approved / rejected。视频里先从主线程角度 debug 时，因为 Alice 线程没有真正跑起来，所以 request 还停在 pending，Alice config 还是 working；放开线程后，Alice 才会读 inbox、响应、退出并变成 shutdown。</p>
+      <div class="box soft">
+        <h3>Worked example：pending 不等于失败</h3>
+        <p>lead 查询到 request 仍是 pending 时，不能立刻断定 Alice 拒绝了。更合理的排查顺序是：Alice 线程是否启动；Alice 是否读到了自己的 inbox；消息里是否带了正确 `request_id`；Alice 是否调用了 `shutdown_response`；响应是否成功写回 lead inbox。只有这些环节都正常，才继续看业务层面的拒绝原因。</p>
+      </div>
+      <div class="grid3">
+        <div class="route"><h3>主线程视角</h3><p>创建请求、写入 Alice inbox、可查询 pending。</p></div>
+        <div class="route"><h3>Alice 线程视角</h3><p>读取 inbox、调用 response、设置 should_exit。</p></div>
+        <div class="route"><h3>确认视角</h3><p>lead inbox 收到响应，config 中 Alice 变 shutdown。</p></div>
+      </div>
+      <div class="box warn">
+        <h3>常见坑</h3>
+        <ul>
+          <li>只发 shutdown 消息，不记录 request id。</li>
+          <li>Alice 响应后没有回信给 lead。</li>
+          <li>批准后直接杀线程，没有让 loop 自然退出。</li>
+          <li>`should_exit` 为 true 后没有把成员状态保存为 shutdown。</li>
+          <li>拒绝请求也没有记录 rejected 状态。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>先分清消息、协议和状态机。</p></div><div class="box soft">提示：协议让团队动作可确认，不只是发一句话。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="1. 协议价值"><div class="q-meta"><span class="pill">选择</span></div><h3>1. 关机协议最主要解决什么问题？</h3><label><input type="radio" name="q1" value="A">A. 让队员退出过程可请求、可响应、可确认</label><br><label><input type="radio" name="q1" value="B">B. 让所有消息都不需要 inbox</label><br><label><input type="radio" name="q1" value="C">C. 让 teammate 无限运行</label></div>
+          <div class="q" data-title="2. FSM"><div class="q-meta"><span class="pill">填空</span></div><h3>2. FSM 的英文全称是 ______，中文可以叫 ______。</h3><input type="text" name="q2"></div>
+          <div class="q" data-title="3. request id"><div class="q-meta"><span class="pill">短答</span></div><h3>3. 为什么 shutdown request 需要 request_id？</h3><textarea name="q3"></textarea></div>
+          <div class="q" data-title="4. graceful"><div class="q-meta"><span class="pill">解释</span></div><h3>4. 为什么这里强调 graceful shutdown，而不是直接 kill 线程？</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、请求与响应</h3><p>检查你能不能追踪 lead 和 Alice 的消息。</p></div><div class="box warn">请求写入 Alice inbox，响应写回 lead inbox。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="5. shutdown_request"><div class="q-meta"><span class="pill">流程</span></div><h3>5. `shutdown_request(alice)` 内部大致做哪 4 步？</h3><textarea name="q5"></textarea></div>
+          <div class="q" data-title="6. Alice inbox"><div class="q-meta"><span class="pill">短答</span></div><h3>6. Alice 的 `alice.jsonl` 中会收到什么类型的消息？</h3><textarea name="q6"></textarea></div>
+          <div class="q" data-title="7. shutdown_response参数"><div class="q-meta"><span class="pill">填空</span></div><h3>7. `shutdown_response` 的关键参数是 request_id、______、______。</h3><input type="text" name="q7"></div>
+          <div class="q" data-title="8. lead确认"><div class="q-meta"><span class="pill">机制</span></div><h3>8. Alice 批准后，lead 如何知道她已经确认关机？</h3><textarea name="q8"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、状态机与退出</h3><p>把 pending、approved、shutdown 的关系讲清楚。</p></div><div class="box soft">请求状态和成员状态是两条相关但不同的状态线。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="9. 请求状态"><div class="q-meta"><span class="pill">清单</span></div><h3>9. shutdown request 可能有哪些状态？</h3><textarea name="q9"></textarea></div>
+          <div class="q" data-title="10. 成员状态"><div class="q-meta"><span class="pill">判断</span></div><h3>10. request approved 后，Alice 的成员状态一定立刻在同一行代码中变成 shutdown。</h3><label><input type="radio" name="q10" value="对">对</label><br><label><input type="radio" name="q10" value="错">错</label></div>
+          <div class="q" data-title="11. should_exit"><div class="q-meta"><span class="pill">解释</span></div><h3>11. `should_exit` 在 teammate loop 中起什么作用？</h3><textarea name="q11"></textarea></div>
+          <div class="q" data-title="12. rejected"><div class="q-meta"><span class="pill">边界</span></div><h3>12. 如果 Alice 返回 approve=false，系统应该怎么处理？</h3><textarea name="q12"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、诊断与迁移</h3><p>把关机协议迁移成可设计的团队协议。</p></div><div class="box soft">表达重点：请求 id、状态字典、inbox、响应工具、自然退出、确认消息。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="13. pending诊断"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. lead 查询 shutdown status 还是 pending，可能有哪些原因？</h3><textarea name="q13"></textarea></div>
+          <div class="q" data-title="14. 状态保存"><div class="q-meta"><span class="pill">短答</span></div><h3>14. 为什么 Alice 退出后必须把 config 中状态保存成 shutdown？</h3><textarea name="q14"></textarea></div>
+          <div class="q" data-title="15. 错误实现"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 某实现收到 shutdown_request 后直接删除 Alice 线程，没有 response。指出问题。</h3><textarea name="q15"></textarea></div>
+          <div class="q" data-title="16. 面试短答"><div class="q-meta"><span class="pill">表达</span></div><h3>16. 用 2-3 句话解释关机协议的工程价值。</h3><textarea name="q16"></textarea></div>
+          <div class="q full" data-title="17. 流程图"><div class="q-meta"><span class="pill">流程图</span></div><h3>17. 用文字画出一次 lead 请求 Alice 关机并收到确认的完整流程。</h3><textarea name="q17"></textarea></div>
+          <div class="q full" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：关机协议如何用 FSM 保证 teammate 优雅退出。</h3><div class="solve-note">请串联 request_id、pending、Alice inbox、shutdown_response、approved/rejected、should_exit、config shutdown、lead inbox。</div><textarea name="q18"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>导出学习记录</h2><span class="tag">self-check</span></div>
+      <p class="muted">完成练习后生成 Markdown 记录，方便保存或提交给同伴检查。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+const cases={
+  pending:["请求等待响应","lead 已经创建 request，并把 shutdown_request 写入 Alice inbox。此时请求状态是 pending，Alice config 仍是 working。","shutdown_requests = {\n  'a13f29c0': {target: 'alice', status: 'pending'}\n}\n\nalice.jsonl:\n{\"type\":\"shutdown_request\",\"request_id\":\"a13f29c0\"}",["pending"]],
+  approved:["Alice 批准关机","Alice 读到 inbox 后调用 shutdown_response，approve=true。请求状态从 pending 变为 approved，并设置 should_exit。","shutdown_requests['a13f29c0'].status = 'approved'\nshould_exit = True\n\nlead.jsonl receives shutdown_response",["approved"]],
+  shutdown:["成员状态写成 shutdown","teammate loop 看到 should_exit 后 break，最后把 config 中 Alice 状态从 working 改成 shutdown。","config.json:\n{\"members\":[{\"name\":\"alice\",\"role\":\"coder\",\"status\":\"shutdown\"}]}\n\nlead can read confirmation.",["shutdown"]],
+  rejected:["Alice 拒绝关机","如果 approve=false，请求状态变 rejected，Alice 不应该退出，但仍要把拒绝原因发给 lead。","shutdown_requests['a13f29c0'].status = 'rejected'\nshould_exit = False\n\nlead.jsonl receives rejection reason.",["pending"]]
+};
+function renderCase(name){const d=cases[name]||cases.pending;document.querySelectorAll("[data-case]").forEach(b=>b.classList.toggle("active",b.dataset.case===name));document.querySelectorAll("[data-state]").forEach(s=>s.classList.toggle("active",d[3].includes(s.dataset.state)));document.getElementById("caseTitle").textContent=d[0];document.getElementById("caseText").textContent=d[1];document.getElementById("caseBox").textContent=d[2]}
+document.querySelectorAll("[data-case]").forEach(btn=>btn.addEventListener("click",()=>renderCase(btn.dataset.case)));renderCase("pending");
+document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
+const questions=[
+  ["基础概念","1. 关机协议解决什么问题？","q1","radio"],["基础概念","2. FSM 全称和中文。","q2","text"],["基础概念","3. 为什么需要 request_id？","q3","text"],["基础概念","4. 为什么 graceful shutdown？","q4","text"],["请求响应","5. shutdown_request 四步。","q5","text"],["请求响应","6. Alice inbox 收到什么消息？","q6","text"],["请求响应","7. shutdown_response 参数。","q7","text"],["请求响应","8. lead 如何确认？","q8","text"],["状态退出","9. request 可能状态。","q9","text"],["状态退出","10. approved 后是否立刻同一行变 shutdown？","q10","radio"],["状态退出","11. should_exit 作用。","q11","text"],["状态退出","12. approve=false 怎么办？","q12","text"],["诊断迁移","13. status 仍 pending 的可能原因。","q13","text"],["诊断迁移","14. 为什么保存 shutdown 状态？","q14","text"],["诊断迁移","15. 直接删除线程的问题。","q15","text"],["诊断迁移","16. 关机协议工程价值。","q16","text"],["诊断迁移","17. lead 请求 Alice 关机流程。","q17","text"],["费曼解释","18. 关机协议如何用 FSM 保证优雅退出。","q18","text"]
+];
+function val(q){if(q[3]==="radio"){const el=document.querySelector(`input[name="${q[2]}"]:checked`);return el?el.value:""}const el=document.querySelector(`[name="${q[2]}"]`);return el?el.value.trim():""}
+function generateRecord(){const groups={};const missing=[];questions.forEach(q=>{const v=val(q);if(!v)missing.push(q[1]);if(!groups[q[0]])groups[q[0]]=[];groups[q[0]].push({t:q[1],a:v||"（未填写）"})});let out="# 12 团队关机协议与FSM｜练习记录\n\n";Object.keys(groups).forEach(g=>{out+=`## ${g}\n\n`;groups[g].forEach(item=>{out+=`### ${item.t}\n${item.a}\n\n`})});document.getElementById("record").textContent=out;const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=val(["","","q18","text"]);const keys=["request_id","pending","shutdown_response","should_exit","shutdown","lead"];const lack=keys.filter(k=>!f.includes(k));if(f&&f.length<120)warnings.push("费曼解释偏短，建议讲成 6-9 句话。");if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join("、")}。`);const q=document.getElementById("quality");q.style.display="block";q.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以保存或提交检查。"}
+function copyRecord(){navigator.clipboard.writeText(document.getElementById("record").textContent).catch(()=>alert("复制失败，请手动复制。"))}
+</script>
+<script src="../assets/study-page.js"></script>
+</body>
+</html>

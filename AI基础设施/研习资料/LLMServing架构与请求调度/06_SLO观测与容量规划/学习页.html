@@ -1,0 +1,1058 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>06｜SLO、观测与容量规划</title>
+  <meta name="description" content="LLM Serving 架构与请求调度第 06 单元：把 TTFT、TPOT、p95/p99、错误率、队列、KV cache 和 GPU 指标连成可执行的容量规划。">
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="LLM Serving 架构与请求调度" data-unit="Unit 06">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>LLM Serving 架构与请求调度</strong>
+        <span>Unit 06</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#position"><span class="dot"></span>课程位置</a>
+        <a href="#map"><span class="dot"></span>概念骨架</a>
+        <a href="#terms"><span class="dot"></span>术语与误区</a>
+        <a href="#metrics"><span class="dot"></span>指标分解</a>
+        <a href="#trace"><span class="dot"></span>状态追踪</a>
+        <a href="#case"><span class="dot"></span>容量案例</a>
+        <a href="#lab"><span class="dot"></span>失败实验室</a>
+        <a href="#alerts"><span class="dot"></span>告警门槛</a>
+        <a href="#walkthrough"><span class="dot"></span>走读示例</a>
+        <a href="#bridge"><span class="dot"></span>下一步</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">
+        先把 TTFT、TPOT、错误率、队列深度和 GPU 利用率放进同一张账，再谈扩容。后面的 Ray Serve LLM 和故障清单会继续用这些指标。
+      </div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">Unit 06｜SLO、观测与容量规划</div>
+          <h1>SLO、观测与容量规划</h1>
+          <p>这页只做一件事：把 TTFT、TPOT、p95/p99、错误率、队列深度、GPU 利用率连成一张能拿来做决策的账。你读完后，应该能先把“慢、错、排队、超时”放回对应的层，再粗算还需要多少副本和多少余量。</p>
+          <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../05_自动伸缩批处理与资源隔离/学习页.html">上一单元</a>
+            <a href="../07_Ray_Serve_LLM与部署形态/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>先盯住这三件事</h3>
+          <ul>
+            <li>用户等的是首 token 还是完整输出。</li>
+            <li>系统卡在排队、prefill、decode，还是返回链路。</li>
+            <li>当前流量到底需要多少 token/s 和多少副本。</li>
+          </ul>
+        </div>
+      </div>
+
+      <section id="goals">
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">Goals</span>
+        </div>
+        <div class="grid">
+          <div class="box soft">
+            <h3>把体验写成 SLO</h3>
+            <p>先区分首 token 等待、后续 token 节奏、完整请求完成和可用性，再把它们写成 p95 / p99、错误率和错误预算，而不是笼统地写“低延迟”。</p>
+          </div>
+          <div class="box soft">
+            <h3>把指标放回层级</h3>
+            <p>看到 TTFT、TPOT、queue_wait、pending replica、GPU util 或 KV cache 压力时，能先判断它对应入口、队列、副本、引擎还是返回链路。</p>
+          </div>
+          <div class="box soft">
+            <h3>把流量换成容量</h3>
+            <p>能用请求量、输入输出 token、单副本 token/s、目标利用率和安全系数，粗算出最小副本数，再说明这个数为什么还要用压测修正。</p>
+          </div>
+        </div>
+        <div class="box info">
+          <strong>读完这一页，你应该能先做什么</strong>
+          <p>拿到一组慢请求指标时，先判断它是“等待太久”“生成太慢”还是“容量不够”，再决定该看队列、prefill、decode 还是扩容。</p>
+        </div>
+      </section>
+
+      <section id="position">
+        <div class="head">
+          <h2>课程位置</h2>
+          <span class="tag">Unit 06</span>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>它接在哪些内容后面</h3>
+            <p>前面的单元已经讲了请求生命周期、流式返回、队列、背压、路由、多租户、批处理和资源隔离。这一页把这些内容收束成一个运营问题：现在这套服务还扛得住多少请求，哪里开始违反用户承诺。</p>
+            <p>后面的 Ray Serve LLM 与生产故障单元会继续沿用这里的指标和判断方式。没有这一页，扩缩容容易退化成“看 GPU 利用率到某个数就加副本”。</p>
+          </div>
+          <div class="box warn">
+            <h3>这里先不追的东西</h3>
+            <p>先别追单个框架的默认阈值、A/B 实验平台、OpenTelemetry 后端、trace 存储结构，或者某个厂商的看板命名。它们会回来，但放在这页之前只会把主线打散。</p>
+          </div>
+        </div>
+        <table data-export-context="课程位置与承接" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>课程段落</th>
+              <th>这一段在解决什么</th>
+              <th>这一页的角色</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>01-02</td>
+              <td>请求边界、接口合同、流式返回</td>
+              <td>先把体验和协议拆开</td>
+            </tr>
+            <tr>
+              <td>03-05</td>
+              <td>队列、路由、批处理、自动伸缩、资源隔离</td>
+              <td>把压力怎么传递讲清</td>
+            </tr>
+            <tr>
+              <td>06</td>
+              <td>SLO、观测、容量规划</td>
+              <td>把信号变成动作</td>
+            </tr>
+            <tr>
+              <td>07-08</td>
+              <td>Ray Serve LLM、生产故障、选型清单</td>
+              <td>把动作放回真实部署和事故</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="map">
+        <div class="head">
+          <h2>概念导图</h2>
+          <span class="tag">Signals → Capacity</span>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>先把四层分开看</h3>
+            <p>用户最先感受到的是首 token、后续 token 和总完成时间；服务层先看到的是队列、路由和拒绝；引擎层先看到的是 prefill、decode 和 KV cache；容量层最后看到的是副本数、利用率和错误预算。</p>
+            <p>很多排障讨论之所以绕，是因为把这四层混成了一层。先把层级分开，后面的指标才有位置。</p>
+          </div>
+          <div class="box info">
+            <h3>一条顺序</h3>
+            <p>体验承诺 → 指标定义 → 读数归位 → 容量估算 → 压测校准 → 告警与扩容。</p>
+            <p>如果顺序反了，最后通常只剩“看起来很忙”，却说不清忙在哪里。</p>
+          </div>
+        </div>
+        <table data-export-context="观测层级对照表" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>层级</th>
+              <th>正在看什么</th>
+              <th>读什么指标</th>
+              <th>写什么状态</th>
+              <th>最常见的误判</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>入口与队列</td>
+              <td>请求有没有被接住</td>
+              <td>queue_wait、pending request、reject rate</td>
+              <td>接纳结果、排队位置、等待时长</td>
+              <td>把排队问题看成模型慢</td>
+            </tr>
+            <tr>
+              <td>引擎前半段</td>
+              <td>prompt 有没有被转成可生成上下文</td>
+              <td>TTFT、prefill time、cache 命中</td>
+              <td>KV cache、sequence 状态</td>
+              <td>把长 prompt 和短 prompt 当成同一类</td>
+            </tr>
+            <tr>
+              <td>引擎后半段</td>
+              <td>后续 token 生成节奏</td>
+              <td>TPOT、decode time、output length</td>
+              <td>token 流、batch 状态</td>
+              <td>把首 token 慢和后续慢混在一起</td>
+            </tr>
+            <tr>
+              <td>容量与 fleet</td>
+              <td>整套系统还能撑多少</td>
+              <td>p95 / p99、GPU util、错误预算、pending replica</td>
+              <td>副本数、告警阈值、限流动作</td>
+              <td>只看平均利用率，不看尾部</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="terms">
+        <div class="head">
+          <h2>术语与误区</h2>
+          <span class="tag">Terms</span>
+        </div>
+        <table data-export-context="关键术语与误区" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>术语</th>
+              <th>直觉</th>
+              <th>精确定义</th>
+              <th>常见误解</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>TTFT</td>
+              <td>用户等到首 token 的时间</td>
+              <td>从请求进入系统到第一个可见 token 出现之间的时间</td>
+              <td>误以为它只等于模型算力时间</td>
+            </tr>
+            <tr>
+              <td>TPOT</td>
+              <td>后续 token 的节奏</td>
+              <td>生成阶段每个 token 的平均时间，常用来描述 decode 速度</td>
+              <td>把它和 TTFT 混成一个指标</td>
+            </tr>
+            <tr>
+              <td>p95 / p99</td>
+              <td>长尾体验</td>
+              <td>分位数，不是平均值</td>
+              <td>拿平均值代替尾部体验</td>
+            </tr>
+            <tr>
+              <td>错误预算</td>
+              <td>还可以接受多少失败</td>
+              <td>在一段时间里允许消耗的可靠性余量</td>
+              <td>只把它看成告警阈值</td>
+            </tr>
+            <tr>
+              <td>queue_wait</td>
+              <td>排队等待</td>
+              <td>请求在入口或调度器里等副本空出来的时间</td>
+              <td>把这段时间算到模型推理里</td>
+            </tr>
+            <tr>
+              <td>GPU util</td>
+              <td>资源忙不忙</td>
+              <td>GPU 的使用率，只是容量线索之一</td>
+              <td>把它当成唯一扩容信号</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="box warn">
+          <h3>边界先放这里</h3>
+          <p>这一页不讨论 tracing backend 的实现细节，也不把某个框架的指标名当成唯一标准。你要保住的是“指标背后对应哪一层、哪一个状态”。</p>
+        </div>
+      </section>
+
+      <section id="metrics">
+        <div class="head">
+          <h2>指标拆解</h2>
+          <span class="tag">Metrics</span>
+        </div>
+        <div class="math-block" data-export-context="TTFT 分解公式" data-export-lang="math">
+          $$TTFT = queue\_wait + route\_wait + prefill + first\_chunk\_write$$
+          <p><code>queue_wait</code> 是请求在入口等副本的时间，<code>route_wait</code> 是挑副本和确认健康状态的时间，<code>prefill</code> 是把 prompt 转成可生成上下文的时间，<code>first_chunk_write</code> 是首个可见 chunk 写出到网络的时间。</p>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>这个分解的用处</h3>
+            <p>总 TTFT 只有一个数，看不出慢在等待还是慢在计算。拆开以后，每一段都能去找自己的证据：排队看负载，prefill 看 prompt 长度和 cache，写出看连接和代理，路由看副本健康和热度。</p>
+          </div>
+          <div class="box info">
+            <h3>先从哪个数开始看</h3>
+            <p>如果 TTFT 上升而 TPOT 稳定，先看 queue_wait 和 prefill。<br>如果 TTFT 正常而 TPOT 变慢，先看 decode、batch 混合和输出长度。<br>如果两者一起变差，先怀疑容量和长尾。</p>
+          </div>
+        </div>
+        <table data-export-context="指标与排查位置" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>指标</th>
+              <th>它主要在看什么</th>
+              <th>常见误判</th>
+              <th>第一检查</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>TTFT</td>
+              <td>首 token 的可见等待</td>
+              <td>把它当成纯模型算力</td>
+              <td>拆成 queue、route、prefill 和首包写出</td>
+            </tr>
+            <tr>
+              <td>TPOT</td>
+              <td>后续 token 的平均节奏</td>
+              <td>把首 token 慢和后续慢混在一起</td>
+              <td>看 decode、batch 和输出长度</td>
+            </tr>
+            <tr>
+              <td>p95 / p99</td>
+              <td>尾部体验</td>
+              <td>把平均值当成全部</td>
+              <td>看长尾请求的分布和排队</td>
+            </tr>
+            <tr>
+              <td>GPU util</td>
+              <td>资源使用率</td>
+              <td>把它当成是否扩容的唯一依据</td>
+              <td>同时看 queue_wait、pending replica 和错误率</td>
+            </tr>
+            <tr>
+              <td>错误率</td>
+              <td>系统是否已经在失守</td>
+              <td>只盯成功率，不看失败类型</td>
+              <td>先分拒绝、超时、取消和真正故障</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="codebar"><span>容量估算伪代码</span><button class="copy" data-copy="capacity-estimator">复制</button></div>
+        <pre id="capacity-estimator" data-export-context="容量估算伪代码" data-export-lang="python"><code class="language-python">def estimate_replicas(qps, avg_input_tokens, avg_output_tokens, per_replica_tps, target_util=0.70, safety=1.20):
+    demand_tps = qps * (avg_input_tokens + avg_output_tokens)
+    usable_tps = per_replica_tps * target_util
+    raw = demand_tps / usable_tps
+    return math.ceil(raw * safety)</code></pre>
+        <div class="math-block" data-export-context="容量规划公式" data-export-lang="math">
+          $$required\_replicas = \left\lceil \frac{QPS \times (input\_tokens + output\_tokens)}{per\_replica\_tps \times target\_utilization} \times safety\_factor \right\rceil$$
+          <p>这个数先给你一个起点。真正上线时，还要看长度分布、prefill / decode 的不对称、KV cache、冷启动和流量长尾。</p>
+        </div>
+      </section>
+
+      <section id="trace">
+        <div class="head">
+          <h2>状态追踪</h2>
+          <span class="tag">Trace</span>
+        </div>
+        <div class="shape-tracer" data-shape-tracer data-export-context="SLO 追踪图" data-export-lang="text">
+          <div class="trace-lines">
+            <button class="trace-line active" type="button" data-trace-step="step-a">
+              <code>request -> queue</code><span>新请求进入系统</span>
+            </button>
+            <button class="trace-line" type="button" data-trace-step="step-b">
+              <code>queue -> route</code><span>挑副本和确认健康</span>
+            </button>
+            <button class="trace-line" type="button" data-trace-step="step-c">
+              <code>route -> prefill/decode</code><span>建立上下文并生成 token</span>
+            </button>
+            <button class="trace-line" type="button" data-trace-step="step-d">
+              <code>decode -> fleet decision</code><span>把指标写回容量账</span>
+            </button>
+          </div>
+          <div class="trace-canvas">
+            <div class="tensor-card active" data-trace-target="step-a">
+              <b>新请求</b>
+              <span>HTTP 请求 / 外部 SLO</span>
+              <p>读：模型名、prompt 长度、stream、当前负载。写：接纳结果、排队状态、拒绝原因。症状：TTFT 升高，但 GPU 还没满。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="step-b">
+              <b>排队与路由</b>
+              <span>服务层调度</span>
+              <p>读：队列深度、副本健康、租户配额、路由权重。写：副本选择、等待时间、路由记录。症状：同样的请求在忙副本前越排越长。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="step-c">
+              <b>prefill / decode</b>
+              <span>引擎内部状态</span>
+              <p>读：prompt token、cache 命中、batch 混合、输出长度。写：KV cache、token stream、sequence 状态。症状：首 token 慢，或者后续 token 明显变慢。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="step-d">
+              <b>容量判断</b>
+              <span>副本和告警</span>
+              <p>读：p95 / p99、错误预算、GPU util、pending replica。写：副本数、限流阈值、告警动作。症状：平均值看着还行，尾部已经开始失守。</p>
+            </div>
+          </div>
+        </div>
+        <table data-export-context="状态追踪账本" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>对象</th>
+              <th>谁创建</th>
+              <th>谁读取</th>
+              <th>谁写入 / 失效</th>
+              <th>典型症状</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>请求对象</td>
+              <td>入口解析层</td>
+              <td>鉴权、路由、观测</td>
+              <td>在入口阶段被标记合法、拒绝或重试</td>
+              <td>字段不合法却进到后面，最后变成 5xx</td>
+            </tr>
+            <tr>
+              <td>队列位置</td>
+              <td>服务层 admission / router</td>
+              <td>调度器、健康检查、限流器</td>
+              <td>入队、出队、丢弃、降级</td>
+              <td>TTFT 长但引擎利用率不高</td>
+            </tr>
+            <tr>
+              <td>sequence</td>
+              <td>副本内部</td>
+              <td>prefill、decode、停止条件</td>
+              <td>状态随着 token 生成逐步变化</td>
+              <td>把 request 级别变量误当成 sequence 状态</td>
+            </tr>
+            <tr>
+              <td>KV cache</td>
+              <td>prefill 阶段</td>
+              <td>decode、后续 batch</td>
+              <td>被写入、复用、淘汰</td>
+              <td>prefill 很重，但缓存没起作用</td>
+            </tr>
+            <tr>
+              <td>流式连接</td>
+              <td>返回链路</td>
+              <td>客户端、网关、超时控制</td>
+              <td>写入 token、关闭、重置</td>
+              <td>服务已经生成，客户端看起来像没返回</td>
+            </tr>
+            <tr>
+              <td>指标记录</td>
+              <td>返回完成时</td>
+              <td>观测、容量规划、告警</td>
+              <td>写入 TTFT、TPOT、queue time、status</td>
+              <td>指标没分层，所有问题都被平均值吞掉</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="case">
+        <div class="head">
+          <h2>容量案例</h2>
+          <span class="tag">Worked Case</span>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>一个最小但不失真的估算</h3>
+            <p>假设现在有 25 QPS，平均输入 900 token，平均输出 500 token，单副本稳定吞吐 10,000 token/s，目标利用率 70%，安全系数 1.2。这个数字足够小，能手算；也足够真实，不会把容量问题抹平。</p>
+            <p>先把请求换成 token/s，再除以可用吞吐，最后乘上安全系数。结果是 6 个副本。</p>
+          </div>
+          <div class="box info">
+            <h3>为什么不是算完就结束</h3>
+            <p>这只是第一轮估算。真实流量里，输入长度和输出长度通常不是平均分布，prefill 和 decode 的代价也不一样；如果把这些差异忽略掉，估算会很快偏离。</p>
+          </div>
+        </div>
+        <table data-export-context="容量案例输入与结果" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>输入</th>
+              <th>值</th>
+              <th>中间结果</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>QPS</td>
+              <td>25</td>
+              <td>每秒 25 个请求</td>
+              <td>流量入口</td>
+            </tr>
+            <tr>
+              <td>平均输入 token</td>
+              <td>900</td>
+              <td></td>
+              <td>prefill 负载</td>
+            </tr>
+            <tr>
+              <td>平均输出 token</td>
+              <td>500</td>
+              <td></td>
+              <td>decode 负载</td>
+            </tr>
+            <tr>
+              <td>单副本稳定 token/s</td>
+              <td>10,000</td>
+              <td>可用吞吐 = 7,000 token/s</td>
+              <td>乘上目标利用率 70%</td>
+            </tr>
+            <tr>
+              <td>安全系数</td>
+              <td>1.2</td>
+              <td>最终副本数 = 6</td>
+              <td>为尾部和抖动留余量</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="codebar"><span>容量估算过程</span><button class="copy" data-copy="capacity-worked">复制</button></div>
+        <pre id="capacity-worked" data-export-context="容量估算过程" data-export-lang="python"><code class="language-python">qps = 25
+input_tokens = 900
+output_tokens = 500
+per_replica_tps = 10000
+target_util = 0.70
+safety = 1.20
+
+demand_tps = qps * (input_tokens + output_tokens)   # 25 * 1400 = 35000
+usable_tps = per_replica_tps * target_util          # 10000 * 0.70 = 7000
+replicas = math.ceil((demand_tps / usable_tps) * safety)  # ceil(5 * 1.2) = 6</code></pre>
+      </section>
+
+      <section id="lab">
+        <div class="head">
+          <h2>失败实验室</h2>
+          <span class="tag">Failure Lab</span>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>先把慢请求分成三类</h3>
+            <p>同样叫“慢”，可能是排队太久、prefill 太重，或者 decode 太慢。把这三类分开，后面的动作才不会跑偏。</p>
+          </div>
+          <div class="box warn">
+            <h3>先看什么</h3>
+            <p>先看 TTFT 和 TPOT 的组合，再看 queue depth、pending replica、GPU util 和错误类型。不要把平均值当成全部。</p>
+          </div>
+        </div>
+        <table data-export-context="诊断分叉表" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>症状</th>
+              <th>更像什么</th>
+              <th>第一检查</th>
+              <th>下一步动作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>TTFT p95 上升，TPOT 基本不变</td>
+              <td>排队或 prefill</td>
+              <td>queue_wait、route_wait、prompt 长度</td>
+              <td>先看入口和前半段</td>
+            </tr>
+            <tr>
+              <td>GPU 利用率不高，但请求开始排队</td>
+              <td>接纳或路由不均</td>
+              <td>pending replica、队列深度、租户配额</td>
+              <td>别只盯 GPU util</td>
+            </tr>
+            <tr>
+              <td>TPOT 变差，首 token 正常</td>
+              <td>decode 或 batch 问题</td>
+              <td>输出长度、batch 混合、显存压力</td>
+              <td>看后半段生成节奏</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="terminal-lab" data-terminal-lab data-export-context="诊断快照" data-export-lang="text">
+          <div class="terminal-controls">
+            <button class="ghost active" data-terminal-case="case-1">队列型</button>
+            <button class="ghost" data-terminal-case="case-2">decode 型</button>
+            <button class="ghost" data-terminal-case="case-3">尾部失守</button>
+          </div>
+          <pre class="terminal-output" aria-live="polite">TTFT p95: 4.2s
+TPOT p95: 28ms
+queue_wait p95: 3.1s
+GPU util: 56%
+pending replica: 0
+hint: 先看排队、路由和入口接纳。</pre>
+          <template data-terminal-output="case-1">TTFT p95: 4.2s
+TPOT p95: 28ms
+queue_wait p95: 3.1s
+GPU util: 56%
+pending replica: 0
+hint: 先看排队、路由和入口接纳。</template>
+          <template data-terminal-output="case-2">TTFT p95: 1.1s
+TPOT p95: 96ms
+queue_wait p95: 0.2s
+GPU util: 92%
+pending replica: 0
+hint: 先看 decode、batch 混合和输出长度。</template>
+          <template data-terminal-output="case-3">TTFT p95: 1.4s
+TPOT p95: 41ms
+error rate: 2.3%
+queue_wait p95: 0.5s
+queue depth spikes at peak
+hint: 平均值还行，尾部已经在失守。</template>
+        </div>
+      </section>
+
+      <section id="alerts">
+        <div class="head">
+          <h2>告警门槛</h2>
+          <span class="tag">Alerting</span>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>看板不该只会“红了再说”</h3>
+            <p>很多团队的第一版告警只有一句“延迟升高就报警”。这种写法的问题不在于太粗，而在于它没有把门槛和动作连起来。TTFT 升高时，可能该查队列；TPOT 变慢时，可能该查 decode；错误率上升时，可能该查拒绝、超时或下游断开。如果同一条告警同时覆盖这些状态，最后通常只会在最差的时候响，而且没人知道先做什么。</p>
+            <p>更好的方式，是把告警分成“预警”和“动作告警”。预警用来提醒趋势正在偏，动作告警用来触发限流、扩容或降级。这样做的好处很简单：告警不再只是噪声，而是能接到具体操作。</p>
+          </div>
+          <div class="box warn">
+            <h3>先看一个小场景</h3>
+            <p>上午看板显示 TTFT p95 连续 10 分钟高于 2.5 秒，queue_wait p95 也高于 1.5 秒，但错误率还只有 0.2%，GPU util 在 62%。这不是“服务已经坏了”，更像是排队在变长、尾部在抬高。这个时候如果只按错误率报警，告警会来得太晚；如果只按 GPU util 报警，告警又会来得太早。</p>
+          </div>
+        </div>
+        <table data-export-context="告警门槛设计表" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>信号</th>
+              <th>预警门槛</th>
+              <th>动作门槛</th>
+              <th>建议动作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>TTFT p95</td>
+              <td>连续 10 分钟 &gt; 2.0 秒</td>
+              <td>连续 5 分钟 &gt; 3.0 秒</td>
+              <td>先看 queue_wait、route_wait 和 prefill</td>
+            </tr>
+            <tr>
+              <td>TPOT p95</td>
+              <td>连续 10 分钟 &gt; 50 ms</td>
+              <td>连续 5 分钟 &gt; 80 ms</td>
+              <td>先看 decode、batch 混合和长输出</td>
+            </tr>
+            <tr>
+              <td>queue_wait p95</td>
+              <td>连续 10 分钟 &gt; 1.0 秒</td>
+              <td>连续 5 分钟 &gt; 2.0 秒</td>
+              <td>先看接纳、路由和 pending replica</td>
+            </tr>
+            <tr>
+              <td>错误率</td>
+              <td>连续 10 分钟 &gt; 0.5%</td>
+              <td>连续 5 分钟 &gt; 1.0%</td>
+              <td>先分拒绝、超时、取消和真实故障</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="codebar"><span>告警规则伪代码</span><button class="copy" data-copy="alert-rule">复制</button></div>
+        <pre id="alert-rule" data-export-context="告警规则伪代码" data-export-lang="python"><code class="language-python">def alert(ttft_p95, tpot_p95, queue_wait_p95, error_rate, gpu_util):
+    warn = []
+    action = []
+    if ttft_p95 > 2.0:
+        warn.append("TTFT warn")
+    if ttft_p95 > 3.0 or queue_wait_p95 > 2.0:
+        action.append("TTFT action")
+    if tpot_p95 > 0.05:
+        warn.append("TPOT warn")
+    if tpot_p95 > 0.08:
+        action.append("TPOT action")
+    if error_rate > 0.01:
+        action.append("error action")
+    if gpu_util > 0.85 and queue_wait_p95 > 1.0:
+        action.append("capacity action")
+    return warn, action</code></pre>
+        <div class="box danger">
+          <h3>如果门槛设错了，会发生什么</h3>
+          <p>门槛太低，告警会像噪声一样刷屏，最后没人理；门槛太高，真正要扩容的时候已经晚了。更糟的是，若门槛只盯 GPU util，排队和长尾会被藏起来，直到用户已经先看到慢请求或超时。告警的目标不是把你吓醒，而是把你推到正确的下一步。</p>
+        </div>
+        <div class="box info">
+          <h3>练习时怎么用它</h3>
+          <p>你可以把自己服务的三条真实告警写成“预警 / 动作 / 建议动作”三列。只要列得出这三列，你就已经把“发现问题”往前推到“知道该做什么”了。</p>
+        </div>
+      </section>
+
+      <section id="walkthrough">
+        <div class="head">
+          <h2>走读示例</h2>
+          <span class="tag">Walkthrough</span>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>把一张看板读成一条判断链</h3>
+            <p>假设上午 10 点，线上看板突然出现一组变化：TTFT p95 从 1.1 秒涨到 3.6 秒，TPOT p95 还在 32 毫秒，queue_wait p95 变成 2.7 秒，GPU util 只有 58%，pending replica 却没有增加。这个时候最容易犯的错，是直接说“模型慢了”或者“副本少了”，然后马上去调大实例数。</p>
+            <p>更稳的读法，是先把这几个数字排成顺序：入口在等，路由和接纳没有把请求及时推到空闲副本，或者副本虽在，但上游已经把队列堆满了；引擎后半段并没有明显变慢，因为 TPOT 还平稳。这个组合更像前半段的问题，而不是 decode 的问题。</p>
+            <p>再往下看，如果长 prompt 的比例上升，prefill 就可能把首 token 往后推；如果长 prompt 没变，queue_wait 却一直上升，那就该查 admission、路由权重和副本健康。只盯 GPU util，会把排队和前半段的代价藏起来；只盯平均延迟，会把少数被卡住的请求埋掉。</p>
+          </div>
+          <div class="box warn">
+            <h3>这条链最容易误导什么</h3>
+            <ul>
+              <li>把排队看成模型慢。</li>
+              <li>把首 token 慢看成 decode 问题。</li>
+              <li>把平均值当成容量结论。</li>
+              <li>把副本数当成唯一动作，忽略路由和接纳。</li>
+            </ul>
+          </div>
+        </div>
+        <table data-export-context="SLO 排障判断表" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>看板组合</th>
+              <th>先读什么</th>
+              <th>更像哪一层</th>
+              <th>下一步动作</th>
+              <th>如果看错会怎样</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>TTFT p95 高，TPOT 平稳，queue_wait 也高</td>
+              <td>排队和路由</td>
+              <td>入口 / 调度层</td>
+              <td>看 admission、route_wait、pending replica</td>
+              <td>把问题误判成引擎算力，最后扩错地方</td>
+            </tr>
+            <tr>
+              <td>TTFT p95 高，TPOT 平稳，prompt 长度明显上升</td>
+              <td>prefill</td>
+              <td>引擎前半段</td>
+              <td>看 prompt 分布、cache 命中、裁剪策略</td>
+              <td>把短时输入波动当成容量不足</td>
+            </tr>
+            <tr>
+              <td>TTFT 正常，TPOT p95 变差，GPU util 也上升</td>
+              <td>decode 和 batch</td>
+              <td>引擎后半段</td>
+              <td>看输出长度、batch 混合、显存压力</td>
+              <td>只加入口副本，后半段还是堵</td>
+            </tr>
+            <tr>
+              <td>平均值还行，p99 已经变差</td>
+              <td>尾部</td>
+              <td>容量与 fleet</td>
+              <td>看长尾请求、热点租户、错误预算</td>
+              <td>把少数慢请求压成“噪声”</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="codebar"><span>排障决策伪代码</span><button class="copy" data-copy="slo-playbook">复制</button></div>
+        <pre id="slo-playbook" data-export-context="排障决策伪代码" data-export-lang="python"><code class="language-python">def diagnose_slo(ttft_p95, tpot_p95, queue_wait_p95, gpu_util, prompt_shift, pending_replica):
+    if ttft_p95 > 2.0 and tpot_p95 <= 0.05:
+        if queue_wait_p95 > 1.0 or pending_replica > 0:
+            return "先看接纳、路由和排队"
+        if prompt_shift:
+            return "先看长 prompt、prefill 和 cache 命中"
+        return "先看入口和副本健康"
+    if ttft_p95 <= 2.0 and tpot_p95 > 0.05:
+        return "先看 decode、batch 混合和输出长度"
+    if gpu_util > 0.85 and queue_wait_p95 > 0.8:
+        return "容量已经接近边界，先看尾部和扩容"
+    return "先看分位数、长尾和租户分布"</code></pre>
+        <div class="box danger">
+          <h3>错误后果</h3>
+          <p>如果你在这一类场景里只看 GPU util，通常会把排队、路由不均和前半段代价都漏掉。结果是：告警晚了，扩容晚了，用户已经先看到首 token 卡住或者请求超时。真正该修的，可能是接纳阈值、路由权重、prompt 长度控制，甚至是副本健康检查。</p>
+        </div>
+        <div class="box info">
+          <h3>练习时怎么用这条链</h3>
+          <p>你可以把自己服务里的一条慢请求，按这张表重写一遍：先写看板上的四个数，再写它更像哪一层，最后写下一步动作。只要这三步能写顺，容量讨论就不容易飘到平均值上去了。</p>
+        </div>
+      </section>
+
+      <section id="bridge">
+        <div class="head">
+          <h2>下一步</h2>
+          <span class="tag">Bridge</span>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>读完后，先去看什么</h3>
+            <p>先挑一段真实流量窗口，把 TTFT p95、TPOT p95、queue depth、pending replica、错误率和 GPU util 放到同一张图里。再选一条慢请求 trace，沿着队列、prefill、decode 和返回链路看它到底卡在哪段。</p>
+            <p>如果你只看一个数，最容易看偏；如果你把一条慢请求和一张容量图一起看，判断会稳很多。</p>
+          </div>
+          <div class="box warn">
+            <h3>这里先不追</h3>
+            <p>先别钻具体看板的字段名、trace backend 的存储格式、某个框架的默认阈值，或者自动伸缩控制器的内部实现。先把“看见什么就该去看哪一层”这件事做顺。</p>
+          </div>
+        </div>
+        <div class="codebar"><span>观测查询示意</span><button class="copy" data-copy="observability-queries">复制</button></div>
+        <pre id="observability-queries" data-export-context="观测查询示意" data-export-lang="text"><code class="language-text">TTFT p95:
+histogram_quantile(0.95, rate(ttft_seconds_bucket[5m]))
+
+TPOT p95:
+histogram_quantile(0.95, rate(tpot_seconds_bucket[5m]))
+
+Reject rate:
+sum(rate(request_rejected_total[5m]))
+
+Queue pressure:
+sum(queue_depth) + sum(pending_replica)</code></pre>
+      </section>
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+          <div class="box">
+            <strong>作答目标</strong>
+            <p>先判断问题属于体验、指标、容量还是迁移；再给出你会先看的那一层。</p>
+          </div>
+          <div class="box">
+            <strong>检查重点</strong>
+            <p>答案里尽量包含对象、原因、后果和下一步检查，不要只写一个孤立名词。</p>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>一、概念辨析</h3>
+              <p>先把体验指标、分位数和公式里的符号分开。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回忆</b>
+              <span>TTFT 看首 token；TPOT 看后续节奏；p95 / p99 看尾部。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q1" data-group="一、概念辨析" data-title="哪一个最接近 TTFT？" data-answer="A">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">体验</span></div>
+              <h3>哪一个最接近 TTFT？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q1" value="A">A. 用户等到第一个可见 token 的时间</label>
+                <label><input type="radio" name="q1" value="B">B. 整个请求结束时间</label>
+                <label><input type="radio" name="q1" value="C">C. GPU 利用率</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">先看首 token，不要把完整请求混进来。</p>
+            </div>
+
+            <div class="q" data-question="q2" data-group="一、概念辨析" data-title="判断：TPOT 的倒数就是整个服务的最大 token/s。" data-answer="false">
+              <div class="q-meta"><span class="pill">true/false</span><span class="pill">吞吐</span></div>
+              <h3>判断：TPOT 的倒数就是整个服务的最大 token/s。</h3>
+              <label><input type="radio" name="q2" value="true">对</label>
+              <label><input type="radio" name="q2" value="false">错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">单请求节奏和全局吞吐不是一回事。</p>
+            </div>
+
+            <div class="q short" data-question="q3" data-group="一、概念辨析" data-title="填空：TTFT = queue_wait + route_wait + prefill + ____" >
+              <div class="q-meta"><span class="pill">fill</span><span class="pill">公式</span></div>
+              <h3>填空：TTFT = queue_wait + route_wait + prefill + ____</h3>
+              <input type="text" name="q3" data-answer="first_chunk_write" placeholder="写出最后一项">
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">这项是首个可见 chunk 写出的时间。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>二、指标读数</h3>
+              <p>把现象翻译成瓶颈，再翻译成检查点。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回忆</b>
+              <span>TTFT 高但 TPOT 平稳，先看队列和 prefill；GPU util 低但排队高，先看接纳和路由。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q4" data-group="二、指标读数" data-title="TTFT p95 上升，TPOT p95 基本不变。先看哪层？" data-answer="A">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">定位</span></div>
+              <h3>TTFT p95 上升，TPOT p95 基本不变。先看哪层？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q4" value="A">A. 队列、路由和 prefill</label>
+                <label><input type="radio" name="q4" value="B">B. decode 和输出长度</label>
+                <label><input type="radio" name="q4" value="C">C. 采样温度</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">首 token 慢，后续还稳，先看前半段。</p>
+            </div>
+
+            <div class="q" data-question="q5" data-group="二、指标读数" data-title="GPU 利用率不高，但请求开始排队。最先怀疑什么？" data-answer="A">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">资源</span></div>
+              <h3>GPU 利用率不高，但请求开始排队。最先怀疑什么？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q5" value="A">A. 接纳或路由不均</label>
+                <label><input type="radio" name="q5" value="B">B. token 采样随机性</label>
+                <label><input type="radio" name="q5" value="C">C. 颜色主题不对</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">先看 pending replica、队列和租户配额。</p>
+            </div>
+
+            <div class="q full" data-question="q6" data-group="二、指标读数" data-title="为什么平均延迟不够做 SLO？">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">分位数</span></div>
+              <h3>为什么平均延迟不够做 SLO？</h3>
+              <p class="solve-note">回答时至少说到：长尾、少数慢请求、队列、长上下文、以及平均值会遮住什么。</p>
+              <textarea name="q6" placeholder="从长尾、队列和长上下文三个角度回答。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>好答案会指出：平均值会把慢请求稀释掉，用户真正感受到的是尾部体验；LLM Serving 里长上下文、排队和个别副本热点很容易把尾部拉高；因此要看 p95 / p99、错误率和分层指标，而不是只看一个平均数。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>三、容量估算</h3>
+              <p>把请求量变成副本数，再看这个数为什么只是起点。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回忆</b>
+              <span>先算 token/s，再除以可用吞吐，最后乘安全系数。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q short" data-question="q7" data-group="三、容量估算" data-title="例子里最少需要多少副本？">
+              <div class="q-meta"><span class="pill">fill</span><span class="pill">计算</span></div>
+              <h3>例子里最少需要多少副本？</h3>
+              <input type="text" name="q7" data-answer="6" placeholder="填数字">
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">25 QPS，900 输入，500 输出，10,000 token/s，70%，安全系数 1.2。</p>
+            </div>
+
+            <div class="q" data-question="q8" data-group="三、容量估算" data-title="哪一项必须重新核对，才能信这条容量估算？" data-answer="A">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">假设</span></div>
+              <h3>哪一项必须重新核对，才能信这条容量估算？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q8" value="A">A. 输入输出 token 的长度分布</label>
+                <label><input type="radio" name="q8" value="B">B. 页面背景颜色</label>
+                <label><input type="radio" name="q8" value="C">C. 浏览器标签页标题</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">平均值能给起点，分布决定偏差有多大。</p>
+            </div>
+
+            <div class="q full" data-question="q9" data-group="三、容量估算" data-title="列出公式里没写进去但会影响容量的因素。">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">校准</span></div>
+              <h3>列出四个公式里没写进去但会影响容量的因素。</h3>
+              <p class="solve-note">答案要说明“因素是什么”和“为什么会让公式偏掉”。至少包含长度分布、prefill / decode 不对称、KV cache、冷启动中的任意四项。</p>
+              <textarea name="q9" placeholder="先列因素，再写每个因素会怎样偏移。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>高质量答案会写到：长度分布会让平均值失真，prefill 和 decode 成本不同会让总 token/s 失真，KV cache 命中和淘汰会改变实际吞吐，冷启动和副本恢复会拉高尾部。只写“压测一下”不够。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>四、迁移与边界</h3>
+              <p>把这页学到的东西，迁移到你自己的服务、日志和后续单元里。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回忆</b>
+              <span>首 token 和后续 token 是两条线；扩容动作要看尾部和排队，不只看平均利用率。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q10" data-group="四、迁移与边界" data-title="首 token 正常、后续 token 变慢，先看什么？" data-answer="A">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">decode</span></div>
+              <h3>首 token 正常、后续 token 变慢，先看什么？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q10" value="A">A. decode、batch 混合和输出长度</label>
+                <label><input type="radio" name="q10" value="B">B. 鉴权页面的配色</label>
+                <label><input type="radio" name="q10" value="C">C. [DONE] 哨兵是否出现得太早</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">问题出在后半段，就先看后半段。</p>
+            </div>
+
+            <div class="q" data-question="q11" data-group="四、迁移与边界" data-title="哪一个不该单独决定扩容？" data-answer="A">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">扩容</span></div>
+              <h3>哪一个不该单独决定扩容？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q11" value="A">A. GPU 利用率</label>
+                <label><input type="radio" name="q11" value="B">B. TTFT p95</label>
+                <label><input type="radio" name="q11" value="C">C. queue depth</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">单个资源指标不够，要和尾部、队列一起看。</p>
+            </div>
+
+            <div class="q full" data-question="q12" data-group="四、迁移与边界" data-title="如何从 SLO 走到扩容动作？">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">Feynman</span></div>
+              <h3>用 8-12 句话解释：如何从 SLO 走到扩容动作？</h3>
+              <p class="solve-note">答案至少要说到：用户承诺、分层指标、瓶颈判断、容量估算、压测校准、告警和动作。</p>
+              <textarea name="q12" placeholder="从用户体验承诺讲到扩容动作，最后说一条你会落地的告警。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>好答案会把链路说完整：先从用户体验承诺出发，再把它拆成 TTFT、TPOT、错误率和尾部延迟；接着根据 queue_wait、prefill、decode 和 GPU util 找到瓶颈；然后用请求量和 token/s 粗算副本数；最后用压测和长尾校准阈值，把结果变成告警和扩容动作。缺少其中任一段，都会让扩容变成拍脑袋。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" type="button" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" type="button" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">Source Boundary</span>
+        </div>
+        <div class="source-list">
+          <a href="../index.html">
+            <b>课程地图</b>
+            <span>课程总论、路线、单元顺序和相邻主题的来源。它说明这节课前后接哪几节。</span>
+          </a>
+          <a href="./学习页.html">
+            <b>本单元旧页</b>
+            <span>本页的原始教学材料：SLO、指标拆解、容量估算、故障判断和练习结构。</span>
+          </a>
+          <a href="https://docs.ray.io/en/latest/serve/llm/index.html">
+            <b>Ray Serve LLM</b>
+            <span>服务层、OpenAI 兼容入口、多副本和伸缩相关的公开文档来源。</span>
+          </a>
+          <a href="https://docs.ray.io/en/latest/serve/index.html">
+            <b>Ray Serve</b>
+            <span>deployment、replica、router、autoscaling 和 metrics 等服务层概念的公开文档来源。</span>
+          </a>
+          <a href="https://docs.vllm.ai/en/latest/">
+            <b>vLLM 文档</b>
+            <span>OpenAI 兼容服务、推理引擎参数、调度、批处理和吞吐语汇的公开文档来源。</span>
+          </a>
+          <a href="https://nvidia.github.io/TensorRT-LLM/">
+            <b>TensorRT-LLM 文档</b>
+            <span>高性能 runtime、serve、batching、KV cache 和后端部署相关的公开文档来源。</span>
+          </a>
+          <a href="https://docs.sglang.ai/">
+            <b>SGLang 文档</b>
+            <span>server、router、runtime 和结构化生成相关的公开文档来源。</span>
+          </a>
+          <a href="https://opentelemetry.io/docs/">
+            <b>OpenTelemetry 文档</b>
+            <span>traces、metrics 和 logs 的通用观测语汇，帮助把服务层与观测层接起来。</span>
+          </a>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

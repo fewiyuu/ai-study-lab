@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>P10｜语音语言模型发展史</title>
+  <link rel="stylesheet" href="../../../../assets/study-page.css">
+</head>
+<body data-study-kind="media" data-feynman-keywords="speech language model,cascade,end-to-end,semantic token,acoustic token,representation model,SUPERB,hybrid decoding,paralinguistic,TASTE,RLHF,stitch">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">09_P10<small>第10讲：语音语言模型发展史</small><small>核心：从语音表示到实时对话</small></div>
+      <div class="navline"></div>
+      <nav>
+        <a href="#goal"><span class="dot"></span>学习目标</a>
+        <a href="#skeleton"><span class="dot"></span>概念骨架</a>
+        <a href="#terms"><span class="dot"></span>术语边界</a>
+        <a href="#lecture"><span class="dot"></span>核心讲义</a>
+        <a href="#source"><span class="dot"></span>来源脉络</a>
+        <a href="#example"><span class="dot"></span>例子拆解</a>
+        <a href="#viz"><span class="dot"></span>可视化</a>
+        <a href="#diagnosis"><span class="dot"></span>错误诊断</a>
+        <a href="#practice"><span class="dot"></span>课后题</a>
+        <a href="#export"><span class="dot"></span>练习记录</a>
+      </nav>
+      <div class="side-note">这讲是第一人称研究史。不要只背年份，要学会问：模型听到什么、输出什么、中间有没有文字、语音 token 承载什么信息、是否能实时互动。</div>
+    </aside>
+
+    <main>
+      <section class="hero" id="goal">
+        <div>
+          <div class="kicker">LEE HUNG-YI LLM 2026 · P10</div>
+          <h1>语音语言模型发展史：从表示学习到实时语音对话</h1>
+          <p>这一讲不是完整 survey，而是从李宏毅团队参与过的研究路径出发，回看语音语言模型如何从语音检索、无监督语音辨识、representation model、初代 speech token 接龙，走到 GPT-4o / Moshi 之后的语音对话模型。</p>
+          <p>本讲最重要的直觉是：语音不只是文字的声音版。语音里有内容、说话人、情绪、年龄、性别、环境、停顿和时间流逝。把语音先转成文字再交给文字模型很容易做，但会丢掉这些信息；端到端模型难做，却有更高能力上限。</p>
+        </div>
+        <div class="goal-card">
+          <h3>本块学完能做什么</h3>
+          <ol>
+            <li>区分对话式语音语言模型、command mode 和 TTS。</li>
+            <li>解释 cascade、agentic、end-to-end 三种路线的取舍。</li>
+            <li>复述从 audio word2vec 到 SUPERB 的技术准备。</li>
+            <li>区分 semantic token、acoustic token 和 hybrid text-speech decoding。</li>
+            <li>说明 TASTE、RLHF、STITCH 各自解决什么问题。</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="skeleton">
+        <div class="head"><h2>一、概念骨架：先看整条技术链</h2><span class="tag">SKELETON</span></div>
+        <p>这一讲不是按论文列表平铺，而是用第一人称研究史回答一个问题：如果模型要直接听人说话、直接用语音回答，它需要先解决哪些前置问题？主线可以压缩成一条链：先分清任务边界，再比较系统路线，然后从语音片段表示、语音版自监督模型、语音 token、文字语音混合生成，最后走到对话对齐和实时互动。</p>
+        <p>这条链的关键直觉是“语音比文字多”。文字主要承载说了什么，语音还带着谁在说、怎么说、在什么环境说、是否迟疑、是否讽刺、是否打断。把语音先转成文字会得到一个工程上很有用的系统，但它天然会把许多非文字信息压掉。端到端语音语言模型困难得多，却是为了追求更高的信息上限。</p>
+        <div class="map">
+          <span class="node">任务边界</span><span class="arrow">→</span>
+          <span class="node">系统路线</span><span class="arrow">→</span>
+          <span class="node">语音表示</span><span class="arrow">→</span>
+          <span class="node">语音 token</span><span class="arrow">→</span>
+          <span class="node">文字语音混合</span><span class="arrow">→</span>
+          <span class="node">对话与实时</span>
+        </div>
+        <div class="timeline">
+          <div class="event"><div class="year">2010</div><div><b>深度学习进入语音辨识早期</b><p>早期结果未必立刻压倒传统系统，但它改写了“声音怎样被表示”的研究方向。</p></div></div>
+          <div class="event"><div class="year">2015</div><div><b>端到端 ASR 早期尝试</b><p>错误率看起来很高，却展示了一个神经网络直接从声音到文字的可能性。</p></div></div>
+          <div class="event"><div class="year">2016-2019</div><div><b>audio word2vec、segmental 表示、无监督 ASR</b><p>核心问题从听写扩展到：声音能不能自己形成片段、向量和可检索单位。</p></div></div>
+          <div class="event"><div class="year">2019-2021</div><div><b>Mockingjay、TERA、APC、wav2vec 2.0、HuBERT、SUPERB</b><p>语音 representation model 成为多种下游任务的基础，也为 speech token 提供来源。</p></div></div>
+          <div class="event"><div class="year">2023-2025</div><div><b>GSLM、GPT-4o、Moshi、hybrid decoding、TASTE、STITCH</b><p>研究焦点从语音接龙走向可对话、可对齐、能利用播放空档思考的语音模型。</p></div></div>
+        </div>
+        <div class="box greenbox"><h3>你现在应该能做什么</h3><p>读完这一段，你应该能把 P10 当成一条“表示学习 → token 化 → 生成策略 → 对话对齐 → 实时交互”的发展线，而不是只背模型名称和年份。</p></div>
+      </section>
+
+      <section id="terms">
+        <div class="head"><h2>二、术语边界：别被模型名字带偏</h2><span class="tag">TERMS</span></div>
+        <p>课程里所说的 speech language model，默认指输入语音、输出语音，并且用于对话的模型。你对它说 “How are you”，它应该回应 “I am fine” 之类的内容，而不是复述你的句子。这个边界很重要，因为文献里的用词还没有稳定下来。</p>
+        <p>有人把能听懂语音指令、输出文字答案的系统也叫 speech language model；很多 TTS 模型因为内部也在做语音 token 接龙，也会把自己叫 speech language model。读论文时不能只看名字，要看输入、输出、任务、是否对话，以及它是不是把 ASR、LLM、TTS 串起来伪装成单一模型。</p>
+        <table class="term-table">
+          <thead><tr><th>术语</th><th>直觉解释</th><th>精确定义与常见误解</th></tr></thead>
+          <tbody>
+            <tr><td>对话式语音语言模型</td><td>直接听你说话，再直接说话回应。</td><td>输入语音、输出语音，并把输入当成对话轮次。误区是把任何语音进语音出的系统都算进来。</td></tr>
+            <tr><td>Command mode / speech-aware LM</td><td>语音是待处理资料，指令决定任务。</td><td>常见任务是情绪识别、翻译、分类或问答。它可能懂语音，却不一定是语音对话助手。</td></tr>
+            <tr><td>TTS</td><td>把文字念出来。</td><td>输入通常是文字，输出是语音。即使内部用语音 token 接龙，也不等同于听懂并回应用户。</td></tr>
+            <tr><td>Cascade</td><td>ASR、文字 LLM、TTS 三段串接。</td><td>容易落地，短期强，但 ASR 会丢掉说话人、情绪、环境等非文字信息。</td></tr>
+            <tr><td>Agentic solution</td><td>文字模型作为核心调度语音工具。</td><td>能调用 ASR、TTS、speech enhancement、voice conversion 等工具。灵活，但系统状态和延迟更复杂。</td></tr>
+            <tr><td>End-to-end</td><td>一个模型直接语音进、语音出。</td><td>能力上限高，能利用完整声音信息；短期训练难、资料贵、成熟方案少。</td></tr>
+            <tr><td>Semantic token</td><td>从语音表示模型离散化得到的 token。</td><td>通常来自 representation model + clustering / VQ。名字不完全准确，因为它不一定只含语义。</td></tr>
+            <tr><td>Acoustic token</td><td>由语音 codec 压缩得到的 token。</td><td>tokenizer 与 detokenizer 一起训练，更重视还原音质和发音细节，但序列可能更长。</td></tr>
+            <tr><td>Hybrid decoding</td><td>文字 token 和语音 token 协同生成。</td><td>文字保留知识和语义，语音 token 负责说法、语气、时长等文字外信息。</td></tr>
+            <tr><td>Paralinguistic information</td><td>文字内容以外的语音信息。</td><td>包括语气、年龄、性别、情绪、停顿、环境、讽刺或真诚程度。语音 RLHF 不能只看转写文本。</td></tr>
+          </tbody>
+        </table>
+        <div class="box soft"><h3>你现在应该能判断什么</h3><p>看到一篇论文说自己是 speech language model，先问四件事：它直接听语音吗？直接输出语音吗？是在对话还是做指令任务？它是否只是 TTS 或 cascade 系统？这四问能帮你避开大多数术语混乱。</p></div>
+      </section>
+
+      <section id="lecture">
+        <div class="head"><h2>三、核心讲义：从可用系统到能力上限</h2><span class="tag">LECTURE</span></div>
+        <h3>1. 三条路线的取舍</h3>
+        <p>要做语音进语音出，不一定要端到端。最容易想到的是 cascade：ASR 把语音转文字，文字 LLM 生成回复，TTS 把回复念出来。今天很多看起来能语音对话的产品，底层仍然可能是这种串接方案。</p>
+        <p>另一种是 agentic solution：以文字模型为核心，让它调用 ASR、TTS、语音增强、语音转换等工具。它更像一个会调工具的系统，而不是一个单一模型。端到端路线则是一个模型直接吃语音、直接吐语音。短期看，cascade 借助成熟 API 往往更稳；长期看，端到端路线更可能保留语气、说话人、环境和打断等完整语音信息。</p>
+        <div class="grid3">
+          <div class="box"><h3>Cascade</h3><p>优点是容易做，现成 API 多，短期效果常常最好。缺点是 ASR 会把说话人、语气、环境等信息压掉，多个模型串接也会增加延迟和工程复杂度。</p></div>
+          <div class="box"><h3>Agentic</h3><p>优点是灵活，可以按任务调用不同语音工具。缺点是系统边界复杂，真实实时对话里的工具选择、状态同步和延迟控制都不简单。</p></div>
+          <div class="box"><h3>End-to-end</h3><p>优点是理论上能保留完整语音信息，延迟上限也更好。缺点是技术仍在快速发展，训练成本高，短期内不一定超过 cascade。</p></div>
+        </div>
+
+        <h3>2. 历史教训：弱结果不等于没价值</h3>
+        <p>李宏毅用语音辨识的发展提醒我们：新技术刚出现时，表现常常不亮眼。早期深度学习用于语音辨识时，并没有立刻震撼所有人；早期端到端 ASR 的错误率也远高于当时成熟的 cascade 系统。但多年迭代后，Whisper 这样的端到端模型成了很多人理解 ASR 的默认入口。</p>
+        <p>这给语音语言模型一个重要判断框架：2025 年 cascade 可能仍然是短期最强方案，但这不说明端到端没有价值。研究者更应该问：哪条路线的信息上限更高？哪条路线未来可以自然利用语气、环境、打断、双向对话和时间流逝？</p>
+
+        <h3>3. 前传：从语音检索到 segmental audio word2vec</h3>
+        <p>在语音语言模型出现之前，李宏毅团队已经在做“把一段语音变成向量”的问题。最早动机来自 spoken content retrieval：如果要在大量录音里搜某个词，直接比较两段不同长度的声音很慢，DTW 这类算法难以实时扩展。若能把每一小段声音变成固定维度向量，就可以用向量检索加速。</p>
+        <p>Audio word2vec 的结构类似 autoencoder：一个 LSTM encoder 读入一段声音，压成一个向量；另一个 LSTM decoder 根据向量还原原声音。这个想法和 P9 的 tokenizer / detokenizer 很接近，只是当时还没有今天这套语音 token 术语。</p>
+        <p>难点是：声音不像文字有清晰空格和标点。词和词、音素和音素之间没有天然边界。Segmental audio word2vec 试图同时学习两件事：哪里该切段，以及每段该变成什么向量。训练目标一方面要重建原声音，另一方面要用尽量少的 segment 表示整段语音，避免模型偷懒把每个 frame 都切成一段。</p>
+
+        <h3>4. Representation model：语音版 BERT 与 GPT</h3>
+        <p>2018 年以后，NLP 有 BERT，语音领域也开始训练“语音版 BERT”。Mockingjay 把一段语音的连续 frame 遮住，让 Transformer 根据上下文还原被盖住的部分。语音和文字不同，如果只 mask 一个 frame，模型可能简单插值就能猜出来，所以必须连续 mask 多个 frame，甚至在频带方向 mask，才能迫使模型学到更有用的信息。</p>
+        <p>同一时期还有 APC，它像语音版 GPT，给前半段语音，预测未来 frame。它不是预测紧邻的下一个 frame，而是预测更远一些的 frame，因为相邻 frame 太容易被局部平滑猜出来。wav2vec 2.0 和 HuBERT 则把 speech representation model 推向更强的阶段。这些模型最初主要被看作下游任务的表示抽取器，而不是拿来直接生成语音的模型。</p>
+        <p>SUPERB benchmark 的意义在于，它证明这些自监督语音表示不只适合 ASR。不同层包含不同信息：后层更适合语音内容识别，前层往往保留说话人信息。用 weighted sum 把每一层表示按任务自动加权，可以让同一个 representation model 适配语音辨识、说话人验证、情绪等多种任务。</p>
+
+        <h3>5. 初代语音语言模型：tokenizer、接龙、detokenizer</h3>
+        <p>最早接近今天想象的语音语言模型之一是 Meta 的 GSLM。它的结构和 P9 讲的多媒体生成非常一致：先把声音变成 token，再训练自回归模型做 token 接龙，最后把 token 还原成声音。</p>
+        <p>语音 token 有两类常见来源。第一类从 speech representation model 改造而来：模型输出一串向量，对这些向量做 clustering 或加 VQ layer，把相似向量归到同一个编号。这类常被称为 semantic token。第二类来自 neural speech codec：tokenizer 和 detokenizer 一起训练，目标是把语音压缩成 token，再高质量还原语音。这类通常叫 acoustic token。</p>
+        <p>课程强调：如果有多组 token，问题就从“下一个 token 是什么”变成“不同 token 谁先生成、谁后生成、如何对齐”。AudioLM 等工作会同时使用 semantic token 和 acoustic token，生成策略本身就成为研究主题。</p>
+
+        <h3>6. 现代路线：文字和语音 token 必须协同</h3>
+        <p>初代语音语言模型只做 pretrain，本质上是在做语音接龙：给它前半句话，它把后半句话讲下去。课程里展示的早期结果语义不连贯，也没有自然的 in-context learning。这背后有数据和训练目标两重困难。</p>
+        <p>语音数据很贵。100 万小时语音听起来很多，换成文字 token 量却远小于大型文字模型的训练规模。更麻烦的是，语音 token 的频率通常接近 50 Hz，而文字 token 只有每秒三四个左右。语音序列长度至少是文字的十倍，Transformer attention 成本又随长度平方增长，训练成本可能是文字模型的百倍量级。</p>
+        <p>GPT-4o 和 Moshi 之后，大家越来越清楚一件事：强语音语言模型不能只靠语音 token。它需要借用文字模型已经学到的知识，同时训练时继续生成文字 token，避免 catastrophic forgetting。文字是语义的高效压缩，语音 token 则负责文字以外的信息，如说话方式、声音、情绪、停顿和语速。</p>
+        <div class="formula">
+          语音语言模型的一个核心训练目标：<br>
+          保留文字模型的知识 + 学会生成语音 token + 让文字 token 与语音 token 协同。<br>
+          <small>如果只教文字模型生成语音 token，又不持续练习文字 token，它可能忘掉文字阶段学到的能力。</small>
+        </div>
+        <table class="term-table">
+          <thead><tr><th>混合方式</th><th>做法</th><th>代价</th></tr></thead>
+          <tbody>
+            <tr><td>先文字后语音</td><td>先生成完整文字，再根据文字合成语音 token。</td><td>像 TTS，容易产生等待延迟，不适合极自然实时对话。</td></tr>
+            <tr><td>词级 interleaving</td><td>生成一个文字 token，再生成对应语音 token。</td><td>需要较好的文字和语音对齐关系。</td></tr>
+            <tr><td>chunk-wise interleaving</td><td>固定比例交替生成文字 token 和语音 token。</td><td>不要求精确对齐，但模型要自己学会错位关系。</td></tr>
+            <tr><td>双 head 并行</td><td>每个时间点同时生成文字 token 和语音 token。</td><td>仍要处理两种序列长度不一致的问题。</td></tr>
+          </tbody>
+        </table>
+
+        <h3>7. TASTE、SFT/RLHF 与 STITCH</h3>
+        <p>如果未来主流是文字和语音 token 混合生成，那么语音 token 的设计就不该再假设“自己包山包海”。既然文字 token 已经说明要讲什么，语音 token 可以更专注于文字表达不了的部分：怎么讲、多长、什么语气、什么发音风格。TASTE 的目标就是让语音 token 数量和文字 token 数量更接近，甚至一对一。</p>
+        <p>只做 pretrain 的语音模型只会接龙，不一定会对话。要让它像助手一样回应用户，需要 SFT：用一问一答的语音对话资料教模型“听到一句话以后应该回答”。RLHF 也可以迁移到语音场景，但不能只把输出转成文字来评分，因为人类偏好还会看语气、时机、身份和安全边界。</p>
+        <p>STITCH 的问题意识是：语音对话不能总是沉默等待思考。若模型每次合成一小段约两秒语音，而生成下一段只要 0.5 秒，中间就有播放 buffer。STITCH 把 reasoning token 插在两段语音 token 之间，让模型边播放上一段语音，边产生内部思考，再生成下一段语音。用户听起来没有额外停顿，模型却获得了 reasoning 的好处。</p>
+        <div class="box greenbox"><h3>你现在应该能做什么</h3><p>你应该能解释为什么“短期可用”和“长期上限”会指向不同路线，也能说明语音语言模型不是单纯把文字模型接上 TTS，而是要重新处理信息保留、token 设计、训练目标和实时互动。</p></div>
+      </section>
+
+      <section id="source">
+        <div class="head"><h2>四、来源脉络：原字幕里有哪些关键证据</h2><span class="tag">SOURCE</span></div>
+        <p>本页依据 P10 原字幕手工修订。原讲座开头明确说明：这一讲不是完整 overview，而是从李宏毅和团队的第一人称视角回看语音语言模型的发展。因此，本页没有把它改写成百科式 survey，而是保留“研究者怎样从旧问题走到新问题”的脉络。</p>
+        <p>字幕中的关键线索有三类。第一类是定义线索：speech language model 的术语混乱、对话模式和 command mode 的差别、TTS 论文也可能自称 speech language model。第二类是路线线索：cascade 容易做但会丢失语音额外信息，端到端短期弱但上限高，agentic 解法以文字模型调度语音工具。第三类是研究线索：从 spoken content retrieval 到 audio word2vec，再到 representation model、SUPERB、GSLM、hybrid token、TASTE、SFT/RLHF 与 STITCH。</p>
+        <table class="metric-table">
+          <thead><tr><th>字幕线索</th><th>本页处理方式</th><th>学习时要抓住的判断</th></tr></thead>
+          <tbody>
+            <tr><td>课程不是完整综述</td><td>放入目标与来源说明，避免把页面写成论文大全。</td><td>学研究演进的判断框架，而不是背全领域列表。</td></tr>
+            <tr><td>术语混乱</td><td>集中到 terms 区，先分清对话模型、command mode、TTS。</td><td>读论文先看任务边界和输入输出。</td></tr>
+            <tr><td>Cascade 与 end-to-end 对比</td><td>放入 skeleton、lecture、viz 三处，既讲直觉也给交互判断。</td><td>短期效果不等于长期上限。</td></tr>
+            <tr><td>Audio word2vec 与 segmental 训练</td><td>在讲义和例子区重建伪代码，不直接堆字幕。</td><td>语音片段边界本身就是学习对象。</td></tr>
+            <tr><td>Representation model 与 SUPERB</td><td>强调不同层保存不同信息，以及多任务评估的意义。</td><td>语音表示不只服务 ASR，也服务说话人、情绪等任务。</td></tr>
+            <tr><td>现代语音模型</td><td>用 hybrid decoding、TASTE、RLHF、STITCH 串成最后一段。</td><td>强语音模型要同时解决知识、声音、对话和实时性。</td></tr>
+          </tbody>
+        </table>
+        <div class="box warn"><h3>资料边界</h3><p>字幕没有提供完整论文公式、实验表格和所有模型细节，所以本页只补足学习必需的概念解释，不把未在讲座主线中展开的论文细节强行扩写成结论。</p></div>
+      </section>
+
+      <section id="example">
+        <div class="head"><h2>五、最小例子：把抽象路线落到可判断对象</h2><span class="tag">EXAMPLE</span></div>
+        <p>这一节的例子不是要你手敲代码，而是训练“看到系统就能拆结构”的能力。语音语言模型的发展史里最容易错的地方，是把所有语音系统都看成同一种东西。下面三个最小例子分别对应：怎么切语音片段、怎么区分生成策略、怎么利用播放 buffer 思考。</p>
+        <div class="codebar"><span class="label">伪代码：segmental audio word2vec 的精神</span><span class="kind">concept</span><button class="copy-code">复制</button></div>
+        <pre><code>for frame in speech_frames:
+    encoder.read(frame)
+    if encoder.decides_boundary():
+        vector = encoder.emit_segment_vector()
+        decoder.reconstruct_segment(vector)
+        encoder.reset_memory()
+
+loss = reconstruction_error + penalty_for_too_many_segments</code></pre>
+        <p>这段伪代码的重点是两个目标同时存在：重建误差要小，segment 数量也要少。如果只追求重建，模型最省事的做法是每个 frame 都切一段，等于没有学到真正可复用的声音单位。加入 segment 数量惩罚后，模型才会被迫寻找“常出现、好压缩、能还原”的片段。</p>
+        <div class="codebar"><span class="label">判断示例：一个语音系统属于哪条路线</span><span class="kind">reading</span><button class="copy-code">复制</button></div>
+        <pre><code>if system.uses_asr and system.uses_text_llm and system.uses_tts:
+    route = "cascade"
+elif system.text_llm_calls_speech_tools:
+    route = "agentic"
+elif system.input == "speech" and system.output == "speech" and system.single_model:
+    route = "end-to-end"
+else:
+    route = "read the paper more carefully"</code></pre>
+        <p>这段判断代码刻意很朴素，因为读论文第一步就应该朴素。先不要被模型名或 demo 效果吸引，先确认它是不是偷偷经过 ASR 文本、是不是以文字模型为调度核心、是不是单一模型直接处理语音进出。只有先分清路线，后面的效果、延迟和信息保留才有可比性。</p>
+        <div class="codebar"><span class="label">伪代码：语音 token 与 reasoning token 交错</span><span class="kind">STITCH</span><button class="copy-code">复制</button></div>
+        <pre><code>while answering:
+    speech_chunk = generate_speech_tokens()
+    play(detokenizer(speech_chunk))
+
+    reasoning = generate_hidden_text_tokens(buffer_time)
+    next_speech_chunk = generate_speech_tokens(conditioned_on=reasoning)</code></pre>
+        <p>STITCH 的关键不在“多生成一些隐藏文字”这么简单，而在时机。语音播放有物理时间，模型可以利用上一段语音正在播放的空档生成 reasoning token。这样用户听到的是连贯语音，模型内部却获得了额外推理步骤。你现在应该能判断：一个语音助手是否实时，不只看回答质量，还要看它怎样切 chunk、怎样利用 buffer、怎样避免沉默。</p>
+      </section>
+
+      <section id="viz">
+        <div class="head"><h2>六、可视化：路线、TASTE 与实时 buffer</h2><span class="tag">VIZ</span></div>
+        <div class="viz-panel">
+          <div class="viz-grid">
+            <div>
+              <h3>路线取舍小实验</h3>
+              <p class="muted">选择目标，观察哪条路线更占优。</p>
+              <div class="btns">
+                <button class="active" data-route="quick">快速做 demo</button>
+                <button class="ghost" data-route="emotion">理解语气情绪</button>
+                <button class="ghost" data-route="realtime">低延迟实时互动</button>
+              </div>
+              <div class="barrow"><span>Cascade</span><div class="bar"><div class="fill" id="cascadeBar"></div></div><b id="cascadeText">高</b></div>
+              <div class="barrow"><span>Agentic</span><div class="bar"><div class="fill gold" id="agenticBar"></div></div><b id="agenticText">中</b></div>
+              <div class="barrow"><span>End-to-end</span><div class="bar"><div class="fill red" id="e2eBar"></div></div><b id="e2eText">低</b></div>
+            </div>
+            <div class="box soft" id="routeNote"><h3>快速做 demo</h3><p>ASR + LLM + TTS 是最稳妥的工程起点，能快速得到可用系统。</p></div>
+          </div>
+        </div>
+        <p>TASTE 的目标是让语音 token 数量和文字 token 数量更接近，甚至一对一。它使用预训练 speech encoder，例如 Whisper encoder，从不同层抽出表示；再用文字 token 作为 query，对语音表示做 attention，得到和文字 token 对应的一组语音 token。detokenizer 同时吃文字 token 和语音 token，像增强版 TTS：文字决定内容，语音 token 决定说法。</p>
+        <svg class="flow-svg" viewBox="0 0 820 270" role="img" aria-label="TASTE 示意图">
+          <rect x="1" y="1" width="818" height="268" fill="#fbfdff" stroke="rgba(36,34,31,.18)"/>
+          <rect x="45" y="55" width="150" height="54" fill="#eef8fc" stroke="#216d5d"/>
+          <text x="120" y="88" text-anchor="middle" font-size="16" fill="#232320">语音输入</text>
+          <rect x="255" y="42" width="170" height="82" fill="#edf8f3" stroke="#1f7a5f"/>
+          <text x="340" y="76" text-anchor="middle" font-size="15" fill="#232320">speech encoder</text>
+          <text x="340" y="99" text-anchor="middle" font-size="13" fill="#5f6875">不同层表示</text>
+          <rect x="485" y="42" width="145" height="82" fill="#fff4d8" stroke="#a37122"/>
+          <text x="557" y="76" text-anchor="middle" font-size="15" fill="#232320">文字 query</text>
+          <text x="557" y="99" text-anchor="middle" font-size="13" fill="#5f6875">attention 汇聚</text>
+          <rect x="690" y="55" width="92" height="54" fill="#ffefea" stroke="#c14f3e"/>
+          <text x="736" y="88" text-anchor="middle" font-size="16" fill="#232320">语音 token</text>
+          <path d="M195 82 H255" stroke="#5f6875" stroke-width="2"/><path d="M425 82 H485" stroke="#5f6875" stroke-width="2"/><path d="M630 82 H690" stroke="#5f6875" stroke-width="2"/>
+          <rect x="210" y="177" width="135" height="48" fill="#f7faff" stroke="rgba(36,34,31,.18)"/>
+          <text x="277" y="207" text-anchor="middle" font-size="15" fill="#232320">文字 token</text>
+          <rect x="400" y="165" width="170" height="72" fill="#f7faff" stroke="rgba(36,34,31,.18)"/>
+          <text x="485" y="195" text-anchor="middle" font-size="15" fill="#232320">detokenizer</text>
+          <text x="485" y="217" text-anchor="middle" font-size="13" fill="#5f6875">内容 + 说法</text>
+          <rect x="630" y="177" width="135" height="48" fill="#f7faff" stroke="rgba(36,34,31,.18)"/>
+          <text x="697" y="207" text-anchor="middle" font-size="15" fill="#232320">还原语音</text>
+          <path d="M345 201 H400" stroke="#5f6875" stroke-width="2"/><path d="M570 201 H630" stroke="#5f6875" stroke-width="2"/>
+        </svg>
+        <p>课程里的 token 交换实验展示了这些 token 可以控制长度：把慢速句子里某几个词对应的语音 token 换成快速句子的 token，detokenizer 还原时这些词会突然加速；反过来也会减速。也就是说，语音 token 确实学到“这个文字 token 应该怎么被念出来”。</p>
+        <div class="viz-panel">
+          <h3>观察：buffer 越多，可思考 token 越多</h3>
+          <div class="slider-row">
+            <label for="bufferSlider">可用 buffer</label>
+            <input id="bufferSlider" type="range" min="0" max="200" value="100">
+            <strong id="bufferValue">100</strong>
+          </div>
+          <div class="barrow"><span>推理帮助</span><div class="bar"><div class="fill" id="reasonBar"></div></div><b id="reasonText">较好</b></div>
+          <div class="barrow"><span>延迟风险</span><div class="bar"><div class="fill red" id="delayBar"></div></div><b id="delayText">中</b></div>
+          <p class="caption">图示只是帮助理解。真实系统还取决于 GPU、chunk 长度、detokenizer 速度和是否用外部文字模型提供 reasoning。</p>
+        </div>
+        <p>课程最后还指出两个尚未解决的重要方向：第一是 full duplex，也就是自然对话中两个人可以同时发声、插话、被打断；第二是物理时间感，例如让模型真正理解“停十秒再说话”。这些不是普通文字模型会自然具备的能力，而是语音语言模型走向真实交互必须面对的问题。</p>
+      </section>
+
+      <section id="diagnosis">
+        <div class="head"><h2>七、错误诊断：常见误区和修正清单</h2><span class="tag">DIAGNOSIS</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>四个第一问题</h3>
+            <ul>
+              <li>它是对话模型、command mode、TTS，还是语音任务模型？</li>
+              <li>它是 cascade、agentic，还是端到端？是否偷偷用 ASR/TTS？</li>
+              <li>它使用 semantic token、acoustic token、continuous token，还是文字和语音混合 token？</li>
+              <li>它是否能处理语气、说话人、情绪、插话、延迟和时间感？</li>
+            </ul>
+          </div>
+          <div class="box redsoft">
+            <h3>六个常见误区</h3>
+            <ul>
+              <li>把语音语言模型和 TTS 混为一谈。</li>
+              <li>以为 cascade 已经够强，所以端到端没有研究价值。</li>
+              <li>只看 ASR 后的文字内容，忽略语音里的额外信息。</li>
+              <li>以为 semantic token 真的只含语义。</li>
+              <li>只看回答质量，不看实时延迟和是否能边听边说。</li>
+              <li>以为 pretrain 语音接龙模型天然会对话和 in-context learning。</li>
+            </ul>
+          </div>
+        </div>
+        <table class="term-table">
+          <thead><tr><th>错误说法</th><th>错在哪里</th><th>怎么修正</th></tr></thead>
+          <tbody>
+            <tr><td>“输入语音输出语音，所以一定是端到端。”</td><td>它可能只是 ASR + LLM + TTS 串接。</td><td>追问中间是否出现文字转写、是否调用多个模块。</td></tr>
+            <tr><td>“TTS 也用 speech token，所以就是对话式语音语言模型。”</td><td>TTS 不负责理解用户语音并生成回应。</td><td>区分输入文字念出来，和听语音后回答。</td></tr>
+            <tr><td>“semantic token 只保存语义。”</td><td>这个命名是历史约定，representation model 未必真的只抽语义。</td><td>看 token 来源和下游任务表现，不只看名称。</td></tr>
+            <tr><td>“pretrain 后自然就会聊天。”</td><td>预训练语音模型多半只会接龙。</td><td>需要 SFT 教对话格式，再用偏好训练改进合适性。</td></tr>
+            <tr><td>“语音 RLHF 只要看 ASR 后文字答案。”</td><td>ASR 会丢掉语气、情绪、年龄、环境等偏好因素。</td><td>评价语音回应时同时看内容和 paralinguistic information。</td></tr>
+            <tr><td>“实时语音只看模型生成速度。”</td><td>真实体验还取决于 chunk、detokenizer、buffer、打断和双工能力。</td><td>同时检查延迟、可打断性、是否能边播放边思考。</td></tr>
+          </tbody>
+        </table>
+        <p>你现在应该能做什么：拿到一个新的语音模型，不再被模型名牵着走，而是能从任务边界、系统路线、token 设计、文字信息利用、对齐训练、实时交互能力六个角度拆开判断。</p>
+      </section>
+
+      <section id="practice">
+        <div class="head"><h2>课后题：把研究史变成判断力</h2><span class="tag">22 QUESTIONS</span></div>
+        <div class="practice-intro">
+          <div class="review-card">
+            <strong>答题建议</strong>
+            <p>这讲不是背年份。每题都尽量回答“这个技术解决什么问题，为什么当时需要它，后来暴露了什么新问题”。</p>
+          </div>
+          <div class="review-card">
+            <strong>核心验收</strong>
+            <p>你应该能讲清：语音不是文字的简单外壳，语音语言模型的关键挑战来自信息保留、token 设计、训练数据、实时延迟和对话对齐。</p>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head"><div><h3>A. 定义与路线</h3><p>先把模型类型分清楚。</p></div><div class="quick-review"><b>快速复盘</b>对话式 SLM、command mode、TTS 经常被混叫；cascade 容易做，end-to-end 上限高。</div></div>
+          <div class="drill-grid">
+            <div class="q" data-role="homework" data-title="1. 判断：所有输入语音、输出语音的系统都一定是端到端语音语言模型。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. 判断：所有输入语音、输出语音的系统都一定是端到端语音语言模型。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
+            <div class="q" data-role="homework" data-title="2. 对话式语音语言模型和 TTS 的核心差别是什么？"><div class="q-meta"><span class="pill">对照</span></div><h3>2. 对话式语音语言模型和 TTS 的核心差别是什么？</h3><textarea name="q2"></textarea></div>
+            <div class="q" data-role="homework" data-title="3. Command mode 为什么不能直接等同于对话式语音语言模型？"><div class="q-meta"><span class="pill">解释</span></div><h3>3. Command mode 为什么不能直接等同于对话式语音语言模型？</h3><textarea name="q3"></textarea></div>
+            <div class="q" data-role="homework" data-title="4. Cascade 方案的三个组件是什么？它最大的信息损失在哪里？"><div class="q-meta"><span class="pill">机制</span></div><h3>4. Cascade 方案的三个组件是什么？它最大的信息损失在哪里？</h3><textarea name="q4"></textarea></div>
+            <div class="q" data-role="homework" data-title="5. 为什么 2025 年 cascade 可能短期更强，但 end-to-end 仍值得研究？"><div class="q-meta"><span class="pill">判断</span></div><h3>5. 为什么 2025 年 cascade 可能短期更强，但 end-to-end 仍值得研究？</h3><textarea name="q5"></textarea></div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head"><div><h3>B. 历史与前传</h3><p>理解技术为什么不是突然出现。</p></div><div class="quick-review"><b>快速复盘</b>audio word2vec 解决固定向量，segmental 解决边界，无监督 ASR 展示无标签学习潜力。</div></div>
+          <div class="drill-grid">
+            <div class="q" data-role="homework" data-title="6. 早期端到端 ASR 表现不好，为什么仍然有研究价值？"><div class="q-meta"><span class="pill">研究判断</span></div><h3>6. 早期端到端 ASR 表现不好，为什么仍然有研究价值？</h3><textarea name="q6"></textarea></div>
+            <div class="q" data-role="homework" data-title="7. Audio word2vec 为什么能帮助语音检索？"><div class="q-meta"><span class="pill">解释</span></div><h3>7. Audio word2vec 为什么能帮助语音检索？</h3><textarea name="q7"></textarea></div>
+            <div class="q" data-role="homework" data-title="8. Segmental audio word2vec 为什么要惩罚 segment 数量太多？"><div class="q-meta"><span class="pill">诊断</span></div><h3>8. Segmental audio word2vec 为什么要惩罚 segment 数量太多？</h3><textarea name="q8"></textarea></div>
+            <div class="q" data-role="homework" data-title="9. 无监督 ASR 用 GAN 思路时，discriminator 分辨的是什么？"><div class="q-meta"><span class="pill">机制</span></div><h3>9. 无监督 ASR 用 GAN 思路时，discriminator 分辨的是什么？</h3><textarea name="q9"></textarea></div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head"><div><h3>C. 表示模型与 token</h3><p>区分 representation、semantic token、acoustic token。</p></div><div class="quick-review"><b>快速复盘</b>表示模型先服务下游任务，后被改造成语音 token 来源。</div></div>
+          <div class="drill-grid">
+            <div class="q" data-role="homework" data-title="10. Mockingjay 为什么不能只 mask 一个语音 frame？"><div class="q-meta"><span class="pill">解释</span></div><h3>10. Mockingjay 为什么不能只 mask 一个语音 frame？</h3><textarea name="q10"></textarea></div>
+            <div class="q" data-role="homework" data-title="11. SUPERB 为什么证明 speech representation model 可能是通用模型？"><div class="q-meta"><span class="pill">解释</span></div><h3>11. SUPERB 为什么证明 speech representation model 可能是通用模型？</h3><textarea name="q11"></textarea></div>
+            <div class="q" data-role="homework" data-title="12. 为什么不同层适合不同语音任务？请用 ASR 和说话人辨识举例。"><div class="q-meta"><span class="pill">对照</span></div><h3>12. 为什么不同层适合不同语音任务？请用 ASR 和说话人辨识举例。</h3><textarea name="q12"></textarea></div>
+            <div class="q" data-role="homework" data-title="13. Semantic token 和 acoustic token 分别从哪里来？各自偏向解决什么问题？"><div class="q-meta"><span class="pill">对照</span></div><h3>13. Semantic token 和 acoustic token 分别从哪里来？各自偏向解决什么问题？</h3><textarea name="q13"></textarea></div>
+            <div class="q" data-role="homework" data-title="14. 初代 GSLM 式模型为什么只会语音接龙，不等于会对话？"><div class="q-meta"><span class="pill">解释</span></div><h3>14. 初代 GSLM 式模型为什么只会语音接龙，不等于会对话？</h3><textarea name="q14"></textarea></div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head"><div><h3>D. 现代语音语言模型</h3><p>理解文字和语音混合生成为什么关键。</p></div><div class="quick-review"><b>快速复盘</b>文字 token 保留知识，语音 token 表达说法；TASTE 让两者更好对齐。</div></div>
+          <div class="drill-grid">
+            <div class="q" data-role="homework" data-title="15. 为什么只用语音资料训练出 Llama 级能力极其困难？"><div class="q-meta"><span class="pill">成本分析</span></div><h3>15. 为什么只用语音资料训练出 Llama 级能力极其困难？</h3><textarea name="q15"></textarea></div>
+            <div class="q" data-role="homework" data-title="16. 训练语音语言模型时，为什么继续生成文字 token 可以缓解遗忘？"><div class="q-meta"><span class="pill">机制</span></div><h3>16. 训练语音语言模型时，为什么继续生成文字 token 可以缓解遗忘？</h3><textarea name="q16"></textarea></div>
+            <div class="q" data-role="homework" data-title="17. 词级 interleaving 和 chunk-wise interleaving 各有什么代价？"><div class="q-meta"><span class="pill">对照</span></div><h3>17. 词级 interleaving 和 chunk-wise interleaving 各有什么代价？</h3><textarea name="q17"></textarea></div>
+            <div class="q" data-role="homework" data-title="18. TASTE 的语音 token 为什么不需要完整保存文字内容？"><div class="q-meta"><span class="pill">解释</span></div><h3>18. TASTE 的语音 token 为什么不需要完整保存文字内容？</h3><textarea name="q18"></textarea></div>
+            <div class="q" data-role="homework" data-title="19. 什么是 paralinguistic information？请举两个模型应该利用它的例子。"><div class="q-meta"><span class="pill">应用</span></div><h3>19. 什么是 paralinguistic information？请举两个模型应该利用它的例子。</h3><textarea name="q19"></textarea></div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head"><div><h3>E. 对齐与实时交互</h3><p>把语音模型放回真实对话。</p></div><div class="quick-review"><b>快速复盘</b>SFT 教会对话，RLHF 教会合适，STITCH 利用播放 buffer 做无额外延迟的思考。</div></div>
+          <div class="drill-grid">
+            <div class="q" data-role="homework" data-title="20. 语音 SFT 为什么需要对话资料？只用演讲资料会怎样？"><div class="q-meta"><span class="pill">诊断</span></div><h3>20. 语音 SFT 为什么需要对话资料？只用演讲资料会怎样？</h3><textarea name="q20"></textarea></div>
+            <div class="q" data-role="homework" data-title="21. STITCH 如何让语音模型一边说话一边 reasoning？"><div class="q-meta"><span class="pill">机制</span></div><h3>21. STITCH 如何让语音模型一边说话一边 reasoning？</h3><textarea name="q21"></textarea></div>
+            <div class="q full" data-role="homework" data-title="22. 费曼题：用 8-10 句话讲清语音语言模型从前传到现代系统的主线。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>22. 费曼题：用 8-10 句话讲清语音语言模型从前传到现代系统的主线。</h3><div class="solve-note">至少提到 speech language model、cascade、end-to-end、audio word2vec、representation model、SUPERB、semantic token、acoustic token、hybrid decoding、TASTE、RLHF、STITCH。</div><textarea name="q22"></textarea></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head"><h2>练习记录</h2><span class="tag">EXPORT</span></div>
+        <div class="export-box">
+          <p>写完后生成 Markdown 练习记录，便于保存、复盘和分享。</p>
+          <div class="export-actions">
+            <button id="buildAnswer">生成 Markdown 练习记录</button>
+            <button id="copyAnswer" class="ghost">复制记录</button>
+            <button id="downloadAnswer" class="ghost">下载 .md</button>
+          </div>
+          <div id="qualityBox" class="quality"></div>
+          <textarea id="exportText" placeholder="这里会生成 Markdown 练习记录。"></textarea>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="../../../../assets/study-page.js"></script>
+<script>
+    const $ = (sel, root=document) => root.querySelector(sel);
+    const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
+
+    function updateProgress(){
+      const h = document.documentElement;
+      const total = h.scrollHeight - h.clientHeight;
+      const pct = total ? (h.scrollTop / total) * 100 : 0;
+      $('#progress').style.width = pct + '%';
+    }
+    window.addEventListener('scroll', updateProgress, {passive:true});
+    updateProgress();
+
+    const links = $$('nav a');
+    const sections = links.map(a => $(a.getAttribute('href'))).filter(Boolean);
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if(!entry.isIntersecting) return;
+        links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id));
+      });
+    }, {rootMargin:'-45% 0px -48% 0px', threshold:0.01});
+    sections.forEach(sec => observer.observe(sec));
+
+    $$('.copy-code').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const pre = btn.closest('.codebar').nextElementSibling;
+        const text = pre ? pre.innerText : '';
+        navigator.clipboard?.writeText(text).then(() => {
+          const old = btn.textContent;
+          btn.textContent = '已复制';
+          setTimeout(() => btn.textContent = old, 1200);
+        });
+      });
+    });
+
+    function setBar(id, pct){
+      const el = $('#' + id);
+      if(el) el.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    }
+
+    function setRoute(mode){
+      const data = {
+        quick: {c:92,a:62,e:38,ct:'高',at:'中',et:'低',title:'快速做 demo',text:'ASR + LLM + TTS 是最稳妥的工程起点，能快速得到可用系统。'},
+        emotion: {c:35,a:58,e:92,ct:'低',at:'中',et:'高',title:'理解语气情绪',text:'端到端模型更有机会保留说话人、情绪、语气和环境信息。'},
+        realtime: {c:45,a:55,e:82,ct:'中低',at:'中',et:'高',title:'低延迟实时互动',text:'端到端路线理论上更适合低延迟，但真实系统仍需要 chunk、buffer 和工程优化。'}
+      }[mode];
+      setBar('cascadeBar', data.c); setBar('agenticBar', data.a); setBar('e2eBar', data.e);
+      $('#cascadeText').textContent = data.ct; $('#agenticText').textContent = data.at; $('#e2eText').textContent = data.et;
+      $('#routeNote').innerHTML = '<h3>' + data.title + '</h3><p>' + data.text + '</p>';
+      $$('[data-route]').forEach(btn => {
+        const active = btn.dataset.route === mode;
+        btn.classList.toggle('active', active);
+        btn.classList.toggle('ghost', !active);
+      });
+    }
+    $$('[data-route]').forEach(btn => btn.addEventListener('click', () => setRoute(btn.dataset.route)));
+    setRoute('quick');
+
+    function updateBuffer(){
+      const v = Number($('#bufferSlider').value);
+      $('#bufferValue').textContent = v;
+      const help = Math.round(100 * (1 - Math.exp(-v / 70)));
+      const delay = Math.max(0, Math.round((v - 130) * 1.2));
+      setBar('reasonBar', help);
+      setBar('delayBar', delay);
+      $('#reasonText').textContent = help > 80 ? '很好' : help > 55 ? '较好' : help > 25 ? '有限' : '低';
+      $('#delayText').textContent = delay > 55 ? '高' : delay > 20 ? '中' : '低';
+    }
+    $('#bufferSlider').addEventListener('input', updateBuffer);
+    updateBuffer();
+
+    function readAnswer(q){
+      const checked = q.querySelector('input[type="radio"]:checked');
+      if(checked) return checked.value;
+      const text = q.querySelector('textarea,input[type="text"]');
+      return text ? text.value.trim() : '';
+    }
+
+    function collectAnswers(){
+      const qs = $$('[data-role="homework"]');
+      const lines = [
+        '# P10 语音语言模型发展史｜练习记录',
+        '',
+        '- 课程：李宏毅 LLM 大模型 第10讲',
+        '- 主题：语音语言模型发展史',
+        '- 生成时间：' + new Date().toLocaleString('zh-CN'),
+        ''
+      ];
+      const missing = [];
+      qs.forEach((q, idx) => {
+        const title = q.dataset.title || q.querySelector('h3')?.innerText || ('第 ' + (idx + 1) + ' 题');
+        const ans = readAnswer(q);
+        if(!ans) missing.push(idx + 1);
+        lines.push('## ' + title);
+        lines.push(ans || '（未作答）');
+        lines.push('');
+      });
+      const keywordText = document.body.dataset.feynmanKeywords || '';
+      const last = qs[qs.length - 1];
+      const feynman = last ? readAnswer(last) : '';
+      const missed = keywordText.split(',').map(s => s.trim()).filter(Boolean).filter(k => !feynman.toLowerCase().includes(k.toLowerCase()));
+      const warnings = [];
+      if(missing.length) warnings.push('未作答题号：' + missing.join('、'));
+      if(feynman && missed.length) warnings.push('费曼题可能遗漏关键词：' + missed.join('、'));
+      const box = $('#qualityBox');
+      if(warnings.length){
+        box.style.display = 'block';
+        box.textContent = warnings.join('\n');
+      }else{
+        box.style.display = 'block';
+        box.textContent = '自检通过：没有发现空题，费曼题覆盖了主要关键词。';
+      }
+      return lines.join('\n');
+    }
+
+    $('#buildAnswer').addEventListener('click', () => {
+      $('#exportText').value = collectAnswers();
+    });
+    $('#copyAnswer').addEventListener('click', () => {
+      const text = $('#exportText').value || collectAnswers();
+      $('#exportText').value = text;
+      navigator.clipboard?.writeText(text);
+    });
+    $('#downloadAnswer').addEventListener('click', () => {
+      const text = $('#exportText').value || collectAnswers();
+      $('#exportText').value = text;
+      const blob = new Blob([text], {type:'text/markdown;charset=utf-8'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'P10-语音语言模型发展史-练习记录.md';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+  </script>
+</body>
+</html>

@@ -9,7 +9,7 @@ tags:
   - AI/提示工程
   - AI/大模型
   - AI/推理
-  - 学习笔记/course-forge
+  - 学习笔记/learning-kit
 source: https://www.aneasystone.com/archives/2024/01/prompt-engineering-notes.html
 created: 2026-06-06
 ---

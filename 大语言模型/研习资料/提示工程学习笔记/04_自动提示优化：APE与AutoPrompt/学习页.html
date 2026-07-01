@@ -1,0 +1,743 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>自动提示优化：APE与AutoPrompt</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="提示工程学习笔记" data-unit="04 自动提示优化">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>提示工程学习笔记</strong>
+        <span>04 自动提示优化</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#mechanism"><span class="dot"></span>核心机制</a>
+        <a href="#example"><span class="dot"></span>例子</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先分清优化对象，再看候选生成和评分。对象错了，后面就会把流程写偏。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">Prompt Engineering 04 · 自动提示优化</div>
+          <h1>自动提示优化：APE与AutoPrompt</h1>
+          <p>这一页只讲一件事：当 prompt 本身已经不稳定、太难手写，或者样例选择会直接影响效果时，怎么把提示优化变成可检查的流程。先分清 APE、AutoPrompt 和 Active Prompting 各自优化的是“提示”“触发词”还是“样例”，再看它们怎么做评估、采样和回退。</p>
+
+          <div class="course-links">
+            
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+  <li>能说清 AutoPrompt、APE 和 Active Prompting 分别在优化什么对象。</li>
+  <li>能按“生成候选 - 评分 - 复核/重采样”写出 APE 的最小闭环。</li>
+  <li>能判断一个任务该补触发词、补提示模板，还是补不确定样例。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head"><h2>学习目标</h2><span class="tag">goals</span></div>
+  <p>先抓住这个单元的边界：这一页不再讨论“怎么把问题写清楚”，而是讨论“怎么把提示本身和示例选择做成可评估的流程”。你需要先判断任务缺的是触发词、提示模板，还是更值得标注的样例，再决定用 AutoPrompt、APE 还是 Active Prompting。</p>
+  <div class="grid3">
+    <div class="box soft"><h3>先看对象</h3><p>AutoPrompt 关注触发 token，APE 关注整段提示，Active Prompting 关注最不稳定的样例。</p></div>
+    <div class="box info"><h3>再看流程</h3><p>候选生成、评分、重采样、人工标注、独立测试，这些步骤各自负责不同的检查点。</p></div>
+    <div class="box warn"><h3>最后看边界</h3><p>没有评测集的提示优化，只是在换一种说法；没有不确定性度量的样例选择，也只是随手挑例子。</p></div>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head"><h2>先抓主线</h2><span class="tag">overview</span></div>
+  <p>提示工程发展到这一层，很多问题已经不是“写一句更好的 prompt”能解决的。输入分布会变，少量样例会过拟合，任务也可能要求模型先找一个适合的触发模式。于是，提示优化开始变成三类动作：生成候选、评估候选、挑选更值得继续的候选。</p>
+  <p>这页的主线很简单：先看 AutoPrompt 怎么从数据里学触发词，再看 APE 怎么把整段提示放进搜索与评分循环，最后看 Active Prompting 怎么把标注预算花在最不稳定的问题上。三者都不是“自动化”这个词本身重要，而是它们把人手里最容易漂的部分固定成了流程。</p>
+  <div class="table-wrap">
+    <table data-export-context="三种自动优化对象对照" data-export-lang="table">
+      <thead>
+        <tr><th>方法</th><th>优化对象</th><th>输入</th><th>输出</th><th>最怕什么</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>AutoPrompt</td><td>触发 token / pattern</td><td>标注样例、masked LM</td><td>能激活目标答案的触发序列</td><td>只在训练样例上触发</td></tr>
+        <tr><td>APE</td><td>整段提示</td><td>输入输出对、评分函数</td><td>高分候选 prompt</td><td>没有独立测试集</td></tr>
+        <tr><td>Active Prompting</td><td>样例选择</td><td>题库、多次采样、不确定性分数</td><td>更值得人工标注的样例</td><td>把稳定样例当边界样例</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="ledger">
+  <div class="head"><h2>状态台账</h2><span class="tag">ledger</span></div>
+  <p>自动提示优化表面上是在找更好的文字，实际上是在跟一组状态打交道：样例集、候选提示、评分函数、重采样结果和独立测试。只要其中一个状态错位，最后得到的“最优提示”就可能只是局部最优。</p>
+  <div class="table-wrap">
+    <table data-export-context="自动提示优化状态台账" data-export-lang="table">
+      <thead>
+        <tr><th>状态</th><th>当前读什么</th><th>会写什么</th><th>错位症状</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>开发样例</td><td>输入输出对</td><td>候选评分的基准</td><td>没有代表性，候选会偏到局部词面</td></tr>
+        <tr><td>候选提示</td><td>任务描述、样例、触发词</td><td>下一轮评估对象</td><td>候选彼此太像，搜索没有分辨率</td></tr>
+        <tr><td>评分函数</td><td>准确率、格式、人工偏好</td><td>候选排名</td><td>指标不一致，最后只剩看起来顺眼</td></tr>
+        <tr><td>独立测试集</td><td>未参与生成的样例</td><td>泛化验证</td><td>开发集高分，测试集明显下滑</td></tr>
+        <tr><td>不确定性分布</td><td>多次采样结果</td><td>需要人工标注的样例</td><td>把稳定问题当成难题，标注预算浪费</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="mechanism">
+  <div class="head"><h2>核心机制</h2><span class="tag">mechanism</span></div>
+  <p>这三个方法看起来不同，其实都在做同一件事：把“凭感觉写 prompt”拆成可观察的中间状态。AutoPrompt 观察触发词是否真的能把模型拉向目标标签，APE 观察候选提示在样例集上的分数，Active Prompting 观察模型在哪些问题上最不稳定。</p>
+  <div class="grid2">
+    <div class="box">
+      <h3>AutoPrompt 的状态变化</h3>
+      <p>输入是一个带掩码的位置，目标是找到一组触发 token，让模型更容易在 masked position 上给出目标答案。核心不是“把 prompt 写长”，而是“找出哪些 token 对结果最敏感”。</p>
+    </div>
+    <div class="box">
+      <h3>APE 的状态变化</h3>
+      <p>输入是示例对和评分规则，输出是候选 prompt 的排名。它关心的是整段提示在开发样例上的表现，所以必须把生成和评估分开，不然就会只优化出一段更像说明文的文字。</p>
+    </div>
+  </div>
+  <div class="codebar"><span class="label">APE 评分骨架</span></div>
+  <pre data-export-context="APE 评分骨架" data-export-lang="math"><code class="language-text">score(prompt) = 任务指标(prompt, dev_set) - 过拟合风险(prompt, dev_set)
+
+其中：
+- 任务指标可以是准确率、格式合规率或人工评分
+- dev_set 是开发样例
+- 过拟合风险在独立测试集上通常会暴露出来
+
+选择规则：
+1. 先在开发样例上排序
+2. 再在独立测试集上复核
+3. 如果 test 分数掉得明显，回到候选池重新采样</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="自动提示优化状态表" data-export-lang="table">
+      <thead>
+        <tr><th>步骤</th><th>读什么</th><th>写什么</th><th>坏掉时的症状</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>触发词搜索</td><td>样例、梯度信号、候选 token</td><td>更能激活目标输出的 token</td><td>只学到训练集里的局部词</td></tr>
+        <tr><td>候选提示生成</td><td>输入输出对、任务描述</td><td>多条 prompt 候选</td><td>候选彼此几乎一样，没有搜索意义</td></tr>
+        <tr><td>评分</td><td>开发样例、准确率、格式合规率、人工判断</td><td>候选分数</td><td>没有独立指标，只剩“看起来更顺”</td></tr>
+        <tr><td>重采样</td><td>高分候选、相近语义变体</td><td>更稳的下一轮候选</td><td>搜索停在第一轮，过早收敛</td></tr>
+        <tr><td>样例筛选</td><td>多次采样结果、不确定性分布</td><td>最不稳定的样例</td><td>把简单题当难题，示例价值很低</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="trace">
+  <div class="head"><h2>AutoPrompt 触发词追踪</h2><span class="tag">trace</span></div>
+  <p>AutoPrompt 的关键不是让句子读起来漂亮，而是看触发 token 会不会把模型输出推向目标标签。为了检查这件事，可以把一个小样例的输入、触发词和输出变化排成追踪表。这里的重点是“写入了什么触发位置”和“模型行为变了没有”。</p>
+  <div class="table-wrap">
+    <table data-export-context="AutoPrompt 触发词追踪表" data-export-lang="table">
+      <thead>
+        <tr><th>步骤</th><th>输入结构</th><th>检查点</th><th>失败信号</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>原句 + [MASK]</td><td>模型原始预测</td><td>基线就已经偏了</td></tr>
+        <tr><td>2</td><td>原句 + 触发 token + [MASK]</td><td>预测是否向目标标签移动</td><td>触发词对预测几乎没影响</td></tr>
+        <tr><td>3</td><td>换一批样例复测</td><td>触发是否跨样例稳定</td><td>只在一条样例上有效</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><b>判断句</b>如果一个触发词只能把单条训练样例推对，那它更像局部碰巧有效，不像可迁移的触发模式。</div>
+</section>
+
+<section id="autoprompt-demo">
+  <div class="head"><h2>AutoPrompt 小实验</h2><span class="tag">demo</span></div>
+  <p>AutoPrompt 的核心，可以用一个很短的分类任务看清楚：你先把原始句子放进模板，再在触发位置插入几个候选 token，然后看 [MASK] 的预测是不是朝目标标签移动。这个过程不像 APE 那样在整段提示上搜索，而是在几个很窄的插槽里找最敏感的词。</p>
+  <div class="table-wrap">
+    <table data-export-context="AutoPrompt 模板插槽示例" data-export-lang="table">
+      <thead>
+        <tr><th>模板位置</th><th>插入前</th><th>插入后</th><th>要看什么</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>触发位 1</td><td>[MASK]</td><td>great [MASK]</td><td>预测是否偏向目标类</td></tr>
+        <tr><td>触发位 2</td><td>great [MASK]</td><td>great useful [MASK]</td><td>多个 token 组合后是否更稳</td></tr>
+        <tr><td>换样例复测</td><td>样例 A 有效</td><td>样例 B / C 也有效</td><td>有没有跨样例稳定性</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span class="label">AutoPrompt 检查顺序</span></div>
+  <pre data-export-context="AutoPrompt 检查顺序" data-export-lang="text"><code class="language-text">1. 准备一个带 [MASK] 的模板。
+2. 在触发位尝试候选 token。
+3. 观察目标标签的概率有没有上升。
+4. 把同一组 token 换到另一批样例上复测。
+5. 如果只对单条样例有效，回到候选池继续搜索。</code></pre>
+  <div class="grid2">
+    <div class="box info"><h3>它和 APE 的差别</h3><p>APE 看的是整段提示有没有更稳；AutoPrompt 看的是少量 token 能不能把预测方向拉过去。</p></div>
+    <div class="box warn"><h3>它最怕什么</h3><p>它最怕在一条样例上看起来很灵，但换一批输入就失灵，所以复测比单次命中更重要。</p></div>
+  </div>
+  <div class="callout"><b>失败后果</b>如果你把触发词当成普通自然语言修辞去写，最后常常只是在局部样例上碰巧有效；一旦换一批任务，输出方向就会掉回去。</div>
+</section>
+
+<section id="active-lab">
+  <div class="head"><h2>主动提示小实验</h2><span class="tag">lab</span></div>
+  <p>Active Prompting 的直觉可以再落一层：同一批问题先采样多次，再算它们的分歧程度。分歧越大，说明模型越不稳，也越值得人工标注。分歧很小的问题通常不该占预算，因为它们不会帮你学到新的边界。</p>
+  <div class="math-block" data-export-context="不确定性分歧的最小表达" data-export-lang="math">
+    $$
+    u(q) = 1 - \max_k p_k(q)
+    $$
+    <p>这里 <code>u(q)</code> 是问题 <code>q</code> 的不确定性，<code>p_k(q)</code> 是第 <code>k</code> 个答案被采到的概率。概率越分散，不确定性越高。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Active Prompting 样例排序" data-export-lang="table">
+      <thead>
+        <tr><th>问题</th><th>采样结果</th><th>最大概率</th><th>不确定性</th><th>是否优先标注</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Q1</td><td>A, A, A, A, A</td><td>1.00</td><td>0.00</td><td>否</td></tr>
+        <tr><td>Q2</td><td>A, B, A, C, B</td><td>0.40</td><td>0.60</td><td>是</td></tr>
+        <tr><td>Q3</td><td>A, A, B, A, A</td><td>0.80</td><td>0.20</td><td>通常不优先</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span class="label">选择最不稳定样例</span></div>
+  <pre data-export-context="选择最不稳定样例" data-export-lang="text"><code class="language-text">1. 对每个问题重复采样 k 次。
+2. 统计答案分布。
+3. 按不确定性从高到低排序。
+4. 选择前 N 个问题人工标注。
+5. 把这些高不确定性样例作为 few-shot CoT 示例。</code></pre>
+  <div class="callout"><b>失败后果</b>如果你只挑模型本来就很稳的问题，标注预算会花在无效样例上，示例也不会补到真正的边界。</div>
+</section>
+
+<section id="lab">
+  <div class="head"><h2>故障演示</h2><span class="tag">failure lab</span></div>
+  <p>把最常见的三种失败放进一个小实验：过拟合、误选样例和错误触发。这样读者能直接看到“看起来优化了”和“真的稳了”之间的差别。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1">APE 过拟合</button>
+      <button class="ghost" data-terminal-case="case-2">样例不稳</button>
+      <button class="ghost" data-terminal-case="case-3">触发失效</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">开发集准确率 92%
+独立测试集准确率 61%
+结论：候选 prompt 只在开发样例上表现好，没过泛化检查。</pre>
+    <template data-terminal-output="case-1">开发集准确率 92%
+独立测试集准确率 61%
+结论：候选 prompt 只在开发样例上表现好，没过泛化检查。</template>
+    <template data-terminal-output="case-2">采样 5 次结果：A, A, A, A, A
+被选中的样例：最稳定的 A 类题
+结论：示例没有覆盖模型最摇摆的边界，Active Prompting 失去意义。</template>
+    <template data-terminal-output="case-3">触发 token 加入后：
+样例 1 预测变化明显
+样例 2 预测几乎不变
+样例 3 预测反向波动
+结论：触发模式没有跨样例稳定性。</template>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head"><h2>操作桥</h2><span class="tag">bridge</span></div>
+  <p>如果你后面要把这一页的思路用到真实任务里，先走三步：先准备一个小的开发样例集，再选一个明确的评价标准，最后把测试集留出来复核。这个顺序对 AutoPrompt、APE 和 Active Prompting 都成立，只是它们优化的对象不同。</p>
+  <div class="table-wrap">
+    <table data-export-context="自动提示优化操作桥" data-export-lang="table">
+      <thead>
+        <tr><th>下一步</th><th>你要准备什么</th><th>先看什么失败</th><th>回到哪一节</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>做 APE</td><td>样例 + 评分规则 + 测试集</td><td>开发集高分，测试集掉分</td><td>核心机制 / APE 评分骨架</td></tr>
+        <tr><td>做 AutoPrompt</td><td>带 mask 的模板 + 触发词候选</td><td>触发词只在局部样例上有效</td><td>AutoPrompt 触发词追踪</td></tr>
+        <tr><td>做 Active Prompting</td><td>题库 + 多次采样 + 不确定性指标</td><td>挑到的都是稳定题</td><td>状态台账 / 故障演示</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><b>判断句</b>只要你能说出“我现在缺什么状态、先看哪一个失败、再回到哪一节”，这页就算真的帮你往前走了一步。</div>
+</section>
+
+<section id="case-study">
+  <div class="head"><h2>具体案例</h2><span class="tag">case</span></div>
+  <p>假设你在做客服工单分类，任务是把用户输入分成“退款、物流、账号、其他”四类。最开始你只有一段普通提示：“请判断这条消息属于哪一类”。这时模型容易被表面词汇带跑，尤其是遇到“退款”和“取消订单”这种边界很近的表达。</p>
+  <p>把这个任务交给自动提示优化后，流程就变成了另一种样子：先准备开发样例，生成多个候选提示，测开发集分数，再把高分候选放到独立测试集上复核。如果是 AutoPrompt，还会在模板里的触发位置上尝试不同 token，看看哪一组能更稳定地拉向目标标签。这个案例的关键不是“写得更长”，而是“对对象、分数和验证路径都更清楚”。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1">
+        <code>原始请求</code><span>模糊分类</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-2">
+        <code>候选池</code><span>prompt A/B/C</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-3">
+        <code>开发评分</code><span>挑出高分候选</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-4">
+        <code>测试复核</code><span>看泛化是否稳</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1">
+        <b>Step 1</b>
+        <span>原始提示只有任务描述，没有约束对象。</span>
+        <p>常见症状是模型把“取消订单”误当成“退款”，或者把带情绪的文本都判成“其他”。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-2">
+        <b>Step 2</b>
+        <span>生成 prompt A / B / C。</span>
+        <p>A 强调关键词，B 强调示例，C 强调输出格式。候选必须彼此有差异，不然就没有比较意义。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-3">
+        <b>Step 3</b>
+        <span>在开发样例上排序。</span>
+        <p>这一步只负责选出暂时更好的候选，不负责最终拍板。开发集分数只是中间信号。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-4">
+        <b>Step 4</b>
+        <span>在独立测试集上复核。</span>
+        <p>如果测试集明显掉分，说明候选只是更会记样例，而不是更稳。要回到候选池重新采样。</p>
+      </div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="客服分类 APE 案例" data-export-lang="table">
+      <thead>
+        <tr><th>候选</th><th>开发集分数</th><th>测试集分数</th><th>结论</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Prompt A</td><td>0.86</td><td>0.67</td><td>开发集好看，但可能过拟合关键词。</td></tr>
+        <tr><td>Prompt B</td><td>0.81</td><td>0.79</td><td>开发和测试都稳，优先考虑。</td></tr>
+        <tr><td>Prompt C</td><td>0.88</td><td>0.54</td><td>像是学到了局部样例，不适合直接上线。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span class="label">候选筛选伪代码</span></div>
+  <pre data-export-context="候选筛选伪代码" data-export-lang="python"><code class="language-python">candidates = generate_prompts(samples, n=8)
+scored = []
+for prompt in candidates:
+    dev_score = evaluate(prompt, dev_set)
+    scored.append((prompt, dev_score))
+
+scored.sort(key=lambda item: item[1], reverse=True)
+top_prompt = scored[0][0]
+test_score = evaluate(top_prompt, test_set)
+
+if test_score < scored[0][1] - 0.1:
+    # 回到候选池，重新搜索，而不是直接把当前高分版本定稿
+    candidates = resample_variants(top_prompt)
+else:
+    top_prompt</code></pre>
+  <div class="callout"><b>失败后果</b>如果你把开发集分数当终点，最后常常会得到一条“在例子里很好看、在新样本上就失灵”的提示。这个案例要记住的不是分数表，而是复核顺序。</div>
+  <p>再往前多看一步，开发集和测试集分开，不只是为了形式完整，而是为了避免你把“候选生成时见过的数据”当成真正的泛化能力。只要测试集还没看，候选就只是暂时好用；只有跨过复核，它才值得被当成可复用流程。</p>
+</section>
+
+<section id="formula">
+  <div class="head"><h2>最小公式</h2><span class="tag">formula</span></div>
+  <p>APE 里最常见的决策可以写得很简单：在开发样例上先排分，再拿测试集复核。真正重要的不是公式本身有多复杂，而是你有没有把“排名依据”和“泛化依据”分开。</p>
+  <div class="math-block" data-export-context="APE 排序与复核" data-export-lang="math">
+    $$
+    \text{choose}(p) = \arg\max_p \big(\text{score}_{dev}(p)\big)
+    $$
+    <p>这里的 <code>score_dev</code> 是开发样例上的分数；真正收口前，还要看 <code>score_test</code> 是否仍然稳定。若测试集明显下降，说明候选只是记住了开发集。</p>
+  </div>
+  <div class="grid2">
+    <div class="box info"><h3>读这个式子要注意</h3><p>它只负责“先选谁”，不负责“最终能不能上”。最终能不能上，要看独立测试集。</p></div>
+    <div class="box warn"><h3>最容易写错的地方</h3><p>把开发集分数当成最终结论，或者把测试集拿来参与生成候选，都会把验证环节污染掉。</p></div>
+  </div>
+</section>
+
+<section id="example">
+  <div class="head"><h2>例子</h2><span class="tag">example</span></div>
+  <p>看一个最小的 APE 闭环。先给模型几条输入输出对，让它生成候选指令；然后用统一的评分函数去比，最后把高分候选再做语义相近的变体搜索。这里最容易犯的错，是把“更会说话的提示”误当作“更有效的提示”。</p>
+  <div class="codebar"><span class="label">APE 的最小闭环</span></div>
+  <pre data-export-context="APE 最小闭环" data-export-lang="text"><code class="language-text">1. 准备开发样例：输入 x 和参考输出 y。
+2. 让 LLM 根据样例生成多条候选指令。
+3. 用准确率、格式合规率或人工评分给候选打分。
+4. 选出高分候选，再生成语义相近的变体。
+5. 在独立测试集上复核，确认不是只记住了开发样例。</code></pre>
+  <p>AutoPrompt 的例子则更像“找钥匙”。你不给模型完整提示，而是让它在可插入的位置上搜索触发 token；这些 token 不一定是人类读起来最自然的词，但它们可能更能激活模型内部的目标模式。这里要特别小心：能激活，不代表可解释；能解释，也不代表稳定。</p>
+  <div class="grid2">
+    <div class="box info"><h3>AutoPrompt 适合看什么</h3><p>它适合看 token 如何影响分类或触发答案，不适合把它当成自动写作文工具。</p></div>
+    <div class="box warn"><h3>APE 适合看什么</h3><p>它适合看提示整体是否更稳，不适合只在一小批样例上凭分数定终身。</p></div>
+  </div>
+</section>
+
+<section id="compare">
+  <div class="head"><h2>方法对照</h2><span class="tag">compare</span></div>
+  <p>把三种方法放在一起看，最重要的是对象不同。AutoPrompt 优化的是触发 token；APE 优化的是完整提示；Active Prompting 优化的是样例选择。对象一变，评估方式、失败形态和后续动作都会变。</p>
+  <p>真正的决策顺序可以再说具体一点：先确认你要改的是模板、触发位还是样例池，再决定是做评分搜索、触发词搜索，还是不确定性排序。这个顺序比“自动优化”这个名字重要得多，因为名字不会告诉你该看哪一个失败信号。</p>
+  <div class="table-wrap">
+    <table data-export-context="AutoPrompt APE Active Prompting 对照" data-export-lang="table">
+      <thead>
+        <tr><th>方法</th><th>优化对象</th><th>典型流程</th><th>常见误判</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>AutoPrompt</td><td>触发 token</td><td>搜索触发词 - 看预测变化 - 保留有效触发词</td><td>把触发词当成人类可读的自然语言模板</td></tr>
+        <tr><td>APE</td><td>提示模板</td><td>生成候选 - 评分 - 变体重采样 - 独立测试</td><td>只看开发集分数，不看泛化</td></tr>
+        <tr><td>Active Prompting</td><td>示例样例</td><td>多次采样 - 算不确定性 - 选择最摇摆的问题 - 人工标注</td><td>优先选稳定题，导致示例信息量太低</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2" style="margin-top:13px;">
+    <div class="box info"><h3>决策树</h3><p>如果任务的输出格式已经固定，但提示本身不稳，优先看 APE；如果只想找更敏感的 token，优先看 AutoPrompt；如果你更担心样例选错，优先看 Active Prompting。</p></div>
+    <div class="box warn"><h3>回退规则</h3><p>开发集高分但测试集掉分，说明要回到候选池；触发词只在局部样例有效，说明要换一批样例；样例总是很稳，说明不确定性排序没有抓到边界。</p></div>
+  </div>
+  <div class="callout"><b>判断句</b>如果你的任务已经有稳定模板，只想让系统自己挑样例，Active Prompting 更合适；如果模板本身需要改，先看 APE；如果你在找触发模式而不是模板，先看 AutoPrompt。</div>
+</section>
+
+<section id="sequence">
+  <div class="head"><h2>组合策略</h2><span class="tag">sequence</span></div>
+  <p>真实工作里，很少有任务只属于一种方法。更常见的情况是：你先用 APE 把模板写稳，再用 AutoPrompt 试探关键触发位，最后用 Active Prompting 补上最不稳定的样例。这个顺序不是固定教条，但它比“随机换方法”更接近可复用流程。</p>
+  <p>举一个客服总结场景。假设你已经有固定输出格式，但模型经常把“退款”与“取消订单”混掉，同时少数边界样例又特别摇摆。先看模板是否该由 APE 重写，再看是否有少量触发 token 能拉住输出方向，最后用 Active Prompting 把最摇摆的工单补进示例池。三步合在一起，比单独调一个方法更稳。</p>
+  <div class="table-wrap">
+    <table data-export-context="组合策略回路" data-export-lang="table">
+      <thead>
+        <tr><th>顺序</th><th>当前动作</th><th>下一步信号</th><th>失败后回到哪里</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>APE 重写模板</td><td>格式更稳但边界仍乱</td><td>回到模板候选池</td></tr>
+        <tr><td>2</td><td>AutoPrompt 搜索触发位</td><td>局部样例变好</td><td>回到触发词候选</td></tr>
+        <tr><td>3</td><td>Active Prompting 补样例</td><td>边界样例明显增加</td><td>回到题库重算不确定性</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span class="label">组合策略伪代码</span></div>
+  <pre data-export-context="组合策略伪代码" data-export-lang="python"><code class="language-python">if prompt_shape_is_clear:
+    prompt = ape_search(dev_set, test_set=None)
+if a_small_number_of_tokens_change_predictions:
+    prompt = auto_prompt(prompt, masked_template)
+if boundary_examples_are_missing:
+    examples = active_prompting(pool, k=5)
+
+run_final_check(prompt, examples, held_out_test_set)</code></pre>
+  <div class="callout"><b>失败后果</b>如果顺序搞反，你很容易先挑到“看起来会说话”的提示，再去找理由解释它为什么有效；那样最后得到的往往是局部有效，而不是可复用的工作流。</div>
+  <p>换句话说，方法名只是入口，真正决定质量的是检查顺序。先确认对象，再看候选，再看复核，最后才决定是不是可以把它变成稳定流程。只要这条线清楚，AutoPrompt、APE 和 Active Prompting 就不会被你混成一锅。</p>
+</section>
+
+<section id="mistakes">
+  <div class="head"><h2>常见误区</h2><span class="tag">mistakes</span></div>
+  <p>第一类误区，是把自动优化理解成“让模型自己夸自己写得好”。如果没有独立评估，这不是优化，是循环自证。第二类误区，是把 AutoPrompt 和 APE 混成一类，结果把“触发词搜索”误写成“长提示生成”。第三类误区，是把 Active Prompting 当成随机挑错题，最后选出来的样例并不代表模型真正不稳的地方。</p>
+  <div class="grid3">
+    <div class="box bad"><h3>伪优化</h3><p>只在生成候选的同一批样例上打分，得到的高分很可能只是过拟合。</p></div>
+    <div class="box warn"><h3>伪样例选择</h3><p>按题目表面难度挑样例，不按不确定性挑样例，示例价值会很低。</p></div>
+    <div class="box info"><h3>伪触发词</h3><p>把触发词当作自然语言修辞优化，最后常常偏离真正要激活的模式。</p></div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="自动提示优化失败映射" data-export-lang="table">
+      <thead>
+        <tr><th>症状</th><th>最可能原因</th><th>先检查什么</th><th>下一步怎么改</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>开发集分数高，测试集掉得快</td><td>APE 过拟合</td><td>是否有独立测试集</td><td>扩大样例，重新评分</td></tr>
+        <tr><td>触发词看起来奇怪但有效</td><td>AutoPrompt 找到了敏感 token</td><td>是不是只在少量样例上成立</td><td>复核跨样例稳定性</td></tr>
+        <tr><td>示例都很常规，模型还是不稳</td><td>Active Prompting 没挑到边界样例</td><td>不确定性分布是否真的拉开</td><td>重新采样和排序</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head"><h2>先别追</h2><span class="tag">boundary</span></div>
+  <p>这一页先不追三件事：一是更复杂的提示搜索算法细节，二是参数高效微调和提示优化的边界争论，三是把这些方法直接接进完整应用系统。它们都值得学，但不该抢走这一页的注意力。先把“对象、评分、样例选择”三条线学稳，后面的系统化方法再接回来就会顺很多。</p>
+  <div class="grid2">
+    <div class="box"><h3>这里先忽略</h3><p>更深的梯度搜索、policy model 训练细节、以及和微调方法的全面比较，放到下一轮再看。</p></div>
+    <div class="box soft"><h3>回头再接</h3><p>当你已经会判断任务缺的是提示、触发词还是样例时，再去看自动提示优化怎么进入完整工作流。</p></div>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>练习前先看什么</strong>
+    <ul>
+      <li>先判断任务是在优化触发词、提示模板，还是样例选择。</li>
+      <li>记住每个方法都要有独立评估，不要拿生成它的样本直接证明它最好。</li>
+      <li>开放题按“对象 / 流程 / 风险”来答，不要只写一句结论。</li>
+    </ul>
+  </div>
+  <div class="review-card">
+    <strong>作答提示</strong>
+    <p>如果你能指出“读什么、写什么、错了会怎样”，答案通常就已经过关了一半。题目里凡是出现评分、样例、不确定性、触发词这些词，就优先想流程，而不是想名词。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head"><div><h3>一、对象识别</h3><p>先分清每种方法到底在优化什么。</p></div><div class="quick-review"><b>review</b><span>对象错了，后面的评估和改法就会全错。</span></div></div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="object" data-title="1. AutoPrompt 优化什么">
+      <div class="q-meta"><span class="pill">choice</span></div>
+      <h3>1. AutoPrompt 优化什么</h3>
+      <p>AutoPrompt 最直接优化的对象是什么？</p>
+      <label><input type="radio" name="q1" value="整段提示模板">整段提示模板</label>
+      <label><input type="radio" name="q1" value="触发 token">触发 token</label>
+      <label><input type="radio" name="q1" value="人工标注样例">人工标注样例</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="object" data-title="2. APE 优化什么">
+      <div class="q-meta"><span class="pill">choice</span></div>
+      <h3>2. APE 优化什么</h3>
+      <p>APE 最直接优化的对象是什么？</p>
+      <label><input type="radio" name="q2" value="整段提示模板">整段提示模板</label>
+      <label><input type="radio" name="q2" value="触发 token">触发 token</label>
+      <label><input type="radio" name="q2" value="人工标注样例">人工标注样例</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q3" data-group="object" data-title="3. Active Prompting 优化什么">
+      <div class="q-meta"><span class="pill">choice</span></div>
+      <h3>3. Active Prompting 优化什么</h3>
+      <p>Active Prompting 最直接优化的对象是什么？</p>
+      <label><input type="radio" name="q3" value="整段提示模板">整段提示模板</label>
+      <label><input type="radio" name="q3" value="触发 token">触发 token</label>
+      <label><input type="radio" name="q3" value="人工标注样例">人工标注样例</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q4" data-group="object" data-title="4. 场景匹配">
+      <div class="q-meta"><span class="pill">match</span></div>
+      <h3>4. 场景匹配</h3>
+      <p>把“搜索触发词”“挑最不稳定的样例”“优化整段提示”分别匹配到 AutoPrompt、Active Prompting、APE。</p>
+      <textarea name="q4" placeholder="按方法名对应写出结果"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>AutoPrompt = 搜索触发词；Active Prompting = 挑最不稳定的样例；APE = 优化整段提示。只要方法对象对了，后面的推理才不会跑偏。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head"><div><h3>二、状态追踪</h3><p>把候选、评分和测试结果连起来看，找出流程里哪一段最容易漂。</p></div><div class="quick-review"><b>review</b><span>流程题要写出读什么、写什么和错在哪里。</span></div></div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q13" data-group="state" data-title="13. APE 评分公式">
+      <div class="q-meta"><span class="pill">formula</span></div>
+      <h3>13. APE 评分公式</h3>
+      <p>把“开发集分数高”和“独立测试还要稳”写成一个简单的评分规则。可以用文字，也可以借用公式表达。</p>
+      <p class="solve-note">答题时要把“评估对象”和“复核对象”分开。</p>
+      <textarea name="q13" placeholder="写出你的评分规则"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>一个合格答案要包含：开发样例上的评分、独立测试集上的复核，以及如果测试集明显下降就回到候选池重新采样。核心不是公式长，而是验证路径完整。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q14" data-group="state" data-title="14. 状态匹配">
+      <div class="q-meta"><span class="pill">match</span></div>
+      <h3>14. 状态匹配</h3>
+      <p>把“开发样例”“候选提示”“评分函数”“独立测试集”分别对应到它们的作用。</p>
+      <textarea name="q14" placeholder="按作用写出来"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>开发样例提供评分基准；候选提示是被比较的对象；评分函数给候选排名；独立测试集负责看泛化，而不是帮你挑最会背答案的版本。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q15" data-group="state" data-title="15. 过拟合症状">
+      <div class="q-meta"><span class="pill">judge</span></div>
+      <h3>15. 过拟合症状</h3>
+      <p>开发集分数高、测试集掉得快，最优先怀疑什么？</p>
+      <label><input type="radio" name="q15" value="候选提示过拟合了开发样例">候选提示过拟合了开发样例</label>
+      <label><input type="radio" name="q15" value="任务本身没有任何规律">任务本身没有任何规律</label>
+      <label><input type="radio" name="q15" value="AutoPrompt 一定无效">AutoPrompt 一定无效</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head"><div><h3>三、流程判断</h3><p>判断候选生成、评分、重采样和独立测试有没有被写全。</p></div><div class="quick-review"><b>review</b><span>少一步，流程就不是自动优化。</span></div></div>
+  <div class="drill-grid">
+    <div class="q" data-question="q5" data-group="flow" data-title="5. APE 的第一步">
+      <div class="q-meta"><span class="pill">short</span></div>
+      <h3>5. APE 的第一步</h3>
+      <p>APE 流程里，先要准备什么材料？</p>
+      <textarea name="q5" placeholder="写出最关键的输入"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>要先准备代表性的输入输出样例，最好还有明确的评分函数。没有样例，后面的候选生成和评分都没有抓手。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q6" data-group="flow" data-title="6. APE 为什么要独立测试">
+      <div class="q-meta"><span class="pill">judge</span></div>
+      <h3>6. APE 为什么要独立测试</h3>
+      <p>APE 在开发样例上得分高，就可以直接定稿，不必再看独立测试集。</p>
+      <label><input type="radio" name="q6" value="对">对</label>
+      <label><input type="radio" name="q6" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q7" data-group="flow" data-title="7. Active Prompting 的流程">
+      <div class="q-meta"><span class="pill">short</span></div>
+      <h3>7. Active Prompting 的流程</h3>
+      <p>用四个词写出 Active Prompting 的流程。</p>
+      <textarea name="q7" placeholder="四个阶段"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>不确定性评估、选择、标注、推理。要点是先找最不稳定的问题，再把人工标注用在这些问题上。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q8" data-group="flow" data-title="8. 触发词搜索的检查点">
+      <div class="q-meta"><span class="pill">debug checklist</span></div>
+      <h3>8. 触发词搜索的检查点</h3>
+      <p>下面哪些检查点适合 AutoPrompt？</p>
+      <label><input type="checkbox" name="q8" value="在多个样例上都能触发目标输出">在多个样例上都能触发目标输出</label>
+      <label><input type="checkbox" name="q8" value="只在一条样例上表现最好">只在一条样例上表现最好</label>
+      <label><input type="checkbox" name="q8" value="不依赖人类可读的自然语言解释">不依赖人类可读的自然语言解释</label>
+      <label><input type="checkbox" name="q8" value="在独立测试中仍然稳定">在独立测试中仍然稳定</label>
+      <details>
+        <summary>展开反馈</summary>
+        <p>应选“在多个样例上都能触发目标输出”“不依赖人类可读的自然语言解释”“在独立测试中仍然稳定”。伪触发词常常只在局部样例里成立。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head"><div><h3>四、诊断改写</h3><p>把失败场景改成可执行的优化流程。</p></div><div class="quick-review"><b>review</b><span>写出错因、后果、修法。</span></div></div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q9" data-group="diagnosis" data-title="9. 伪 APE 诊断">
+      <div class="q-meta"><span class="pill">diagnostic</span></div>
+      <h3>9. 伪 APE 诊断</h3>
+      <p>某人让模型在 3 条样例上不断改写 prompt，最后挑了一个“看起来最顺”的版本，没有独立测试集。这个流程哪里有问题？</p>
+      <textarea name="q9" placeholder="按错因 / 后果 / 修法来写"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>错因：只在少量样例上自我证明；后果：很容易过拟合成更会说话的文字；修法：引入评分函数、保留开发集和独立测试集，并做语义相近变体搜索。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q10" data-group="diagnosis" data-title="10. 样例选择诊断">
+      <div class="q-meta"><span class="pill">diagnostic</span></div>
+      <h3>10. 样例选择诊断</h3>
+      <p>某题采样 5 次都得到同一个答案，另一题采样 5 次出现明显分歧。哪一个更适合 Active Prompting，为什么？</p>
+      <textarea name="q10" placeholder="先说对象，再说原因"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>应优先选分歧大的问题。Active Prompting 的目标是找到模型最不稳定、最值得人工标注的边界样例，而不是重复标注已经稳定的问题。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q11" data-group="diagnosis" data-title="11. 触发词误用">
+      <div class="q-meta"><span class="pill">scenario</span></div>
+      <h3>11. 触发词误用</h3>
+      <p>你发现一组 AutoPrompt 触发词在训练集里很好，但换一批任务就不稳。你会先检查什么？</p>
+      <textarea name="q11" placeholder="写出检查顺序"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>先看它是不是只记住了训练样例，再看是否在独立样本上稳定，最后检查触发词是不是依赖了很窄的上下文模式。要把“局部有效”与“可迁移有效”分开。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="diagnosis" data-title="12. 费曼解释">
+      <div class="q-meta"><span class="pill">synthesis</span></div>
+      <h3>12. 费曼解释</h3>
+      <p>用 200 字以内解释：为什么提示优化到这一层，不能只靠“换个更好的说法”？</p>
+      <p class="solve-note">按对象、流程和验证三个部分来答。</p>
+      <textarea name="q12" placeholder="先对象，再流程，再验证"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>高分答案要说清三件事：优化对象不同，流程不同，验证方式也不同。AutoPrompt 盯触发词，APE 盯整段 prompt，Active Prompting 盯样例选择；这些都需要独立评估，不然只是在把文字改得更顺而已。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head"><div><h3>五、迁移与解释</h3><p>把单页知识翻译成可执行的判断和解释。</p></div><div class="quick-review"><b>review</b><span>迁移题要说对象、流程和验证。</span></div></div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q16" data-group="transfer" data-title="16. 选择哪种方法">
+      <div class="q-meta"><span class="pill">scenario</span></div>
+      <h3>16. 选择哪种方法</h3>
+      <p>你要优化一个客服分类提示，但现在只有少量开发样例，且任务输出格式很固定。你先看 APE、AutoPrompt 还是 Active Prompting？为什么？</p>
+      <textarea name="q16" placeholder="先对象，再流程，再风险"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>如果目标是整段提示，先看 APE；如果想找更敏感的触发词，再看 AutoPrompt；如果开发样例本身不稳定，才考虑 Active Prompting。答题时要写出对象和为什么不是另外两种。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q17" data-group="transfer" data-title="17. 费曼解释">
+      <div class="q-meta"><span class="pill">synthesis</span></div>
+      <h3>17. 费曼解释</h3>
+      <p>用 250 字以内解释：为什么“自动提示优化”不等于“让模型自己写得更像人”？</p>
+      <textarea name="q17" placeholder="说清对象、流程和验证"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>高分答案应当把“自动提示优化”说成流程问题：对象不是人类写作风格，而是触发词、提示模板和样例选择；过程必须包含候选、评分、复核；验证必须看独立测试或不确定性分布。只说“更自然”不够。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li>Yongchao Zhou et al., <em>Large Language Models Are Human-Level Prompt Engineers</em>，2022。用于支撑 APE 的候选生成、评分与重采样流程。</li>
+  <li>Shizhe Diao et al., <em>Active Prompting with Chain-of-Thought for Large Language Models</em>，2023。用于支撑不确定性评估、样例选择和人工标注的流程。</li>
+  <li>Zekun Li et al., <em>Guiding Large Language Models via Directional Stimulus Prompting</em>，2023。用于理解“方向刺激”如何和输入组合成可控提示。</li>
+  <li>本地整理笔记《提示工程学习笔记：来源材料》中“自动提示工程师（APE）”“主动提示（Active Prompting）”“定向刺激提示（Directional Stimulus Prompting）”段落。用于补足课程内的中文表述、术语边界和相邻方法对照。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

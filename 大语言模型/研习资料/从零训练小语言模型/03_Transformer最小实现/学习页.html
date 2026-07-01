@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transformer 最小实现</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="从零训练小语言模型" data-unit="03">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>从零训练小语言模型</strong>
+        <span>03</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#mechanism"><span class="dot"></span>核心机制</a>
+        <a href="#shape"><span class="dot"></span>形状推演</a>
+        <a href="#code"><span class="dot"></span>最小代码</a>
+        <a href="#variants"><span class="dot"></span>先别钻变体</a>
+        <a href="#mistakes"><span class="dot"></span>常见错误</a>
+        <a href="#bridge"><span class="dot"></span>下一步</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把 token id 送进最小 Transformer，再沿着 shape、代码和错误实验看它怎样变成 logits。卡住时先查形状和残差顺序。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">基础单元</div>
+          <h1>Transformer 最小实现</h1>
+          <p>这一页只讲最小 decoder-only Transformer 的前向结构：input_ids 先进入 embedding，再经过因果 attention、MLP、残差和归一化，最后变成 logits。这里先不碰训练循环、优化器、checkpoint 或分布式细节，先把模型怎么流、每个线头读写什么讲清楚。</p>
+
+          <div class="course-links">
+            <a href="../02_Tokenizer与token流/学习页.html">上一节：Tokenizer 与 token 流</a><a href="../index.html">课程地图</a><a href="../04_训练循环优化器与检查点/学习页.html">下一节：训练循环、优化器与检查点</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页，你应该能做什么</h3>
+          <ul>
+  <li>能按 <code>[B,T]</code>、<code>[B,T,C]</code>、<code>[B,H,T,D]</code>、<code>[B,T,V]</code> 追踪一条前向数据流，知道每一步读什么、写什么。</li>
+  <li>能分清 attention、MLP、残差、RMSNorm、输出头各自负责什么，并指出代码里对应的关键行。</li>
+  <li>能用形状表、错误实验和练习题自查常见实现问题：mask、head 维度、残差顺序、位置编码和 logits 误用。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goal</span>
+  </div>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>先看输入输出契约</h3>
+      <p>这一页先把 <code>input_ids</code> 如何变成 <code>logits</code> 说清楚。你要先知道模型吃什么、吐什么，再去看每个子层怎么改写表示。</p>
+    </div>
+    <div class="box info">
+      <h3>先看模块职责</h3>
+      <p>attention 负责在 token 位置之间搬信息，MLP 负责在同一位置的通道维度上加工信息，残差和归一化负责让这条路能稳定堆深。</p>
+    </div>
+    <div class="box">
+      <h3>先看可检查点</h3>
+      <p>读完本页后，你应该能指出每个关键张量的形状，能把代码里的主要行和功能对上，还能说出常见 bug 会先坏在哪里。</p>
+    </div>
+  </div>
+  <div class="box warn">
+    <h3>本页边界</h3>
+    <p>这里先不展开完整训练循环、优化器、loss、checkpoint、混合精度和分布式训练。下一单元会把 <code>forward(input_ids) → logits</code> 接到交叉熵、backward 和参数更新上；这一页先把模型本体看透。</p>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">map</span>
+  </div>
+  <p>把这页当成一条可逐行追踪的路：<code>input_ids</code> 先变成向量，再进入若干个 block，最后投到词表空间得到 <code>logits</code>。如果这条路中间某一步的形状、顺序或权重绑定错了，模型还能跑，但学到的就是另一回事。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" type="button" data-trace-step="input">
+        <code>input_ids</code><span>整数 token id，形状 <code>[B,T]</code></span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="embed">
+        <code>embedding</code><span>查表后得到 <code>[B,T,C]</code></span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="block">
+        <code>block</code><span>attention + MLP + residual</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="norm">
+        <code>final norm</code><span>把激活尺度收回稳定区间</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="logits">
+        <code>logits</code><span>投到词表，形状 <code>[B,T,V]</code></span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="input">
+        <b>输入阶段</b>
+        <span>离散编号</span>
+        <p>模型先读到的是 token id，也就是一串整数编号。这个阶段只负责把序列边界和词表索引送进模型。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="embed">
+        <b>查表阶段</b>
+        <span><code>[B,T,C]</code></span>
+        <p>embedding 把编号翻成可学习向量，后面的 attention 和 MLP 才能在连续空间里工作。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="block">
+        <b>块内阶段</b>
+        <span>同形状读写</span>
+        <p>block 读入 <code>[B,T,C]</code>，经过归一化、attention、MLP 和残差后，仍然写回 <code>[B,T,C]</code>。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="norm">
+        <b>输出前整理</b>
+        <span>最后的 RMSNorm</span>
+        <p>最后一层归一化有实际作用，它把输出头看到的激活尺度收稳，减少分数漂移。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="logits">
+        <b>词表阶段</b>
+        <span><code>[B,T,V]</code></span>
+        <p>输出头把每个位置的隐藏状态翻译回词表分数。训练时交叉熵就看这一层。</p>
+      </div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="前向主线台账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>如果错了，先看什么症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>input_ids</code></td>
+          <td>整数 token id</td>
+          <td><code>[B,T]</code> 序列</td>
+          <td>越界 id、padding 混入、样本长度和 block_size 不一致</td>
+        </tr>
+        <tr>
+          <td><code>embedding</code></td>
+          <td><code>[B,T]</code> id</td>
+          <td><code>[B,T,C]</code> 向量</td>
+          <td>词表和 embedding 行数不一致，或者位置编码路径写错</td>
+        </tr>
+        <tr>
+          <td><code>block</code></td>
+          <td><code>[B,T,C]</code> 激活</td>
+          <td><code>[B,T,C]</code> 新激活</td>
+          <td>attention 或 MLP 没有回到同形状，残差加不回去</td>
+        </tr>
+        <tr>
+          <td><code>logits</code></td>
+          <td><code>[B,T,C]</code> 隐藏状态</td>
+          <td><code>[B,T,V]</code> 词表分数</td>
+          <td>输出头没有绑对，或者把 logits 当成概率提前 softmax 了</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>先记一个锚点</h3>
+    <p><code>input_ids → embedding → block → logits</code> 这条线会在整页重复出现。你只要能把这一条线看稳，后面的形状、代码和练习就不会散。</p>
+  </div>
+</section>
+
+<section id="mechanism">
+  <div class="head">
+    <h2>块内机制</h2>
+    <span class="tag">mechanism</span>
+  </div>
+  <p>最小 decoder-only Transformer 的一层 block 里，读写顺序其实很固定：先归一化，再做 causal attention；attention 的输出回到原形状后做残差相加；然后再归一化，再做 MLP，再次残差相加。位置编码、权重绑定和输出头都要和这条顺序对齐。</p>
+  <div class="math-block" data-export-context="block 前向公式" data-export-lang="math">
+    $$
+    \begin{aligned}
+    D &= C / H \\
+    a_0 &= \mathrm{Emb}(input\_ids) + \mathrm{Pos}(0:T-1) \\
+    a_{\ell} &= a_{\ell-1} + \mathrm{Attn}_{\ell}(\mathrm{Norm}_1(a_{\ell-1})) \\
+    x_{\ell} &= a_{\ell} + \mathrm{MLP}_{\ell}(\mathrm{Norm}_2(a_{\ell})) \\
+    logits &= \mathrm{Norm}_f(x_L) \, W_{out}^{\top}
+    \end{aligned}
+    $$
+    <p><code>C</code> 是模型宽度，<code>H</code> 是 head 数，<code>D</code> 是每个 head 的维度，<code>L</code> 是 block 层数，<code>W_out</code> 是输出头权重。这个式子里的每个符号都能在代码里找到落点。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="块内读写台账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>代码或对象</th>
+          <th>进入前</th>
+          <th>出来后</th>
+          <th>读什么</th>
+          <th>写什么 / 改什么</th>
+          <th>常见症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>self.token_emb(input_ids)</code></td>
+          <td><code>[B,T]</code> 整数 id</td>
+          <td><code>[B,T,C]</code> 向量</td>
+          <td>词表索引</td>
+          <td>查表并生成连续表示</td>
+          <td>embedding 行数和 vocab_size 不一致</td>
+        </tr>
+        <tr>
+          <td><code>self.qkv(x)</code></td>
+          <td><code>[B,T,C]</code></td>
+          <td>三份 <code>[B,H,T,D]</code></td>
+          <td>通道维度上的输入向量</td>
+          <td>切成 query、key、value</td>
+          <td>head 维度算错，后面 reshape 或 matmul 会炸</td>
+        </tr>
+        <tr>
+          <td><code>masked_fill(... == 0, -inf)</code></td>
+          <td><code>[B,H,T,T]</code> scores</td>
+          <td>未来位置被遮住</td>
+          <td>因果 mask</td>
+          <td>把未来 token 变成不可见</td>
+          <td>模型训练时偷看答案，生成时失真</td>
+        </tr>
+        <tr>
+          <td><code>x = x + ...</code></td>
+          <td>子层输入和子层输出</td>
+          <td><code>[B,T,C]</code> 同形状相加</td>
+          <td>原表示和局部修正</td>
+          <td>保留原信息，叠加增量</td>
+          <td>如果输出形状不回到 <code>[B,T,C]</code>，残差加不回去</td>
+        </tr>
+        <tr>
+          <td><code>x @ self.token_emb.weight.T</code></td>
+          <td><code>[B,T,C]</code></td>
+          <td><code>[B,T,V]</code> logits</td>
+          <td>隐藏状态</td>
+          <td>投到词表分数</td>
+          <td>输出头没绑好，概率口径和词表契约会错</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box soft">
+    <h3>权重绑定怎么理解</h3>
+    <p>很多最小实现会把输入 embedding 和输出头绑在同一张权重表上。读 token 和写 token 用的是同一套词表空间，既省参数，也让输入端和输出端的词表语义保持一致。你现在应该能做什么：看到 <code>logits = x @ self.token_emb.weight.T</code> 时，知道它是一种明确的词表对齐决定。</p>
+  </div>
+</section>
+
+<section id="shape">
+  <div class="head">
+    <h2>形状推演</h2>
+    <span class="tag">shape</span>
+  </div>
+  <p>这部分只看形状，不先讨论训练。拿一个小例子：<code>B=2</code>、<code>T=6</code>、<code>C=256</code>、<code>H=4</code>、<code>V=16000</code>。你要能立刻说出每一步的张量长什么样，以及哪一步会因为上下文长度或词表变贵。</p>
+  <div class="shift-demo" data-shift-demo>
+    <label>输入一个已经切好的 token 序列
+      <input type="text" value="我 喜 欢 最 小 Transformer 代码" aria-label="输入一个已经切好的 token 序列">
+    </label>
+    <div class="shift-rows" aria-live="polite">
+      <div class="shift-row x">
+        <b>x 输入</b>
+        <div class="shift-cells">
+          <span class="shift-cell">我</span>
+          <span class="shift-cell">喜</span>
+          <span class="shift-cell">欢</span>
+          <span class="shift-cell">最</span>
+          <span class="shift-cell">小</span>
+          <span class="shift-cell">Transformer</span>
+        </div>
+      </div>
+      <div class="shift-row y">
+        <b>y 目标</b>
+        <div class="shift-cells">
+          <span class="shift-cell">喜</span>
+          <span class="shift-cell">欢</span>
+          <span class="shift-cell">最</span>
+          <span class="shift-cell">小</span>
+          <span class="shift-cell">Transformer</span>
+          <span class="shift-cell">代码</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="math-block" data-export-context="多头注意力维度关系" data-export-lang="math">
+    $$
+    D = C / H,\qquad
+    Q,K,V: [B,T,C] \rightarrow [B,H,T,D],\qquad
+    scores: [B,H,T,T]
+    $$
+    <p><code>D</code> 是每个 head 的维度。<code>T</code> 进到 attention 后会平方增长到 <code>[B,H,T,T]</code>，所以长上下文最先贵的通常就是 scores 这一块。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="形状台账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>张量</th>
+          <th>形状</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>哪类错误最先暴露</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>input_ids</code></td>
+          <td><code>[B,T]</code></td>
+          <td>整数 token id</td>
+          <td>模型输入</td>
+          <td>样本长度超过 block_size</td>
+        </tr>
+        <tr>
+          <td><code>embedding</code></td>
+          <td><code>[B,T,C]</code></td>
+          <td>词表索引</td>
+          <td>连续表示</td>
+          <td>词表大小和 embedding 行数不同</td>
+        </tr>
+        <tr>
+          <td><code>Q/K/V</code></td>
+          <td><code>[B,H,T,D]</code></td>
+          <td>通道维输入</td>
+          <td>三组注意力子空间</td>
+          <td><code>C % H != 0</code>，head 无法均分</td>
+        </tr>
+        <tr>
+          <td><code>scores</code></td>
+          <td><code>[B,H,T,T]</code></td>
+          <td>query 和 key 的相似度</td>
+          <td>注意力权重的前一步</td>
+          <td>mask 形状错、softmax 维度错、尺度没除以 <code>sqrt(D)</code></td>
+        </tr>
+        <tr>
+          <td><code>logits</code></td>
+          <td><code>[B,T,V]</code></td>
+          <td>隐藏状态</td>
+          <td>词表分数</td>
+          <td>输出头和 embedding 没对齐，或误把 logits 当概率</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>先记住一条成本线</h3>
+    <p><code>T</code> 对 attention 的成本是平方级，<code>V</code> 对输出头的成本是线性级，<code>C</code> 会同时影响 embedding、attention、MLP 和输出投影。你现在应该能做什么：看到一个配置，就能先判断贵在哪里。</p>
+  </div>
+</section>
+
+<section id="code">
+  <div class="head">
+    <h2>最小代码</h2>
+    <span class="tag">code</span>
+  </div>
+  <p>下面这段是教学用 PyTorch 版本。它保留了最小前向路径：embedding、causal attention、SwiGLU MLP、pre-norm、残差、输出头绑定。它没有尝试覆盖所有现代变体，只负责把结构写清楚。</p>
+  <div class="codebar"><span>mini_transformer_lm.py</span><button class="copy" data-copy="mini-code">复制</button></div>
+  <pre id="mini-code" data-export-context="最小 Transformer 教学代码" data-export-lang="python"><code class="language-python">import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        scale = torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+        return self.weight * x * scale
+
+class CausalSelfAttention(nn.Module):
+    def __init__(self, dim, n_heads, block_size):
+        super().__init__()
+        assert dim % n_heads == 0
+        self.n_heads = n_heads
+        self.head_dim = dim // n_heads
+        self.qkv = nn.Linear(dim, 3 * dim, bias=False)
+        self.proj = nn.Linear(dim, dim, bias=False)
+        mask = torch.tril(torch.ones(block_size, block_size))
+        self.register_buffer("mask", mask.view(1, 1, block_size, block_size), persistent=False)
+
+    def forward(self, x):
+        B, T, C = x.shape
+        q, k, v = self.qkv(x).chunk(3, dim=-1)
+        q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = k.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        v = v.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        scores = scores.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
+        att = F.softmax(scores, dim=-1)
+        y = att @ v
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        return self.proj(y)
+
+class SwiGLUMLP(nn.Module):
+    def __init__(self, dim, hidden_dim):
+        super().__init__()
+        self.up = nn.Linear(dim, hidden_dim, bias=False)
+        self.gate = nn.Linear(dim, hidden_dim, bias=False)
+        self.down = nn.Linear(hidden_dim, dim, bias=False)
+
+    def forward(self, x):
+        return self.down(F.silu(self.gate(x)) * self.up(x))
+
+class Block(nn.Module):
+    def __init__(self, dim, n_heads, block_size, mlp_ratio=4):
+        super().__init__()
+        self.norm1 = RMSNorm(dim)
+        self.attn = CausalSelfAttention(dim, n_heads, block_size)
+        self.norm2 = RMSNorm(dim)
+        self.mlp = SwiGLUMLP(dim, int(mlp_ratio * dim))
+
+    def forward(self, x):
+        x = x + self.attn(self.norm1(x))
+        x = x + self.mlp(self.norm2(x))
+        return x
+
+class MiniTransformerLM(nn.Module):
+    def __init__(self, vocab_size, dim, n_layers, n_heads, block_size):
+        super().__init__()
+        self.block_size = block_size
+        self.token_emb = nn.Embedding(vocab_size, dim)
+        self.pos_emb = nn.Embedding(block_size, dim)
+        self.blocks = nn.ModuleList([Block(dim, n_heads, block_size) for _ in range(n_layers)])
+        self.norm = RMSNorm(dim)
+
+    def forward(self, input_ids):
+        B, T = input_ids.shape
+        if T > self.block_size:
+            raise ValueError("sequence is longer than block_size")
+        pos = torch.arange(T, device=input_ids.device)
+        x = self.token_emb(input_ids) + self.pos_emb(pos)[None, :, :]
+        for block in self.blocks:
+            x = block(x)
+        x = self.norm(x)
+        logits = x @ self.token_emb.weight.T
+        return logits
+
+model = MiniTransformerLM(
+    vocab_size=16000,
+    dim=256,
+    n_layers=4,
+    n_heads=4,
+    block_size=128,
+)
+input_ids = torch.randint(0, 16000, (2, 128))
+logits = model(input_ids)
+print(logits.shape)  # [2, 128, 16000]</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="代码线与形状变化" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>代码位置</th>
+          <th>读入什么</th>
+          <th>写出什么</th>
+          <th>去掉会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>self.token_emb(input_ids)</code></td>
+          <td><code>[B,T]</code> token id</td>
+          <td><code>[B,T,C]</code> token 向量</td>
+          <td>模型只能看到整数编号，无法进入连续表示空间</td>
+        </tr>
+        <tr>
+          <td><code>self.qkv(x).chunk(3, dim=-1)</code></td>
+          <td><code>[B,T,C]</code></td>
+          <td>三份 Q/K/V</td>
+          <td>attention 没有发问、匹配和读取三类角色</td>
+        </tr>
+        <tr>
+          <td><code>scores = scores.masked_fill(...)</code></td>
+          <td><code>[B,H,T,T]</code> scores</td>
+          <td>未来位置为 <code>-inf</code></td>
+          <td>模型训练时会偷看后文，语言建模目标被破坏</td>
+        </tr>
+        <tr>
+          <td><code>y = y.transpose(1, 2).contiguous().view(B, T, C)</code></td>
+          <td><code>[B,H,T,D]</code></td>
+          <td><code>[B,T,C]</code></td>
+          <td>transpose 后内存不连续，后续 view 可能报错或读错布局</td>
+        </tr>
+        <tr>
+          <td><code>x @ self.token_emb.weight.T</code></td>
+          <td><code>[B,T,C]</code></td>
+          <td><code>[B,T,V]</code> logits</td>
+          <td>无法和下一个 token 的词表编号做交叉熵</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>这段代码先别加的东西</h3>
+    <p>这里先不加 RoPE、QK-Norm、FlashAttention、KV cache、混合精度、checkpoint 和分布式训练。它们都重要，但会把这页的主线拉散。你现在应该能做什么：拿这段代码逐行标注形状，并知道下一单元会从哪里接训练循环。</p>
+  </div>
+</section>
+
+<section id="variants">
+  <div class="head">
+    <h2>先别钻变体</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <p>这一页只保留一个最小可读版本。那些更像现代开放模型的选择，先放在边上：它们都能学，但这页先不把它们放进主线。把最小版本看透之后，再回头看这些变体，你会更容易知道它们是在改哪一层。</p>
+  <div class="table-wrap">
+    <table data-export-context="变体放置清单" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>变体</th>
+          <th>这一页怎么处理</th>
+          <th>以后回来时看什么</th>
+          <th>如果现在塞进去会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Learned position embedding</td>
+          <td>保留在最小实现里，位置直接加到 token 向量上</td>
+          <td>看 <code>self.pos_emb(pos)</code> 这类位置表</td>
+          <td>最容易理解，适合先建立位置和 token 的分工</td>
+        </tr>
+        <tr>
+          <td>RoPE</td>
+          <td>先不进最小版</td>
+          <td>看位置如何进入 Q/K 的旋转变换</td>
+          <td>会把 attention 的数学式和实现顺序都拉长</td>
+        </tr>
+        <tr>
+          <td>QK-Norm</td>
+          <td>先不进最小版</td>
+          <td>看 query 和 key 归一化放在 score 之前还是之后</td>
+          <td>会让 attention 的稳定性讨论更细，但这页会变重</td>
+        </tr>
+        <tr>
+          <td>FlashAttention</td>
+          <td>先不追 kernel 级实现</td>
+          <td>看同一条 attention 公式怎么换成高效算子</td>
+          <td>会把“结构怎么读”提前变成“性能怎么跑”</td>
+        </tr>
+        <tr>
+          <td>KV cache</td>
+          <td>留给生成和推理单元</td>
+          <td>看自回归生成时 key/value 怎样复用历史状态</td>
+          <td>会把训练前向和生成前向混到一起</td>
+        </tr>
+        <tr>
+          <td>权重绑定</td>
+          <td>保留</td>
+          <td>看输入 embedding 和输出 head 是否共用同一张表</td>
+          <td>如果不讲清楚，输出头会像一个独立模块一样漂着</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>现在先忽略的邻近概念</h3>
+    <p>先把 <code>loss</code>、<code>backward</code>、优化器、checkpoint、混合精度和分布式训练放到下一页以后。它们会回来，但这页先让你把前向结构和张量契约立住。</p>
+  </div>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见错误</h2>
+    <span class="tag">debug</span>
+  </div>
+  <p>这一节的目的很直接：让你知道每个 bug 最先会露出什么样子。下面这个小实验把几类最常见的错误并排摆出来，你可以切换案例，先看症状，再回到前面的台账找首查点。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" type="button" data-terminal-case="case-good">对齐正常</button>
+      <button class="ghost" type="button" data-terminal-case="case-head">head 维度错</button>
+      <button class="ghost" type="button" data-terminal-case="case-mask">mask 漏了</button>
+      <button class="ghost" type="button" data-terminal-case="case-layout">布局不连续</button>
+    </div>
+    <pre class="terminal-output" data-export-context="故障实验输出" data-export-lang="text" aria-live="polite">config: vocab_size=16000, block_size=128, dim=256, heads=4
+shape: input_ids=[2,128] -&gt; logits=[2,128,16000]
+status: 这一批数据可以进入训练</pre>
+    <template data-terminal-output="case-good">config: vocab_size=16000, block_size=128, dim=256, heads=4
+shape: input_ids=[2,128] -&gt; logits=[2,128,16000]
+status: 这一批数据可以进入训练</template>
+    <template data-terminal-output="case-head">config: vocab_size=16000, block_size=128, dim=250, heads=8
+error: dim 不能被 head 数整除
+first check: C % H 是否为 0，以及 qkv reshape 是否按 D=C/H 走</template>
+    <template data-terminal-output="case-mask">config: vocab_size=16000, block_size=128, dim=256, heads=4
+warn: causal mask 没有遮住未来位置
+symptom: 训练 loss 很快变低，但生成时会出现像偷看答案一样的输出
+first check: masked_fill 是否真的把右上角设成 -inf</template>
+    <template data-terminal-output="case-layout">config: vocab_size=16000, block_size=128, dim=256, heads=4
+error: transpose 后直接 view
+symptom: tensor 可能不是 contiguous，后续视图重排会出错
+first check: y.transpose(...).contiguous().view(...) 是否写全</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="常见错误与首查点" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>最可能的原因</th>
+          <th>先查什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>训练 loss 看着很低，但生成像在偷看答案</td>
+          <td>causal mask 没有遮住未来位置</td>
+          <td>先看 <code>masked_fill(..., -inf)</code> 是否真的生效</td>
+        </tr>
+        <tr>
+          <td>head 维度不整除或 reshape 报错</td>
+          <td><code>C % H != 0</code></td>
+          <td>先看 <code>dim // n_heads</code> 是否成立</td>
+        </tr>
+        <tr>
+          <td>transpose 后 view 报错或结果怪</td>
+          <td>布局不连续</td>
+          <td>先补 <code>contiguous()</code></td>
+        </tr>
+        <tr>
+          <td>位置重复或位置消失</td>
+          <td>learned position embedding 和 RoPE 混在一起，或者都没接</td>
+          <td>先看位置只走了一条路径没有</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>下一步</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <p>如果你已经能不看答案说出 <code>input_ids</code>、embedding、block、logits 的形状和职责，就可以去下一页看训练循环、优化器与检查点了。下一页会把这页的输出接到交叉熵、backward 和参数更新；这一页先不要把这些步骤和前向结构混在一起。</p>
+  <div class="table-wrap">
+    <table data-export-context="下一页接线表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>本页产物</th>
+          <th>下一页接什么</th>
+          <th>先查什么</th>
+          <th>如果还没过</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>[B,T,V]</code> logits</td>
+          <td>交叉熵 loss</td>
+          <td>labels 是否右移一位</td>
+          <td>回到 shape 和 overview，先确认 next-token 语义</td>
+        </tr>
+        <tr>
+          <td>模型参数</td>
+          <td>backward 和 optimizer.step()</td>
+          <td>梯度是否稳定、学习率是否合理</td>
+          <td>先不要在这页追学习率曲线</td>
+        </tr>
+        <tr>
+          <td>checkpoint 习惯</td>
+          <td>保存和恢复训练状态</td>
+          <td>权重、优化器状态和 step 计数有没有一起存</td>
+          <td>等到下一页再把状态机看全</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>这里先不追</h3>
+    <p>先别把 loss 曲线、梯度裁剪、混合精度、分布式训练和 checkpoint 恢复一起塞进脑子里。它们都属于后面那条线；本页只要求你把前向结构、形状和常见故障看明白。</p>
+  </div>
+</section>
+
+<section id="consistency">
+  <div class="head">
+    <h2>实现一致性检查</h2>
+    <span class="tag">check</span>
+  </div>
+  <p>这页看起来讲的是结构，实际上还在训练你做一件更重要的事：让形状、公式和代码互相咬住。只要有一处对不上，模型就可能“能跑”，但语义已经跑偏。下面这张表就是你写最小实现时的手工检查单。</p>
+  <div class="table-wrap">
+    <table data-export-context="实现一致性检查单" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>检查点</th>
+          <th>应当一致的地方</th>
+          <th>最容易出错的位置</th>
+          <th>一眼能看到的症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>符号闭合</td>
+          <td><code>C</code>、<code>H</code>、<code>D</code>、<code>V</code>、<code>B</code>、<code>T</code> 的定义和使用要一致</td>
+          <td>公式、代码注释、练习题的维度写法</td>
+          <td>公式看懂了，代码却对不上，或者反过来</td>
+        </tr>
+        <tr>
+          <td>位置逻辑</td>
+          <td>position embedding 只加一次，或者 RoPE 只走 attention 路径</td>
+          <td>embedding 初始化和 attention 前处理</td>
+          <td>位置重复注入，生成和训练口径不一致</td>
+        </tr>
+        <tr>
+          <td>形状闭环</td>
+          <td>attention 和 MLP 最后都回到 <code>[B,T,C]</code></td>
+          <td>输出投影、down projection、残差相加前</td>
+          <td>残差加不回去，或者只能靠硬 reshape 修补</td>
+        </tr>
+        <tr>
+          <td>内存布局</td>
+          <td><code>transpose</code> 后再 <code>view</code> 时要保证连续</td>
+          <td>attention 输出重排</td>
+          <td>运行时布局报错，或者得到看似正确的错结果</td>
+        </tr>
+        <tr>
+          <td>接口边界</td>
+          <td><code>forward(input_ids)</code> 只返回 logits，不偷偷算 loss</td>
+          <td>模型类和训练循环的分工</td>
+          <td>模型本体和训练逻辑搅在一起，后面没法复用</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>你现在应该能做什么</h3>
+    <p>拿到一份最小 Transformer 实现，你应该先检查符号、形状、位置注入和输出接口是否闭合，再去看性能细节。这个顺序能让你先抓住“对不对”，而不是先被“快不快”带偏。</p>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>作答目标</strong>
+    <p>这一页的练习不只是记术语，而是让你能检查最小 Transformer 的输入、形状、代码行和常见故障。</p>
+  </div>
+  <div class="review-card">
+    <strong>检查重点</strong>
+    <p>答题时尽量把对象、原因、后果和修法写在一起。开放题要写到具体机制，不要只给结论。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、输入与输出</h3>
+      <p>先把 token id、embedding、logits 和 next-token 目标分开。</p>
+    </div>
+    <div class="quick-review">
+      <b>先抓接口</b>
+      <span><code>input_ids</code> 先进 embedding，再进 block，最后到 logits。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、输入与输出" data-title="Q1 token id 先变成什么" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">输入</span></div>
+      <h3>Q1 <code>input_ids</code> 进入最小 Transformer 后，第一步最准确的变化是什么？</h3>
+      <label><input type="radio" name="q1" value="A">A. 直接变成 <code>[B,T,V]</code> logits。</label>
+      <label><input type="radio" name="q1" value="B">B. 先经过 embedding 查表，变成 <code>[B,T,C]</code>。</label>
+      <label><input type="radio" name="q1" value="C">C. 直接被 causal mask 遮住。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、输入与输出" data-title="Q2 logits 是否等于概率" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">输出</span></div>
+      <h3>Q2 <code>logits</code> 已经是概率分布，应该每次都先加和到 1。</h3>
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q3" data-group="一、输入与输出" data-title="Q3 为什么不能跳过 embedding">
+      <div class="q-meta"><span class="pill">解释</span><span class="pill">输入契约</span></div>
+      <h3>Q3 用 3 句话说明：为什么 token id 不能直接拿去做 attention，必须先过 embedding？</h3>
+      <p class="solve-note">回答里至少提到“离散编号”“连续表示”和“<code>[B,T,C]</code>”。</p>
+      <textarea name="q3" placeholder="先写对象，再写形状，再写后果。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要说明：token id 只是词表索引，没有几何意义；embedding 把这些索引查成可学习的连续向量，模型才可以在 <code>[B,T,C]</code> 上做线性变换、attention 和 MLP；如果跳过这一步，后面的矩阵乘法没有正确的输入契约，模型只能把整数当整数处理。写出这条因果链就算答到点上。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、形状推演</h3>
+      <p>把 <code>B,T,C,H,V</code> 的关系手算出来，不要只会看图。</p>
+    </div>
+    <div class="quick-review">
+      <b>先算 D</b>
+      <span><code>D = C / H</code>，然后再看 Q/K/V 和 scores。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q4" data-group="二、形状推演" data-title="Q4 每个 head 的维度" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">shape</span></div>
+      <h3>Q4 设 <code>C=512</code>、<code>H=8</code>，每个 head 的维度 <code>D</code> 是多少？</h3>
+      <label><input type="radio" name="q4" value="A">A. 32</label>
+      <label><input type="radio" name="q4" value="B">B. 64</label>
+      <label><input type="radio" name="q4" value="C">C. 128</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q5" data-group="二、形状推演" data-title="Q5 QKV 的形状" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">multi-head</span></div>
+      <h3>Q5 如果输入是 <code>[B,T,C]</code>，多头 attention 中拆开的 Q / K / V 最常见的形状是什么？</h3>
+      <label><input type="radio" name="q5" value="A">A. <code>[B,T,C]</code></label>
+      <label><input type="radio" name="q5" value="B">B. <code>[B,H,T,D]</code></label>
+      <label><input type="radio" name="q5" value="C">C. <code>[B,T,V]</code></label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q6" data-group="二、形状推演" data-title="Q6 attention scores 的形状" data-answer="C">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">scores</span></div>
+      <h3>Q6 设 <code>B=2</code>、<code>H=8</code>、<code>T=128</code>，attention scores 的形状是哪个？</h3>
+      <label><input type="radio" name="q6" value="A">A. <code>[2,128,8,64]</code></label>
+      <label><input type="radio" name="q6" value="B">B. <code>[2,8,64,128]</code></label>
+      <label><input type="radio" name="q6" value="C">C. <code>[2,8,128,128]</code></label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、代码阅读</h3>
+      <p>把代码里的关键行和功能对上，知道每一行在读什么、写什么。</p>
+    </div>
+    <div class="quick-review">
+      <b>先找三处</b>
+      <span>mask、contiguous、输出头绑定，是这页最容易漏的三处。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q7" data-group="三、代码阅读" data-title="Q7 因果 mask 在哪一行" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">mask</span></div>
+      <h3>Q7 下面哪一行最直接负责因果 mask？</h3>
+      <label><input type="radio" name="q7" value="A"><code>y = att @ v</code></label>
+      <label><input type="radio" name="q7" value="B"><code>scores = scores.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))</code></label>
+      <label><input type="radio" name="q7" value="C"><code>return self.proj(y)</code></label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q8" data-group="三、代码阅读" data-title="Q8 输出头绑定在哪" data-answer="C">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">weight tie</span></div>
+      <h3>Q8 下面哪一行最清楚地表示“输出头和 embedding 共享同一张表”？</h3>
+      <label><input type="radio" name="q8" value="A"><code>x = self.norm(x)</code></label>
+      <label><input type="radio" name="q8" value="B"><code>self.pos_emb = nn.Embedding(block_size, dim)</code></label>
+      <label><input type="radio" name="q8" value="C"><code>logits = x @ self.token_emb.weight.T</code></label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q9" data-group="三、代码阅读" data-title="Q9 为什么要 contiguous">
+      <div class="q-meta"><span class="pill">解释</span><span class="pill">layout</span></div>
+      <h3>Q9 为什么在 <code>transpose(1, 2)</code> 之后要补 <code>contiguous()</code>，再做 <code>view(B, T, C)</code>？</h3>
+      <p class="solve-note">答案里最好出现“内存布局”“非连续张量”和“view 依赖连续视图”这三个词。</p>
+      <textarea name="q9" placeholder="先写发生了什么，再写为什么会坏。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p><code>transpose</code> 会改变张量的步幅，张量常常不再是连续布局；<code>view</code> 依赖可直接重解释的连续内存，如果不先补 <code>contiguous()</code>，就可能报错或按错误布局重排。把这点说清，就说明你知道这里不是随便写的一个小修饰，而是布局安全的必要步骤。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、变体与排错</h3>
+      <p>最后把这一页压成能执行的判断：哪些东西现在该忽略，哪些故障该先查。</p>
+    </div>
+    <div class="quick-review">
+      <b>先看症状</b>
+      <span>训练能跑不代表实现对；先看症状再回表。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q10" data-group="四、变体与排错" data-title="Q10 哪些变体先放一边" data-answer="C">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">boundary</span></div>
+      <h3>Q10 如果先做最小实现，下面哪一组更适合放到后面再看？</h3>
+      <label><input type="radio" name="q10" value="A">A. token embedding、causal mask、残差</label>
+      <label><input type="radio" name="q10" value="B">B. learned position embedding、输出头绑定、RMSNorm</label>
+      <label><input type="radio" name="q10" value="C">C. RoPE、QK-Norm、FlashAttention、KV cache</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q11" data-group="四、变体与排错" data-title="Q11 mask 问题的典型症状" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">debug</span></div>
+      <h3>Q11 下面哪种症状最像 causal mask 出问题？</h3>
+      <label><input type="radio" name="q11" value="A">A. 模型第一层 embedding 维度和 vocab_size 对不上。</label>
+      <label><input type="radio" name="q11" value="B">B. 训练 loss 很快变低，但生成时像看过后文。</label>
+      <label><input type="radio" name="q11" value="C">C. tokenizer 的 decode 抽样结果可读。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="四、变体与排错" data-title="Q12 向 OLMo2 靠近的三步">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">transfer</span></div>
+      <h3>Q12 如果要把这页的最小实现往 OLMo 2 靠近，你会优先加哪三项？它们分别放在 block 的哪一处？</h3>
+      <p class="solve-note">答案里至少提到 <code>RMSNorm</code>、<code>QK-Norm</code>、<code>SwiGLU</code>、<code>RoPE</code> 中的三个，并说出它们大概放在 attention 前、attention 内、MLP 里还是输出侧。</p>
+      <textarea name="q12" placeholder="先写三项，再写位置，再写为什么不是随便加。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案不需要把 OLMo 2 的所有细节都背下来，但至少要说出：RMSNorm 可以放在 attention 和 MLP 之前做 pre-norm 或放在输出侧做最后整理；QK-Norm 放在 attention 的 query / key 计算附近；SwiGLU 替换普通 MLP；RoPE 进入 attention 的位置逻辑而不是简单加在 token embedding 上。再补一句“这些东西各自改的是不同层”，就说明你已经知道它们的落点。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li>
+    <b>Stanford CS336: Language Modeling from Scratch</b>
+    <p>访问日期：2026-06-21。用来确认从 tokenizer 到 Transformer 架构再到训练循环的学习顺序，也用来确定最小实现应该先讲什么。</p>
+  </li>
+  <li>
+    <b>CS336 Assignment 1: Basics</b>
+    <p>访问日期：2026-06-21。用来对齐最小 Transformer 语言模型需要实现的组件：embedding、attention、MLP、残差、归一化和输出头。</p>
+  </li>
+  <li>
+    <b>karpathy/llm.c</b>
+    <p>访问日期：2026-06-21。用来理解 GPT-2 训练实现如何从 PyTorch 参考下沉到更低层的 C/CUDA 路径，也用来提醒自己前向结构和系统实现之间的关系。</p>
+  </li>
+  <li>
+    <b>OLMo 2 论文与项目页</b>
+    <p>访问日期：2026-06-21。用来观察现代开放模型公开披露的架构选择，包括 RMSNorm、QK-Norm、SwiGLU、RoPE 和输出侧归一化。</p>
+  </li>
+  <li>
+    <b>Transformers OLMo2 文档</b>
+    <p>访问日期：2026-06-21。用来核对现代开放模型在 Hugging Face 体系里的公开组件命名、接口和实现选择。</p>
+  </li>
+</ul>
+
+<p class="muted">这一页根据公开资料重写为教学说明，不复制课程作业、仓库说明或论文长段内容。版本和访问日期只用于帮助你复查边界，不是让你把这些源页背下来。</p>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

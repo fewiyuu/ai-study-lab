@@ -1,0 +1,912 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>数据工程全景：从网页到 token</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="预训练数据工程与数据配方" data-unit="单元 01">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>预训练数据工程与数据配方</strong>
+        <span>单元 01</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>对象链</a>
+        <a href="#terms"><span class="dot"></span>术语与误区</a>
+        <a href="#pipeline"><span class="dot"></span>工程流水线</a>
+        <a href="#recording"><span class="dot"></span>运行记录</a>
+        <a href="#tools"><span class="dot"></span>工具视角</a>
+        <a href="#examples"><span class="dot"></span>例题与修正</a>
+        <a href="#boundary"><span class="dot"></span>边界说明</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">本页把学习目标压到能动手检查的最小闭环。先顺着主线读，再用练习区自查。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">learning unit</div>
+          <h1>数据工程全景：从网页到 token</h1>
+          <p>这一页只处理一条最基础的链路：把原始网页、抽取后的 document、训练 sample、token 和 shard 分开。后面的过滤、去重、配方、验证和运行记录，都在这条链路上工作。先把对象认准，再看工具和实验，后面的单元就不会混在一起。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../02_获取解析与标准化/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+  <li>能把 raw data -> document -> sample -> token -> shard 画成一条链，并说出每一步的输入和输出。</li>
+  <li>能分清 document vs sample、token vs shard，并知道哪个概念服务于治理，哪个概念服务于训练或存储。</li>
+  <li>能读一条小型 pipeline 记录或 manifest，判断哪一步出了问题，以及下一步该回查什么。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head"><h2>学习目标</h2><span class="tag">foundation</span></div>
+  <div class="grid3">
+    <div class="card"><b>先认对象</b><p>原始网页还不是可训练语料。先确认它有没有正文、元数据和可追溯来源，再决定后面怎么处理。</p></div>
+    <div class="card"><b>再认转换</b><p>同一份内容会在不同阶段变成不同对象。抽取、分句、packing、tokenize、shard 不是同一件事。</p></div>
+    <div class="card"><b>最后认证据</b><p>要能回到来源、规则版本、tokenizer 版本和 shard 清单。只有规模没有证据，后面很难排错。</p></div>
+  </div>
+  <p class="inline-note"><b>这页的边界</b>这里只把对象层次和最小流水线讲清。过滤规则、去重算法、配方比例、消融实验和合规判断，后面的单元会继续展开。</p>
+</section>
+
+<section id="map">
+  <div class="head"><h2>对象链</h2><span class="tag">trace</span></div>
+  <p>最小链路先记成五个对象：raw data、document、sample、token、shard。你看到一个数据集说明时，先问它站在哪一层，再问它往下一层怎么变。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" type="button" data-trace-step="raw">
+        <code>raw data</code><span>来源与格式</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="doc">
+        <code>document</code><span>正文 + 元数据</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="sample">
+        <code>sample</code><span>训练窗口</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="token">
+        <code>token</code><span>离散 id 序列</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="shard">
+        <code>shard</code><span>并行文件块</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="raw">
+        <b>raw data</b>
+        <span>读取 crawl record、URL、response、headers。</span>
+        <p>写入原始记录。这里最容易把模板、脚本、乱码和重复页一起带进来。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="doc">
+        <b>document</b>
+        <span>读取正文抽取器和元数据保留规则。</span>
+        <p>写入正文、语言、来源、长度、过滤标记。正文抽错，后面的质量判断就不稳。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="sample">
+        <b>sample</b>
+        <span>读取 context length、packing policy、边界规则。</span>
+        <p>写入训练输入。样本边界一乱，训练 loader 和评测对齐都会变难。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="token">
+        <b>token</b>
+        <span>读取 tokenizer 版本与词表。</span>
+        <p>写入 token id 序列。版本一变，token 数和序列切分都会跟着变。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="shard">
+        <b>shard</b>
+        <span>读取样本流、checksum、分片策略。</span>
+        <p>写入并行文件块和 manifest。没有校验和，排错时很难回到来源。</p>
+      </div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="对象链状态表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>前一层读什么</th>
+          <th>这一层写什么</th>
+          <th>错了会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>raw data</code></td>
+          <td>URL、response、crawl record</td>
+          <td>原始抓取记录</td>
+          <td>脚本、模板和乱码会一起进来</td>
+        </tr>
+        <tr>
+          <td><code>document</code></td>
+          <td>正文抽取器、元数据规则</td>
+          <td>正文 + 元数据 + 过滤标记</td>
+          <td>正文抽错后，后面的质量分都不可靠</td>
+        </tr>
+        <tr>
+          <td><code>sample</code></td>
+          <td>上下文长度、packing、边界规则</td>
+          <td>训练输入窗口</td>
+          <td>样本边界乱了，训练和评测对不齐</td>
+        </tr>
+        <tr>
+          <td><code>token</code></td>
+          <td>tokenizer 版本与词表</td>
+          <td>token id 序列</td>
+          <td>版本漂移会改变长度和切分</td>
+        </tr>
+        <tr>
+          <td><code>shard</code></td>
+          <td>样本流、checksum、分片策略</td>
+          <td>并行文件块和 manifest</td>
+          <td>缺少记录时，回查会卡在半路</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="terms">
+  <div class="head"><h2>术语与误区</h2><span class="tag">table</span></div>
+  <p>这五个词最容易混。先把词义说准，后面的工具和实验就会顺。</p>
+  <div class="table-wrap">
+    <table data-export-context="术语对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>术语</th>
+          <th>直觉解释</th>
+          <th>精确定义</th>
+          <th>常见误解</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>raw data</code></td>
+          <td>还没整理过的来源材料。</td>
+          <td>从网页、仓库、书籍、论文、论坛、百科等来源拿到的原始文件或记录。</td>
+          <td>误以为 raw data 已经是可训练文本。它常含导航、广告、脚本、乱码和重复。</td>
+        </tr>
+        <tr>
+          <td><code>document</code></td>
+          <td>能被过滤和去重的一篇文本对象。</td>
+          <td>解析 raw data 后得到的正文、URL、时间、语言、来源、质量分、过滤原因等字段组合。</td>
+          <td>误以为 document 一定等于一整个网页。它可以是一篇抽取后的文章，也可能被切分或合并。</td>
+        </tr>
+        <tr>
+          <td><code>sample</code></td>
+          <td>训练 loader 拿到的一段可学习材料。</td>
+          <td>按上下文长度、边界、混合策略或 packing 规则构造出的训练样本。</td>
+          <td>误以为 sample 和 document 是同一个东西。document 偏治理，sample 偏训练输入。</td>
+        </tr>
+        <tr>
+          <td><code>token</code></td>
+          <td>tokenizer 能识别的离散单位。</td>
+          <td>文本经过 tokenizer 映射后的 token 或 token id。</td>
+          <td>误以为 token 就是单词。中文、代码、空格、标点和罕见词都会按 tokenizer 规则切分。</td>
+        </tr>
+        <tr>
+          <td><code>shard</code></td>
+          <td>为了并行读取而切好的文件块。</td>
+          <td>把 documents、samples 或 token ids 分成多个大小可控的存储单元。</td>
+          <td>误以为 shard 越大越好。过大影响并行和恢复，过小增加文件管理和调度开销。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <b>document vs sample</b>
+      <p>document 是治理对象，sample 是训练对象。一个 document 可以切出多个 sample，多个短 document 也可以被拼进一个 sample。</p>
+    </div>
+    <div class="card">
+      <b>token vs shard</b>
+      <p>token 是模型学习的离散内容，shard 是工程上的存储和读取单位。前者关心模型看到了什么，后者关心 loader 怎么读得稳。</p>
+    </div>
+  </div>
+</section>
+
+<section id="pipeline">
+  <div class="head"><h2>工程流水线</h2><span class="tag">mechanism</span></div>
+  <p>最小版本可以看成五步：读取原始记录、抽正文、做质量处理、构样与混合、tokenize 并打包成 shard。真实工程常把其中几步拆得更细，但这五步够你定位问题。</p>
+  <div class="flow">
+    <div class="step">
+      <b>01 Raw Ingestion</b>
+      <p>读入 Common Crawl、站点抓取、代码仓库、书籍或内部语料。此时主要问题是格式杂、来源杂、噪声高。</p>
+    </div>
+    <div class="step">
+      <b>02 Extract Documents</b>
+      <p>从 HTML、WARC 或 JSON 中抽正文，保留 URL、时间、域名、语言候选和长度。正文抽取质量会决定后面所有过滤器的输入。</p>
+    </div>
+    <div class="step">
+      <b>03 Curate Documents</b>
+      <p>过滤低质、重复、语言不符、污染评测集或不合规的 document。过滤会改变数据覆盖和偏差。</p>
+    </div>
+    <div class="step">
+      <b>04 Build Samples</b>
+      <p>按上下文长度、packing 规则和数据配方把 document 变成 sample。这里开始显式回答“模型应该多看哪类数据”。</p>
+    </div>
+    <div class="step">
+      <b>05 Tokenize And Shard</b>
+      <p>用目标 tokenizer 把 sample 转成 token ids，再打包成 shard，供训练 loader 分布式、可重复、可监控地读取。</p>
+    </div>
+  </div>
+  <div class="grid2" style="margin-top: 14px;">
+    <div class="math-block" data-export-context="训练可用数据公式" data-export-lang="math">
+      $$
+      \text{训练可用数据} = \text{来源可追溯} + \text{文本可治理} + \text{样本可配方} + \text{token 可复现} + \text{shard 可读取}
+      $$
+      <p>这个式子不是数学证明，意思是：一项缺了，后面的训练和复盘就会断。</p>
+    </div>
+    <div class="box info">
+      <h3>检查顺序</h3>
+      <p>如果某个数据集结果怪，先回看 document 是否抽对，再看 sample 是否按上下文长度切对，最后看 tokenizer 和 shard 是否被记录下来。别先怀疑训练 loop。</p>
+    </div>
+  </div>
+  <div class="codebar"><span>manifest-mini.json</span><button class="copy" data-copy="code-manifest">复制</button></div>
+  <pre id="code-manifest" data-export-context="最小运行记录示例" data-export-lang="json"><code class="language-json">{
+  "source": "Common Crawl / 网站抓取",
+  "document": {
+    "extractor": "main-text",
+    "keep_metadata": true
+  },
+  "sample": {
+    "context_length": 2048,
+    "packing": "greedy"
+  },
+  "tokenizer": "sentencepiece-v1",
+  "shard": {
+    "count": 256,
+  "checksum": true
+  }
+}</code></pre>
+</section>
+
+<section id="recording">
+  <div class="head"><h2>运行记录</h2><span class="tag">diagnosis</span></div>
+  <p>只看数据量很容易误判。真正能把问题拉回现场的，是记录里是否写清了来源、抽取版本、样本边界、tokenizer 和 shard 校验。下面这张小表就是最小回查链路。</p>
+  <div class="table-wrap">
+    <table data-export-context="运行记录回查表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>记录项</th>
+          <th>它回答什么</th>
+          <th>缺了会怎样</th>
+          <th>下一步回查</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>source</code></td>
+          <td>这批数据从哪里来</td>
+          <td>无法判断来源是否重复或偏置</td>
+          <td>回到 raw data 和抓取记录</td>
+        </tr>
+        <tr>
+          <td><code>document.extractor</code></td>
+          <td>正文是怎么抽出来的</td>
+          <td>很难判断正文是否抽错或丢失</td>
+          <td>检查 document 与原始网页对照</td>
+        </tr>
+        <tr>
+          <td><code>sample.context_length</code></td>
+          <td>训练窗口有多长</td>
+          <td>sample 边界和训练对齐会漂</td>
+          <td>回看 packing 与切窗规则</td>
+        </tr>
+        <tr>
+          <td><code>tokenizer</code></td>
+          <td>序列是怎么离散化的</td>
+          <td>token 数、长度和评测统计会变</td>
+          <td>确认 tokenizer 版本是否一致</td>
+        </tr>
+        <tr>
+          <td><code>shard.checksum</code></td>
+          <td>文件是否完整、能否复现</td>
+          <td>训练报错后很难证明文件没坏</td>
+          <td>先查 shard manifest 再查生成版本</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <b>怎么用这张表</b>
+      <p>当一个 shard 出错时，不要先猜模型。先看 checksum，再看 tokenizer 版本，再回到 sample 边界和 document 记录。这样错误会尽量停在数据层。</p>
+    </div>
+    <div class="card">
+      <b>为什么这页要加它</b>
+      <p>这一段把对象链和运行记录接起来。前面只是知道对象，现在开始知道出了问题该回到哪一条记录。</p>
+    </div>
+  </div>
+</section>
+
+<section id="failure-path">
+  <div class="head"><h2>故障回查路径</h2><span class="tag">case</span></div>
+  <p>假设训练日志里出现了一个很普通的报错：<code>shard-00042.jsonl: missing checksum</code>。这个报错看起来像文件问题，实际上它常常是一个更早阶段的信号，说明生成记录、样本边界或者 tokenizer 版本里至少有一项没写对。处理这种问题最怕直接跳到训练 loop，因为训练只是把前面的错放大了。</p>
+  <p>更稳的顺序是：先确认 shard 本身是不是完整，再看它对应的 manifest 是否写全了来源和抽取版本，然后回到 document 和 sample，检查正文是不是抽对、窗口是不是切对，最后才看 tokenizer 是否换过。如果这里的顺序反了，你会在模型参数里绕很久，但问题其实早就出现在数据层了。</p>
+  <div class="codebar"><span>trace.log</span><button class="copy" data-copy="code-trace-log">复制</button></div>
+  <pre id="code-trace-log" data-export-context="故障回查示例" data-export-lang="text"><code class="language-text">shard-00042.jsonl: missing checksum
+  -> check shard manifest
+  -> verify source and extractor version
+  -> compare tokenizer version
+  -> confirm sample boundary rules
+  -> if all above are stable, return to document extraction</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="故障回查链路表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>先查什么</th>
+          <th>它读什么</th>
+          <th>它写什么</th>
+          <th>错了会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>checksum 缺失</td>
+          <td>shard manifest</td>
+          <td>文件完整性、生成版本</td>
+          <td>回查入口</td>
+          <td>你连这个 shard 是否可信都说不清</td>
+        </tr>
+        <tr>
+          <td>tagger/tokenizer mismatch</td>
+          <td>tokenizer 版本</td>
+          <td>词表、编码规则</td>
+          <td>token id 序列</td>
+          <td>token 数和长度统计会整体漂移</td>
+        </tr>
+        <tr>
+          <td>sample 边界异常</td>
+          <td>sample 规则</td>
+          <td>context length、packing policy</td>
+          <td>训练窗口</td>
+          <td>训练和评测对不齐，指标也会歪</td>
+        </tr>
+        <tr>
+          <td>document 丢字段</td>
+          <td>抽取版本</td>
+          <td>正文抽取器、元数据保留规则</td>
+          <td>正文 + 元数据</td>
+          <td>后面的过滤器会在错误输入上工作</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box info">
+      <h3>为什么这条路径要排成这样</h3>
+      <p>每一层都只依赖前一层的记录。shard 依赖 sample，sample 依赖 document，document 依赖 raw data。你越早检查高层文件，越能把错误卡在离来源最近的位置。</p>
+    </div>
+    <div class="box warn">
+      <h3>什么时候回到单元 02</h3>
+      <p>如果问题出在 document 抽取，就回到“获取、解析与标准化”单元；如果问题出在 tokenizer，则先确认 tokenizer 版本，再回到 sample 和 shard。不要把这些问题混成一个“训练不稳定”。</p>
+    </div>
+  </div>
+  <p>这一段把对象链和运行记录接起来了。前面你只是知道五层名字，现在你应该能说出：一个坏 shard 先看什么、为什么先看它、看完之后应该去哪一层继续查。</p>
+</section>
+
+<section id="metric-chain">
+  <div class="head"><h2>链路如何影响指标</h2><span class="tag">impact</span></div>
+  <p>这页的最后一件事，是把对象层次和训练指标连起来。很多团队看到困惑度上升，第一反应是“模型不行了”，但真正的变化可能发生在 document 抽取、sample 边界、tokenizer 版本，或者 shard 的读取方式上。换句话说，指标只是最后的回声，未必是最早的原因。</p>
+  <div class="table-wrap">
+    <table data-export-context="对象层次与指标变化表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>变化发生在哪层</th>
+          <th>典型现象</th>
+          <th>最容易被误判成什么</th>
+          <th>更稳的检查动作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>document</code></td>
+          <td>正文抽少了，语言混杂了，噪声上来了</td>
+          <td>模型学不会</td>
+          <td>回看抽取器、过滤标记和元数据保留规则</td>
+        </tr>
+        <tr>
+          <td><code>sample</code></td>
+          <td>样本切窗变短或跨文档拼接太多</td>
+          <td>训练不稳定</td>
+          <td>检查 context length、packing policy 和边界</td>
+        </tr>
+        <tr>
+          <td><code>token</code></td>
+          <td>token 数明显变化，损失曲线起伏变大</td>
+          <td>学习率不合适</td>
+          <td>确认 tokenizer 版本和词表是否切换</td>
+        </tr>
+        <tr>
+          <td><code>shard</code></td>
+          <td>读数据慢、报错、恢复困难</td>
+          <td>训练框架有 bug</td>
+          <td>回看 shard size、checksum 和 manifest</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>一个短例子</h3>
+      <p>假设同样的文档，在新版本里被切成更短的 sample，同时 tokenizer 也换了。你看到的第一个现象可能是 token 数变化，第二个现象可能是 perplexity 变差，但根因不一定是模型本身，而是输入边界变了。</p>
+    </div>
+    <div class="box warn">
+      <h3>怎么把这个例子用到排错里</h3>
+      <p>先问“哪一层先变了”，再问“它写了什么记录”。如果回答不了这两个问题，就不要急着改模型参数。先把输入层和记录层弄清，再看训练曲线。</p>
+    </div>
+  </div>
+  <div class="codebar"><span>debug-sequence.txt</span><button class="copy" data-copy="code-debug-sequence">复制</button></div>
+  <pre id="code-debug-sequence" data-export-context="对象层次排错顺序" data-export-lang="text"><code class="language-text">1. 先查 shard 是否完整
+2. 再查 tokenizer 版本是否一致
+3. 再查 sample 边界和 packing
+4. 再查 document 抽取与过滤
+5. 最后才回到训练参数</code></pre>
+</section>
+
+<section id="teach-back">
+  <div class="head"><h2>把整页讲回去</h2><span class="tag">transfer</span></div>
+  <p>如果你要把这一页讲给别人，不要从工具名开口，先从对象链开口：raw data 先被整理成 document，再切成 sample，再编码成 token，最后写成 shard。这样讲，别人先记住的是数据怎么变，再去记用了什么工具。</p>
+  <div class="box info">
+    <h3>30 秒复述顺序</h3>
+    <p>第一句说清页面目标。第二句说清五层对象。第三句说清指标只是回声，排错要沿着“shard、token、sample、document、raw data”往回查。只要这三句能说顺，你就已经能拿这页去做复盘或带新人了。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="复述检查表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>复述点</th>
+          <th>最低要求</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>对象链</td>
+          <td>能从 raw data 说到 shard</td>
+        </tr>
+        <tr>
+          <td>记录层</td>
+          <td>能说出版本、边界和 checksum</td>
+        </tr>
+        <tr>
+          <td>排错顺序</td>
+          <td>先查输入层，再看训练参数</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <pre data-export-context="复述提纲" data-export-lang="text"><code class="language-text">1. 这页讲网页如何变成 token
+2. 先记 raw data → document → sample → token → shard
+3. 再记每层都要留版本、边界和 checksum
+4. 指标变差先回头查输入，不先动训练参数</code></pre>
+  <p>如果复述时只能说出工具名而说不出对象层，说明还没有真正吃透这页。先回到链路，再回到工具；顺序反过来，理解就会散。</p>
+</section>
+
+<section id="tools">
+  <div class="head"><h2>工具视角</h2><span class="tag">source-to-tool</span></div>
+  <p>工具不是概念本身，只是把某一层工程化。看工具时，只问它在链路里的哪一层工作，别把它们混成一类。</p>
+  <div class="table-wrap">
+    <table data-export-context="工具视角对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>资料</th>
+          <th>主要看哪一层</th>
+          <th>适合借鉴什么</th>
+          <th>暂时别扩展到哪里</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>NeMo Curator</td>
+          <td>document 与后续策展</td>
+          <td>清洗、分类、去重、PII 处理、分布式执行</td>
+          <td>具体 API 和集群调参</td>
+        </tr>
+        <tr>
+          <td>DataTrove</td>
+          <td>raw files -> document pipeline</td>
+          <td>reader / filter / dedup / writer 的流程组织</td>
+          <td>模型架构和训练超参</td>
+        </tr>
+        <tr>
+          <td>FineWeb</td>
+          <td>数据配方与验证</td>
+          <td>过滤、去重、消融、训练效果的闭环</td>
+          <td>把它当成唯一配方</td>
+        </tr>
+        <tr>
+          <td>OLMo 2</td>
+          <td>透明训练记录</td>
+          <td>来源、阶段、评测和边界的写法</td>
+          <td>把它当作数据处理库</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid3">
+    <div class="card"><b>看工具之前</b><p>先确定你想解决的是抽取、过滤、去重、配方还是记录。对象层不清，工具名越多越乱。</p></div>
+    <div class="card"><b>看工具之后</b><p>把工具输出映射回 document、sample、token 和 shard。只要能回到对象层，工具细节就不会喧宾夺主。</p></div>
+    <div class="card"><b>这一页的用法</b><p>把工具名当索引，不当结论。真正要记住的是它帮你改变了哪一个对象。</p></div>
+  </div>
+</section>
+
+<section id="examples">
+  <div class="head"><h2>例题与修正</h2><span class="tag">worked case</span></div>
+  <p>下面这条记录把同一个网页在四个层次上拆开。你可以顺着它回想：每一层在读什么、写什么、丢了什么。</p>
+  <div class="codebar"><span>object-chain.txt</span><button class="copy" data-copy="code-object-chain">复制</button></div>
+  <pre id="code-object-chain" data-export-context="对象链示例" data-export-lang="text"><code class="language-text">raw data:
+  WARC/HTML record, URL, crawl timestamp, response headers
+
+document:
+  extracted main text
+  meta: url, domain, crawl_time, language, extraction_version
+  quality: language_score, length, filter_flags
+
+sample:
+  sequence window built from curated documents
+  respects context length and packing policy
+
+token:
+  tokenizer.encode(sample_text) -> token ids
+
+shard:
+  train-000042.bin / train-000042.jsonl
+  shard id, token count, checksum, source mix</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="对象状态与故障表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>最小状态</th>
+          <th>下一步读写</th>
+          <th>常见故障</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>document</code></td>
+          <td>正文 + 元数据</td>
+          <td>读来源、语言、长度；写过滤标记</td>
+          <td>正文抽错后，后面的质量分都不可靠</td>
+        </tr>
+        <tr>
+          <td><code>sample</code></td>
+          <td>上下文窗口</td>
+          <td>读 context length；写训练输入</td>
+          <td>样本边界乱了，训练和评测对不齐</td>
+        </tr>
+        <tr>
+          <td><code>token</code></td>
+          <td>token id 序列</td>
+          <td>读 tokenizer 版本；写损失输入</td>
+          <td>版本漂移会改变长度和切分</td>
+        </tr>
+        <tr>
+          <td><code>shard</code></td>
+          <td>并行文件块</td>
+          <td>读样本流；写 manifest 与 checksum</td>
+          <td>缺少记录时，回查会卡在半路</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box"><h3>为什么要保留 metadata</h3><p>只保正文，后面很难查污染、查偏差、查来源重复，也很难定位某个 shard 为什么报错。metadata 不一定进训练文本，但它一定要进运行记录。</p></div>
+    <div class="box"><h3>为什么 shard 不是小事</h3><p>shard 太少并行度不够，太碎又会让文件打开和调度成本上升。好的 shard 设计关心读取吞吐、故障恢复和来源混合，而不只是把文件切小。</p></div>
+  </div>
+</section>
+
+<section id="mistakes">
+  <div class="head"><h2>常见混淆</h2><span class="tag">debug</span></div>
+  <div class="grid3">
+    <div class="card"><b>把网页当语料</b><p>网页是来源，不一定是语料。抽取正文前，它还可能含模板、广告、脚本和重复块。</p></div>
+    <div class="card"><b>把过滤当清洁</b><p>过滤器在移除噪声，也在改变分布。过滤结果需要用训练和评测验证。</p></div>
+    <div class="card"><b>把 tokenizer 当细节</b><p>tokenizer 会改变 token 数、序列长度和罕见文本的表示方式，不能等到最后才随便选。</p></div>
+    <div class="card"><b>把 sample 当 document</b><p>sample 是训练输入，可能跨 document 拼接，也可能从长 document 切出多个窗口。</p></div>
+    <div class="card"><b>把 shard 当压缩包</b><p>shard 的目标是并行读取和断点恢复，不是单纯把文件压小。</p></div>
+    <div class="card"><b>把工具当配方</b><p>工具只实现流程，配方还要经过验证。FineWeb 的意义就在于把数据决策拉回实验闭环。</p></div>
+  </div>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" type="button" data-terminal-case="case-1">缺 checksum</button>
+      <button class="ghost" type="button" data-terminal-case="case-2">缺 source_url</button>
+      <button class="ghost" type="button" data-terminal-case="case-3">tokenizer 变了</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite" data-export-context="故障演示输出" data-export-lang="text"># case 1
+shard-00042.jsonl: missing checksum
+=> this shard cannot be traced back to source mixing.</pre>
+    <template data-terminal-output="case-1"># case 1
+shard-00042.jsonl: missing checksum
+=> this shard cannot be traced back to source mixing.</template>
+    <template data-terminal-output="case-2"># case 2
+document record: missing source_url
+=> dedup audit and contamination check cannot be traced to origin.</template>
+    <template data-terminal-output="case-3"># case 3
+tokenizer version mismatch detected
+=> token count changed; sample boundaries and metrics no longer align.</template>
+  </div>
+  <p>先从对象错位查起，再从规模和吞吐查。很多“模型效果不稳”的描述，最后都能回到 document、sample、token 或 shard 的某一层记录不完整。</p>
+</section>
+
+<section id="boundary">
+  <div class="head"><h2>边界说明</h2><span class="tag">boundary</span></div>
+  <div class="grid2">
+    <div class="box info"><h3>这页已经讲完的</h3><p>对象链、最小流水线、工具对应层次、常见故障和最小运行记录。你现在应该能拿着一份数据说明，先把它放到正确层次。</p></div>
+    <div class="box warn"><h3>下一步再看</h3><p>过滤规则、语言识别、去重算法、污染控制、数据配方、消融验证、许可隐私和发布边界。它们都建立在这页的对象词表上。</p></div>
+  </div>
+  <p class="inline-note"><b>和后面单元的关系</b>第二单元会进入获取、解析与标准化，先把网页变成 document；第三单元再看质量过滤，第四单元才进入去重和泄漏控制。这里先把底座搭稳。</p>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>怎么答才算会</h3>
+    <p>先分对象，再讲转换，再回到记录。能说出输入、输出、读写关系和一个常见故障，才算真的会。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>选择题看对象边界；开放题看原因、后果和回查对象。答案不需要长，但要能指向下一步检查什么。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、术语定位</h3>
+      <p>先把 raw data、document、sample、token、shard 分开。对象一旦混掉，后面的工具都会看错层。</p>
+    </div>
+    <div class="quick-review">先把 raw data、document、sample、token、shard 分开，再看工具怎么动它们。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、术语定位" data-title="哪一个对象最适合做语言识别和质量过滤？" data-answer="document">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">对象边界</span></div>
+      <h3>哪一个对象最适合做语言识别和质量过滤？</h3>
+      <label><input type="radio" name="q1" value="raw data"> raw data</label>
+      <label><input type="radio" name="q1" value="document"> document</label>
+      <label><input type="radio" name="q1" value="shard"> shard</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、术语定位" data-title="sample 一定对应一个完整 document 吗？" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">训练输入</span></div>
+      <h3>sample 一定对应一个完整 document 吗？</h3>
+      <label><input type="radio" name="q2" value="对"> 对</label>
+      <label><input type="radio" name="q2" value="错"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q3" data-group="一、术语定位" data-title="填空：训练损失通常作用在什么序列上？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">token</span></div>
+      <h3>填空：训练损失通常作用在什么序列上？</h3>
+      <input type="text" name="q3" data-answer="token id" placeholder="例如：token id">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q4" data-group="一、术语定位" data-title="shard 的主要作用是什么？" data-answer="B. 让数据可并行读取和管理">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">storage</span></div>
+      <h3>shard 的主要作用是什么？</h3>
+      <label><input type="radio" name="q4" value="A. 把文本翻译成 token"> A. 把文本翻译成 token</label>
+      <label><input type="radio" name="q4" value="B. 让数据可并行读取和管理"> B. 让数据可并行读取和管理</label>
+      <label><input type="radio" name="q4" value="C. 判断网页是否高质量"> C. 判断网页是否高质量</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q5" data-group="一、术语定位" data-title="用自己的话解释 document 和 sample 的区别">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">概念区分</span></div>
+      <h3>用自己的话解释 document 和 sample 的区别</h3>
+      <p class="solve-note">至少讲清楚：谁给治理看，谁给训练看；一个 document 怎样变出多个 sample；什么时候可以跨 document 拼接。</p>
+      <textarea name="q5" placeholder="先写对象，再写用途，再写边界。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>合格答案应包含三点：document 是抽取后的治理对象，sample 是训练输入；sample 可由一个 document 切窗，也可把多个短 document pack 到一起；不要把二者说成同一层。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、流程判断</h3>
+      <p>把对象放回流水线。目标不是记死顺序，而是说清每一步为什么需要前一步。</p>
+    </div>
+    <div class="quick-review">流程题只要盯住输入、输出和边界，不要被单个工具名带跑。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q6" data-group="二、流程判断" data-title="为什么不能在 raw HTML 上直接做大部分质量过滤？" data-answer="A. 因为 HTML 还可能混有模板、脚本和导航噪声">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">extract</span></div>
+      <h3>为什么不能在 raw HTML 上直接做大部分质量过滤？</h3>
+      <label><input type="radio" name="q6" value="A. 因为 HTML 还可能混有模板、脚本和导航噪声"> A. 因为 HTML 还可能混有模板、脚本和导航噪声</label>
+      <label><input type="radio" name="q6" value="B. 因为 HTML 没有任何文字"> B. 因为 HTML 没有任何文字</label>
+      <label><input type="radio" name="q6" value="C. 因为 tokenizer 不支持网页"> C. 因为 tokenizer 不支持网页</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q7" data-group="二、流程判断" data-title="给出最小主线并说明理由">
+      <div class="q-meta"><span class="pill">sequence</span><span class="pill">flow</span></div>
+      <h3>给出最小主线并说明理由</h3>
+      <p class="solve-note">把下面五步排成最小主线：读取 raw data、抽取 document、构造 sample、tokenize、写入 shard。要求说明为什么这个顺序能把错误尽早暴露出来。</p>
+      <textarea name="q7" placeholder="先写顺序，再写一句理由。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>顺序应是读取 raw data -> 抽取 document -> 构造 sample -> tokenize -> 写入 shard。理由是前一层的输出要稳定，后一层才能判断自己的输入是否正确；如果顺序倒过来，错误会在更晚的层才暴露。</p></details>
+    </div>
+
+    <div class="q" data-question="q8" data-group="二、流程判断" data-title="metadata 是否一定要进入训练文本？" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">metadata</span></div>
+      <h3>metadata 是否一定要进入训练文本？</h3>
+      <label><input type="radio" name="q8" value="对"> 对</label>
+      <label><input type="radio" name="q8" value="错"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q9" data-group="二、流程判断" data-title="解释为什么 tokenization 的版本需要记录">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">repro</span></div>
+      <h3>解释为什么 tokenization 的版本需要记录</h3>
+      <p class="solve-note">从 token 数、序列切分、训练复现、评测对齐里至少选两点说清楚。</p>
+      <textarea name="q9" placeholder="不要只写“为了复现”，要写清楚复现什么。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>版本记录能让别人复现 token 数和序列切分；如果 tokenizer 变了，样本长度、packing 结果和 loss 的统计对象都会变，训练结果就无法和旧实验对齐。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、工具迁移</h3>
+      <p>把工具名映射回对象层。只要你能说出它在链路里改了什么，工具就算看懂了一半。</p>
+    </div>
+    <div class="quick-review">工具名是索引，层次才是答案。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q10" data-group="三、工具迁移" data-title="DataTrove 的 pipeline 思路最适合描述什么？" data-answer="A. 组合 reader、filter、dedup、writer 等步骤处理 documents">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">tool view</span></div>
+      <h3>DataTrove 的 pipeline 思路最适合描述什么？</h3>
+      <label><input type="radio" name="q10" value="A. 组合 reader、filter、dedup、writer 等步骤处理 documents"> A. 组合 reader、filter、dedup、writer 等步骤处理 documents</label>
+      <label><input type="radio" name="q10" value="B. 自动决定模型架构"> B. 自动决定模型架构</label>
+      <label><input type="radio" name="q10" value="C. 自动证明数据没有版权风险"> C. 自动证明数据没有版权风险</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q11" data-group="三、工具迁移" data-title="NeMo Curator 的价值只在下载 Common Crawl 吗？" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">curation</span></div>
+      <h3>NeMo Curator 的价值只在下载 Common Crawl 吗？</h3>
+      <label><input type="radio" name="q11" value="对"> 对</label>
+      <label><input type="radio" name="q11" value="错"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="三、工具迁移" data-title="FineWeb 为什么是数据工程案例，而不只是一个大数据集名字？">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">validation</span></div>
+      <h3>FineWeb 为什么是数据工程案例，而不只是一个大数据集名字？</h3>
+      <p class="solve-note">从 Common Crawl 来源、过滤、去重、消融验证、训练效果里至少选三点。</p>
+      <textarea name="q12" placeholder="把“数据集名字”改写成“数据工程例子”。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>FineWeb 的重点在于它展示了从 Common Crawl 到可训练语料的策展过程：过滤和去重如何改变数据分布，消融实验如何验证数据配方，训练效果如何反过来检查数据决策。只说“数据很多”是不够的。</p></details>
+    </div>
+
+    <div class="q" data-question="q13" data-group="三、工具迁移" data-title="发现 shard 频繁报错时，先查哪一类记录？" data-answer="A. shard manifest 和 checksum">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">diagnosis</span></div>
+      <h3>发现 shard 频繁报错时，先查哪一类记录？</h3>
+      <label><input type="radio" name="q13" value="A. shard manifest 和 checksum"> A. shard manifest 和 checksum</label>
+      <label><input type="radio" name="q13" value="B. 模型隐藏层维度"> B. 模型隐藏层维度</label>
+      <label><input type="radio" name="q13" value="C. prompt 温度参数"> C. prompt 温度参数</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、错误诊断与综合解释</h3>
+      <p>把概念用到真实描述上。这里考的是能不能发现含糊说法，以及能不能把含糊说法改回可检查的对象。</p>
+    </div>
+    <div class="quick-review">故障先回到 shard/document/sample/token 的记录，再看训练 loop。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q14" data-group="四、错误诊断与综合解释" data-title="诊断：我们清洗了互联网数据，得到 2T token，所以数据质量很好">
+      <div class="q-meta"><span class="pill">error diagnosis</span><span class="pill">evidence</span></div>
+      <h3>诊断：我们清洗了互联网数据，得到 2T token，所以数据质量很好</h3>
+      <p class="solve-note">指出至少 4 个缺失信息，并说明为什么 token 数不能直接证明质量。</p>
+      <textarea name="q14" placeholder="从来源、document、重复、污染、tokenizer、配方、评测验证里选。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>至少要补四类信息：来源是否明确、document 是否抽对、重复和污染是否检查、tokenizer 和配方是否记录。token 数只说明规模，不说明文本是否干净、是否偏置、是否泄漏了评测集。</p></details>
+    </div>
+
+    <div class="q full" data-question="q15" data-group="四、错误诊断与综合解释" data-title="场景：你发现某个 shard 训练时频繁报错，应该先检查哪些记录？">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">retrace</span></div>
+      <h3>场景：你发现某个 shard 训练时频繁报错，应该先检查哪些记录？</h3>
+      <p class="solve-note">先勾出最靠前的三项，再用一句话说明为什么顺序是这样。不要先猜模型问题。</p>
+      <label><input type="checkbox" name="q15" value="shard manifest 和 checksum"> shard manifest 和 checksum</label>
+      <label><input type="checkbox" name="q15" value="tokenizer 版本"> tokenizer 版本</label>
+      <label><input type="checkbox" name="q15" value="sample 边界"> sample 边界</label>
+      <label><input type="checkbox" name="q15" value="训练的隐藏层维度"> 训练的隐藏层维度</label>
+      <details><summary>参考答案 / 评分要点</summary><p>最先看 shard manifest 和 checksum，再回到 tokenizer 版本和 sample 边界。因为 shard 自身是否完整、序列是否因版本漂移而变形，决定了报错到底是数据问题还是模型问题。隐藏层维度不是第一轮回查对象。</p></details>
+    </div>
+
+    <div class="q full" data-question="q16" data-group="四、错误诊断与综合解释" data-title="综合解释：从网页到 token 讲给一个刚入门的训练工程师">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">feynman</span></div>
+      <h3>综合解释：从网页到 token 讲给一个刚入门的训练工程师</h3>
+      <p class="solve-note">用 150-250 字，必须包含 raw data、document、sample、token、shard 五个词。</p>
+      <textarea name="q16" placeholder="先讲链路，再讲每一层的责任。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>优秀答案会先给出五层链路，再说明每一层的责任：raw data 负责来源，document 负责抽取和治理，sample 负责训练输入，token 负责离散化，shard 负责并行读取和复现。说清这五层后，过滤、去重、配方和验证才有位置可放。</p></details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><a href="https://cs336.stanford.edu/spring2025/index.html">Stanford CS336 Spring 2025</a> 的 data 相关材料，支撑课程主线、对象链和练习顺序。</li>
+  <li><a href="https://docs.nvidia.com/nemo/curator/latest/">NeMo Curator</a> 与 <a href="https://github.com/huggingface/datatrove">DataTrove</a>，支撑过滤、去重和 pipeline 术语。</li>
+  <li><a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb">FineWeb 数据集</a>、<a href="https://huggingfacefw-blogpost-fineweb-v1.static.hf.space/">FineWeb 技术博客</a> 和 <a href="https://arxiv.org/abs/2406.17557">FineWeb 论文</a>，支撑数据验证与消融例子。</li>
+  <li><a href="https://arxiv.org/abs/2501.00656">OLMo 2</a>，支撑训练记录、来源透明度和发布边界。</li>
+</ul>
+<p class="muted">来源快照：access date 2026-06-20。本文只讲公开可验证的对象层次和课程主线，不扩展未在源材料里出现的实现细节。</p>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

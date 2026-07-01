@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>03 工具调用让 Agent 做事｜Claude Code 工作流</title>
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand"><strong>Claude Code 工作流</strong><span>03｜工具调用让 Agent 做事</span></div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>目标与主线</a>
+      <a href="#tools"><span class="dot"></span>tools 列表</a>
+      <a href="#tool-use"><span class="dot"></span>tool_use block</a>
+      <a href="#execute"><span class="dot"></span>本地执行</a>
+      <a href="#messages"><span class="dot"></span>messages 增长</a>
+      <a href="#errors"><span class="dot"></span>失败也要回写</a>
+      <a href="#public-guide"><span class="dot"></span>讲义补强</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>导出练习记录</a>
+    </nav>
+    <div class="side-note">工具调用不是模型自己动手。模型提出请求，本地代码执行，并把结果交回给模型。</div>
+  </aside>
+  <main>
+    <header class="hero" id="goal">
+      <div>
+        <div class="kicker">Tool use loop</div>
+        <h1>工具调用让 Agent 做事</h1>
+        <p class="muted">上一节的 `hello` 只产生文本回复。本节看 Agent 真正“做事”的最小链路：模型看到可用工具，返回 `tool_use`，本地程序执行命令，再把执行结果作为新消息写回去。</p>
+        <div class="map">
+          <span class="node">tools 列表</span><span class="arrow">→</span>
+          <span class="node">tool_use block</span><span class="arrow">→</span>
+          <span class="node">执行 command</span><span class="arrow">→</span>
+          <span class="node">tool result</span><span class="arrow">→</span>
+          <span class="node">再次请求模型</span>
+        </div>
+        <p>学完本页，你应该能解释：为什么工具调用结果必须追加到 messages，为什么失败输出也有价值，以及为什么 messages 会从 1 条增长到 3 条、5 条甚至更多。</p>
+      </div>
+      <div class="box soft">
+        <h3>来源材料</h3>
+        <p>视频：《Learn Claude Code 源码详解》从只会聊天到帮你做事，只需工具，开发实战分享屋，2026-03-08。</p>
+        <p>本页聚焦 Bash 工具调用链路。多工具分发会在下一块继续拆。</p>
+      </div>
+    </header>
+
+    <section id="tools">
+      <div class="head"><h2>1. tools 列表是在告诉模型“你能请求什么”</h2><span class="tag">capability list</span></div>
+      <p>模型本身不知道你本地有哪些工具。Agent 每次请求模型时，会把 `tools` 列表一起传过去。这个列表说明工具名、用途和参数结构。模型看到这些说明后，才可能在响应里返回 `tool_use` block，请求本地程序执行某个工具。</p>
+      <p>这里要分清两件事：`tools` 列表只是能力说明，不是工具执行结果；模型返回 `tool_use` 也只是请求，不是已经执行。真正的执行发生在本地代码里，比如 `run_bash` 调用 `subprocess.run`。</p>
+      <div class="codebar"><span class="label">正确示例：把工具能力传给模型</span><span>Python</span></div>
+      <pre><code>response = client.messages.create(
+    model=model,
+    messages=messages,
+    tools=tools,
+)</code></pre>
+      <div class="grid3">
+        <div class="route"><h3>工具名</h3><p>模型用它指定要调用哪个工具，例如 `bash`。</p></div>
+        <div class="route"><h3>参数 schema</h3><p>告诉模型 input 里应该放什么字段，例如 `command`。</p></div>
+        <div class="route"><h3>本地 handler</h3><p>真正执行工具的 Python 函数，例如 `run_bash`。</p></div>
+      </div>
+      <p>判断句：`tools` 让模型知道“可以请求 Bash”，但不能代替本地安全检查。模型给出的命令仍然要由本地程序决定是否执行。</p>
+    </section>
+
+    <section id="tool-use">
+      <div class="head"><h2>2. tool_use block 是模型提出的动作请求</h2><span class="tag">request block</span></div>
+      <p>当模型判断只靠文字不够，需要本地收集信息或执行动作时，`response.stop_reason` 会变成 `tool_use`。这和上一节的 `end_turn` 不同：`end_turn` 表示本轮可以结束，`tool_use` 表示模型希望本地程序先做一件事，再把结果告诉它。</p>
+      <p>字幕里的调试示例中，`response.content` 里有 thinking block 和 tool_use block。代码会遍历 content，找到 `type == "tool_use"` 的块，再从 `block.input.command` 里取出命令。这个命令不是自然语言解释，而是要传给工具 handler 的参数。</p>
+      <div class="codebar"><span class="label">逐行拆解：识别 tool_use 并取出命令</span><span>Python</span></div>
+      <pre><code>for block in response.content:
+    if block.type == "tool_use":
+        command = block.input["command"]
+        output = run_bash(command)
+        tool_results.append({
+            "type": "tool_result",
+            "tool_use_id": block.id,
+            "content": output,
+        })</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>字段</th><th>作用</th><th>读错后果</th></tr></thead>
+          <tbody>
+            <tr><td>`block.type`</td><td>判断这是 thinking、text 还是 tool_use。</td><td>把 thinking 当命令执行会完全跑偏。</td></tr>
+            <tr><td>`block.input`</td><td>工具参数，本节里关键字段是 `command`。</td><td>取错字段会导致 handler 拿不到命令。</td></tr>
+            <tr><td>`block.id`</td><td>后续 tool_result 要对应这次 tool_use。</td><td>模型不知道哪个结果对应哪个请求。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="execute">
+      <div class="head"><h2>3. 本地执行：run_bash 不是摆设</h2><span class="tag">local side effect</span></div>
+      <p>`run_bash` 是本节里让 Agent 从聊天变成行动的关键。它会拿到模型请求的 command，先做一些简单的危险命令拦截，再用本地 shell 执行。字幕里提到会屏蔽提权、关机、重启、危险删除等命令，目的不是做完整安全系统，而是给最小 Agent 加一道基础防线。</p>
+      <p>这里有个边界要讲清楚：本节的安全检查非常粗糙。它能让你理解“执行前应该有校验”，但不能当生产级安全策略。后面的权限系统会更系统地处理允许、拒绝、询问和规则匹配。</p>
+      <div class="codebar"><span class="label">正确示例：最小 Bash handler 的意图</span><span>Python</span></div>
+      <pre><code>def run_bash(command: str) -&gt; str:
+    blocked = ["sudo", "shutdown", "reboot", "rm -rf /"]
+    if any(word in command for word in blocked):
+        return "Blocked dangerous command."
+
+    result = subprocess.run(
+        command,
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout or result.stderr or "No output"</code></pre>
+      <p>判断句：工具 handler 必须返回结果。无论命令成功、失败、无输出、被拦截，都要形成可写回 messages 的文本，否则模型无法知道刚才发生了什么。</p>
+    </section>
+
+    <section id="messages">
+      <div class="head"><h2>4. messages 为什么会越来越长</h2><span class="tag">context grows</span></div>
+      <p>工具调用的核心不是“执行一次命令”而是“执行结果进入上下文”。第一次请求模型时，messages 里可能只有用户 prompt。模型返回 assistant 响应，请求工具，于是 messages 变成 2 条。工具执行后，tool_result 作为新消息追加进去，messages 变成 3 条。再次请求模型时，这 3 条会一起发过去。</p>
+      <p>如果模型还需要第二次工具调用，流程继续：assistant tool_use 追加进去，tool_result 再追加进去，messages 就可能变成 5 条。随着 messages 增长，模型看到的上下文更多，能知道哪些命令失败了、哪些路径不存在、下一步应该换什么办法。</p>
+      <div class="viz-panel">
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <h3>切换查看 messages 增长</h3>
+            <div class="viz-actions">
+              <button data-msg="1" class="active">1 条</button>
+              <button data-msg="3">3 条</button>
+              <button data-msg="5">5 条</button>
+            </div>
+            <div class="msg-list" id="msgList"></div>
+          </div>
+          <div class="viz-cell">
+            <h3 id="msgTitle">初始用户请求</h3>
+            <p id="msgText">messages 里只有用户 prompt。模型还不知道本地执行过任何命令。</p>
+            <div class="viz-note" id="msgHint">观察点：没有 tool_result 时，模型无法利用本地执行反馈。</div>
+          </div>
+        </div>
+      </div>
+      <div class="codebar error"><span class="label">错误示例：执行了工具但不回写结果</span><span>上下文断裂</span></div>
+      <pre><code>output = run_bash(command)
+
+# 错误点：只在本地变量里拿到 output，没有 append 到 messages。
+# 下一次请求模型时，模型不知道命令执行失败还是成功。</code></pre>
+      <p>这类错误会让 Agent 退回“盲猜下一步”。它可能反复执行类似命令，因为它没看到上一次失败的输出。修法是把 tool_result 作为消息追加回去，并带上对应的 tool_use id。</p>
+    </section>
+
+    <section id="errors">
+      <div class="head"><h2>5. 失败结果也有学习价值</h2><span class="tag">failure feedback</span></div>
+      <p>字幕示例里，模型请求执行类似 `find` 的命令，结果可能是找不到文件、拒绝访问或没有输出。初学者容易觉得“失败就没用”。Agent 视角正好相反：失败输出也是环境反馈。模型只有看到失败结果，才知道下一步要换命令、换路径、或者向用户解释限制。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>工具输出</th><th>应该怎样回写</th><th>模型可以学到什么</th></tr></thead>
+          <tbody>
+            <tr><td>成功输出</td><td>把 stdout 写入 tool_result。</td><td>已有足够信息，可以继续总结或下一步操作。</td></tr>
+            <tr><td>stderr 报错</td><td>把错误文本写入 tool_result。</td><td>命令失败原因、权限问题、路径问题。</td></tr>
+            <tr><td>No output</td><td>明确写入无输出。</td><td>命令执行了，但没有返回内容。</td></tr>
+            <tr><td>安全拦截</td><td>写入 blocked 原因。</td><td>这条路径不能走，要换安全方案。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>判断句：工具结果不是给本地程序自己看的，而是给下一轮模型看的。只要会影响下一步判断，就应该进入 messages。</p>
+    </section>
+
+    <section id="public-guide">
+      <div class="head"><h2>6. 公开讲义补强：一次工具调用的验收清单</h2><span class="tag">tool call checklist</span></div>
+      <p>把这一页压缩成一句话：工具调用是一个双向协议，模型只能提出“我想调用什么工具、带什么参数”，本地程序负责执行，并把真实结果回写给模型。只要结果没有回写，这次调用在下一轮模型眼里就等于没有发生。</p>
+      <div class="grid3">
+        <div class="route"><h3>`tools`</h3><p>能力目录。它告诉模型“可以请求哪些工具、参数长什么样”，不执行任何动作。</p></div>
+        <div class="route"><h3>`tool_use`</h3><p>动作请求。它由模型生成，通常包含工具名、调用 id 和 input 参数。</p></div>
+        <div class="route"><h3>`tool_result`</h3><p>执行反馈。它由本地程序生成，必须能对应到某次 `tool_use`。</p></div>
+      </div>
+      <div class="codebar"><span class="label">最小工具调用三步</span><span>Pseudo flow</span></div>
+      <pre><code>1. send(messages, tools=[bash_schema])
+2. model -> tool_use(id="u1", name="bash", input={command: "pwd"})
+3. local -> tool_result(tool_use_id="u1", content="...current directory...")</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>验收点</th><th>为什么重要</th><th>失败信号</th></tr></thead>
+          <tbody>
+            <tr><td>工具名存在</td><td>能路由到本地 handler。</td><td>模型请求了未注册工具。</td></tr>
+            <tr><td>参数符合 schema</td><td>handler 能拿到必要字段。</td><td>`command` 缺失或类型不对。</td></tr>
+            <tr><td>执行有边界</td><td>防止危险命令直接运行。</td><td>没有任何拦截或权限检查。</td></tr>
+            <tr><td>结果写回 messages</td><td>下一轮模型才能基于事实继续。</td><td>模型重复同一命令或继续盲猜。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>你现在应该能做什么：审查任意工具调用实现时，按“声明能力、识别请求、本地执行、回写结果、继续循环”五步确认链路是否闭合。</p>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>先确认你能分清 tools、tool_use、tool_result。</p></div><div class="box soft">复习一下：tools 是能力说明，tool_use 是模型请求，tool_result 是本地执行反馈。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. tools 作用"><div class="q-meta"><span class="pill">选择</span></div><h3>1. `tools` 列表的作用是什么？</h3><label><input type="radio" name="q1" value="A">A. 直接执行所有工具</label><label><input type="radio" name="q1" value="B">B. 告诉模型本地可请求哪些工具</label><label><input type="radio" name="q1" value="C">C. 保存工具结果</label></div>
+          <div class="q" data-role="homework" data-title="2. stop_reason"><div class="q-meta"><span class="pill">判断</span></div><h3>2. `stop_reason=tool_use` 表示当前轮已经结束，不需要本地做事。</h3><label><input type="radio" name="q2" value="对">对</label><label><input type="radio" name="q2" value="错">错</label></div>
+          <div class="q" data-role="homework" data-title="3. 三者区分"><div class="q-meta"><span class="pill">填空</span></div><h3>3. tools 是 ______，tool_use 是 ______，tool_result 是 ______。</h3><input type="text" name="q3"></div>
+          <div class="q" data-role="homework" data-title="4. 本地执行"><div class="q-meta"><span class="pill">短答</span></div><h3>4. 为什么说模型没有自己执行 Bash？</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、流程与消息增长</h3><p>这一组检查你能不能追踪 messages 的条数和顺序。</p></div><div class="box soft">顺序是 user prompt、assistant tool_use、tool_result，然后可能继续 assistant tool_use、tool_result。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="5. 顺序排序"><div class="q-meta"><span class="pill">排序</span></div><h3>5. 排序：执行 command、模型返回 tool_use、发送 messages、追加 tool_result、再次发送 messages。</h3><input type="text" name="q5"></div>
+          <div class="q" data-role="homework" data-title="6. 三条消息"><div class="q-meta"><span class="pill">追踪</span></div><h3>6. 第一次工具执行完成后，messages 里通常是哪三类消息？</h3><textarea name="q6"></textarea></div>
+          <div class="q" data-role="homework" data-title="7. 五条消息"><div class="q-meta"><span class="pill">追踪</span></div><h3>7. 如果模型连续请求两次工具，为什么 messages 可能变成 5 条？</h3><textarea name="q7"></textarea></div>
+          <div class="q" data-role="homework" data-title="8. 上下文价值"><div class="q-meta"><span class="pill">短答</span></div><h3>8. messages 变长对模型下一步判断有什么帮助？</h3><textarea name="q8"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、错误诊断</h3><p>按错因、后果、修法回答。</p></div><div class="box warn">失败结果也要回写。否则模型会缺少最关键的环境反馈。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="9. 不回写结果"><div class="q-meta"><span class="pill">诊断</span></div><h3>9. 执行了 Bash 但没有 append tool_result，会发生什么？</h3><textarea name="q9"></textarea></div>
+          <div class="q" data-role="homework" data-title="10. 命令失败"><div class="q-meta"><span class="pill">诊断</span></div><h3>10. 命令返回“找不到文件”，为什么也要写回 messages？</h3><textarea name="q10"></textarea></div>
+          <div class="q" data-role="homework" data-title="11. 安全拦截"><div class="q-meta"><span class="pill">安全</span></div><h3>11. 为什么 `run_bash` 要先拦截危险命令？</h3><textarea name="q11"></textarea></div>
+          <div class="q" data-role="homework" data-title="12. tool id"><div class="q-meta"><span class="pill">诊断</span></div><h3>12. tool_result 不带对应的 tool_use id，可能有什么问题？</h3><textarea name="q12"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、迁移与表达</h3><p>把工具调用讲成一条可复述链路。</p></div><div class="box soft">重点句：模型请求动作，本地执行动作，执行反馈回到模型。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="13. block 类型"><div class="q-meta"><span class="pill">识别</span></div><h3>13. 本节常见的三类 content block 是什么？各自做什么？</h3><textarea name="q13"></textarea></div>
+          <div class="q" data-role="homework" data-title="14. handler 边界"><div class="q-meta"><span class="pill">边界</span></div><h3>14. 为什么工具 schema 不能代替本地安全检查？</h3><textarea name="q14"></textarea></div>
+          <div class="q" data-role="homework" data-title="15. 面试短答"><div class="q-meta"><span class="pill">表达</span></div><h3>15. 用 2-3 句话解释 Agent 如何从“聊天”变成“做事”。</h3><textarea name="q15"></textarea></div>
+          <div class="q" data-role="homework" data-title="16. 检查清单"><div class="q-meta"><span class="pill">清单</span></div><h3>16. 处理 tool_use block 时要检查哪 5 件事？</h3><textarea name="q16"></textarea></div>
+          <div class="q full" data-role="homework" data-title="17. 最小流程图"><div class="q-meta"><span class="pill">流程图</span></div><h3>17. 用文字画出一次工具调用完整流程。</h3><textarea name="q17"></textarea></div>
+          <div class="q full" data-role="homework" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：为什么 tool_result 必须写回 messages。</h3><div class="solve-note">请串联 tools、tool_use、本地执行、失败输出、tool_result、再次请求模型。</div><textarea name="q18"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>保存练习记录</h2><span class="tag">自测用</span></div>
+      <p class="muted">完成练习后生成本页记录，便于检查理解和复制留存。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+const msgStates={
+  1:{title:"初始用户请求",text:"messages 里只有用户 prompt。模型还不知道本地执行过任何命令。",hint:"没有 tool_result 时，模型无法利用本地执行反馈。",items:[["user","user","请查找当前目录下的 Python 文件"]]},
+  3:{title:"第一次工具调用完成",text:"assistant 请求执行 Bash，本地运行后把结果作为 tool_result 追加进去。",hint:"下一次请求模型时，这三条消息会一起发送。",items:[["user","user","请查找当前目录下的 Python 文件"],["assistant","assistant","tool_use: bash(command='find ...')"],["tool","tool_result","找不到文件 / 权限不足 / No output"]]},
+  5:{title:"第二次工具调用完成",text:"模型看到第一次失败后，可能换一个命令再试。第二次结果继续进入 messages。",hint:"messages 增长让模型知道哪些路走过、哪些反馈已经出现。",items:[["user","user","请查找当前目录下的 Python 文件"],["assistant","assistant","tool_use: bash(command='find ...')"],["tool","tool_result","找不到文件"],["assistant","assistant","tool_use: bash(command='dir *.py')"],["tool","tool_result","No output"]]}
+};
+function renderMessages(n){const s=msgStates[n]||msgStates[1];document.querySelectorAll("[data-msg]").forEach(b=>b.classList.toggle("active",b.dataset.msg===String(n)));document.getElementById("msgTitle").textContent=s.title;document.getElementById("msgText").textContent=s.text;document.getElementById("msgHint").textContent=s.hint;document.getElementById("msgList").innerHTML=s.items.map((it,i)=>`<div class="msg ${it[0]}"><b>${i+1}. ${it[1]}</b><br>${it[2]}</div>`).join("")}
+document.querySelectorAll("[data-msg]").forEach(btn=>btn.addEventListener("click",()=>renderMessages(btn.dataset.msg)));renderMessages(1);
+document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
+const questionNodes=[...document.querySelectorAll('[data-role="homework"]')];
+const questions=questionNodes.map((node,idx)=>["综合练习",node.dataset.title||node.querySelector("h3")?.innerText||`第 ${idx+1} 题`,`q${idx+1}`,"dom"]);
+function answerOf(node){const checked=[...node.querySelectorAll('input[type=radio]:checked,input[type=checkbox]:checked')].map(i=>i.value);const text=[...node.querySelectorAll('textarea,input[type=text]')].map(i=>i.value.trim()).filter(Boolean);return [...checked,...text].join('；')}
+function generateRecord(){const missing=[],lines=['# 03 工具调用让 Agent 做事｜练习记录',''];questionNodes.forEach((node,idx)=>{const title=node.dataset.title||node.querySelector('h3')?.innerText||`第 ${idx+1} 题`;const answer=answerOf(node);if(!answer)missing.push(title);lines.push(`## ${idx+1}. ${title}`,answer||'（未填写）','')});document.getElementById('record').textContent=lines.join('\n');const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=answerOf(questionNodes[questionNodes.length-1]||document.createElement('div'));const keys=['tools','tool_use','本地执行','失败','tool_result','模型'];const lack=keys.filter(k=>f&&!f.includes(k));if(f&&f.length<120)warnings.push('费曼解释偏短，建议讲成 6-9 句话。');if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join('、')}。`);const q=document.getElementById('quality');q.style.display='block';q.textContent=warnings.length?warnings.join('\n'):'练习记录完整，可以用于自测检查。'}
+function copyRecord(){navigator.clipboard.writeText(document.getElementById('record').textContent).catch(()=>alert('复制失败，请手动复制。'))}
+</script>
+<script src="../assets/study-page.js"></script>
+</body>
+</html>

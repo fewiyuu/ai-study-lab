@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>05｜DPO、ORPO 与直接偏好优化</title>
+  <meta name="description" content="后训练全栈第 05 单元：理解 DPO、ORPO、reference model、margin 与偏好过优化边界。">
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="后训练全栈" data-unit="05">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>后训练全栈</strong>
+        <span>05</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#terms"><span class="dot"></span>关键术语</a>
+        <a href="#walkthrough"><span class="dot"></span>样本走查</a>
+        <a href="#dpo"><span class="dot"></span>DPO</a>
+        <a href="#orpo"><span class="dot"></span>ORPO</a>
+        <a href="#decision"><span class="dot"></span>怎么选</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#boundary"><span class="dot"></span>边界与失真</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">上一页讲偏好数据和 reward model，这一页把它们压进 DPO 和 ORPO 的目标式里。</div>
+      <div class="side-note">下一页会接 PPO、GRPO 和 RLHF 训练环；这里先把 margin、reference 和 SFT 的关系看稳。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">单元 05</div>
+          <h1>DPO 和 ORPO：把偏好直接写进目标式</h1>
+          <p>这一页只处理直接偏好优化的主线：DPO 怎么借 reference model 读 margin，ORPO 怎么把偏好压力并进 SFT。PPO 和 GRPO 的完整训练环，留到下一页再看。</p>
+          <div class="course-links">
+            <a href="../index.html">返回课程地图</a>
+            <a href="../04_偏好数据与奖励建模/学习页.html">上一单元：偏好数据与奖励建模</a>
+            <a href="../06_PPO_GRPO与RLHF训练环/学习页.html">下一单元：PPO、GRPO 与 RLHF 训练环</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完这一页，你能开始做什么</h3>
+          <ul>
+            <li>分清 DPO、ORPO、SFT 各自承担的那一层。</li>
+            <li>手算一条 DPO 样本的 policy gap、reference gap 和 margin。</li>
+            <li>看到 margin 或 reward 上升时，知道先查数据、锚点还是偏好代理。</li>
+          </ul>
+        </div>
+      </div>
+
+      <section id="goals">
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">what to look for</span>
+        </div>
+        <div class="grid3">
+          <div class="box soft">
+            <h3>先认对象</h3>
+            <p>知道 DPO 不是在学单个回答的绝对分数，而是在学 chosen 相对 rejected 的偏向。</p>
+          </div>
+          <div class="box info">
+            <h3>先认锚点</h3>
+            <p>知道 reference model 在 DPO 里不是背景板，它负责保留比较刻度。</p>
+          </div>
+          <div class="box warn">
+            <h3>先认失真</h3>
+            <p>知道 ORPO 少了显式 reference model 以后，仍然要盯住偏好代理会不会被长度、格式或安全模板带偏。</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="这一页先看的对象和风险" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>对象</th>
+                <th>先问什么</th>
+                <th>最容易错在哪</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>DPO</td>
+                <td>它比较的是谁相对谁？</td>
+                <td>把相对 margin 误读成绝对分数。</td>
+              </tr>
+              <tr>
+                <td>reference model</td>
+                <td>它有没有被冻结？</td>
+                <td>锚点跟着一起漂，比较就失去刻度。</td>
+              </tr>
+              <tr>
+                <td>ORPO</td>
+                <td>它把偏好压力放到哪里？</td>
+                <td>以为去掉显式 reference 就等于去掉约束。</td>
+              </tr>
+              <tr>
+                <td>margin / reward</td>
+                <td>它升高时，人看也更好吗？</td>
+                <td>把代理指标当成真实质量。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="inline-note"><b>这页先不追的东西</b>先别往 `PPO / GRPO`、别的 preference loss 变体、judge prompt 细节和更复杂的分布式训练里钻。这里先把 DPO 和 ORPO 的读法立住，下一页再接训练环。</p>
+      </section>
+
+      <section id="overview">
+        <div class="head">
+          <h2>先抓主线</h2>
+          <span class="tag">overview</span>
+        </div>
+        <p>这一页不是把 RLHF 重新讲一遍，而是把偏好样本压成可直接优化的目标式。DPO 把 chosen / rejected 的差异和 reference 的差异放到同一个 margin 里；ORPO 则把偏好压力并进 SFT，不再显式跑一份 reference model。</p>
+        <p>可以先把它看成三步：先看一对回答里谁更好，再看 policy 是否比 reference 更会区分这对样本，最后看这个差异会不会被长度、格式或安全模板这种代理信号带偏。</p>
+
+        <div class="shape-tracer" data-shape-tracer>
+          <div class="trace-lines">
+            <button class="trace-line active" type="button" data-trace-step="policy">
+              <code>log πθ(chosen/rejected)</code>
+              <span>先看 policy 自己偏向谁</span>
+            </button>
+            <button class="trace-line" type="button" data-trace-step="reference">
+              <code>log πref(chosen/rejected)</code>
+              <span>再看 reference 原本怎么偏</span>
+            </button>
+            <button class="trace-line" type="button" data-trace-step="margin">
+              <code>policy gap - reference gap</code>
+              <span>减出 margin</span>
+            </button>
+            <button class="trace-line" type="button" data-trace-step="scale">
+              <code>β · margin</code>
+              <span>放大或收紧偏好压力</span>
+            </button>
+            <button class="trace-line" type="button" data-trace-step="update">
+              <code>update(policy only)</code>
+              <span>只改 policy，不改锚点</span>
+            </button>
+          </div>
+          <div class="trace-canvas">
+            <div class="tensor-card active" data-trace-target="policy">
+              <b>policy</b>
+              <span>先算同一条样本上 chosen 和 rejected 的 logprob 差。</span>
+              <p>如果这一步都读错了，后面的 margin 没法解释。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="reference">
+              <b>reference</b>
+              <span>reference 也对同一对回答算一次差，但它应该保持冻结。</span>
+              <p>锚点漂了，margin 就只是自己跟自己比。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="margin">
+              <b>margin</b>
+              <span>policy gap 减去 reference gap，才知道 policy 比锚点多会区分多少。</span>
+              <p>这一步不是绝对打分，是相对变化。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="scale">
+              <b>β</b>
+              <span>β 太小，更新太软；β 太大，容易把 policy 推得太猛。</span>
+              <p>超参数不是装饰，它直接决定梯度力度。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="update">
+              <b>update</b>
+              <span>通常只更新 policy；reference 保持不动，作为比较刻度。</span>
+              <p>如果 reference 也在变，这条线就断了。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table data-export-context="DPO 与 ORPO 的对象链" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>对象</th>
+                <th>主要读取</th>
+                <th>主要写入</th>
+                <th>出错时会看到什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>policy</td>
+                <td>prompt、chosen、rejected、reference 的对照</td>
+                <td>回答分布</td>
+                <td>分数涨了，但人看更像模板。</td>
+              </tr>
+              <tr>
+                <td>reference model</td>
+                <td>同一对回答的基准偏向</td>
+                <td>不写入</td>
+                <td>如果它也更新，margin 失去锚点。</td>
+              </tr>
+              <tr>
+                <td>DPO margin</td>
+                <td>policy gap 与 reference gap</td>
+                <td>训练压力</td>
+                <td>若只看 chosen 比 rejected 高，可能误判训练已完成。</td>
+              </tr>
+              <tr>
+                <td>ORPO penalty</td>
+                <td>chosen 的 SFT 信号与偏好压力</td>
+                <td>更偏向 chosen 的参数更新</td>
+                <td>λ 不合适时，SFT 和偏好项会互相打架。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="terms">
+        <div class="head">
+          <h2>关键术语</h2>
+          <span class="tag">symbols</span>
+        </div>
+        <div class="grid2">
+          <div class="box soft">
+            <h3>policy gap</h3>
+            <p><code>log πθ(chosen | x) - log πθ(rejected | x)</code>。读的是 policy 自己更偏向哪一边，不是绝对好坏。</p>
+          </div>
+          <div class="box info">
+            <h3>reference gap</h3>
+            <p><code>log πref(chosen | x) - log πref(rejected | x)</code>。读的是锚点原本怎么偏，负责保住比较尺度。</p>
+          </div>
+          <div class="box warn">
+            <h3>margin</h3>
+            <p><code>policy gap - reference gap</code>。它告诉你 policy 比 reference 多会区分多少；不是“回答是否绝对正确”。</p>
+          </div>
+          <div class="box">
+            <h3>β / λ</h3>
+            <p>这类系数管的是偏好压力的强弱。太弱，模型学不动；太强，模型容易绕到代理信号上。</p>
+          </div>
+        </div>
+        <p class="inline-note"><b>先别追的变体</b>这页先不展开其他直接偏好优化变体。你只要先把 DPO 的锚点、ORPO 的单阶段偏好压力和 margin 的读法分开，后面的算法名就不会混成一团。</p>
+      </section>
+
+      <section id="walkthrough">
+        <div class="head">
+          <h2>样本走查</h2>
+          <span class="tag">trace one sample</span>
+        </div>
+        <p>把一条样本完整走一遍，比记公式更有用。下面这条样本来自同一个 prompt：policy 已经更偏向 chosen，但 reference 也有一点偏向 chosen，所以 margin 不是特别大。这个时候，训练并不是“已经结束”，而是“方向对了，但还要继续把差异拉开一点”。</p>
+        <div class="table-wrap">
+          <table data-export-context="一条 DPO 样本的完整走查" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>步骤</th>
+                <th>公式</th>
+                <th>示例值</th>
+                <th>你该怎么读</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>policy gap</td>
+                <td><code>log πθ(chosen) - log πθ(rejected)</code></td>
+                <td><code>0.8</code></td>
+                <td>policy 已经更偏向 chosen，但这只是起点。</td>
+              </tr>
+              <tr>
+                <td>reference gap</td>
+                <td><code>log πref(chosen) - log πref(rejected)</code></td>
+                <td><code>0.3</code></td>
+                <td>锚点本来就有一点偏向 chosen，所以不能只看 policy 自己。</td>
+              </tr>
+              <tr>
+                <td>margin</td>
+                <td><code>policy gap - reference gap</code></td>
+                <td><code>0.5</code></td>
+                <td>policy 比 reference 多会区分 0.5，这就是 DPO 真正在读的变化量。</td>
+              </tr>
+              <tr>
+                <td>scaled margin</td>
+                <td><code>β · margin</code></td>
+                <td><code>0.05</code></td>
+                <td>这条样本的更新很轻，说明模型还在温和地往正确方向推。</td>
+              </tr>
+              <tr>
+                <td>loss</td>
+                <td><code>-log σ(βm)</code></td>
+                <td><code>≈ 0.668</code></td>
+                <td>loss 没有消失，说明还有梯度；但方向已经对了。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="grid2">
+          <div class="box soft">
+            <h3>margin 为正时</h3>
+            <p>policy 相对 reference 更会把 chosen 抬高。这种样本会继续给模型一个正向推动，但力度取决于 β 和 margin 的大小。</p>
+          </div>
+          <div class="box warn">
+            <h3>margin 为负时</h3>
+            <p>policy 还不如 reference 会区分这对样本。DPO 会把梯度方向拉回去，迫使 policy 把 chosen 和 rejected 的差重新拉开。</p>
+          </div>
+        </div>
+        <p>这里有一个很实用的检查法：如果 margin 一直很大，但人看输出却开始像模板，先别急着夸模型学会了偏好。先查是不是 chosen / rejected 太容易分、是不是 rubric 只奖励长答案、是不是 reference 也跟着漂了。DPO 读的是相对变化，不是漂亮表面。反过来，如果 margin 长期接近 0，也别急着加大 β，先看样本本身是不是太接近、SFT 起点是不是太弱、或者 chosen / rejected 其实根本没有拉开任务差异。</p>
+
+        <div class="table-wrap">
+          <table data-export-context="DPO 算错一步会怎样" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>算错的位置</th>
+                <th>表面上你会以为</th>
+                <th>真实会发生什么</th>
+                <th>下一步先查什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>把 policy gap 当成绝对质量</td>
+                <td>chosen 分数高了，模型就更好了。</td>
+                <td>你可能只看到了 policy 自己的偏向，没有看锚点。</td>
+                <td>回到 reference gap 和 margin。</td>
+              </tr>
+              <tr>
+                <td>把 reference 也一起更新</td>
+                <td>模型训练更快了。</td>
+                <td>比较刻度被一起拖走，margin 失去解释力。</td>
+                <td>确认 reference 是否冻结。</td>
+              </tr>
+              <tr>
+                <td>把高 margin 当成高质量</td>
+                <td>偏好对齐已经成功。</td>
+                <td>模型可能只是学会了长度、格式或拒答模板。</td>
+                <td>抽查最高分样本，看是不是代理信号在起作用。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="inline-note"><b>和练习怎么接</b>如果你能把这张表说顺，再做 Q4 到 Q8，会发现你不是在背公式，而是在判断哪一层出了偏差。</p>
+      </section>
+
+      <section id="dpo">
+        <div class="head">
+          <h2>DPO 的读法</h2>
+          <span class="tag">reference anchor</span>
+        </div>
+        <p>DPO 的核心不是“把 RLHF 变短”，而是把偏好关系写成一个可直接优化的 margin。它并不需要显式训练 reward model，但它仍然需要 reference model 作为锚点。没有这个锚点，policy 只是在和自己比。</p>
+
+        <div class="math-block" data-export-context="DPO margin 与损失函数" data-export-lang="math">
+          $$m=\Big[\log \pi_{\theta}(y^+|x)-\log \pi_{\theta}(y^-|x)\Big]-\Big[\log \pi_{\text{ref}}(y^+|x)-\log \pi_{\text{ref}}(y^-|x)\Big]$$
+          $$L_{\text{DPO}}=-\log \sigma(\beta m)$$
+          <p><strong>读法：</strong>前一层是 policy 自己对 chosen 和 rejected 的偏向，后一层是 reference 原本的偏向。把两者相减，才知道 policy 相对锚点多会区分这对样本。</p>
+        </div>
+
+        <div class="codebar">
+          <span>DPO 参考实现骨架</span>
+          <button class="copy" type="button" data-copy="dpo-pseudocode">复制</button>
+        </div>
+        <pre id="dpo-pseudocode" data-export-context="DPO 参考实现骨架" data-export-lang="python"><code class="language-python">def dpo_loss(policy_pos, policy_neg, ref_pos, ref_neg, beta):
+    policy_gap = policy_pos - policy_neg
+    ref_gap = ref_pos - ref_neg
+    margin = policy_gap - ref_gap
+    return -torch.log(torch.sigmoid(beta * margin))
+
+# 这里只展示结构：先算 policy gap，再减 reference gap，
+# 最后把 margin 送进 sigmoid。</code></pre>
+
+        <div class="table-wrap">
+          <table data-export-context="DPO 样本走查" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>步骤</th>
+                <th>示例数值</th>
+                <th>你该读到什么</th>
+                <th>错了会怎样</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>policy gap</td>
+                <td><code>-6.2 - (-7.0) = 0.8</code></td>
+                <td>policy 已经更偏向 chosen。</td>
+                <td>如果这一步算反，后面的 margin 全错。</td>
+              </tr>
+              <tr>
+                <td>reference gap</td>
+                <td><code>-6.5 - (-6.8) = 0.3</code></td>
+                <td>reference 也有一点偏向 chosen，但没有 policy 强。</td>
+                <td>如果 reference 也跟着更新，这一步就不再是锚点。</td>
+              </tr>
+              <tr>
+                <td>margin</td>
+                <td><code>0.8 - 0.3 = 0.5</code></td>
+                <td>policy 比 reference 多会区分 0.5。</td>
+                <td>只看 chosen 比 rejected 高，不能替代 margin。</td>
+              </tr>
+              <tr>
+                <td>β · margin</td>
+                <td><code>0.1 × 0.5 = 0.05</code></td>
+                <td>这条样本的更新压力很轻。</td>
+                <td>β 太小，模型可能学得太慢；太大，容易推过头。</td>
+              </tr>
+              <tr>
+                <td>σ(βm)</td>
+                <td><code>≈ 0.512</code></td>
+                <td>目标仍然在正确方向上，但还没拉开很多。</td>
+                <td>如果你把这个数直接当质量分，会误读训练状态。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>一个实用判断是：如果 chosen 的绝对概率升了，但 reference 原本就更偏 chosen，margin 可能并没有多大变化。DPO 看的正是“policy 相对 reference 有没有更会区分”。</p>
+      </section>
+
+      <section id="orpo">
+        <div class="head">
+          <h2>ORPO 的读法</h2>
+          <span class="tag">SFT + preference</span>
+        </div>
+        <p>ORPO 的位置更像“把两件事绑在一起做”：一边继续做 SFT，一边给 chosen / rejected 加偏好压力。它的好处是少了一份显式 reference model 的前向成本，适合想把 instruction tuning 和 preference alignment 放到同一阶段的人。</p>
+        <p>但它不是把约束拿掉了，而是把约束换了位置。少了显式 reference，不等于少了风险。λ 取值、数据配比、chosen / rejected 的可比性，都会直接影响它是不是会把模型推去学代理信号。</p>
+
+        <div class="table-wrap">
+          <table data-export-context="DPO 和 ORPO 的对比" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>方法</th>
+                <th>是否有显式 reference model</th>
+                <th>偏好压力放在哪里</th>
+                <th>适合什么场景</th>
+                <th>主要风险</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>DPO</td>
+                <td>有</td>
+                <td>policy 相对 reference 的 margin</td>
+                <td>想保住锚点，同时绕开 reward model + PPO 的复杂环路。</td>
+                <td>reference 选择、β、数据噪声和过训练都会影响稳定性。</td>
+              </tr>
+              <tr>
+                <td>ORPO</td>
+                <td>没有显式 reference model</td>
+                <td>SFT 项 + odds-ratio 偏好项</td>
+                <td>想把 instruction tuning 和 preference alignment 放在单阶段里。</td>
+                <td>λ、数据比例和偏好对质量更敏感，容易把代理信号放大。</td>
+              </tr>
+              <tr>
+                <td>SFT</td>
+                <td>通常没有</td>
+                <td>只学 chosen / answer</td>
+                <td>先把格式、指令遵循和领域表达打底。</td>
+                <td>只会模仿，不知道为什么另一个回答更差。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="codebar">
+          <span>ORPO 的结构示意</span>
+          <button class="copy" type="button" data-copy="orpo-pseudocode">复制</button>
+        </div>
+        <pre id="orpo-pseudocode" data-export-context="ORPO 结构示意" data-export-lang="python"><code class="language-python">sft_loss = cross_entropy(chosen_tokens)
+pref_score = logp(chosen_tokens) - logp(rejected_tokens)
+pref_penalty = preference_penalty(pref_score)
+loss = sft_loss + lambda_orpo * pref_penalty
+
+# 这里先看结构，不把实现细节写死：
+# 1) 继续保留 SFT 的正向学习
+# 2) 再把 chosen / rejected 的相对压力加进去</code></pre>
+
+        <p class="inline-note"><b>一句话区分</b>DPO 是“带锚点地读 margin”，ORPO 是“在 SFT 里加偏好压力”。两者都在做 preference optimization，只是刻度和成本不同。</p>
+      </section>
+
+      <section id="decision">
+        <div class="head">
+          <h2>怎么选</h2>
+          <span class="tag">practical choice</span>
+        </div>
+        <p>实际做实验时，最常见的问题不是公式看不懂，而是顺序选错。你如果还没有稳定的 SFT 基线，先不要急着上 DPO 或 ORPO。你如果已经有偏好对，但预算紧，想少掉一份显式 reference forward，可以先看 ORPO。你如果更在意锚点、想把“相对 reference 的偏移”看得更稳，DPO 通常更合适。</p>
+        <div class="table-wrap">
+          <table data-export-context="DPO / ORPO / SFT 选择面板" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>场景</th>
+                <th>优先选谁</th>
+                <th>为什么</th>
+                <th>第一条检查</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>只有示范数据，想先把格式和指令遵循打底</td>
+                <td>SFT</td>
+                <td>先把基础能力稳定住，再谈偏好压力。</td>
+                <td>看 loss mask、样本格式和是否已经跑通小 batch。</td>
+              </tr>
+              <tr>
+                <td>已经有偏好对，预算还算紧，但想把偏好项并进训练</td>
+                <td>ORPO</td>
+                <td>单阶段更直接，少一个显式 reference forward。</td>
+                <td>看 λ、chosen / rejected 是否可比、SFT 和偏好项会不会打架。</td>
+              </tr>
+              <tr>
+                <td>你最在意比较尺度，想保留锚点</td>
+                <td>DPO</td>
+                <td>reference model 保持刻度，margin 更好解释。</td>
+                <td>看 reference 是否冻结、β 是否合适、margin 是否真的在拉开。</td>
+              </tr>
+              <tr>
+                <td>出现长度上升、模板化、评测下降</td>
+                <td>先停</td>
+                <td>这通常不是继续加 epoch 的信号，而是 proxy 失真。</td>
+                <td>抽查高分样本，确认是不是被长度或格式代理骗了。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="inline-note"><b>实验顺序</b>先把 SFT 起点和偏好数据看稳，再选 DPO 或 ORPO。不要为了省一步就把锚点、偏好对比和训练监控一起省掉。</p>
+      </section>
+
+      <section id="lab">
+        <div class="head">
+          <h2>同一条样本，三种设置</h2>
+          <span class="tag">parameter lab</span>
+        </div>
+        <p>下面这组设置用同一条偏好样本来说明一个更具体的问题：不是所有“margin 变大”都值得高兴，也不是所有“省掉 reference”都能直接上。你要看的是，训练设置改了以后，损失曲线、样本间隔和输出样式分别会往哪边走。</p>
+        <div class="table-wrap">
+          <table data-export-context="同一条样本在三种设置下的结果" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>设置</th>
+                <th>你在改什么</th>
+                <th>短期现象</th>
+                <th>常见副作用</th>
+                <th>该怎么判断</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>DPO + 低 β</td>
+                <td>把偏好压力收得很轻。</td>
+                <td>loss 下降慢，margin 只会一点点涨。</td>
+                <td>模型看起来稳，但其实学得太慢。</td>
+                <td>先看验证 margin 是否也在涨；如果连验证都不动，说明更新太软。</td>
+              </tr>
+              <tr>
+                <td>DPO + 高 β</td>
+                <td>把偏好压力放得很重。</td>
+                <td>margin 拉得快，训练曲线看着漂亮。</td>
+                <td>模型容易把长度、格式或安全模板当成捷径。</td>
+                <td>抽查最高分样本，看看有没有统一口吻、过长回答或避重就轻。</td>
+              </tr>
+              <tr>
+                <td>ORPO + 高 λ</td>
+                <td>把偏好项压进 SFT，而且权重更重。</td>
+                <td>chosen 的拟合更强，短期会看到更明显的对齐感。</td>
+                <td>SFT 和偏好项打架，模型可能学得更像模板。</td>
+                <td>同时看 instruction following、长度分布和 held-out preference，别只看训练 loss。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="grid2">
+          <div class="box soft">
+            <h3>一个最小判断</h3>
+            <p>如果你把一条样本从 DPO 低 β 换成 DPO 高 β，看到的是 margin 拉得更快、回答更长、语气更一致，那不一定是“模型更会对齐了”，也可能只是它更会讨好偏好代理。这个时候该查的不是单个 loss，而是高分样本长什么样。</p>
+          </div>
+          <div class="box warn">
+            <h3>别误读的地方</h3>
+            <p>ORPO 省掉显式 reference，不等于省掉比较。它只是把比较写进了另一项 loss。若 chosen / rejected 本身不稳，或者 λ 太大，模型会把“更像 chosen”误学成“更像模板”。</p>
+          </div>
+        </div>
+
+        <div class="codebar">
+          <span>训练时该盯的最小日志</span>
+          <button class="copy" type="button" data-copy="monitor-log">复制</button>
+        </div>
+        <pre id="monitor-log" data-export-context="训练时该盯的最小日志" data-export-lang="text"><code>step 142 | policy_gap=0.8 | ref_gap=0.3 | margin=0.5 | beta=0.1
+step 143 | policy_gap=0.9 | ref_gap=0.3 | margin=0.6 | beta=0.1
+step 144 | policy_gap=1.1 | ref_gap=0.3 | margin=0.8 | beta=0.1
+
+读法：
+1. margin 在涨，不代表真实质量一定在涨。
+2. 如果参考样本的长度和模板感也一起涨，先查代理信号。
+3. 如果 reference 没冻结，先修锚点，再谈调参。</code></pre>
+
+        <p>这就是这页最想留下的一条手感：DPO 和 ORPO 都不是单看一个标量就能收工的方法。你需要同时看样本长什么样、锚点有没有动、训练曲线是慢慢爬还是突然拉开，以及这些变化是不是只是把回答推向了更像“高分模板”的方向。读懂这层，下一页进入 PPO / GRPO 时，才知道该把采样、reward、KL 和 policy update 放在什么顺序里看。</p>
+      </section>
+
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区</h2>
+          <span class="tag">check before training</span>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="DPO 和 ORPO 常见误区" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>误区</th>
+                <th>真正含义</th>
+                <th>先查什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>DPO 只是更简单的 PPO</td>
+                <td>DPO 不走在线 rollout，那条训练环和 PPO / GRPO 不是一回事。</td>
+                <td>先看目标式，再看是否需要采样、reward 和 KL。</td>
+              </tr>
+              <tr>
+                <td>reference model 可有可无</td>
+                <td>在 DPO 里 reference model 是比较刻度，不是装饰。</td>
+                <td>先看是否冻结，再看是否和 policy 从同一 checkpoint 出发。</td>
+              </tr>
+              <tr>
+                <td>ORPO 去掉 reference 就更自由</td>
+                <td>ORPO 不是去掉约束，而是把约束换成单阶段偏好压力。</td>
+                <td>先看 λ，再看 chosen / rejected 是否真可比。</td>
+              </tr>
+              <tr>
+                <td>margin 高了就代表任务做好了</td>
+                <td>margin 只是代理量，真实质量还要看 held-out 样本和人看结果。</td>
+                <td>先看最高分样本，再看独立评测。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="inline-note"><b>别把问题混在一起</b>如果你看到指标变好但样子变啰嗦，先别急着换 trainer。很多时候只是模型学会了更会讨好分数，而不是更会做任务。</p>
+      </section>
+
+      <section id="boundary">
+        <div class="head">
+          <h2>边界与失真</h2>
+          <span class="tag">when to stop</span>
+        </div>
+        <p>偏好优化最容易出问题的地方，不是“没收敛”，而是 proxy 信号继续变好，但真实质量开始变差。这个页面只负责把这件事看见，不负责替你把下一轮训练写完。</p>
+
+        <div class="terminal-lab" data-terminal-lab data-export-context="偏好优化失真诊断" data-export-lang="text">
+          <div class="terminal-controls">
+            <button class="ghost active" type="button" data-terminal-case="length-bump">长度变长</button>
+            <button class="ghost" type="button" data-terminal-case="ref-drift">reference 漂移</button>
+            <button class="ghost" type="button" data-terminal-case="margin-collapse">margin 卡住</button>
+          </div>
+          <pre class="terminal-output" aria-live="polite">现象：margin 在涨，但人工抽检开始嫌回答太长。
+下一步：先看高分样本和长度分布，再看是不是被长度代理带偏。
+后果：分数更高，用户更难读完。
+修正：收紧 β 或 λ，补短而准的偏好样本。</pre>
+          <template data-terminal-output="length-bump"><pre>现象：margin 在涨，但人工抽检开始嫌回答太长。
+下一步：先看高分样本和长度分布，再看是不是被长度代理带偏。
+后果：分数更高，用户更难读完。
+修正：收紧 β 或 λ，补短而准的偏好样本。</pre></template>
+          <template data-terminal-output="ref-drift"><pre>现象：reference model 也在跟着更新。
+下一步：先查加载路径和冻结设置。
+后果：policy 和 reference 失去刻度，margin 没法解释。
+修正：把 reference 重新冻结，再重跑一个小 batch。</pre></template>
+          <template data-terminal-output="margin-collapse"><pre>现象：policy gap 和 reference gap 都很小，margin 卡在 0 附近。
+下一步：先看 chosen / rejected 是否真的可比。
+后果：训练信号太弱，模型只是在原地打转。
+修正：清洗偏好对，检查 SFT 起点和 batch 质量。</pre></template>
+        </div>
+
+        <div class="table-wrap">
+          <table data-export-context="偏好优化失真检查表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>信号</th>
+                <th>先查什么</th>
+                <th>常见误读</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>train margin 上升，val margin 不动</td>
+                <td>held-out preference set、样本覆盖、是否过拟合训练偏好。</td>
+                <td>把训练分数上升误读成能力上升。</td>
+              </tr>
+              <tr>
+                <td>回答越来越长</td>
+                <td>长度分布、最高分样本、rubric 是否把“详细”当成“更好”。</td>
+                <td>把长当成会做题。</td>
+              </tr>
+              <tr>
+                <td>reference 和 policy 一起漂</td>
+                <td>冻结设置、加载路径、训练脚本里谁在更新。</td>
+                <td>把锚点漂移误看成算法不稳定。</td>
+              </tr>
+              <tr>
+                <td>reward / margin 继续涨，但人看更差</td>
+                <td>抽查高分样本，确认有没有格式模板、拒答模板或长度代理。</td>
+                <td>把 proxy 目标当成真实目标。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="box danger">
+          <h3>停止规则</h3>
+          <p>不要把“preference loss 继续下降”当成继续训练的充分理由。只要验证偏好、独立评测、长度分布、KL / 漂移和人工抽检里有一项开始松动，就该先停下来查原因，而不是先加 epoch。</p>
+        </div>
+        <p>如果这一层看不稳，下一页的 PPO 和 GRPO 只会把同样的问题放大。</p>
+      </section>
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+          <div class="review-card">
+            <strong>作答目标</strong>
+            <p>先认对象，再认方向，再认风险。每题都尽量回答“谁在读、谁在写、为什么会错、先查哪一层”。</p>
+          </div>
+          <div class="review-card">
+            <strong>检查重点</strong>
+            <p>能否把 DPO、ORPO、reference model、margin 和过优化连成一条线，而不是把它们当成五个孤立名词。</p>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>一、先认对象</h3>
+              <p>先把 DPO、ORPO、reference model 和 SFT 分开，再谈更新方向。</p>
+            </div>
+            <div class="quick-review">
+              <b>重点</b>
+              <span>DPO 读 margin，ORPO 把偏好压力绑进 SFT。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q1" data-group="一、先认对象" data-title="Q1. DPO 最直接优化什么？" data-answer="B">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">对象</span></div>
+              <h3>Q1. DPO 最直接优化什么？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q1" value="A">A. chosen 的绝对分数始终接近 1</label>
+                <label><input type="radio" name="q1" value="B">B. policy 相对 reference 更偏向 chosen，而不是 rejected</label>
+                <label><input type="radio" name="q1" value="C">C. reward model 直接取代 policy</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">提示：先想 margin，而不是绝对分数。</p>
+            </div>
+
+            <div class="q" data-question="q2" data-group="一、先认对象" data-title="Q2. DPO 仍然需要 reference model 作为锚点。" data-answer="对">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">锚点</span></div>
+              <h3>Q2. DPO 仍然需要 reference model 作为锚点。</h3>
+              <label><input type="radio" name="q2" value="对">对</label>
+              <label><input type="radio" name="q2" value="错">错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">提示：没有锚点，policy 只是在和自己比。</p>
+            </div>
+
+            <div class="q short" data-question="q3" data-group="一、先认对象" data-title="Q3. ORPO 省掉的显式对象是什么？">
+              <div class="q-meta"><span class="pill">填空</span><span class="pill">结构</span></div>
+              <h3>Q3. ORPO 省掉的显式对象是什么？</h3>
+              <input type="text" name="q3" data-answer="reference model,reference" placeholder="写对象名">
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">提示：它仍然做偏好优化，只是不再显式跑那一份锚点。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>二、算 margin</h3>
+              <p>把一条样本拆成数字，再看这个数字会怎样推动更新。</p>
+            </div>
+            <div class="quick-review">
+              <b>重点</b>
+              <span>先算 policy gap，再算 reference gap，最后才有 margin。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q short" data-question="q4" data-group="二、算 margin" data-title="Q4. policy gap 数值是多少？">
+              <div class="q-meta"><span class="pill">计算</span><span class="pill">policy</span></div>
+              <h3>Q4. 已知 <code>log πθ(chosen) = -6.2</code>，<code>log πθ(rejected) = -7.0</code>。policy gap 是多少？</h3>
+              <input type="text" name="q4" data-answer="0.8,0.80" placeholder="只写数字">
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">提示：chosen 减 rejected。</p>
+            </div>
+
+            <div class="q short" data-question="q5" data-group="二、算 margin" data-title="Q5. reference gap 数值是多少？">
+              <div class="q-meta"><span class="pill">计算</span><span class="pill">reference</span></div>
+              <h3>Q5. 已知 <code>log πref(chosen) = -6.5</code>，<code>log πref(rejected) = -6.8</code>。reference gap 是多少？</h3>
+              <input type="text" name="q5" data-answer="0.3,0.30" placeholder="只写数字">
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">提示：它是锚点原本怎么偏。</p>
+            </div>
+
+            <div class="q" data-question="q6" data-group="二、算 margin" data-title="Q6. margin = 0.5 代表什么？" data-answer="A">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">margin</span></div>
+              <h3>Q6. margin = 0.5 代表什么？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q6" value="A">A. policy 比 reference 更偏向 chosen</label>
+                <label><input type="radio" name="q6" value="B">B. policy 比 reference 更偏向 rejected</label>
+                <label><input type="radio" name="q6" value="C">C. chosen 一定已经是最终答案</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">提示：margin 读的是相对变化，不是绝对真理。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>三、选方法</h3>
+              <p>把资源、锚点和训练节奏放到一起判断。</p>
+            </div>
+            <div class="quick-review">
+              <b>重点</b>
+              <span>DPO 保锚点，ORPO 省显式 reference。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q7" data-group="三、选方法" data-title="Q7. 想少掉一个 reference forward，优先试哪条？" data-answer="B">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">资源</span></div>
+              <h3>Q7. 你已经有偏好对，想少掉一个 reference forward，又愿意把 SFT 和偏好压力绑在一起，优先试哪条？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q7" value="A">A. DPO</label>
+                <label><input type="radio" name="q7" value="B">B. ORPO</label>
+                <label><input type="radio" name="q7" value="C">C. 纯 SFT</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">提示：看是否还要显式 reference model。</p>
+            </div>
+
+            <div class="q" data-question="q8" data-group="三、选方法" data-title="Q8. 想保留显式锚点，优先试哪条？" data-answer="A">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">锚点</span></div>
+              <h3>Q8. 你更在意保留显式锚点，先把 margin 读稳，再决定是否继续训练，优先试哪条？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q8" value="A">A. DPO</label>
+                <label><input type="radio" name="q8" value="B">B. ORPO</label>
+                <label><input type="radio" name="q8" value="C">C. 只做评测，不训练</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">提示：显式 reference 是 DPO 的刻度。</p>
+            </div>
+
+            <div class="q full" data-question="q9" data-group="三、选方法" data-title="Q9. 一句话说明 DPO 和 ORPO 的差别。">
+              <div class="q-meta"><span class="pill">开放</span><span class="pill">对比</span></div>
+              <h3>Q9. 一句话说明 DPO 和 ORPO 的差别，必须同时提到 reference model 和 SFT。</h3>
+              <textarea name="q9" placeholder="先写 DPO，再写 ORPO。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>好答案要同时提到三件事：DPO 用 reference model 作为锚点，把 chosen / rejected 的相对差写成 margin；ORPO 把偏好压力并进 SFT，不再显式依赖 reference model；两者都还是偏好优化，不是普通 SFT。</p>
+              </details>
+              <p class="solve-note">脚手架：先说锚点，再说 SFT，再说它们都在做 preference optimization。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>四、诊断失真</h3>
+              <p>看到分数上涨时，先别庆祝，先看它有没有开始钻空子。</p>
+            </div>
+            <div class="quick-review">
+              <b>重点</b>
+              <span>分数变好，不等于任务真的变好。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q10" data-group="四、诊断失真" data-title="Q10. 最像什么失真？" data-answer="A">
+              <div class="q-meta"><span class="pill">诊断</span><span class="pill">失真</span></div>
+              <h3>Q10. 训练后 margin 上升、回答更长、人工判断下降，这最像什么？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q10" value="A">A. proxy drift / reward hacking</label>
+                <label><input type="radio" name="q10" value="B">B. tokenizer 词表变小</label>
+                <label><input type="radio" name="q10" value="C">C. prompt 完全无效</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">提示：分数涨了，不代表真实目标没被钻空子。</p>
+            </div>
+
+            <div class="q" data-question="q11" data-group="四、诊断失真" data-title="Q11. β 越小越好。" data-answer="错">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">超参数</span></div>
+              <h3>Q11. β 越小越安全，所以越小越好。</h3>
+              <label><input type="radio" name="q11" value="对">对</label>
+              <label><input type="radio" name="q11" value="错">错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">提示：太小会让更新变软，模型可能学不动。</p>
+            </div>
+
+            <div class="q full" data-question="q12" data-group="四、诊断失真" data-title="Q12. 看到 train margin 升、val margin 平、长度显著增长，你先查哪三件事？">
+              <div class="q-meta"><span class="pill">开放</span><span class="pill">排障</span></div>
+              <h3>Q12. 看到 train margin 升、val margin 平、长度显著增长，你先查哪三件事？</h3>
+              <textarea name="q12" placeholder="至少写三项，并说清先后顺序。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>好的答案通常会按这个顺序来：</p>
+                <ul>
+                  <li>先看 held-out preference set，确认是不是只拟合了训练偏好。</li>
+                  <li>再抽查最高 margin 的样本，确认有没有长度代理、格式模板或安全模板。</li>
+                  <li>再看 reference 是否冻结、β 是否过小或过大、chosen / rejected 是否真的可比。</li>
+                </ul>
+              </details>
+              <p class="solve-note">脚手架：先看验证集，再看最高分样本，再看锚点和超参数。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">Practice Record</span>
+        </div>
+        <p>点击生成后，页面会把题目、你的答案和核心复盘上下文整理成 Markdown。没填的题会被标出来，方便后面补完。</p>
+        <div class="quality" id="quality"></div>
+        <div class="export" id="record">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" type="button" onclick="generateRecord()">生成练习记录</button>
+          <button class="ghost" type="button" onclick="copyRecord()">复制 Markdown</button>
+          <button class="ghost" type="button" onclick="downloadRecord()">下载 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">sources</span>
+        </div>
+        <ul class="source-list">
+          <li><a href="../index.html">课程地图：后训练全栈</a>。用来确认第 05 单元在“偏好数据 → DPO → RLHF”这条路线里的位置。</li>
+          <li><a href="../04_偏好数据与奖励建模/学习页.html">上一单元：偏好数据与奖励建模</a>。这里默认你已经能说清 chosen / rejected、reward model 和 reward hacking。</li>
+          <li><a href="https://huggingface.co/docs/trl/dpo_trainer">Hugging Face TRL：DPO Trainer</a>（访问于 2026-06-22）。用于确认 DPO 的 reference anchor、pairwise completion 和 margin 语境。</li>
+          <li><a href="https://huggingface.co/docs/trl/orpo_trainer">Hugging Face TRL：ORPO Trainer</a>（访问于 2026-06-22）。用于确认 ORPO 的单阶段偏好优化和 reference-model-free 语境。</li>
+          <li><a href="https://arxiv.org/abs/2305.18290">Direct Preference Optimization: Your Language Model is Secretly a Reward Model</a>（2023，访问于 2026-06-22）。用于 DPO 的 margin 读法和隐式 reward 解释。</li>
+          <li><a href="https://arxiv.org/abs/2403.07691">ORPO: Monolithic Preference Optimization without Reference Model</a>（2024，访问于 2026-06-22）。用于 ORPO 的单阶段 preference optimization 说明。</li>
+          <li><a href="https://arxiv.org/abs/2210.10760">Scaling Laws for Reward Model Overoptimization</a>（2022，访问于 2026-06-22）。用于理解 proxy reward / margin 继续涨，但真实质量变差的风险。</li>
+        </ul>
+        <p class="muted">这页只固定 DPO 和 ORPO 的核心读法。具体 trainer 参数、默认超参数和更新细节，还是要以当前官方文档为准。</p>
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

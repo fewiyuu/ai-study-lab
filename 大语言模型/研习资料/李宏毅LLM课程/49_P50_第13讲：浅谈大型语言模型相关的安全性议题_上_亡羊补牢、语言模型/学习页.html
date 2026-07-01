@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>49_P50｜第13讲：浅谈大型语言模型相关的安全性议题 (上) — 亡羊补牢、语言模型</title>
+  <link rel="stylesheet" href="../../../../assets/study-page.css">
+</head>
+<body data-study-kind="safety" data-feynman-keywords="幻觉、事实查核、FActScore、防火墙、偏见、红队、履历筛选、政治倾向、AI侦测、水印">
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <strong>49_P50</strong>
+      <span>第13讲：浅谈大型语言模型相关的安全性议题 (上)<br>亡羊补牢、偏见检测、AI 文本侦测</span>
+    </div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>学习目标</a>
+      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
+      <a href="#terms"><span class="dot"></span>术语表</a>
+      <a href="#lecture"><span class="dot"></span>讲义主线</a>
+      <a href="#source"><span class="dot"></span>安全线索</a>
+      <a href="#example"><span class="dot"></span>最小例子</a>
+      <a href="#viz"><span class="dot"></span>交互观察</a>
+      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>自学记录</a>
+    </nav>
+    <div class="side-note">读这一讲时，始终问一句：风险是在模型回答之前、回答过程中，还是回答之后被发现的？位置不同，处理办法也不同。</div>
+  </aside>
+  <main>
+    <section class="hero" id="goal">
+      <div>
+        <div class="kicker">LI HONGYI LLM · 安全议题上篇</div>
+        <h1>浅谈大型语言模型相关的安全性议题（上）</h1>
+        <p>这一讲先不追求把所有解决方案讲完，而是让你看见问题在哪里。李宏毅把上篇分成三条线：语言模型会幻觉，所以要在输出后补一层事实查核；语言模型会带偏见，所以要设计测试、红队和减偏方法；机器生成文字越来越常见，所以要理解侦测器和水印为什么有用、又为什么不可靠。</p>
+        <p>读完后，你应该能把一个 LLM 安全问题放回系统里判断：风险来自资料、训练、生成过程，还是输出后的使用场景。这样你不会只说“模型不安全”，而能说清楚要检查哪一段、用什么证据、有哪些漏判风险。</p>
+        <div class="map"><span class="node">幻觉</span><span class="arrow">→</span><span class="node">事实查核</span><span class="arrow">→</span><span class="node">偏见检测</span><span class="arrow">→</span><span class="node">红队</span><span class="arrow">→</span><span class="node">AI 侦测与水印</span></div>
+        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=50">https://www.bilibili.com/video/BV1JKoeBiEt4?p=50</a></p>
+      </div>
+      <div class="route">
+        <h3>本节要练成的判断</h3>
+        <ol><li>解释为什么 GPT-4 级别的模型仍可能编造论文、混合人物资料，事实查核只能降低风险，不能给出绝对真理。</li><li>说明如何用词汇置换、情感分析、红队模型、履历排序和政治测验观察偏见。</li><li>区分“侦测 AI 文本”的分类器路线和“生成时加水印”的路线，并说出它们的失效方式。</li><li>把资料前处理、训练中处理、生成时调整和输出后防御放到同一张减偏路线图里。</li></ol>
+      </div>
+    </section>
+
+    <section id="skeleton">
+      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
+      <div class="grid3">
+        <div class="box soft"><h3>输出后补救</h3><p>模型回答已经生成，再用事实查核、有害词检测、警告提示或防火墙做二次检查。它的价值是多一道关，不是把模型变成真理机器。</p><p>核心直觉：防火墙像出口安检，只能拦下可识别的风险，不能证明货物从源头就没有问题。</p><p>判断句：如果系统只能说“网络上有人这样写”，它给的是支持证据，不是最终事实。</p></div>
+        <div class="box"><h3>偏见被测出来</h3><p>偏见不是只靠直觉争论。可以把输入中的性别、种族、国家、名字或职业换掉，再比较模型输出的情绪、排序、代词和立场是否明显变化。</p><p>判断句：同一份履历只改名字却得到不同排名，就要怀疑模型利用了不该影响结论的社会线索。</p></div>
+        <div class="box warn"><h3>来源被追踪</h3><p>AI 生成文本侦测有两条路：事后训练分类器，或生成时主动加水印。前者怕模型更新和写作风格变化，后者怕改写、同义替换和攻击。</p><p>判断句：侦测分数只能当证据的一部分，不能单独判定一个人是否违规。</p></div>
+      </div>
+      <div class="mini-graph">
+        <div class="box"><h3>资料层</h3><p>训练资料可能已有偏见，也可能缺少可靠事实来源。</p></div>
+        <div class="box"><h3>训练层</h3><p>参数学习、RLHF、红队奖励都会改变模型倾向。</p></div>
+        <div class="box"><h3>生成层</h3><p>采样概率、拒答规则和水印规则影响具体输出。</p></div>
+        <div class="box"><h3>使用层</h3><p>事实查核、履历筛选和文本侦测都发生在真实应用里。</p></div>
+      </div>
+    </section>
+
+    <section id="terms">
+      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
+      <table class="metric-table">
+        <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
+        <tr><td>幻觉</td><td>模型说得像真的，但内容不一定是真的。</td><td>语言模型在证据不足、任务过宽或分布外情境中生成不受事实支持的陈述。</td><td>把流畅、具体、语气肯定当成事实可靠。</td></tr>
+        <tr><td>事实查核</td><td>把模型回答拿去找外部证据。</td><td>从回答中抽取可检验陈述，转成查询，再用检索结果判断是否有支持证据。</td><td>以为“搜得到类似句子”就等于绝对正确。</td></tr>
+        <tr><td>FActScore</td><td>把长回答拆成更小的事实来检查。</td><td>一种细粒度事实评估思路：抽取原子事实，检索证据，再判断每个事实是否被支持。</td><td>忘了抽事实、改写问题、检索和判断本身也可能出错。</td></tr>
+        <tr><td>防火墙</td><td>放在模型和用户之间的安全层。</td><td>输出后处理模块，可做事实查核、有害内容检测、警告、改写或拦截。</td><td>把防火墙当成根治方案，而不是降低风险的额外关卡。</td></tr>
+        <tr><td>偏见</td><td>模型对某些群体、职业或立场有系统性倾向。</td><td>在只有敏感属性或社会线索变化时，输出评价、排序、情绪或立场发生稳定差异。</td><td>以为反刻板印象就不是偏见；只要方向和人类直觉不同，也仍可能是偏见。</td></tr>
+        <tr><td>红队</td><td>专门找系统漏洞的人或模型。</td><td>在 LLM 安全中，红队可以生成刺激输入，让被测模型暴露偏见、歧视或其他不安全行为。</td><td>以为红队只是在骂模型；它本质上是系统化测试。</td></tr>
+        <tr><td>AI 文本侦测器</td><td>判断一段话像不像机器写的工具。</td><td>通常用机器文本和人类文本训练分类器，输出概率、分数或可疑标记。</td><td>把侦测器结果当作司法证据，忽略误判和模型版本漂移。</td></tr>
+        <tr><td>水印</td><td>藏在生成文字里的暗号。</td><td>生成时改变某些 token 的采样概率，让知道规则的检测器能从统计模式中识别来源。</td><td>以为水印肉眼可见，或以为改写不会破坏水印。</td></tr>
+      </table>
+      <p class="checkpoint">读到这里，你已经可以把术语放进“风险在哪里、怎么检测、哪里会失效”这三个问题里。</p>
+    </section>
+
+    <section id="lecture">
+      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>1. 为什么先讲“亡羊补牢”</h3>
+          <p>大型语言模型经过预训练、指令微调和偏好对齐后，仍然会讲错话。课堂里的例子很直接：让 GPT-4 推荐 LLM 安全综述论文，它可能给出看似学术、格式完整的标题，但拿去 Google 搜不到。问题不在于模型“故意骗人”，而在于它擅长生成像答案的文本，不等于每个事实都经过检索和验证。</p>
+          <p>“亡羊补牢”的想法是：既然不能保证模型永远不犯错，就在模型和人之间再放一层检查。这个安全层可以做事实查核、有害词检测、毒性评分、警告提示，甚至直接拦截或改写回答。它像部署系统里的第二道关口，但它只是在降低风险。</p>
+          <p>判断时要记住位置：模型先给出回答，安全层再处理回答。它不是重新训练模型，也不是让模型从此没有幻觉。你看到任何“输出后查核”方案，都要问：它查的是什么陈述，依赖什么证据，查核模块本身会不会犯错。</p>
+        </div>
+        <div class="box">
+          <h3>2. 事实查核不是“找得到网页就真”</h3>
+          <p>Gemini 这类平台会把回答中的句子标成绿色或红色：绿色表示网络上找得到类似支持，红色表示找不到。这个设计有帮助，因为它提醒用户不要无条件相信回答。但它也有边界。网络上有类似说法，不代表事情一定对；网络上找不到，也不代表事情一定错。</p>
+          <p>FActScore 一类方法把流程拆得更细：先从模型回答里抽出需要检查的原子事实，再把事实改写成查询，拿去搜索资料，最后判断是否被证据支持。每一步都合理，也每一步都可能错。抽事实可能漏掉关键句，改写问题可能改变意思，搜索结果可能本身不可靠，最后的判断常常又交给另一个语言模型。</p>
+          <p>课堂里“两个李宏毅”的例子尤其重要。模型把演员李宏毅和教授李宏毅的资料混到一起，每个链接或单句都可能是真的，但合成后的个人介绍是错的。这种错误不是单句查核能完全解决的，它要求系统识别实体一致性：这些事实是不是属于同一个人、同一个时间、同一个上下文。</p>
+        </div>
+      </div>
+      <div class="grid3" style="margin-top:12px">
+        <div class="box soft"><h3>3. 用替换测试看偏见</h3><p>HELM 一类评测会把输入中的敏感词换掉，例如把“男”换成“女”，或者换不同种族、地区、国家相关词，再比较模型输出。如果只是敏感属性变了，回答的情绪分数、评价方向或建议强度却大幅变化，就说明模型可能有偏见。</p><p>这里讨论的是“偏见是否存在”，不是立刻判断每种偏见是否应该被修正。课堂特意把这两件事分开：检测偏见是技术问题，是否处理以及怎么处理，还牵涉公平性、社会规范和应用场景。</p></div>
+        <div class="box warn"><h3>4. 红队让模型暴露问题</h3><p>强模型常会避开敏感回答，直接问不一定测得出偏见。红队的做法是让另一组人或另一个模型专门寻找触发输入。在 LLM 场景里，可以训练一个红队语言模型，让它生成能诱导被测模型说出偏见、歧视或不安全内容的提示。</p><p>训练思路类似奖励学习：红队输出一句话，被测模型回答，如果回答越偏见，红队得到的 reward 越高。这样红队模型会逐渐学会找漏洞。你现在要能分清：被测模型不是在被训练，红队模型才是在被优化来找问题。</p></div>
+        <div class="box "><h3>5. 履历、名字和 embedding</h3><p>彭博社的虚拟履历实验把同一份履历换上八个不同名字，让模型为金融分析师、HR、软件工程师等岗位排序。因为模型有随机性，实验需要重复很多次。结果显示，同样履历只因名字不同就可能排名不同，说明模型把名字背后的族群、性别或地区线索带进了判断。</p><p>把名字丢进模型得到 embedding 后再投影到二维平面，也能看到不同地区或族群名字会聚成不同群。聚类本身不是错误，因为名字确实带有统计信息；问题是这些信息被用于履历筛选时，可能让无关因素影响决策。</p></div>
+        <div class="box soft"><h3>6. 职业与政治倾向</h3><p>职业刻板印象可以从代词和称谓里看出来。让模型给幼稚园老师写反馈，它可能默认用女性代词；给建筑工人写反馈，它可能默认男性代词。医生这类职业可能相对中性，技师或建筑工人则容易出现强性别倾向。</p><p>政治倾向也能被测。直接问模型是否支持某个政治命题，它常会两边都说，避免表态。给出额外约束，例如“回答只能从这些选项中选一个”，模型就可能稳定选择某些立场。这个结果提醒我们：把 LLM 用在政治、政策或舆论相关任务时，不能假设它没有立场。</p></div>
+        <div class="box warn"><h3>7. 减偏有四个入口</h3><p>偏见可能来自资料，也可能来自训练过程、生成过程或输出后的使用方式。资料层可以做清理、重采样和标注检查；训练层可以调整目标函数、加入公平性约束或偏好资料；生成层可以修改输出概率，让某些偏见表达不那么容易被采样；输出后可以加防御层，对回答做检测、警告、改写或拒绝。</p><p>这些入口没有一个是万能的。资料清理可能删掉真实差异，训练约束可能牺牲其他能力，生成时改概率可能让语言变僵，输出后改写可能掩盖问题来源。减偏不是把一个按钮打开，而是根据任务风险选择组合。</p></div>
+        <div class="box "><h3>8. AI 文本侦测与水印</h3><p>侦测 AI 文本的朴素思路是收集机器生成句子和人类生成句子，训练分类器找差异。对单一模型、单一版本，它有机会做得不错；一旦模型改版、提示方式变化、人类写作风格受 AI 影响，分类器就会变得不稳。</p><p>另一条路是在生成时加水印。简化例子是把 token 分成红组和绿组，在特定位置提高某一组 token 的概率。人读起来不一定看得出差异，但检测器知道规则后，可以统计生成文本是否符合这套偏好。水印也会被改写、同义替换或重采样削弱。</p></div>
+      </div>
+      <div class="box greenbox" style="margin-top:12px">
+        <h3>完整知识链路</h3>
+        <p>这一讲可以串成一条安全链：语言模型会生成流畅但可能错误的内容，所以输出后要有事实查核和防火墙；模型在训练资料和训练目标中吸收社会线索，所以要用替换测试、红队、履历排序、职业代词和政治测验把偏见测出来；AI 生成文本进入论文和审稿场景后，分类器和水印可以提供来源线索，但都不能单独作最终判断。你现在应该能拿一个真实 LLM 应用，标出它在哪些位置需要查事实、查偏见、查来源。</p>
+      </div>
+    </section>
+
+    <section id="source">
+      <div class="head"><h2>安全线索</h2><span class="tag">线索</span></div>
+      <p class="muted">下面把字幕里的关键例子整理成适合回看的线索。每条都对应讲义里的一个判断点。</p>
+      <div class="source-lines">
+        <div class="box"><h3>幻觉例子</h3><p>强如 GPT-4，推荐安全综述论文时也可能编出查不到的论文标题。结论：LLM 不是搜索引擎，答案需要外部证据。</p><p class="checkpoint">能做的判断：看到文献、人物经历、法律条文这类事实型输出，先查来源，不被格式和语气骗过。</p></div>
+        <div class="box"><h3>Gemini 事实查核</h3><p>Gemini 会用 Google 搜索结果给句子标记支持或存疑。绿色代表有类似资料背书，红色代表找不到支持。结论：查核结果是风险提示，不是绝对判决。</p><p class="checkpoint">能做的判断：绿色也可能引用错实体，红色也可能只是资料少。</p></div>
+        <div class="box"><h3>实体混合</h3><p>让模型“完整介绍李宏毅”，它可能把演员李宏毅和教授李宏毅的信息合并。单句可能都对，合起来却错。结论：长回答要检查实体一致性。</p><p class="checkpoint">能做的判断：当回答跨越多个来源时，检查每条事实是不是属于同一个对象。</p></div>
+        <div class="box"><h3>偏见检测</h3><p>把输入中的性别、族群、国家或名字换掉，再比较输出情绪、排序和立场。结论：偏见可以通过受控变量测试暴露出来。</p><p class="checkpoint">能做的判断：如果只改敏感属性就改变结果，模型可能在用不该用的线索。</p></div>
+        <div class="box"><h3>履历和政治</h3><p>同一份履历换名字后多次排序，模型会表现出族群和性别偏好；政治测验加上强制选项后，模型也会显示倾向。结论：应用到招聘和政治任务时要特别谨慎。</p><p class="checkpoint">能做的判断：高风险应用不能只看一次回答，要用重复实验和对照组。</p></div>
+        <div class="box"><h3>审稿与水印</h3><p>研究者用分类器分析会议审稿意见，ChatGPT 发布后部分领域疑似 AI 生成比例上升；另一类方案是在生成时给 token 选择加统计水印。结论：来源追踪有线索，但不等于零误判。</p><p class="checkpoint">能做的判断：侦测器和水印都要配合人工复核、上下文证据和申诉机制。</p></div>
+      </div>
+    </section>
+
+    <section id="example">
+      <div class="head"><h2>最小例子</h2><span class="tag">EXAMPLE</span></div>
+      <p>下面两个最小例子不是为了运行代码，而是把课堂里的流程压成可检查步骤。读代码时看三件事：输入是什么，中间判断是什么，输出凭什么可信。</p>
+      <div class="codebar"><span class="label">最小示例：事实查核防火墙</span><span class="kind">pseudo</span></div>
+      <pre><code>answer = llm("请推荐几篇 LLM 安全综述论文")
+claims = extract_atomic_claims(answer)
+
+for claim in claims:
+    query = rewrite_as_search_query(claim)
+    evidence = search_web(query)
+    verdict = judge_support(claim, evidence)
+    show_badge(claim, verdict)
+
+# badge 表示“有无支持证据”，不是“事实已经被证明”。</code></pre>
+      <div class="box soft"><h3>逐行理解</h3><p><code>extract_atomic_claims</code> 负责把长回答拆成小事实，例如论文标题、作者、年份。<code>rewrite_as_search_query</code> 把事实转成检索问题。<code>judge_support</code> 再看证据是否支持原句。最容易漏的地方是：拆事实、改写查询和判断支持都可能由另一个 LLM 完成，因此也可能幻觉。</p><p>你现在可以检查一个查核系统：它是否只给“有网页背书”，还是会处理实体混合、来源可信度和证据冲突。</p></div>
+
+      <div class="codebar"><span class="label">最小示例：简化版水印</span><span class="kind">pseudo</span></div>
+      <pre><code>tokens = split_vocabulary_into_red_and_green()
+
+for position in range(max_length):
+    probs = llm_next_token_probs(context)
+    if position % 2 == 0:
+        probs = boost(probs, group="green")
+    else:
+        probs = boost(probs, group="red")
+    token = sample(probs)
+    context += token
+
+# 检测器知道分组和规则后，统计文本是否偏向这套选择模式。</code></pre>
+      <div class="box warn"><h3>这个例子能说明什么</h3><p>水印不是在文字里写一个肉眼可见的标记，而是轻微改变生成时的 token 概率。人读起来通常仍然通顺；检测器看的是统计模式。它的边界也很清楚：如果文本被大幅改写、翻译、重采样，原来的统计模式可能被破坏。</p></div>
+      <div class="box info" style="margin-top:12px">
+        <h3>Worked example：一段回答怎样过三道安全检查</h3>
+        <p>假设模型回答：“A 论文在 2023 年提出某个安全框架，作者是 X 和 Y。”第一道检查把它拆成三个原子事实：论文是否存在、年份是否正确、作者是否正确。第二道检查检索证据，发现论文存在且年份正确，但作者列表没有 Y。第三道检查把结论写成“部分支持：论文和年份有证据，作者 Y 缺少支持”。</p>
+        <p>这个例子说明：事实查核的好输出不是简单的“对 / 错”，而是指出哪一条事实有证据、哪一条没有证据、证据是否指向同一个实体。你现在应该能把一段长回答拆成可查的原子事实，而不是被整段文字的流畅度带着走。</p>
+      </div>
+    </section>
+
+    <section id="viz">
+      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
+      <div class="viz-panel">
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <h3>事实查核强度</h3>
+            <div class="slider-row"><span>抽取陈述数</span><input id="complexity" type="range" min="10" max="100" value="45"><b id="complexityOut">45</b></div>
+            <div class="demo-meter"><div class="demo-fill" id="complexityFill"></div></div>
+            <p id="complexityText" class="checkpoint"></p>
+          </div>
+          <div class="viz-cell">
+            <h3>安全策略位置</h3>
+            <div class="viz-actions">
+              <button data-check="data" class="active">资料前</button>
+              <button data-check="train">训练中</button>
+              <button data-check="decode">生成时</button>
+              <button data-check="after">输出后</button>
+            </div>
+            <p id="checkText" class="checkpoint"></p>
+          </div>
+        </div>
+      </div>
+      <p>观察重点：检查越多，覆盖范围可能越大，误判和成本也会升高。减偏或防错策略越靠前，越可能改变模型行为；越靠后，越像防火墙，容易部署，但也可能只是在修补表面。</p>
+    </section>
+
+    <section id="diagnosis">
+      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
+      <div class="grid2">
+        <div class="box redsoft">
+          <h3>常见坑</h3>
+          <ol><li>把事实查核当作绝对真理。错因：混淆“有支持证据”和“事实成立”。后果：实体混合、错误来源和过期信息仍会漏过。修法：检查证据质量、实体一致性和反证。</li><li>只看单个样例就判断模型有无偏见。错因：忽略模型随机性和样本覆盖。后果：可能把偶然输出当成稳定倾向。修法：做对照组、重复采样和统计比较。</li><li>把反刻板印象当作没有偏见。错因：只看方向是否符合常见偏见，不看是否由敏感属性驱动。后果：模型仍可能在招聘、排序和推荐中不公平。修法：回到受控变量测试。</li><li>认为红队就是让模型说难听话。错因：把系统化漏洞搜索理解成普通挑衅。后果：测试覆盖不足，也无法形成可复现样本。修法：定义攻击目标、奖励信号和失败类型。</li><li>用 AI 侦测分数直接处罚学生或审稿人。错因：忽略分类器误判、模型版本变化和人类写作风格变化。后果：误伤真实作者。修法：把侦测结果当线索，配合上下文证据。</li><li>以为水印不可破坏。错因：只看到生成时嵌入，没有考虑改写攻击。后果：检测器在翻译、润色、同义替换后失效。修法：说明水印强度、攻击模型和检测阈值。</li></ol>
+        </div>
+        <div class="box">
+          <h3>易混概念</h3>
+          <table class="metric-table">
+            <tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr>
+            <tr><td>事实支持</td><td>事实正确</td><td>支持表示证据能背书某句；正确还要看证据是否可靠、是否指向同一实体。</td></tr>
+            <tr><td>偏见存在</td><td>偏见应被处理</td><td>本讲先说明怎么检测偏见；处理与否还要看应用、规范和公平目标。</td></tr>
+            <tr><td>红队模型</td><td>被测模型</td><td>红队模型负责找触发输入；被测模型负责暴露或抵抗问题。</td></tr>
+            <tr><td>文本分类器</td><td>水印检测器</td><td>分类器事后学习机器文本特征；水印检测器寻找生成时刻意嵌入的统计模式。</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
+      <div class="practice-intro">
+        <div class="review-card"><strong>作答前先抓主线</strong><p>先判断风险位置：输出后事实查核、模型偏见检测，还是 AI 来源追踪。开放题不要空泛评价，写出可检查证据。</p></div>
+        <div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起幻觉、事实查核、偏见、红队、AI 文本侦测和水印。</p></div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>这一组先检查术语和边界。答案短一点也可以，但要说准。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. 事实查核工具能降低幻觉风险，但不能保证所有被标绿的句子都是真的。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. 事实查核工具能降低幻觉风险，但不能保证所有被标绿的句子都是真的。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
+          <div class="q" data-role="homework" data-title="2. 本讲说的“亡羊补牢”主要指哪一种安全策略？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. 本讲说的“亡羊补牢”主要指哪一种安全策略？</h3><div class="choices"><label><input type="radio" name="q2" value="在模型输出后加检查或防御层">在模型输出后加检查或防御层</label><label><input type="radio" name="q2" value="只扩大模型参数量">只扩大模型参数量</label><label><input type="radio" name="q2" value="禁止模型联网">禁止模型联网</label></div></div>
+          <div class="q short" data-role="homework" data-title="3. FActScore 一类流程通常先抽取 ______，再检索证据并判断是否支持。"><div class="q-meta"><span class="pill">填空</span></div><h3>3. FActScore 一类流程通常先抽取 ______，再检索证据并判断是否支持。</h3><input type="text" name="q3"></div>
+          <div class="q short" data-role="homework" data-title="4. 用 1-2 句话解释：为什么“网络上有类似资料”不等于事实一定正确。"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 用 1-2 句话解释：为什么“网络上有类似资料”不等于事实一定正确。</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、主线理解</h3><p>这一组要求你把概念连成一条可复述的链路。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="5. 按顺序写出事实查核防火墙的四个步骤：抽取、改写、检索、判断。"><div class="q-meta"><span class="pill">排序</span></div><h3>5. 按顺序写出事实查核防火墙的四个步骤：抽取、改写、检索、判断。</h3><textarea name="q5"></textarea></div>
+          <div class="q short" data-role="homework" data-title="6. 区分“事实支持”和“事实正确”。"><div class="q-meta"><span class="pill">对照</span></div><h3>6. 区分“事实支持”和“事实正确”。</h3><textarea name="q6"></textarea></div>
+          <div class="q short" data-role="homework" data-title="7. 两个李宏毅的例子说明了哪一种查核难点？"><div class="q-meta"><span class="pill">解释</span></div><h3>7. 两个李宏毅的例子说明了哪一种查核难点？</h3><textarea name="q7"></textarea></div>
+          <div class="q" data-role="homework" data-title="8. 如果模型把每一句都查到网页背书，就一定不会把不同人的资料混在一起。"><div class="q-meta"><span class="pill">判断</span></div><h3>8. 如果模型把每一句都查到网页背书，就一定不会把不同人的资料混在一起。</h3><div class="choices"><label><input type="radio" name="q8" value="对">对</label><label><input type="radio" name="q8" value="错">错</label></div></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、偏见检测</h3><p>这一组检查你能不能设计对照实验，而不是凭感觉判断偏见。</p></div><div class="quick-review"><b>REMIND</b>优先写“只改变了什么变量”和“比较了什么输出”。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="9. 用性别词置换检测偏见时，应该比较模型输出的哪两类信息？"><div class="q-meta"><span class="pill">填空</span></div><h3>9. 用性别词置换检测偏见时，应该比较模型输出的哪两类信息？</h3><input type="text" name="q9"></div>
+          <div class="q short" data-role="homework" data-title="10. 为什么强模型常常需要红队方法才能测出偏见？"><div class="q-meta"><span class="pill">解释</span></div><h3>10. 为什么强模型常常需要红队方法才能测出偏见？</h3><textarea name="q10"></textarea></div>
+          <div class="q short" data-role="homework" data-title="11. 红队模型的 reward 应该和什么结果相关？"><div class="q-meta"><span class="pill">简答</span></div><h3>11. 红队模型的 reward 应该和什么结果相关？</h3><textarea name="q11"></textarea></div>
+          <div class="q short" data-role="homework" data-title="12. 同一份履历换不同名字后排名不同，这个实验在控制什么变量？"><div class="q-meta"><span class="pill">场景</span></div><h3>12. 同一份履历换不同名字后排名不同，这个实验在控制什么变量？</h3><textarea name="q12"></textarea></div>
+          <div class="q" data-role="homework" data-title="13. 反刻板印象的偏好也可能是一种偏见。"><div class="q-meta"><span class="pill">判断</span></div><h3>13. 反刻板印象的偏好也可能是一种偏见。</h3><div class="choices"><label><input type="radio" name="q13" value="对">对</label><label><input type="radio" name="q13" value="错">错</label></div></div>
+          <div class="q short" data-role="homework" data-title="14. 名字 embedding 聚成族群或地区簇，为什么会影响招聘系统风险？"><div class="q-meta"><span class="pill">解释</span></div><h3>14. 名字 embedding 聚成族群或地区簇，为什么会影响招聘系统风险？</h3><textarea name="q14"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、错误诊断</h3><p>这一组按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="15. 有人说：只要事实查核标绿，回答就可以直接发布。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 有人说：只要事实查核标绿，回答就可以直接发布。错因、后果、修法是什么？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q15"></textarea></div>
+          <div class="q short" data-role="homework" data-title="16. 有人只问模型一次政治测验题，就断言模型没有政治倾向。错在哪里？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 有人只问模型一次政治测验题，就断言模型没有政治倾向。错在哪里？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q16"></textarea></div>
+          <div class="q short" data-role="homework" data-title="17. 有人用 AI 侦测器分数直接判定论文作者作弊。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>17. 有人用 AI 侦测器分数直接判定论文作者作弊。错因、后果、修法是什么？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q17"></textarea></div>
+          <div class="q short" data-role="homework" data-title="18. 有人认为给模型加水印后，任何改写都不会影响检测。错在哪里？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>18. 有人认为给模型加水印后，任何改写都不会影响检测。错在哪里？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q18"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>五、场景迁移</h3><p>这一组检查你能不能换个场景继续判断。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="19. 如果把 LLM 用于课程论文摘要，你会怎样设计事实查核步骤？"><div class="q-meta"><span class="pill">应用</span></div><h3>19. 如果把 LLM 用于课程论文摘要，你会怎样设计事实查核步骤？</h3><textarea name="q19"></textarea></div>
+          <div class="q short" data-role="homework" data-title="20. 如果把 LLM 用于招聘履历初筛，至少要做哪三类偏见测试？"><div class="q-meta"><span class="pill">应用</span></div><h3>20. 如果把 LLM 用于招聘履历初筛，至少要做哪三类偏见测试？</h3><textarea name="q20"></textarea></div>
+          <div class="q short" data-role="homework" data-title="21. 如果学校想使用 AI 文本侦测器，你会建议加入哪三条保护机制？"><div class="q-meta"><span class="pill">应用</span></div><h3>21. 如果学校想使用 AI 文本侦测器，你会建议加入哪三条保护机制？</h3><textarea name="q21"></textarea></div>
+          <div class="q short" data-role="homework" data-title="22. 写出 5 条你会用来验收 LLM 安全系统的检查清单。"><div class="q-meta"><span class="pill">清单</span></div><h3>22. 写出 5 条你会用来验收 LLM 安全系统的检查清单。</h3><textarea name="q22"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>六、表达输出</h3><p>最后三题检查你能不能讲给别人听。</p></div><div class="quick-review"><b>REMIND</b>先说问题，再说方法，最后说边界。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="23. 面试短答：为什么说输出后防火墙只能降低风险，不能根治幻觉？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>23. 面试短答：为什么说输出后防火墙只能降低风险，不能根治幻觉？</h3><textarea name="q23"></textarea></div>
+          <div class="q short" data-role="homework" data-title="24. 面试短答：如何用红队模型检测 LLM 偏见？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>24. 面试短答：如何用红队模型检测 LLM 偏见？</h3><textarea name="q24"></textarea></div>
+          <div class="q full" data-role="homework" data-title="25. 用 6-9 句话讲清楚本讲三条安全主线：幻觉与事实查核、偏见与红队、AI 文本侦测与水印。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>25. 用 6-9 句话讲清楚本讲三条安全主线：幻觉与事实查核、偏见与红队、AI 文本侦测与水印。</h3><div class="solve-note">先说每条线的问题，再说检测或缓解办法，最后说各自边界。</div><textarea name="q25"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>自学记录</h2><span class="tag">记录</span></div>
+      <p class="muted">完成练习后生成记录，方便回看订正。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+
+<script src="../../../../assets/study-page.js"></script>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){
+  const max=document.documentElement.scrollHeight-innerHeight;
+  progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";
+  let current=sections[0]?.id;
+  for(const section of sections){
+    const rect=section.getBoundingClientRect();
+    if(rect.top<innerHeight*.36) current=section.id;
+    section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);
+  }
+  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));
+}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+document.querySelectorAll(".codebar").forEach(bar=>{
+  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
+  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});
+  bar.appendChild(btn);
+});
+const complexity=document.getElementById("complexity");
+function updateComplexity(){
+  const value=Number(complexity.value);
+  document.getElementById("complexityOut").textContent=value;
+  document.getElementById("complexityFill").style.width=value+"%";
+  document.getElementById("complexityText").textContent=value>75?"抽取陈述越多，覆盖更细，但检索和判断成本会升高，误判也会变多。":value<30?"只查少量陈述时速度快，但容易漏掉实体混合、年份和来源错误。":"中等强度适合先发现主要事实风险，再对高风险句子加查核。";
+}
+complexity.addEventListener("input",updateComplexity);updateComplexity();
+const checkTexts={
+  data:"资料前处理可以减少偏见来源，但也可能删掉真实差异，需要记录清理规则。",
+  train:"训练中处理能改变模型倾向，适合高风险系统，但成本高，也要重新评估能力。",
+  decode:"生成时调整概率或加入水印，能影响具体输出，但可能被采样、改写和攻击削弱。",
+  after:"输出后防御最容易部署，可以查核、警告或改写，但它是在补救已经生成的回答。"
+};
+document.querySelectorAll("[data-check]").forEach(btn=>btn.addEventListener("click",()=>{
+  document.querySelectorAll("[data-check]").forEach(b=>b.classList.toggle("active",b===btn));
+  document.getElementById("checkText").textContent=checkTexts[btn.dataset.check];
+}));
+document.getElementById("checkText").textContent=checkTexts.loose;
+function valueOfQuestion(q){
+  const radio=q.querySelector("input[type=radio]:checked"); if(radio) return radio.value;
+  const text=q.querySelector("textarea,input[type=text],select"); return text?text.value.trim():"";
+}
+function questionGroup(q){return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";}
+function generateRecord(){
+  const qs=[...document.querySelectorAll('[data-role=homework]')],groups={},warnings=[];
+  qs.forEach((q,i)=>{
+    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";
+    const hint=q.querySelector(".solve-note")?.innerText.trim()||"";
+    const answer=valueOfQuestion(q);
+    if(!answer) warnings.push("第 "+(i+1)+" 题未填写："+title);
+    if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))) warnings.push("第 "+(i+1)+" 题建议补齐“错因 / 后果 / 修法”。");
+    if(q.dataset.type==="feynman"){
+      const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
+      if(answer&&answer.length<120) warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");
+      const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):[];
+      if(lack.length) warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");
+    }
+    const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
+  });
+  let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";
+  Object.keys(groups).forEach(group=>{out+="## "+group+"\n\n";groups[group].forEach(item=>{out+="### "+item.title+"\n";if(item.hint) out+="提示摘要："+item.hint+"\n\n";out+=item.answer+"\n\n";});});
+  document.getElementById("record").textContent=out;
+  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，适合回看订正。";
+}
+function fallbackCopy(text,onOk,onFail){
+  const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";document.body.appendChild(ta);ta.focus();ta.select();
+  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
+}
+function copyText(text,onOk,onFail){
+  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
+  else fallbackCopy(text,onOk,onFail);
+}
+function copyRecord(){
+  copyText(document.getElementById("record").textContent,()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";},()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";});
+}
+</script>
+</body>
+</html>

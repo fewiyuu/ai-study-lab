@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>02 消息历史与 Agent 循环｜Claude Code 工作流</title>
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand"><strong>Claude Code 工作流</strong><span>02｜消息历史与 Agent 循环</span></div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>目标与主线</a>
+      <a href="#two-loops"><span class="dot"></span>两层循环</a>
+      <a href="#history"><span class="dot"></span>history 列表</a>
+      <a href="#agent-loop"><span class="dot"></span>agent_loop</a>
+      <a href="#content"><span class="dot"></span>content blocks</a>
+      <a href="#debug"><span class="dot"></span>调试观察</a>
+      <a href="#public-guide"><span class="dot"></span>讲义补强</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>导出练习记录</a>
+    </nav>
+    <div class="side-note">这一节先故意避开工具调用，只看一次普通 hello 对话怎样进出消息循环。</div>
+  </aside>
+  <main>
+    <header class="hero" id="goal">
+      <div>
+        <div class="kicker">Message loop</div>
+        <h1>消息历史与 Agent 循环</h1>
+        <p class="muted">上一节只是把 Agent 跑起来。这一节开始读第一段核心源码：用户输入如何变成 `history` 里的消息，`agent_loop` 怎样调用模型，模型回复又如何被追加回同一个列表。</p>
+        <div class="map">
+          <span class="node">input</span><span class="arrow">→</span>
+          <span class="node">user message</span><span class="arrow">→</span>
+          <span class="node">agent_loop</span><span class="arrow">→</span>
+          <span class="node">assistant response</span><span class="arrow">→</span>
+          <span class="node">print text</span>
+        </div>
+        <p>学完本页，你应该能画出一次无工具调用的消息流，分清外层输入循环和内层 Agent 循环，并知道为什么 `response.content` 不能当成普通字符串处理。</p>
+      </div>
+      <div class="box soft">
+        <h3>来源材料</h3>
+        <p>视频：《Learn Claude Code 源码详解》让 Hello 进入循环，开发实战分享屋，2026-03-06。</p>
+        <p>本页只讲 `hello` 这种不触发工具调用的轮次。工具调用会在下一块单独拆。</p>
+      </div>
+    </header>
+
+    <section id="two-loops">
+      <div class="head"><h2>1. 先分清两层循环</h2><span class="tag">outer / inner</span></div>
+      <p>源码里有两层 `while True`。外层循环在主函数里，负责不断等待用户输入；只要你不输入 `q` 或 `exit`，它就会继续问下一句。内层循环在 `agent_loop` 里，负责让模型完成当前这一个用户任务。当前任务结束后，内层循环退出，控制权回到外层循环。</p>
+      <p>很多初学者会把这两层循环混在一起。一个简单判断是：外层循环的单位是“用户又输入了一条新 prompt”，内层循环的单位是“模型为了完成这条 prompt 可能需要跑几轮”。本节输入的是 `hello`，模型不需要工具，所以内层循环只走一轮就结束。</p>
+      <div class="grid2">
+        <div class="box">
+          <h3>外层循环做什么</h3>
+          <ul>
+            <li>维护同一个 `history` 列表。</li>
+            <li>等待用户输入 `query`。</li>
+            <li>把用户输入包装成 `role=user` 的消息。</li>
+            <li>调用 `agent_loop(history)`。</li>
+            <li>从最后一条回复里打印文本。</li>
+          </ul>
+        </div>
+        <div class="box warn">
+          <h3>内层循环做什么</h3>
+          <ul>
+            <li>把当前 messages 发给模型。</li>
+            <li>把模型响应追加进同一个列表。</li>
+            <li>检查 `stop_reason`。</li>
+            <li>如果是 `end_turn`，说明当前轮结束。</li>
+            <li>如果是 `tool_use`，下一节会继续处理工具。</li>
+          </ul>
+        </div>
+      </div>
+      <div class="codebar"><span class="label">逐行拆解：两层循环骨架</span><span>Python</span></div>
+      <pre><code>history = []
+
+while True:
+    query = input("&gt; ")
+    if query in ("q", "exit"):
+        break
+
+    history.append({"role": "user", "content": query})
+    agent_loop(history)
+
+    response_content = history[-1]["content"]
+    for block in response_content:
+        if hasattr(block, "text"):
+            print(block.text)</code></pre>
+      <p>你现在应该能判断：`history` 不在 `agent_loop` 里面新建，因为它要跨多次用户输入持续累积；`agent_loop` 接收的是同一个列表引用，所以它追加的 assistant 消息会留在外层。</p>
+    </section>
+
+    <section id="history">
+      <div class="head"><h2>2. history 是消息列表，不是聊天文本</h2><span class="tag">role / content</span></div>
+      <p>`history` 是一个列表，里面每个元素是一条消息。最小用户消息通常有两个字段：`role` 表示这条消息是谁说的，`content` 表示内容。输入 `hello` 后，外层循环会追加 `{"role": "user", "content": "hello"}`。</p>
+      <p>这个结构看起来普通，但它是 Agent 能记住上下文的基础。第二次输入时，`history` 里已经有上一次用户消息和模型回复。模型收到的不是孤立的一句话，而是一串消息。后续工具结果、任务计划、压缩摘要，也都会围绕 messages 这个结构展开。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>字段</th><th>本节含义</th><th>常见错法</th></tr></thead>
+          <tbody>
+            <tr><td>`role`</td><td>消息归属，常见是 `user` 或 `assistant`。</td><td>把 role 写错，模型协议可能无法识别说话方。</td></tr>
+            <tr><td>`content`</td><td>消息内容。用户消息可以是字符串，模型回复常是 block 列表。</td><td>以为所有 content 都是纯字符串。</td></tr>
+            <tr><td>`history[-1]`</td><td>Python 里取最后一条消息。</td><td>忘记 `agent_loop` 已经追加了 assistant 回复。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="codebar"><span class="label">正确示例：hello 后的消息列表</span><span>Python-like</span></div>
+      <pre><code>[
+  {"role": "user", "content": "hello"},
+  {
+    "role": "assistant",
+    "content": [
+      ThinkingBlock(...),
+      TextBlock(text="Hello, how can I help you today?")
+    ]
+  }
+]</code></pre>
+      <p>判断句：看到 `history[-1]["content"]` 时，要先问最后一条消息是谁追加的。如果是 assistant 响应，content 通常要按 blocks 遍历，而不是直接 `print(content)`。</p>
+    </section>
+
+    <section id="agent-loop">
+      <div class="head"><h2>3. agent_loop 的一轮做了什么</h2><span class="tag">request / response</span></div>
+      <p>`agent_loop` 是当前任务的核心。它把 messages 发给模型，拿到 response，再把 response 作为 assistant 消息追加回 messages。追加之后再看 `stop_reason`。这一步要先追加再判断，因为无论后续是结束还是工具调用，模型刚才说过什么都应该进入历史。</p>
+      <p>本节输入 `hello`，模型判断不需要调用工具，所以 `stop_reason` 是 `end_turn`。这表示“这一轮 assistant 已经把该说的话说完了”。代码看到 `end_turn` 后就 `return`，内层循环结束，外层循环继续等待下一次输入。</p>
+      <div class="viz-panel">
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <h3>点击观察当前步骤</h3>
+            <div class="viz-actions">
+              <button data-step="0" class="active">1 输入 hello</button>
+              <button data-step="1">2 追加 user</button>
+              <button data-step="2">3 调模型</button>
+              <button data-step="3">4 追加 assistant</button>
+              <button data-step="4">5 end_turn 返回</button>
+            </div>
+            <div class="timeline" id="timeline"></div>
+          </div>
+          <div class="viz-cell">
+            <h3 id="stepTitle">用户输入 hello</h3>
+            <p id="stepText">外层循环拿到 query。此时还没有追加消息，history 仍然保持上一轮状态。</p>
+            <div class="viz-note" id="stepHint">观察点：用户输入只是原始字符串，还不是 API 协议里的消息对象。</div>
+          </div>
+        </div>
+      </div>
+      <div class="codebar error"><span class="label">错误示例：没有保存 assistant 响应</span><span>消息丢失</span></div>
+      <pre><code>response = client.messages.create(messages=messages)
+
+if response.stop_reason == "end_turn":
+    return
+
+# 错误点：response 没有被 append 到 messages。
+# 外层回去读 history[-1] 时，读到的仍然是 user 消息。</code></pre>
+      <p>这类错误的后果很明显：外层想从最后一条消息里打印模型回复，却发现最后一条还是用户输入。修法是在判断结束条件前，把 assistant 响应追加到 messages。</p>
+    </section>
+
+    <section id="content">
+      <div class="head"><h2>4. content blocks 要逐个看</h2><span class="tag">thinking / text</span></div>
+      <p>模型响应的 `content` 不是一个简单字符串，而是 block 列表。本节调试时能看到至少两类 block：thinking block 和 text block。代码遍历这些 block，找到带 `text` 属性的那一个，再打印 `block.text`。</p>
+      <p>这个设计让一个回复里可以放不同类型的内容。后续工具调用时，`content` 里还可能出现 `tool_use` block。你现在不需要展开工具调用细节，只要先养成习惯：看 `content` 时，先看它是列表，再看每个 block 的类型和字段。</p>
+      <div class="grid2">
+        <div class="box soft">
+          <h3>thinking block</h3>
+          <p>表示模型内部推理相关的块。不同 API 或模型对它的可见性、字段和处理方式不同。本节观察重点是：它不是要直接打印给用户的普通文本。</p>
+        </div>
+        <div class="box ok">
+          <h3>text block</h3>
+          <p>包含可以展示给用户的自然语言文本。代码用 `hasattr(block, "text")` 找到它，然后打印出来。</p>
+        </div>
+      </div>
+      <div class="codebar"><span class="label">正确示例：只打印有 text 的 block</span><span>Python</span></div>
+      <pre><code>response_content = history[-1]["content"]
+
+for block in response_content:
+    if hasattr(block, "text"):
+        print(block.text)</code></pre>
+      <p>判断句：如果你把 `response.content` 当字符串处理，说明你还没进入 Agent 协议层；如果你能说出“遍历 block，识别 text block，再展示”，就抓住了本节的关键。</p>
+    </section>
+
+    <section id="debug">
+      <div class="head"><h2>5. 调试时看哪几个变量</h2><span class="tag">断点观察</span></div>
+      <p>字幕里的调试路线很适合初学：在定义 `history` 附近打断点，先观察空列表；输入 `hello` 后，看 `query`；追加消息后，看 `history` 的第一条；进入 `agent_loop` 后，看请求返回的 `response`；最后看 `history[-1]["content"]` 里的 blocks。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>观察点</th><th>应该看到什么</th><th>说明什么</th></tr></thead>
+          <tbody>
+            <tr><td>`history = []`</td><td>空列表</td><td>会话历史从这里开始累积。</td></tr>
+            <tr><td>`query`</td><td>`"hello"`</td><td>外层循环拿到了用户输入。</td></tr>
+            <tr><td>append user 后</td><td>一条 `role=user` 消息</td><td>用户输入已变成 API 消息。</td></tr>
+            <tr><td>`response.stop_reason`</td><td>`end_turn`</td><td>模型认为不需要工具，当前轮结束。</td></tr>
+            <tr><td>`response_content`</td><td>thinking block + text block</td><td>输出要从 block 里取。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>你现在应该能做一次最小调试复述：输入 `hello` 后，`history` 从 0 条变 1 条，再在 `agent_loop` 里变 2 条；最后外层从第 2 条消息的 text block 里打印回复。</p>
+    </section>
+
+    <section id="public-guide">
+      <div class="head"><h2>6. 公开讲义补强：消息协议最小心智模型</h2><span class="tag">message protocol</span></div>
+      <p>把这一页压缩成一句话：Agent 循环不是把一段聊天文本来回拼接，而是在维护一组有角色、有内容块、有停止原因的协议消息。协议消息的好处是程序能精确判断“谁说的、说了什么类型的内容、下一步该结束还是调用工具”。</p>
+      <div class="grid3">
+        <div class="route"><h3>role</h3><p>消息身份。常见值是 `user`、`assistant`，后续还会出现工具结果相关消息。</p></div>
+        <div class="route"><h3>content block</h3><p>内容块。assistant 回复可以包含 text、thinking、tool_use 等块，不能默认当成字符串。</p></div>
+        <div class="route"><h3>stop_reason</h3><p>停止原因。`end_turn` 表示当前任务回答完；`tool_use` 表示模型请求本地程序继续行动。</p></div>
+      </div>
+      <div class="codebar"><span class="label">最小消息历史例子</span><span>JSON-like</span></div>
+      <pre><code>[
+  {"role": "user", "content": "hello"},
+  {
+    "role": "assistant",
+    "content": [
+      {"type": "text", "text": "Hello! How can I help?"}
+    ]
+  }
+]</code></pre>
+      <div class="box warn">
+        <h3>常见误区</h3>
+        <ul>
+          <li>把 `history` 理解成一整段字符串，导致无法解释多轮上下文。</li>
+          <li>把 `agent_loop` 当成主输入循环，混淆“当前任务内部循环”和“下一次用户输入”。</li>
+          <li>直接打印 `response.content`，没有按 block 类型过滤 text。</li>
+          <li>先判断 `stop_reason` 再决定是否保存 assistant 响应，导致历史不完整。</li>
+        </ul>
+      </div>
+      <p>你现在应该能做什么：看到一次模型响应时，先按 `role -> content blocks -> stop_reason -> 是否继续循环` 的顺序读，而不是把它当成普通字符串输出。</p>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3><p>先检查你能不能说清 messages 的基本结构。</p></div>
+          <div class="box soft">复习一下：`history` 是消息列表；消息里有 role 和 content；assistant 的 content 可能是 block 列表。</div>
+        </div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. history 类型"><div class="q-meta"><span class="pill">选择</span></div><h3>1. `history` 在本节源码里是什么？</h3><label><input type="radio" name="q1" value="A">A. 单个字符串</label><label><input type="radio" name="q1" value="B">B. 消息列表</label><label><input type="radio" name="q1" value="C">C. 模型对象</label></div>
+          <div class="q" data-role="homework" data-title="2. role 字段"><div class="q-meta"><span class="pill">填空</span></div><h3>2. 用户输入 `hello` 后，追加消息的 `role` 是 ______，`content` 是 ______。</h3><input type="text" name="q2"></div>
+          <div class="q" data-role="homework" data-title="3. content 判断"><div class="q-meta"><span class="pill">判断</span></div><h3>3. assistant 的 `content` 一定是普通字符串。</h3><label><input type="radio" name="q3" value="对">对</label><label><input type="radio" name="q3" value="错">错</label></div>
+          <div class="q" data-role="homework" data-title="4. history[-1]"><div class="q-meta"><span class="pill">短答</span></div><h3>4. `history[-1]` 在 `agent_loop` 返回后通常指向哪条消息？</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、流程排序</h3><p>这一组检查你能不能把一次 hello 对话排成准确顺序。</p></div>
+          <div class="box soft">先外层输入，再追加 user，再进内层调模型，再追加 assistant，最后打印 text。</div>
+        </div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="5. 两层循环"><div class="q-meta"><span class="pill">区分</span></div><h3>5. 外层循环和内层 `agent_loop` 的职责分别是什么？</h3><textarea name="q5"></textarea></div>
+          <div class="q" data-role="homework" data-title="6. 顺序排序"><div class="q-meta"><span class="pill">排序</span></div><h3>6. 排序：打印 text、调用模型、追加 user 消息、输入 hello、追加 assistant 响应。</h3><input type="text" name="q6"></div>
+          <div class="q" data-role="homework" data-title="7. end_turn"><div class="q-meta"><span class="pill">概念</span></div><h3>7. `stop_reason=end_turn` 表示什么？</h3><textarea name="q7"></textarea></div>
+          <div class="q" data-role="homework" data-title="8. 继续输入"><div class="q-meta"><span class="pill">场景</span></div><h3>8. 为什么打印完 hello 回复后，程序还能继续等待下一次输入？</h3><textarea name="q8"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、代码阅读与诊断</h3><p>这一组把错误写法放出来，让你定位后果。</p></div>
+          <div class="box warn">回答诊断题时按错因、后果、修法走，不要只写“逻辑错”。</div>
+        </div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="9. 缺少 append"><div class="q-meta"><span class="pill">诊断</span></div><h3>9. 如果 `agent_loop` 没把 response 追加进 messages，外层打印会出什么问题？</h3><textarea name="q9"></textarea></div>
+          <div class="q" data-role="homework" data-title="10. content 当字符串"><div class="q-meta"><span class="pill">诊断</span></div><h3>10. 直接 `print(history[-1]["content"])` 为什么不稳？</h3><textarea name="q10"></textarea></div>
+          <div class="q" data-role="homework" data-title="11. thinking block"><div class="q-meta"><span class="pill">识别</span></div><h3>11. 为什么遍历 block 时要判断有没有 `text` 属性？</h3><textarea name="q11"></textarea></div>
+          <div class="q" data-role="homework" data-title="12. 循环混淆"><div class="q-meta"><span class="pill">诊断</span></div><h3>12. 把两层 `while True` 当成同一个循环，会导致你误解哪件事？</h3><textarea name="q12"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、迁移与表达</h3><p>把本节学到的消息流讲给别人听。</p></div>
+          <div class="box soft">这一节的表达重点不是工具，而是“消息如何保存、请求如何发出、回复如何取出”。</div>
+        </div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="13. 调试变量"><div class="q-meta"><span class="pill">清单</span></div><h3>13. 调试一次 hello 对话时，你会重点看哪 5 个变量或字段？</h3><textarea name="q13"></textarea></div>
+          <div class="q" data-role="homework" data-title="14. 多轮上下文"><div class="q-meta"><span class="pill">迁移</span></div><h3>14. 第二次输入时，为什么模型能看到上一轮内容？</h3><textarea name="q14"></textarea></div>
+          <div class="q" data-role="homework" data-title="15. 面试短答"><div class="q-meta"><span class="pill">表达</span></div><h3>15. 用 2-3 句话解释 `history` 在 Agent 里的作用。</h3><textarea name="q15"></textarea></div>
+          <div class="q" data-role="homework" data-title="16. 边界"><div class="q-meta"><span class="pill">边界</span></div><h3>16. 本节为什么暂时不讲 `tool_use`？</h3><textarea name="q16"></textarea></div>
+          <div class="q full" data-role="homework" data-title="17. 最小流程图"><div class="q-meta"><span class="pill">流程图</span></div><h3>17. 用文字画出一次无工具调用的消息流。</h3><textarea name="q17"></textarea></div>
+          <div class="q full" data-role="homework" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：输入 `hello` 后，`history` 和 `agent_loop` 如何协作。</h3><div class="solve-note">请串联外层循环、user message、client 请求、assistant response、stop_reason、content blocks。</div><textarea name="q18"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>保存练习记录</h2><span class="tag">自测用</span></div>
+      <p class="muted">完成练习后生成本页记录，便于检查理解和复制留存。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+const stepData=[
+  ["用户输入 hello","外层循环拿到 query。此时还没有追加消息，history 仍然保持上一轮状态。","观察点：用户输入只是原始字符串，还不是 API 协议里的消息对象。"],
+  ["追加 user message","代码把 query 包装成 {role:'user', content:'hello'} 并追加进 history。","观察点：history 从空列表变成一条用户消息。"],
+  ["进入 agent_loop 调模型","agent_loop 把 messages 发给模型。tools 参数此处先放在一边，不进入工具分支。","观察点：请求带的是整个 messages，不只是最后一句 hello。"],
+  ["追加 assistant response","模型返回 response 后，代码把它作为 assistant 消息追加进 messages。","观察点：history 现在有两条消息，最后一条是 assistant。"],
+  ["看到 end_turn 后返回","stop_reason 是 end_turn，说明模型认为本轮不用工具，当前任务结束。","观察点：内层循环结束，外层循环继续等下一次输入。"]
+];
+function renderStep(i){document.querySelectorAll("[data-step]").forEach(b=>b.classList.toggle("active",Number(b.dataset.step)===i));document.getElementById("stepTitle").textContent=stepData[i][0];document.getElementById("stepText").textContent=stepData[i][1];document.getElementById("stepHint").textContent=stepData[i][2];document.getElementById("timeline").innerHTML=stepData.map((s,idx)=>`<div class="step ${idx===i?"active":""}"><b>${idx+1}. ${s[0]}</b><br><span>${s[1]}</span></div>`).join("")}
+document.querySelectorAll("[data-step]").forEach(btn=>btn.addEventListener("click",()=>renderStep(Number(btn.dataset.step))));renderStep(0);
+document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
+const questionNodes=[...document.querySelectorAll('[data-role="homework"]')];
+const questions=questionNodes.map((node,idx)=>["综合练习",node.dataset.title||node.querySelector("h3")?.innerText||`第 ${idx+1} 题`,`q${idx+1}`,"dom"]);
+function answerOf(node){const checked=[...node.querySelectorAll('input[type=radio]:checked,input[type=checkbox]:checked')].map(i=>i.value);const text=[...node.querySelectorAll('textarea,input[type=text]')].map(i=>i.value.trim()).filter(Boolean);return [...checked,...text].join('；')}
+function generateRecord(){const missing=[],lines=['# 02 消息历史与 Agent 循环｜练习记录',''];questionNodes.forEach((node,idx)=>{const title=node.dataset.title||node.querySelector('h3')?.innerText||`第 ${idx+1} 题`;const answer=answerOf(node);if(!answer)missing.push(title);lines.push(`## ${idx+1}. ${title}`,answer||'（未填写）','')});document.getElementById('record').textContent=lines.join('\n');const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=answerOf(questionNodes[questionNodes.length-1]||document.createElement('div'));const keys=['外层循环','user','client','assistant','stop_reason','content'];const lack=keys.filter(k=>f&&!f.includes(k));if(f&&f.length<120)warnings.push('费曼解释偏短，建议讲成 6-9 句话。');if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join('、')}。`);const q=document.getElementById('quality');q.style.display='block';q.textContent=warnings.length?warnings.join('\n'):'练习记录完整，可以用于自测检查。'}
+function copyRecord(){navigator.clipboard.writeText(document.getElementById('record').textContent).catch(()=>alert('复制失败，请手动复制。'))}
+</script>
+<script src="../assets/study-page.js"></script>
+</body>
+</html>

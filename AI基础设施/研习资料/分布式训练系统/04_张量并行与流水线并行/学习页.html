@@ -1,0 +1,929 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>张量并行与流水线并行</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="分布式训练系统" data-unit="04｜张量并行与流水线并行">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>分布式训练系统</strong>
+        <span>04｜张量并行与流水线并行</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#terms"><span class="dot"></span>术语与边界</a>
+        <a href="#tp-shape"><span class="dot"></span>张量并行追踪</a>
+        <a href="#pp-trace"><span class="dot"></span>流水线时序</a>
+        <a href="#walkthrough"><span class="dot"></span>组合拓扑</a>
+        <a href="#bridge"><span class="dot"></span>代码桥接</a>
+        <a href="#boundary"><span class="dot"></span>这里先不追</a>
+        <a href="#mistakes"><span class="dot"></span>常见错误</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先分清层内切分、阶段切分和副本同步，再看它们怎样落到 rank、stage 和 micro-batch 上。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">模型内部并行</div>
+          <h1>张量并行与流水线并行</h1>
+          <p>这一页接着 03 的参数分片往下走，但重点换成模型内部怎么切：张量并行负责把同一层的矩阵和激活拆给多卡，流水线并行负责把模型深度和 micro-batch 的节拍排好。先把层内切分、阶段切分、数据副本同步分开，再看它们怎样同时出现在一条训练拓扑里。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../03_FSDP2与参数分片/学习页.html">上一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页你能做什么</h3>
+          <ul>
+  <li>能把 `ColwiseParallel`、`RowwiseParallel`、`PrepareModuleInput` 和 `PrepareModuleOutput` 连成一条可执行的层内切分链，而不是只会背名词。</li>
+  <li>能顺着一个 `H -> 4H -> H` 的 MLP 和一个 3-stage、5 micro-batch 的流水线，画出 rank、stage、micro-batch 和通信动作的对应关系。</li>
+  <li>能看懂什么时候该先查形状、什么时候该查调度、什么时候该查进程组边界，从而定位 TP / PP 的常见错误。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goal</span>
+  </div>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>先分对象</h3>
+      <p>张量并行切的是层内矩阵和激活，流水线并行切的是模型深度。两者都能扩卡，但它们要回答的问题不同。</p>
+    </div>
+    <div class="box info">
+      <h3>再看边界</h3>
+      <p>TP 关注同一层的局部计算和局部聚合，PP 关注 stage 之间的激活和梯度传递。边界错了，形状和调度都会乱。</p>
+    </div>
+    <div class="box warn">
+      <h3>最后看组合</h3>
+      <p>把 TP、PP、DP 放进同一个 rank 拓扑里，知道每个维度各管什么，才不会把“并行”当成一个单一开关。</p>
+    </div>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">overview</span>
+  </div>
+  <p>03 单元解决的是“状态常驻太大怎么办”。04 进入模型内部并行：当单张卡已经能装下参数分片，但单层计算还是太慢、模型深度还是太长时，训练系统就会把层内矩阵和层序列拆开，让多个 rank 一起完成同一批前向和反向工作。</p>
+  <div class="map">
+    <span class="node">X=[B,H], W=[H,4H]</span>
+    <span class="arrow">→</span>
+    <span class="node">ColwiseParallel</span>
+    <span class="arrow">→</span>
+    <span class="node">RowwiseParallel</span>
+    <span class="arrow">→</span>
+    <span class="node">3-stage / 5 micro-batch</span>
+  </div>
+  <p>理解这页时先抓一个锚点：Transformer 的 MLP 里有一个 <code>H -&gt; 4H -&gt; H</code> 的两层结构。第一层适合按输出维切开，第二层适合按输入维切开；如果再把整个模型切成 3 个 stage，就会多出 micro-batch、stage 间传输和 bubble。这个锚点会贯穿后面的形状、时序和组合推演。</p>
+  <p>把这件事说得更直白一点：TP 读的是矩阵布局，PP 读的是模型顺序，DP 读的是副本是否一致。这三种问题不能混着查。很多人第一次看 TP / PP，都会想先问“哪种更快”，但真正能省时间的是先把对象分开：矩阵、stage、batch 副本。只要对象分错了，后面的讨论就会在不同层级之间来回跳。</p>
+  <p>这页先用 PyTorch 的公共原语看清边界，Megatron Core 放到下一单元再把这些边界装进训练栈里。</p>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语与边界</h2>
+    <span class="tag">terms</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="TP/PP 术语与边界" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>术语</th>
+          <th>先怎么理解</th>
+          <th>这页里的作用</th>
+          <th>常见误读</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>TP</td>
+          <td>Tensor Parallelism，把同一层的矩阵切到多个 rank 上算。</td>
+          <td>看层内形状、局部输出和什么时候要拼回完整结果。</td>
+          <td>把它误读成按层切模型。</td>
+        </tr>
+        <tr>
+          <td>PP</td>
+          <td>Pipeline Parallelism，把模型按深度切成 stage。</td>
+          <td>看 stage 划分、micro-batch 数量、调度顺序和气泡比例。</td>
+          <td>以为 stage 越多吞吐一定越高。</td>
+        </tr>
+        <tr>
+          <td>DeviceMesh</td>
+          <td>把 rank 排成明确的分布式网格。</td>
+          <td>告诉 <code>parallelize_module()</code> 该沿哪条并行轴切。</td>
+          <td>把它当成可有可无的包装参数。</td>
+        </tr>
+        <tr>
+          <td>process group</td>
+          <td>一组需要一起做 collective 的 rank。</td>
+          <td>限制通信只在该发生的 rank 之间发生。</td>
+          <td>把 TP、PP、DP 的通信混成一个 group。</td>
+        </tr>
+        <tr>
+          <td>micro-batch</td>
+          <td>送进流水线调度器的最小切片。</td>
+          <td>决定管道能不能被填满，bubble 会不会太大。</td>
+          <td>以为总 batch 足够大就不用管 micro-batch。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>先别追的东西</h3>
+    <p>Sequence Parallel、Context Parallel、Expert Parallel、zero-bubble schedule 和分布式优化器先不展开。它们会在后续单元或更后面的训练栈里回来。</p>
+  </div>
+</section>
+
+<section id="tp-shape">
+  <div class="head">
+    <h2>张量并行追踪</h2>
+    <span class="tag">tp</span>
+  </div>
+  <p>先看 MLP 的第一层：<code>X=[B,H]</code>，<code>W1=[H,4H]</code>。把输出维切成两份时，每个 rank 只拿到一半输出列；它算出来的是局部激活，不是完整结果。下一层如果还想保持分片，就让后续算子继续吃分片表示；如果要恢复完整输出，就在合适的位置做一次聚合。</p>
+  <div class="shape-tracer" data-shape-tracer data-export-context="TP 层内形状追踪" data-export-lang="text">
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1" type="button"><code>X=[B,H], W1=[H,4H]</code><span>输入还是完整的</span></button>
+      <button class="trace-line" data-trace-step="step-2" type="button"><code>ColwiseParallel</code><span>按输出维切开</span></button>
+      <button class="trace-line" data-trace-step="step-3" type="button"><code>RowwiseParallel</code><span>按输入维接回去</span></button>
+      <button class="trace-line" data-trace-step="step-4" type="button"><code>PrepareModuleInput / Output</code><span>重写模块边界</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1"><b>输入张量</b><span>[B,H]</span><p>rank 看到同样的 batch 和 hidden 结构。这个阶段不需要额外通信。</p></div>
+      <div class="tensor-card" data-trace-target="step-2"><b>列并行线性层</b><span>每个 rank 持有 <code>W1=[H,2H]</code>，输出局部 <code>[B,2H]</code></span><p>输出通道被切开，局部结果保留了 batch 维。</p></div>
+      <div class="tensor-card" data-trace-target="step-3"><b>行并行线性层</b><span>每个 rank 消费 <code>[B,2H]</code> 的局部片，写出 <code>[B,H]</code> 的部分和</span><p>这一步算的是同一输出的不同贡献，最后要靠归约恢复完整结果。</p></div>
+      <div class="tensor-card" data-trace-target="step-4"><b>边界准备</b><span>把前一层的分片格式，改成下一层能直接消费的格式</span><p>布局没接上时，模块能跑但结果会错位，或者下一层会直接报形状错。</p></div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="TP 状态/形状/读写矩阵" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>进入前</th>
+          <th>进入后</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>出错症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>ColwiseParallel</code></td>
+          <td><code>W1=[H,4H]</code></td>
+          <td><code>W1</code> 按输出维分片成 <code>[H,2H]</code></td>
+          <td>输入激活、局部权重片</td>
+          <td>局部输出列</td>
+          <td>输出维没对齐时，下一层会看到形状不匹配</td>
+        </tr>
+        <tr>
+          <td><code>RowwiseParallel</code></td>
+          <td>局部分片激活 <code>[B,2H]</code></td>
+          <td>局部权重行 <code>[2H,H]</code></td>
+          <td>局部输入片、局部权重片</td>
+          <td>部分和 <code>[B,H]</code></td>
+          <td>忘了归约时，结果看起来像少算了一半</td>
+        </tr>
+        <tr>
+          <td><code>PrepareModuleInput</code></td>
+          <td>上一层的输出布局</td>
+          <td>当前层可消费的输入布局</td>
+          <td>前一层的输出格式</td>
+          <td>本层输入的分片格式</td>
+          <td>布局没接上时，模块能跑但结果错位</td>
+        </tr>
+        <tr>
+          <td><code>PrepareModuleOutput</code></td>
+          <td>当前层的局部输出</td>
+          <td>下游模块期待的输出布局</td>
+          <td>当前层输出的保存方式</td>
+          <td>给后续模块的边界格式</td>
+          <td>边界不清时，后面的 stage 读到半成品张量</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>TP 代码桥接</span><button class="copy" data-copy="tp-code-bridge">复制</button></div>
+  <pre id="tp-code-bridge" data-export-context="TP 代码桥接" data-export-lang="python"><code class="language-python">from torch.distributed.device_mesh import DeviceMesh
+from torch.distributed.tensor.parallel import (
+    ColwiseParallel,
+    PrepareModuleInput,
+    PrepareModuleOutput,
+    RowwiseParallel,
+    parallelize_module,
+)
+
+mesh = DeviceMesh("cuda", [0, 1])
+
+tp_plan = {
+    "mlp.fc1": ColwiseParallel(),
+    "mlp.fc2": RowwiseParallel(),
+    "mlp": [PrepareModuleInput(), PrepareModuleOutput()],
+}
+
+parallelize_module(mlp_block, mesh, tp_plan)</code></pre>
+  <div class="box info">
+    <h3>这段代码先读哪里</h3>
+    <p>先读模块名，再读并行方式。<code>fc1</code> 和 <code>fc2</code> 不是两个随意的层名，而是两种切分方向的连接点。<code>parallelize_module()</code> 只吃 1-D <code>DeviceMesh</code>，所以你必须先把并行轴写清楚。</p>
+  </div>
+</section>
+
+<section id="pp-trace">
+  <div class="head">
+    <h2>流水线时序</h2>
+    <span class="tag">pp</span>
+  </div>
+  <p>流水线并行的难点不在“能不能切”，而在“切完以后怎么喂”。把 3-stage 模型拆成 5 个 micro-batch 时，前几步要先把 pipeline 填起来，后面才进入 steady state。stage 越多、micro-batch 越少，空转就越明显。</p>
+  <div class="table-wrap">
+    <table data-export-context="PP 时序与气泡表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>时间片</th>
+          <th>Stage 0</th>
+          <th>Stage 1</th>
+          <th>Stage 2</th>
+          <th>观察点</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>t0</td><td>mb1 前向</td><td>空</td><td>空</td><td>warmup 开始</td></tr>
+        <tr><td>t1</td><td>mb2 前向</td><td>mb1 前向</td><td>空</td><td>stage 1 开始接活</td></tr>
+        <tr><td>t2</td><td>mb3 前向</td><td>mb2 前向</td><td>mb1 前向</td><td>管道被填满</td></tr>
+        <tr><td>t3</td><td>mb4 前向</td><td>mb3 前向</td><td>mb2 前向</td><td>steady 区开始</td></tr>
+        <tr><td>t4</td><td>mb5 前向</td><td>mb4 前向</td><td>mb3 前向</td><td>最慢 stage 决定节拍</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>读这张表时先看什么</h3>
+      <p>先看每个时间片有没有空白 stage，再看空白是不是由 micro-batch 不够造成的。如果 stage 2 比别的 stage 慢，后面的 stage 会等它，不是调度器本身“没写对”。</p>
+    </div>
+    <div class="box info">
+      <h3>一个最小失败例子</h3>
+      <p>4 个 stage 只给 2 个 micro-batch 时，后续 stage 很快空下来，前向看起来还能跑，吞吐却明显掉下去。这个现象是 bubble 变大，不是模型算错。</p>
+    </div>
+  </div>
+  <div class="math-block" data-export-context="PP 气泡与填充公式" data-export-lang="math">
+    $$
+    \text{bubble} \approx \frac{S-1}{M+S-1}
+    $$
+    <p>这里 <code>S</code> 表示 stage 数，<code>M</code> 表示 micro-batch 数。stage 越多、micro-batch 越少，空转比例越高。这个式子的作用不是算到小数点，而是让你在排查吞吐时先怀疑调度粒度。</p>
+  </div>
+  <div class="terminal-lab" data-terminal-lab data-export-context="PP 调度失败实验" data-export-lang="text">
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1" type="button">micro-batch 太少</button>
+      <button class="ghost" data-terminal-case="case-2" type="button">stage 失衡</button>
+      <button class="ghost" data-terminal-case="case-3" type="button">边界错位</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">症状：3-stage 流水线只跑 2 个 micro-batch，前向能执行，但中后段 stage 经常空着。排查方向：先看 micro-batch 数，再看 stage 是否均衡。</pre>
+    <template data-terminal-output="case-1">症状：2 个 micro-batch 还不够填满 3 个 stage。后续 stage 空转时间长，吞吐下降。先增加 micro-batch，再看通信是否跟得上。</template>
+    <template data-terminal-output="case-2">症状：某个 stage 的单步耗时明显更长，整个 pipeline 被最慢 stage 拖住。先测每个 stage 的 forward/backward 耗时，再重切层数。</template>
+    <template data-terminal-output="case-3">症状：stage 间激活张量形状不一致，传输能发生但接收端读不进去。先核对 stage 边界上的输入输出契约。</template>
+  </div>
+</section>
+
+<section id="walkthrough">
+  <div class="head">
+    <h2>组合推演</h2>
+    <span class="tag">tp + pp + dp</span>
+  </div>
+  <p>TP 和 PP 不是互相替代的两个选项，它们通常和 DP 一起出现。一个更实用的看法是：DP 决定数据副本怎么同步，TP 决定单层怎么算，PP 决定层序怎么排。三者同时存在时，rank 往往会同时属于多个 group，但每次通信只应该落在一个明确的维度上。</p>
+  <div class="table-wrap">
+    <table data-export-context="TP/PP/DP 组合推演" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>维度</th>
+          <th>切什么</th>
+          <th>通信对象</th>
+          <th>典型动作</th>
+          <th>常见错法</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>DP</td>
+          <td>数据副本</td>
+          <td>同一 batch 的副本 rank</td>
+          <td>同步梯度</td>
+          <td>把 DP 和 TP 的通信混在一起</td>
+        </tr>
+        <tr>
+          <td>TP</td>
+          <td>层内张量</td>
+          <td>同一层的 TP group</td>
+          <td>列切、行切、局部聚合</td>
+          <td>把 TP 当成按层切模型</td>
+        </tr>
+        <tr>
+          <td>PP</td>
+          <td>模型深度</td>
+          <td>相邻 stage</td>
+          <td>传激活、传梯度</td>
+          <td>stage 负载不均衡或 micro-batch 太少</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>怎么读这个推演</h3>
+      <p>先从最外层的 DP 读起，再进到 PP，最后看 TP。这样你会发现三个维度的通信对象完全不同：一个管副本，一个管 stage，一个管层内矩阵。只要顺序倒了，你就容易把不同维度的 collective 认成同一种操作。</p>
+    </div>
+    <div class="box info">
+      <h3>如果你要手算</h3>
+      <p>先不管每个 rank 的精确编号，先写“谁和谁通信”。一旦你能把 TP 组、PP 相邻 stage、DP 同步组分别写出来，rank 编号只是把这个关系展开成表格而已。</p>
+    </div>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>代码桥接</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <p>如果你接下来要读 PyTorch 官方文档，最直接的入口就是 <code>parallelize_module()</code>。它把“这层用哪种并行方式”写成一个显式计划。看这类代码时，不要先问 API 细节，先问每个模块应该属于哪种切法。</p>
+  <div class="codebar"><span>TP/PP 最小桥接代码</span><button class="copy" data-copy="tp-pp-bridge">复制</button></div>
+  <pre id="tp-pp-bridge" data-export-context="TP/PP 最小桥接代码" data-export-lang="python"><code class="language-python">from torch.distributed.device_mesh import DeviceMesh
+from torch.distributed.tensor.parallel import ColwiseParallel, RowwiseParallel, parallelize_module
+
+mesh = DeviceMesh("cuda", [0, 1])
+
+tp_plan = {
+    "mlp.fc1": ColwiseParallel(),
+    "mlp.fc2": RowwiseParallel(),
+}
+
+parallelize_module(model.mlp, mesh, tp_plan)</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="TP 代码读写矩阵" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>错放时的症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>DeviceMesh</code></td>
+          <td>rank 怎么排成一条并行轴</td>
+          <td>TP 计划应该沿哪条轴展开</td>
+          <td>mesh 维度不对，<code>parallelize_module()</code> 就会和你的并行计划对不上</td>
+        </tr>
+        <tr>
+          <td><code>tp_plan</code></td>
+          <td>模块名和切分方式</td>
+          <td>每个子模块对应的 TP 角色</td>
+          <td>名字写错时，计划会落到错误的子模块上</td>
+        </tr>
+        <tr>
+          <td><code>parallelize_module()</code></td>
+          <td>模块树、mesh、TP 计划</td>
+          <td>把边界写进真实模块</td>
+          <td>如果不经过它，边界就不会真的生效</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="implementation">
+  <div class="head">
+    <h2>实现一致性</h2>
+    <span class="tag">case</span>
+  </div>
+  <p>把 TP 和 PP 真正落到代码里时，最容易出问题的地方，不是 API 名字，而是模块树、并行计划和 stage 边界写成了三套互相独立的配置。表面上模型还能跑，实际上你已经在不同层级上回答不同问题：哪一层切开、哪一段放进同一 stage、哪一组 rank 负责同一副本、哪一处需要把局部结果拼回完整张量。</p>
+  <p>拿一个 4-block Transformer 当例子会更清楚。假设 <code>blocks.0</code> 和 <code>blocks.1</code> 放在 stage 0，<code>blocks.2</code> 和 <code>blocks.3</code> 放在 stage 1；每个 block 里的 <code>mlp.fc1</code> 走列并行，<code>mlp.fc2</code> 走行并行。这样一来，stage 只负责层的顺序，TP 只负责层内部的矩阵切分，DP 只负责副本之间的梯度同步。只要任一层的边界写反，后面的读取和聚合就会开始打架。</p>
+  <div class="table-wrap">
+    <table data-export-context="从模块树到并行计划" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>边界</th>
+          <th>你在看什么</th>
+          <th>对应动作</th>
+          <th>检查重点</th>
+          <th>一旦错位会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>模块树</td>
+          <td>block、attention、MLP、residual 的嵌套关系</td>
+          <td>决定哪一层进入 TP 计划</td>
+          <td>名字是否稳定、层级是否清楚</td>
+          <td>计划写进了错误的子模块，后面再调试会很乱</td>
+        </tr>
+        <tr>
+          <td>TP 边界</td>
+          <td>层内矩阵是按列切还是按行切</td>
+          <td>决定局部输出、局部输入、部分和的位置</td>
+          <td>输入输出形状是否连续</td>
+          <td>看起来能跑，结果却在某个边界上少了一次聚合</td>
+        </tr>
+        <tr>
+          <td>PP 边界</td>
+          <td>哪些 block 放在同一个 stage</td>
+          <td>决定激活从哪里传到哪里</td>
+          <td>stage 的计算量和 micro-batch 是否配平</td>
+          <td>一边空转，一边排队，吞吐掉得很快</td>
+        </tr>
+        <tr>
+          <td>DP 边界</td>
+          <td>哪些 rank 共享同一份副本</td>
+          <td>决定梯度在哪个 group 里同步</td>
+          <td>同步 group 是否和 TP、PP 混用</td>
+          <td>梯度重复聚合或聚合范围过大</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>4-block 计划示意</span><button class="copy" data-copy="impl-plan">复制</button></div>
+  <pre id="impl-plan" data-export-context="4-block TP/PP 计划示意" data-export-lang="python"><code class="language-python">from torch.distributed.device_mesh import DeviceMesh
+from torch.distributed.tensor.parallel import ColwiseParallel, RowwiseParallel, parallelize_module
+
+mesh = DeviceMesh("cuda", [0, 1])
+
+tp_plan = {
+    "blocks.0.mlp.fc1": ColwiseParallel(),
+    "blocks.0.mlp.fc2": RowwiseParallel(),
+    "blocks.1.mlp.fc1": ColwiseParallel(),
+    "blocks.1.mlp.fc2": RowwiseParallel(),
+}
+
+parallelize_module(model.blocks[:2], mesh, tp_plan)
+
+# stage 0 只放前两个 block；后两个 block 的 stage 划分交给外层调度器。
+# 如果 stage 边界穿过 fc2，后续 stage 看到的就会是半成品张量。</code></pre>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>怎么读这个例子</h3>
+      <p>先确认 <code>blocks.0</code> 和 <code>blocks.1</code> 的边界，再看 <code>fc1</code> 和 <code>fc2</code> 是不是还待在同一个 stage 内。TP 只关心层内怎么切，PP 只关心这些层放在哪个 stage。只要把这两个问题混成一个，日志就会同时给你形状错和等待时间长。</p>
+    </div>
+    <div class="box info">
+      <h3>自查顺序</h3>
+      <p>先画模块树，再写 TP 计划，最后才看 stage 调度。顺序一旦倒过来，你会把“半成品张量”和“stage 没填满”看成同一种错。</p>
+    </div>
+  </div>
+</section>
+
+<section id="control-loop">
+  <div class="head">
+    <h2>检查回路</h2>
+    <span class="tag">loop</span>
+  </div>
+  <p>把一个 4-block Transformer 拆成 <code>TP=2, PP=2, DP=2</code> 时，先别看总吞吐，先把边界画出来：哪两个 block 属于同一 stage，哪一层走列并行，哪一层走行并行，梯度又在哪个副本组里收敛。这个顺序一旦乱掉，日志会同时出现形状、时序和同步三类信号，排查会很慢。</p>
+  <div class="table-wrap">
+    <table data-export-context="TP/PP 检查回路表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>先查什么</th>
+          <th>下一步</th>
+          <th>对应边界</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>输出形状对，但速度明显慢</td>
+          <td>是否在等完整结果才继续</td>
+          <td>看 TP 的局部聚合位置有没有放晚</td>
+          <td>TP 边界</td>
+        </tr>
+        <tr>
+          <td>stage 里某一段经常空着</td>
+          <td>stage 数和 micro-batch 数是否匹配</td>
+          <td>看 stage 是否失衡，或者 micro-batch 是否太少</td>
+          <td>PP 调度</td>
+        </tr>
+        <tr>
+          <td>模块能跑，但结果像拼错了</td>
+          <td>TP 的输入输出布局是否接上</td>
+          <td>核对 <code>PrepareModuleInput</code> / <code>PrepareModuleOutput</code></td>
+          <td>TP / PP 交界</td>
+        </tr>
+        <tr>
+          <td>分组看起来都对，collective 还是混乱</td>
+          <td>同一次通信服务的是哪个维度</td>
+          <td>把 DP、TP、PP 的 group 分开写清楚</td>
+          <td>process group</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box soft">
+    <h3>排查顺序</h3>
+    <p>先看边界，再看形状，最后看调度。这个顺序很重要，因为很多问题表面像性能问题，实际上是布局问题；也有些看起来像布局问题，实际上是 stage 数和 micro-batch 数没配好。</p>
+  </div>
+</section>
+
+<section id="failure-lab">
+  <div class="head">
+    <h2>故障实验室</h2>
+    <span class="tag">lab</span>
+  </div>
+  <p>现在把前面的链条合成一次真实排错。假设你把一个 4-block Transformer 迁到 <code>TP=2, PP=2</code>，模型能跑，但第一种症状是吞吐掉得很快，第二种症状是某个 stage 总在等前一段，第三种症状是某个线性层的输出看起来像拼错了。只看一个症状很容易误判，必须按边界顺序排。</p>
+  <div class="table-wrap">
+    <table data-export-context="TP/PP 故障排查表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>优先怀疑什么</th>
+          <th>第一步检查</th>
+          <th>常见修法</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>输出形状对，但速度明显慢</td>
+          <td>TP / PP 的通信没重叠</td>
+          <td>看每个边界是不是都在等全量结果</td>
+          <td>把聚合放到真正需要完整结果的地方</td>
+        </tr>
+        <tr>
+          <td>stage 里某一段经常空着</td>
+          <td>micro-batch 太少或 stage 失衡</td>
+          <td>数一下 stage 数和 micro-batch 数</td>
+          <td>增加 micro-batch，或重切层分配</td>
+        </tr>
+        <tr>
+          <td>模块能跑，但结果像拼错了</td>
+          <td>TP 的输入输出布局错位</td>
+          <td>核对 <code>ColwiseParallel</code> 和 <code>RowwiseParallel</code></td>
+          <td>补 <code>PrepareModuleInput</code> / <code>PrepareModuleOutput</code></td>
+        </tr>
+        <tr>
+          <td>分组看起来都对，collective 还是混乱</td>
+          <td>把不同维度塞进同一个 group</td>
+          <td>检查每一次通信是为哪个维度服务的</td>
+          <td>把 DP、TP、PP 的 group 分开写清楚</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="terminal-lab" data-terminal-lab data-export-context="TP/PP 故障实验" data-export-lang="text">
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-a" type="button">吞吐下降</button>
+      <button class="ghost" data-terminal-case="case-b" type="button">stage 等待</button>
+      <button class="ghost" data-terminal-case="case-c" type="button">边界错位</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">症状：模型能跑，但某个 stage 的输出像少接了一段。排查顺序：先看 TP 的边界，再看 PP 的 stage，最后看 group 是否混用。</pre>
+    <template data-terminal-output="case-a">症状：吞吐下降，但形状没报错。先查 TP / PP 的通信是否被完全挡在计算后面，导致重叠消失。</template>
+    <template data-terminal-output="case-b">症状：stage 1 经常等待 stage 0。先查 micro-batch 是否足够，再看 stage 是否失衡。</template>
+    <template data-terminal-output="case-c">症状：局部输出形状看着对，实际内容错位。先查 <code>PrepareModuleInput</code> / <code>PrepareModuleOutput</code> 有没有放在正确边界。</template>
+  </div>
+  <p>一个更小的复现办法，是先只保留一个 MLP block 和一条 stage 边界，把 <code>ColwiseParallel</code> / <code>RowwiseParallel</code> 跑通，再把 stage 切分加回去。这样你能先判断错在 TP 还是 PP：如果小模型都错，问题通常在层内布局；如果小模型正常、加上 stage 才出错，问题通常在流水线边界或 micro-batch。</p>
+  <div class="box warn">
+    <h3>这组排查怎么用</h3>
+    <p>先把症状归到边界，再去看具体 API。TP 的错法通常先体现在形状和局部结果，PP 的错法通常先体现在等待和 bubble，group 的错法通常先体现在通信成员和顺序。只要顺序反了，你就会把性能、布局和同步混成一个问题。</p>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>这里先不追</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>先别深挖</h3>
+      <p>Sequence Parallel、Context Parallel、Expert Parallel、zero-bubble schedule、checkpointing in pipeline、分布式优化器先放一边。它们会改变实现细节，但不会改变这页的主判断。</p>
+    </div>
+    <div class="box warn">
+      <h3>先记住</h3>
+      <p>如果你现在还分不清“层内切分”和“层序切分”，先不要跳到 Megatron Core 的完整栈图。回到这一页，把 MLP 形状和流水线时序各画一遍。</p>
+    </div>
+  </div>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见错误</h2>
+    <span class="tag">mistakes</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="TP/PP 常见错误" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>常见错法</th>
+          <th>直接症状</th>
+          <th>先改哪里</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>把 TP 当成按层切模型</td>
+          <td>形状和通信边界一直对不上</td>
+          <td>先画层内矩阵，再写 TP 计划</td>
+        </tr>
+        <tr>
+          <td>只看 stage 数，不看 micro-batch</td>
+          <td>管道没填满，bubble 很大</td>
+          <td>先确认 micro-batch 是否足够</td>
+        </tr>
+        <tr>
+          <td>用一个全局 group 做所有通信</td>
+          <td>collective 互相打架，排查很慢</td>
+          <td>把 DP、TP、PP 的 group 分开</td>
+        </tr>
+        <tr>
+          <td>只记 API 名字，不看边界</td>
+          <td>代码能跑，但结果错位</td>
+          <td>先看模块树，再看 <code>PrepareModuleInput</code> / <code>PrepareModuleOutput</code></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、概念辨析</h3>
+      <p>先确认你不会把 TP、PP 和 DP 混成一类。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速提示</b>
+      <span>TP 看层内，PP 看层序，DP 看副本。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、概念辨析" data-title="TP 更直接切什么？" data-answer="B">
+      <div class="q-meta"><span class="pill">选择</span><span class="pill">区分 TP/PP</span></div>
+      <h3>TP 更直接切什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q1" value="A">A. 不同训练样本。</label>
+        <label><input type="radio" name="q1" value="B">B. 同一层里的矩阵和激活。</label>
+        <label><input type="radio" name="q1" value="C">C. 检查点文件。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">先盯住“同一层”这三个字。</p>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、概念辨析" data-title="流水线并行的 stage 越多，吞吐一定越高。" data-answer="false">
+      <div class="q-meta"><span class="pill">判断</span><span class="pill">气泡</span></div>
+      <h3>流水线并行的 stage 越多，吞吐一定越高。</h3>
+      <label><input type="radio" name="q2" value="true">对</label>
+      <label><input type="radio" name="q2" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">考虑 micro-batch 数、stage 失衡和等待。</p>
+    </div>
+
+    <div class="q full" data-question="q3" data-group="一、概念辨析" data-title="把三种并行各自切什么写清楚">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">边界</span></div>
+      <h3>把三种并行各自切什么写清楚。</h3>
+      <div class="mini-fields">
+        <label>TP <input type="text" name="q3_tp" data-answer="层内矩阵,层内激活,同一层的矩阵" placeholder="层内矩阵"></label>
+        <label>PP <input type="text" name="q3_pp" data-answer="模型深度,stage,层序" placeholder="模型深度"></label>
+        <label>DP <input type="text" name="q3_dp" data-answer="数据副本,batch,样本副本" placeholder="数据副本"></label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">先说对象，再说通信对象。</p>
+    </div>
+
+    <div class="q" data-question="q4" data-group="一、概念辨析" data-title="parallelize_module 需要什么 mesh？" data-answer="B">
+      <div class="q-meta"><span class="pill">code reading</span><span class="pill">DeviceMesh</span></div>
+      <h3><code>parallelize_module()</code> 需要什么 mesh？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q4" value="A">A. 任意维度的二维 mesh。</label>
+        <label><input type="radio" name="q4" value="B">B. 1-D <code>DeviceMesh</code>。</label>
+        <label><input type="radio" name="q4" value="C">C. 不需要 mesh。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">先看这个 API 对并行轴的约束。</p>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、形状与代码</h3>
+      <p>用矩阵形状判断局部结果和通信动作。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速提示</b>
+      <span>列并行先切输出，行并行再接输入并做归约。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q5" data-group="二、形状与代码" data-title="两路列并行线性层推导">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">列切</span></div>
+      <h3>两路列并行线性层推导</h3>
+      <div class="choices">
+        <label><input type="radio" name="q5" value="A">A. <code>X=[B,H]</code>，<code>W1=[H,4H]</code>，2-way 列并行后每个 rank 持有 <code>W1=[H,2H]</code>，局部输出是 <code>[B,2H]</code>。</label>
+        <label><input type="radio" name="q5" value="B">B. <code>X=[B,2H]</code>，<code>W1=[H,4H]</code>，2-way 列并行后每个 rank 持有 <code>W1=[2H,H]</code>，局部输出是 <code>[H,B]</code>。</label>
+        <label><input type="radio" name="q5" value="C">C. <code>X=[B,H]</code>，<code>W1=[H,4H]</code>，2-way 列并行后每个 rank 仍然持有完整 <code>W1</code>，只是输出更慢。</label>
+      </div>
+      <p class="solve-note">先把“输入完整、权重切片、局部输出”这条顺序认出来，再看数字。</p>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q6" data-group="二、形状与代码" data-title="为什么列并行和行并行常配对？">
+      <div class="q-meta"><span class="pill">explain</span><span class="pill">MLP 配对</span></div>
+      <h3>为什么列并行和行并行常配对？</h3>
+      <textarea name="q6" placeholder="用 Transformer MLP 的 H -> 4H -> H 结构解释，重点说清中间激活是否可以保持分片，以及通信被放在哪里。"></textarea>
+      <p class="solve-note">回答时至少说清三件事：第一层做什么、第二层做什么、中间激活怎么过边界。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案会写出：第一层负责扩特征，所以适合按输出维切；第二层负责把特征压回隐藏维，所以适合按输入维切。中间激活能否保持分片，取决于下游层是否继续接受分片布局。这里的重点是配对后边界更自然，而不是“两个名字刚好能搭”。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q7" data-group="二、形状与代码" data-title="哪种写法更贴近 PyTorch TP 入口？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">API</span></div>
+      <h3>哪种写法更贴近 PyTorch TP 入口？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q7" value="A">A. 先建 1-D <code>DeviceMesh</code>，再把 <code>ColwiseParallel</code> / <code>RowwiseParallel</code> 填进 <code>parallelize_module()</code>。</label>
+        <label><input type="radio" name="q7" value="B">B. 先给每个层随便起一个并行名字，再让框架自己猜。</label>
+        <label><input type="radio" name="q7" value="C">C. 只要导入 <code>torch.distributed</code>，其余都不用写。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">看清“先 mesh，后计划”这个顺序。</p>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、流水线诊断</h3>
+      <p>把 micro-batch、stage 和 bubble 放进同一条时间线。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速提示</b>
+      <span>吞吐先看 stage 是否均衡，再看 micro-batch 是否够填管道。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q8" data-group="三、流水线诊断" data-title="4 个 stage 但只有 2 个 micro-batch，主要问题是什么？" data-answer="A">
+      <div class="q-meta"><span class="pill">选择</span><span class="pill">气泡</span></div>
+      <h3>4 个 stage 但只有 2 个 micro-batch，主要问题是什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q8" value="A">A. 后续 stage 很难持续满载，bubble 会变大。</label>
+        <label><input type="radio" name="q8" value="B">B. 一定会让显存降到 0。</label>
+        <label><input type="radio" name="q8" value="C">C. 不会有任何跨 stage 通信。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">micro-batch 是填流水线的单位。</p>
+    </div>
+
+    <div class="q full" data-question="q9" data-group="三、流水线诊断" data-title="stage 失衡时先查什么？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">诊断顺序</span></div>
+      <h3>stage 失衡时先查什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q9" value="A">A. 先看每个 stage 的耗时，再看 micro-batch 数，最后才考虑重切层。</label>
+        <label><input type="radio" name="q9" value="B">B. 先把 batch 调到最大，再看有没有空转。</label>
+        <label><input type="radio" name="q9" value="C">C. 先怀疑 tokenizer 词表，再看 pipeline。</label>
+      </div>
+      <p class="solve-note">别把“最慢 stage 决定节拍”这件事放到最后。</p>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q10" data-group="三、流水线诊断" data-title="画一条 3-stage、5-micro-batch 的前向流水线">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">时间线</span></div>
+      <h3>画一条 3-stage、5-micro-batch 的前向流水线。</h3>
+      <textarea name="q10" placeholder="用 t0/t1/t2... 写出每个时间片哪些 stage 在处理哪个 micro-batch，并标出 warmup 和 steady 区。"></textarea>
+      <p class="solve-note">不用追求完整反向，先把前向填充过程画清楚。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>答案要看出你是否把填充阶段和稳态阶段分开了。3-stage、5-micro-batch 的前向至少会先经历 warmup，再进入 steady。重点不是把每个时间片画得完全一样，而是能让人看出“前几步在填管道，后几步才持续满载”。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、组合与迁移</h3>
+      <p>把 TP、PP、DP 放到同一个 rank 拓扑里解释。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速提示</b>
+      <span>每个 rank 同时属于多个 group，但每次通信只该服务一个维度。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q11" data-group="四、组合与迁移" data-title="16 卡：TP=2、PP=4、DP=2 的通信边界" data-answer="C">
+      <div class="q-meta"><span class="pill">选择</span><span class="pill">进程组</span></div>
+      <h3>16 卡：TP=2、PP=4、DP=2 的通信边界里，哪一项最直接对应梯度同步？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q11" value="A">A. TP 组</label>
+        <label><input type="radio" name="q11" value="B">B. PP 相邻 stage</label>
+        <label><input type="radio" name="q11" value="C">C. DP 组</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">先把“副本同步”这件事和另外两种切分分开。</p>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="四、组合与迁移" data-title="三种并行分别更偏向什么？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">迁移</span></div>
+      <h3>三种并行分别更偏向什么？</h3>
+      <div class="mini-fields">
+        <label>DDP <input type="text" name="q12_ddp" data-answer="梯度同步,副本一致,吞吐" placeholder="梯度同步"></label>
+        <label>FSDP2 <input type="text" name="q12_fsdp" data-answer="显存,状态分片,常驻状态" placeholder="显存"></label>
+        <label>TP <input type="text" name="q12_tp" data-answer="层内切分,矩阵切分,同层计算" placeholder="层内切分"></label>
+      </div>
+      <p class="solve-note">重点不是背名字，而是把各自最先解决的问题说对。</p>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q13" data-group="四、组合与迁移" data-title="用 180 字给同事解释本单元">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">Feynman</span></div>
+      <h3>用 180 字给同事解释本单元。</h3>
+      <textarea name="q13" placeholder="要求包含：TP 切什么、PP 切什么、micro-batch 为什么重要、process group 为什么不能混。"></textarea>
+      <p class="solve-note">先讲直觉，再讲术语，最后说一个常见坑。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>优秀答案会先说直觉：TP 是把一层里的矩阵拆给多卡算，PP 是把模型按深度切成多个 stage，micro-batch 用来把管道填起来。然后再落到术语：每种通信都应该发生在自己的进程组里。最后最好补一句常见坑，比如把 TP 当成按层切，或者把所有通信都放进 world group。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li>课程根目录 <code>index.html</code>：给出本课程的顺序、前后单元和课程边界。</li>
+  <li><code>03_FSDP2与参数分片/学习页.html</code>：承接参数分片与数据并行的状态账本，为模型内部并行铺垫。</li>
+  <li>PyTorch 官方文档 <code>torch.distributed.tensor.parallel</code>（访问快照：2026-06-21）：支持 <code>parallelize_module()</code>、<code>ColwiseParallel</code>、<code>RowwiseParallel</code>、<code>PrepareModuleInput</code> 和 <code>PrepareModuleOutput</code> 的边界描述。</li>
+  <li>PyTorch 官方文档 <code>torch.distributed.pipelining</code>（访问快照：2026-06-21）：支持 pipeline stage、micro-batch、调度和梯度传播的边界描述。</li>
+  <li>PyTorch 官方文档 <code>torch.distributed.tensor</code>（访问快照：2026-06-21）：支持 DTensor、device mesh 与布局语义。</li>
+  <li>Megatron Core 官方 <code>User Guide</code> / <code>Parallelism Strategies Guide</code>（访问快照：2026-06-21）：用于对照 TP、PP、DP 的职责分工和组合关系。</li>
+  <li>这页只把 Sequence Parallel、Context Parallel、Expert Parallel、zero-bubble schedule 和分布式优化器当作边界参考，不在本页展开。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

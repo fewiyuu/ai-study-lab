@@ -1,0 +1,848 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Systems：训练吞吐、显存与分布式资源账</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="CS336 从零训练语言模型" data-unit="04 / Systems">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>CS336 从零训练语言模型</strong>
+        <span>04 / Systems</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>先看资源账</a>
+        <a href="#profile"><span class="dot"></span>瓶颈怎么读</a>
+        <a href="#ledger"><span class="dot"></span>对象怎么流</a>
+        <a href="#attention"><span class="dot"></span>attention 变慢在哪里</a>
+        <a href="#ddp"><span class="dot"></span>DDP 通信</a>
+        <a href="#fsdp"><span class="dot"></span>FSDP 分片</a>
+        <a href="#assignment"><span class="dot"></span>接上 Assignment 2</a>
+        <a href="#mistakes"><span class="dot"></span>排错速查</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把一次训练 step 拆成算、存、传、等四笔账，再看 Assignment 2 的 attention、DDP、FSDP 测试在检查什么。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">CS336 / Assignment 2 Systems</div>
+          <h1>Systems：训练吞吐、显存与分布式资源账</h1>
+          <p>这一页只讲 Assignment 2 前半段必须先建立的系统直觉：一次训练 step 的时间和显存花在哪里，profile 里该先看哪一类信号，attention 为什么会从公式问题变成内存访问问题，DDP 与 FSDP 分别把哪些张量复制、通信或分片。完整 CUDA 架构、Triton kernel 调优和生产级分布式训练留到后续专题；这里先让你能读懂测试、profile 结果和第一批错误信号。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="https://github.com/stanford-cs336/assignment2-systems">Assignment 2 Systems</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页，你应该能</h3>
+          <ul>
+  <li>把一次训练 step 拆成 compute、memory traffic、communication、synchronization 四类资源账。</li>
+  <li>从 Assignment 2 的 adapter 和测试名判断下一步该实现 FlashAttention2、DDP、FSDP 还是 sharded optimizer。</li>
+  <li>遇到 attention 数值不匹配、DDP 参数不等价、FSDP shard 或 dtype 报错时，能先定位该看哪一笔账。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>先看一笔资源账</h2>
+    <span class="tag">goal</span>
+  </div>
+  <p>上一单元里，训练循环看起来像一串 Python 调用：forward、loss、backward、optimizer step。到了 Systems，问题变成：这些调用在 GPU 上到底消耗了什么资源，哪些资源会让吞吐停住。吞吐可以先理解为单位时间完成多少训练工作，例如 tokens/s、samples/s 或 step/s。资源账则是在问：一轮 step 的时间花在算矩阵乘、读写显存、跨设备传张量，还是等待同步。</p>
+  <p>先拿一个小 batch 做锚点。假设模型有两张 GPU，每张卡各跑 10 条样本；一次 step 里会出现参数、激活值、梯度、optimizer state、attention 中间量、跨 rank 通信缓冲区。模型数学上没有变，但这些对象的存放位置和移动时机变了。Assignment 2 的测试正是在检查这些对象是否被正确计算、保存、同步和还原。</p>
+  <div class="math-block" data-export-context="训练 step 的四类资源账" data-export-lang="math">
+    $$
+    T_{\mathrm{step}} \approx T_{\mathrm{compute}} + T_{\mathrm{memory}} + T_{\mathrm{comm}} + T_{\mathrm{sync}}
+    $$
+    <p><code>T_compute</code> 是矩阵乘、softmax、归一化等算术时间；<code>T_memory</code> 是读写 HBM、保存激活、读 optimizer state 的时间；<code>T_comm</code> 是 all-reduce、all-gather、reduce-scatter 这类跨设备传输；<code>T_sync</code> 是某个 rank 或 kernel 等其它工作完成的空等时间。真实 profile 会更复杂，但这四项足够帮你读 Assignment 2 的第一批瓶颈。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="一次训练 step 的对象账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>什么时候出现</th>
+          <th>主要占哪笔账</th>
+          <th>常见错误信号</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>parameters</td>
+          <td>forward 前就存在，optimizer step 后更新</td>
+          <td>显存；FSDP 下还涉及 all-gather</td>
+          <td>rank 之间参数不等价，full params 还原失败</td>
+        </tr>
+        <tr>
+          <td>activations</td>
+          <td>forward 产生，backward 读取</td>
+          <td>显存和读写带宽</td>
+          <td>backward 需要的张量没保存，梯度对不上</td>
+        </tr>
+        <tr>
+          <td>attention scores / LSE</td>
+          <td>attention forward 与 backward 之间</td>
+          <td>softmax 计算、显存流量</td>
+          <td>输出接近但梯度不对，或 saved tensor shape 不对</td>
+        </tr>
+        <tr>
+          <td>gradients</td>
+          <td>backward 逐层产生</td>
+          <td>显存；DDP/FSDP 下涉及通信</td>
+          <td>optimizer step 前没有同步，parallel baseline 不等价</td>
+        </tr>
+        <tr>
+          <td>optimizer state</td>
+          <td>optimizer 初始化后逐步积累</td>
+          <td>显存；sharded optimizer 下涉及所有权</td>
+          <td>分片更新后参数和非分片 AdamW 不一致</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这一页先不追 CUDA 线程块、pipeline parallel、ZeRO 细节和 kernel 级别调优。先把“资源账”立住，你才知道后面哪类优化是语义必须，哪类优化只是性能加分。</p>
+  <p>你现在应该能做什么：看到一个训练变慢或测试失败的现象，先把它归到“算、存、传、等”中的一类或几类，再去查对应的公式、通信或同步点。</p>
+</section>
+
+<section id="profile">
+  <div class="head">
+    <h2>瓶颈怎么读</h2>
+    <span class="tag">profile</span>
+  </div>
+  <p>profile 和 benchmark 是两种不同问题。benchmark 问“这段代码每秒能处理多少工作”；profile 问“时间具体花在哪些 kernel、哪些内存拷贝、哪些同步点上”。当 tokens/s 低时，不要只看 GPU utilization 一个数字。一个训练 step 可能算力很忙，也可能看起来 GPU 很忙但主要在搬数据，或者每张卡都能算却互相等待通信。</p>
+  <p>读 profile 时先按可观察信号分组。矩阵乘和卷积一类 kernel 时间高，通常先看形状、batch、融合和 Tensor Core 友好程度；大量小 kernel 串行出现，先看 Python 调度、算子切分和能否融合；memcpy 或显存读写占比高，先看中间张量是否太大、是否重复 materialize；collective 操作占比高，先看 DDP/FSDP 的通信时机和数据量。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-forward">
+        <code>forward(x)</code><span>激活值 + attention 中间量</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-backward">
+        <code>loss.backward()</code><span>逐层产生梯度</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-comm">
+        <code>sync gradients / params</code><span>all-reduce / reduce-scatter / all-gather</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-step">
+        <code>optimizer.step()</code><span>读写参数和 optimizer state</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-forward">
+        <b>forward 账</b><span>compute + memory</span>
+        <p>Transformer block 会读参数、写激活。attention 如果显式保存完整 score matrix，序列长度一上来，显存和带宽都会先吃紧。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-backward">
+        <b>backward 账</b><span>saved tensors + gradients</span>
+        <p>backward 既要重放依赖关系，也要读取 forward 保存的关键张量。FlashAttention 测试要求保存每个 query 的 log-sum-exp，因为 backward 要用它恢复 softmax 归一化。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-comm">
+        <b>通信账</b><span>rank 之间移动张量</span>
+        <p>DDP 通常同步梯度；FSDP 还要在 forward/backward 周围 gather 参数、在 backward 后 reduce-scatter 梯度。通信放错位置，数值可能对不上，也会让设备空等。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-step">
+        <b>更新账</b><span>parameter + state</span>
+        <p>AdamW 这类优化器会维护额外 state。sharded optimizer 的目标是让每个 rank 只维护自己负责的 state，同时更新效果仍等价于非分片优化器。</p>
+      </div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="profile 症状到排查入口" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>先怀疑</th>
+          <th>下一步检查</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>tokens/s 低，矩阵乘 kernel 占大头</td>
+          <td>算力账</td>
+          <td>看 shape 是否让 GEMM 太小或太碎，batch/seq 是否合理</td>
+        </tr>
+        <tr>
+          <td>显存接近上限，OOM 或 batch 被迫很小</td>
+          <td>显存账</td>
+          <td>看 activation、attention score、optimizer state 是否可重算、分片或融合</td>
+        </tr>
+        <tr>
+          <td>多卡 step 比单卡快得很少</td>
+          <td>通信账</td>
+          <td>看 all-reduce、all-gather、reduce-scatter 的数据量和是否阻塞计算</td>
+        </tr>
+        <tr>
+          <td>GPU 利用率忽高忽低</td>
+          <td>同步账</td>
+          <td>看 rank 是否数据不均、某个 collective 是否等待慢 rank</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>你现在应该能做什么：拿到一个 profile 截图或 benchmark 数字时，先写出“慢在哪一笔账”，再决定该看 kernel、显存、通信还是分布式等价性。</p>
+</section>
+
+<section id="ledger">
+  <div class="head">
+    <h2>对象怎么流</h2>
+    <span class="tag">ledger</span>
+  </div>
+  <p>这一节把一次 step 里最容易混淆的对象摆成账本。你不用先背 DDP 或 FSDP 的名词，先看对象在 forward、backward、同步和更新时分别由谁读、由谁写。只要这张表没对上，后面的代码和测试就会一直错在同一类地方。</p>
+  <p>锚点还是那组最小情形：2 张 GPU，每张卡各看 10 条样本。rank 之间看见的数据不一样，但最后都要得到同一套等价参数。差别只在参数、梯度、optimizer state 和通信缓冲区的归属。</p>
+  <div class="codebar"><span>一次 step 的时序</span><button class="copy" data-copy="step-timeline">复制</button></div>
+  <pre id="step-timeline" data-export-context="训练 step 时序" data-export-lang="python"><code class="language-python">for batch in loader:
+    logits = model(inputs)      # 读参数，写激活
+    loss = criterion(logits, targets)
+    loss.backward()             # 读 saved tensors，写梯度
+    sync_or_reduce(model)       # DDP / FSDP 在这里处理通信
+    optimizer.step()            # 读梯度和 state，写参数和 state</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="训练 step 的读写账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>阶段</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>出错时最像什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>forward</td>
+          <td>parameters、输入 batch、必要的 mask</td>
+          <td>activations、attention 中间量、LSE</td>
+          <td>输出值错、shape 对不上、saved tensor 不够</td>
+        </tr>
+        <tr>
+          <td>backward</td>
+          <td>saved tensors、loss 依赖、局部梯度</td>
+          <td>gradients</td>
+          <td>forward 对了，梯度不对，或某个参数没有 grad</td>
+        </tr>
+        <tr>
+          <td>after backward</td>
+          <td>本地梯度、通信缓冲区、分片信息</td>
+          <td>同步后的梯度或 shard 梯度</td>
+          <td>多卡参数不等价、reduce-scatter 形状不对、通信没等完</td>
+        </tr>
+        <tr>
+          <td>optimizer.step()</td>
+          <td>梯度、optimizer state、当前参数</td>
+          <td>更新后的参数和 state</td>
+          <td>和非并行 baseline 的权重越走越偏</td>
+        </tr>
+        <tr>
+          <td>next iteration</td>
+          <td>更新后的参数</td>
+          <td>新的 activations / 新的梯度</td>
+          <td>上一步的同步问题会在下一轮放大</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这张账本还有一个实用点：它能帮你分清“模型语义错了”和“对象生命周期错了”。前者常见于 attention 公式、mask、scale；后者常见于 DDP/FSDP 的同步时机、参数归属、dtype 以及 optimizer state 的位置。</p>
+  <p>你现在应该能做什么：拿到一个训练问题时，先写出哪个对象在什么阶段被读写，再决定要查 forward、backward 还是同步。</p>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>先知道，先别钻</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <p>这一页要先立住的是训练 step 的资源账、attention 的 LSE、DDP 的同步时机、FSDP 的 shard / full 归属。下面这些概念会在后面的系统优化和实现细节里再回来，现在先放一边。</p>
+  <div class="table-wrap">
+    <table data-export-context="Systems 单元的边界与回头点" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>先放一边的概念</th>
+          <th>现在怎么处理</th>
+          <th>后面再回来时看什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>CUDA 线程块 / warp</td>
+          <td>先只把它看作 kernel 级别的性能细节</td>
+          <td>kernel 为什么慢、为什么要分块读写</td>
+        </tr>
+        <tr>
+          <td>pipeline parallel</td>
+          <td>先不纳入本页的资源账</td>
+          <td>跨 stage 的等待和负载不均</td>
+        </tr>
+        <tr>
+          <td>ZeRO stages</td>
+          <td>先和 FSDP 的 shard / gather / scatter 区分开</td>
+          <td>参数、梯度、optimizer state 的更细粒度分工</td>
+        </tr>
+        <tr>
+          <td>activation checkpoint</td>
+          <td>先把它当作“用计算换显存”的下一层手段</td>
+          <td>哪些中间量可以重算，哪些必须保存</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>你现在应该能做什么：看到这些词时，先知道它们属于后续优化层，不要把本页的语义问题和更深的性能问题混在一起。</p>
+</section>
+
+<section id="attention">
+  <div class="head">
+    <h2>attention 变慢在哪里</h2>
+    <span class="tag">attention</span>
+  </div>
+  <p>标准 scaled dot-product attention 的公式很短，但朴素实现会产生一个形状为 <code>batch × n_queries × n_keys</code> 的 score matrix。序列越长，这个矩阵越大；如果还把 softmax 概率 <code>P</code> 也保存下来，forward 看似直接，backward 会把显存和内存带宽都推高。FlashAttention2 的动机之一，就是把 attention 当作“如何分块读写、如何少存中间量”的系统问题。</p>
+  <div class="math-block" data-export-context="attention 与 LSE 关系" data-export-lang="math">
+    $$
+    S = \frac{QK^\top}{\sqrt d},\qquad
+    P = \operatorname{softmax}(S),\qquad
+    O = PV,\qquad
+    L_i = \log \sum_j e^{S_{ij}}
+    $$
+    <p><code>Q</code>、<code>K</code>、<code>V</code> 的最后一维是 head dimension <code>d</code>。<code>S</code> 是每个 query 对每个 key 的分数；<code>L_i</code> 是第 <code>i</code> 个 query 行的 log-sum-exp。Assignment 2 的 attention 测试要求 autograd forward 保存一个形状为 <code>(batch_size, n_queries)</code> 的 LSE 张量，用它在 backward 中稳定地恢复 softmax 相关量。</p>
+  </div>
+  <div class="codebar"><span>测试里 attention 的语义表面</span><button class="copy" data-copy="attention-test-surface">复制</button></div>
+  <pre id="attention-test-surface" data-export-context="attention 测试入口与形状" data-export-lang="python"><code class="language-python">batch_size = 4
+n_queries = 128
+n_keys = 128
+D = 64
+q = torch.randn(batch_size, n_queries, D, requires_grad=True)
+k = torch.randn(batch_size, n_keys, D, requires_grad=True)
+v = torch.randn(batch_size, n_keys, D, requires_grad=True)
+
+o = impl(q, k, v, is_causal)
+maybe_lse = [t for t in o.grad_fn.saved_tensors if t.shape == (q.shape[0], q.shape[1])]
+
+assert len(maybe_lse) == 1
+torch.testing.assert_close(o, o_ref, rtol=1e-2, atol=1e-2)</code></pre>
+  <p>这段测试给了三个实现约束。第一，函数返回的是 <code>O</code>，形状应沿用 query 位置：<code>(batch_size, n_queries, D)</code>。第二，causal mask 需要保留；开启时第 <code>i</code> 个 query 不能看未来 key。第三，forward 不能只返回正确输出，还要把 backward 需要的稳定中间量保存到 autograd context。输出对了但 LSE 没保存，测试也会失败，因为 backward 无法用同一套数值路径复现梯度。</p>
+  <div class="table-wrap">
+    <table data-export-context="attention 错误到原因" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>失败现象</th>
+          <th>先看哪里</th>
+          <th>原因</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>forward 输出和 reference 不接近</td>
+          <td><code>scale = 1 / sqrt(d)</code>、mask、softmax 维度</td>
+          <td>score matrix 的数值语义错了，后面再省显存也没意义</td>
+        </tr>
+        <tr>
+          <td>提示没有找到 LSE saved tensor</td>
+          <td><code>ctx.save_for_backward(...)</code> 保存对象</td>
+          <td>测试需要一个 <code>(batch_size, n_queries)</code> 的 log-sum-exp 张量</td>
+        </tr>
+        <tr>
+          <td>forward 过了，backward 梯度不匹配</td>
+          <td><code>dQ</code>、<code>dK</code>、<code>dV</code> 推导和保存张量</td>
+          <td>backward 需要 forward 的归一化信息，不会单独再做一次 softmax</td>
+        </tr>
+        <tr>
+          <td>Triton 测试被跳过</td>
+          <td>是否有 CUDA GPU</td>
+          <td>这是环境限制，不等于 PyTorch 语义实现已经失败</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>你现在应该能做什么：在写 FlashAttention2 的 PyTorch 版本之前，先用朴素公式确认输出、LSE 形状和 backward 梯度三件事；再把“少存大矩阵、分块读写”的优化放进 Triton 版本。</p>
+</section>
+
+<section id="ddp">
+  <div class="head">
+    <h2>DDP 通信检查什么</h2>
+    <span class="tag">distributed</span>
+  </div>
+  <p>Distributed Data Parallel 的基本想法是：每个 rank 保留一份完整模型，吃不同的数据切片，backward 后把梯度同步到等价于“单个模型看完整 batch”的结果。这里最容易犯的错，是把“每张卡都能 backward”误认为“多卡训练已经等价”。如果 optimizer step 前梯度没有同步，两个 rank 会沿不同方向更新，几步之后参数就不再相同。</p>
+  <p>Assignment 2 的 DDP adapter 暴露两个入口：<code>get_ddp(module)</code> 返回包装后的模块，负责参数广播和梯度同步机制；<code>ddp_on_after_backward(ddp_model, optimizer)</code> 在 backward 结束、optimizer step 之前运行，用来完成或等待梯度同步。测试用两类 toy model，包括 tied weights，目的是让你处理共享参数、非训练参数和 rank 初始化差异。</p>
+  <div class="codebar"><span>DDP 的作业接口</span><button class="copy" data-copy="ddp-adapter-surface">复制</button></div>
+  <pre id="ddp-adapter-surface" data-export-context="DDP adapter 入口" data-export-lang="python"><code class="language-python">def get_ddp(module: torch.nn.Module) -&gt; torch.nn.Module:
+    """Wrap a module for distributed data parallel training."""
+    raise NotImplementedError
+
+def ddp_on_after_backward(ddp_model: torch.nn.Module, optimizer: torch.optim.Optimizer):
+    """Run after backward and before optimizer.step()."""
+    raise NotImplementedError</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="DDP 等价性检查顺序" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>测试阶段</th>
+          <th>它在验证什么</th>
+          <th>实现含义</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>初始化后</td>
+          <td>rank 0 参数广播到其它 rank；不需要梯度的固定参数保持不变</td>
+          <td><code>get_ddp</code> 不能只保存 module，还要建立一致初始状态</td>
+        </tr>
+        <tr>
+          <td>非并行 baseline 更新后</td>
+          <td>baseline 已经 step，DDP 还没 step，因此 rank 0 上参数应暂时不同</td>
+          <td>测试还会看训练时序是否合理</td>
+        </tr>
+        <tr>
+          <td>DDP backward 后</td>
+          <td>每个 rank 只看本地 10 条样本，但同步后梯度应等价于完整 20 条样本</td>
+          <td>同步通常要做平均或等价缩放，不能只把梯度相加后直接 step</td>
+        </tr>
+        <tr>
+          <td>DDP step 后</td>
+          <td>DDP 参数和非并行 baseline 再次相等</td>
+          <td><code>ddp_on_after_backward</code> 的时机必须在 optimizer step 之前</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>通信重叠是 DDP 的性能点：梯度在 backward 中逐层产生，越早准备好的梯度越早可以异步通信。source adapter 的说明要求“asynchronously communicating gradients as they are ready”，并且每个 parameter tensor 单独通信。学习阶段可以先把语义做对，再读 profile 看通信是否挡住了后面的 backward。</p>
+  <p>你现在应该能做什么：看到 DDP 参数不等价时，先检查三件事：初始化广播有没有发生，backward 后 step 前有没有等待所有梯度通信完成，梯度缩放是否和非并行完整 batch 的 loss 语义一致。</p>
+</section>
+
+<section id="fsdp">
+  <div class="head">
+    <h2>FSDP 分片改变了哪笔账</h2>
+    <span class="tag">sharding</span>
+  </div>
+  <p>DDP 每个 rank 都存完整参数、完整梯度和完整 optimizer state。模型变大后，显存先成为瓶颈。Fully Sharded Data Parallel 的核心变化是：把参数、梯度和 optimizer state 的一部分分给不同 rank；计算某一层时再临时 all-gather 出完整参数，backward 后用 reduce-scatter 把梯度归还到各自 shard。它省显存，但增加通信和时序复杂度。</p>
+  <div class="table-wrap">
+    <table data-export-context="DDP 与 FSDP 的对象归属" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>DDP</th>
+          <th>FSDP</th>
+          <th>排错问题</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>parameters</td>
+          <td>每个 rank 一整份</td>
+          <td>平时只保留 shard；计算时 all-gather</td>
+          <td>full params 是否能按名字还原</td>
+        </tr>
+        <tr>
+          <td>gradients</td>
+          <td>每个 rank 同步后有完整梯度</td>
+          <td>reduce-scatter 后每个 rank 只保留本地 shard 梯度</td>
+          <td>grad shape 是否等于本地 param.data shape</td>
+        </tr>
+        <tr>
+          <td>optimizer state</td>
+          <td>每个 rank 一整份</td>
+          <td>跟参数 shard 对齐分片</td>
+          <td>分片更新后是否等价于非分片 optimizer</td>
+        </tr>
+        <tr>
+          <td>mixed precision</td>
+          <td>可选，主要影响算和带宽</td>
+          <td>通信和计算可用 <code>compute_dtype</code>，master weight 保持 fp32</td>
+          <td>梯度 dtype 是否回到 master weight dtype</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Assignment 2 的 FSDP 测试很具体。<code>get_fsdp(module, compute_dtype=None)</code> 要返回包装器；<code>fsdp_on_after_backward</code> 在 backward 后、step 前处理同步；<code>fsdp_gather_full_params</code> 要把分片参数 all-gather 回完整 state dict。测试会比较 FSDP 模型和非并行 baseline 的参数，还会检查 <code>compute_dtype=torch.float16</code> 时，计算通信可以降精度，但 master weights 和 optimizer 更新仍按 fp32 语义走。</p>
+  <div class="codebar"><span>FSDP 的作业接口</span><button class="copy" data-copy="fsdp-adapter-surface">复制</button></div>
+  <pre id="fsdp-adapter-surface" data-export-context="FSDP adapter 入口" data-export-lang="python"><code class="language-python">def get_fsdp(module: torch.nn.Module, compute_dtype: torch.dtype | None = None) -&gt; torch.nn.Module:
+    """Shard weights, all-gather for forward/backward, reduce-scatter gradients."""
+    raise NotImplementedError
+
+def fsdp_on_after_backward(fsdp_model: torch.nn.Module, optimizer: torch.optim.Optimizer):
+    """Run after backward and before optimizer.step()."""
+    raise NotImplementedError
+
+def fsdp_gather_full_params(fsdp_model: torch.nn.Module) -&gt; dict[str, torch.Tensor]:
+    """Reconstruct full parameter tensors from shards."""
+    raise NotImplementedError</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="FSDP backward 后必须成立的不变量" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>不变量</th>
+          <th>测试里的信号</th>
+          <th>不成立时通常说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>每个 requires_grad 参数都有梯度</td>
+          <td><code>param.grad is not None</code></td>
+          <td>hook 没挂上、参数被错误替换、backward 路径断了</td>
+        </tr>
+        <tr>
+          <td>本地梯度形状等于本地参数 shard 形状</td>
+          <td><code>param.grad.shape == param.data.shape</code></td>
+          <td>reduce-scatter 切分边界或 padding 处理错</td>
+        </tr>
+        <tr>
+          <td>梯度 dtype 等于 master weight dtype</td>
+          <td><code>param.grad.dtype == param.data.dtype</code></td>
+          <td>fp16 compute 后没有把 grad 恢复到 fp32 更新语义</td>
+        </tr>
+        <tr>
+          <td>非分片参数的梯度在 rank 间一致</td>
+          <td><code>dist.all_gather</code> 后 allclose</td>
+          <td>只处理了 sharded 参数，漏掉 replicated 参数同步</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>你现在应该能做什么：把 FSDP 的“省显存”理解成对象归属变化，重点看 full、shard、同步和 dtype。每次出错时，先问参数、梯度、optimizer state 现在应该是 full 还是 shard，dtype 应该是 compute dtype 还是 master dtype。</p>
+</section>
+
+<section id="assignment">
+  <div class="head">
+    <h2>接上 Assignment 2</h2>
+    <span class="tag">operation</span>
+  </div>
+  <p>本页的操作桥接基于本地缓存的 <code>stanford-cs336/assignment2-systems</code> 仓库快照，commit 为 <code>ca8bc81a59b70516f7ebb2da4808daade877c736</code>。课程页缓存来自 CS336 Spring 2025，列出 Assignment 2: Systems；仓库 README 标题写的是 CS336 Spring 2026 Assignment 2: Systems。两处源材料口径不同，所以这里分别记录，不把年份合并成一个未经确认的结论。</p>
+  <p>你真正要打开的第一份文件是 <code>tests/adapters.py</code>。它是测试层和你代码之间的接口契约。所有 <code>raise NotImplementedError</code> 都在提醒你：测试会从这些函数拿到你的实现类或 wrapper。然后按任务面打开对应测试：attention 看 <code>tests/test_attention.py</code>，DDP 看 <code>tests/test_ddp.py</code>，FSDP 看 <code>tests/test_fsdp.py</code>，sharded optimizer 看 <code>tests/test_sharded_optimizer.py</code>。</p>
+  <div class="codebar"><span>建议的第一轮命令</span><button class="copy" data-copy="assignment-commands">复制</button></div>
+  <pre id="assignment-commands" data-export-context="Assignment 2 第一轮命令" data-export-lang="bash"><code class="language-bash"># 在 assignment2-systems 仓库根目录
+uv run python
+python -c "import cs336_basics; import cs336_systems; print('imports ok')"
+
+# 先按任务面跑小范围测试，再跑提交脚本
+uv run pytest -v tests/test_attention.py
+uv run pytest -v tests/test_ddp.py
+uv run pytest -v tests/test_fsdp.py
+uv run pytest -v tests/test_sharded_optimizer.py
+./test_and_make_submission.sh</code></pre>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-adapter">adapter 未实现</button>
+      <button class="ghost" data-terminal-case="case-lse">LSE 保存错误</button>
+      <button class="ghost" data-terminal-case="case-gpu">GPU 测试跳过</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">E   NotImplementedError
+tests/adapters.py:17: in get_flashattention_autograd_function_pytorch</pre>
+    <template data-terminal-output="case-adapter">E   NotImplementedError
+tests/adapters.py:17: in get_flashattention_autograd_function_pytorch
+
+含义：测试已经找到 adapter，但 adapter 还没有返回你的实现。先决定实现类放在哪里，再让 adapter 返回类对象，不是实例。</template>
+    <template data-terminal-output="case-lse">AssertionError: Expected one tensor of shape 4,128 in saved tensors
+
+含义：forward 输出可能已经接近 reference，但 autograd context 没保存测试要求的 log-sum-exp。回到 attention 小节，检查 L 的形状和 ctx.save_for_backward。</template>
+    <template data-terminal-output="case-gpu">SKIPPED [1] A GPU must be available to run Triton kernels
+
+含义：这是环境限制，不是 PyTorch 版本语义失败。没有 CUDA 时，先用 PyTorch FlashAttention 语义和 CPU 可跑的分布式测试推进。</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Assignment 2 文件到任务映射" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>文件</th>
+          <th>先读什么</th>
+          <th>读完该能判断什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>tests/adapters.py</code></td>
+          <td>所有 <code>get_*</code> 和 <code>*_on_after_backward</code> 函数签名</td>
+          <td>测试会如何拿到你的实现，返回类还是 wrapper 实例</td>
+        </tr>
+        <tr>
+          <td><code>tests/test_attention.py</code></td>
+          <td><code>_attention_and_lse</code>、forward/backward close 检查</td>
+          <td>FlashAttention 至少要满足哪些语义和保存张量</td>
+        </tr>
+        <tr>
+          <td><code>tests/test_ddp.py</code></td>
+          <td>rank 0 参数广播、local batch、step 后等价性</td>
+          <td>DDP 同步应发生在 backward 后、optimizer step 前</td>
+        </tr>
+        <tr>
+          <td><code>tests/test_fsdp.py</code></td>
+          <td>full params gather、gradient shape/dtype、fp16 compute</td>
+          <td>FSDP 要同时处理 shard、replicated 参数和 master dtype</td>
+        </tr>
+        <tr>
+          <td><code>tests/test_sharded_optimizer.py</code></td>
+          <td>AdamW 参数、10 次 step 后和非分片模型比较</td>
+          <td>state 分片不能改变 optimizer 的数学更新语义</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>你现在应该能做什么：不用先读完整 handout，也能根据第一个失败测试找到对应 adapter、测试文件和资源账。真正开始实现时，再回到官方 handout 和仓库 README 核对要求。</p>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>排错速查</h2>
+    <span class="tag">debug</span>
+  </div>
+  <p>Systems 页最常见的误区，是把所有失败都理解成“数学公式错了”。有些失败确实是公式错，例如 attention 的 scale、mask 或 backward 推导；但 DDP/FSDP 的很多失败来自对象生命周期：参数什么时候 full，什么时候 shard，梯度什么时候同步，optimizer 读到的是本地状态还是全局等价状态。</p>
+  <div class="table-wrap">
+    <table data-export-context="Systems 排错速查表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>现象</th>
+          <th>优先检查</th>
+          <th>不要先做什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>attention forward 通过，backward 不通过</td>
+          <td>LSE、保存张量、<code>dQ/dK/dV</code> 依赖</td>
+          <td>不要先改 Triton block size；PyTorch 语义还没闭合</td>
+        </tr>
+        <tr>
+          <td>DDP 训练后和 baseline 参数不同</td>
+          <td>梯度同步时机、平均方式、是否等待异步通信完成</td>
+          <td>不要只调学习率；测试期待的是等价语义</td>
+        </tr>
+        <tr>
+          <td>FSDP full params 对不上</td>
+          <td>shard 切分、all-gather 顺序、参数名映射</td>
+          <td>不要把每个 rank 的本地 shard 当作完整参数比较</td>
+        </tr>
+        <tr>
+          <td>FSDP fp16 case 报 dtype 或数值问题</td>
+          <td>compute dtype 与 master weight dtype 的边界</td>
+          <td>不要把 master weight 永久改成 fp16</td>
+        </tr>
+        <tr>
+          <td>sharded optimizer 最终权重不一致</td>
+          <td>rank 拥有哪些 state，step 是否只更新对应 shard</td>
+          <td>不要让每个 rank 都维护一份完整 AdamW state 后假装分片</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>最后给自己留一个检查顺序：先让单设备或 CPU 可读语义测试过；再看多进程等价性；再追 GPU-only Triton 性能。这样能把“我没有 CUDA 环境”和“我的实现语义错了”分开。你现在应该能做什么：遇到失败时写出一句具体诊断，例如“这是 DDP step 前梯度没有同步”。</p>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>怎么答才算会</h3>
+    <p>先把症状翻成资源账，再翻成对象流。选择题和填空题只检查你有没有把关键名词放对位置；开放题才检查你能不能把诊断顺序说清楚。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>优先看你是否分清 compute、memory、communication、synchronization；是否能把 attention 的 LSE、DDP 的同步时机、FSDP 的 shard / full 参数、以及测试文件名对上。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、把账读对</h3>
+      <p>先判断瓶颈属于哪一类，再决定往哪份测试或哪段代码查。这里的目标是把现象归到正确的资源账里。</p>
+    </div>
+    <div class="quick-review">锚点：2 张 GPU、每张卡 10 条样本、一次 step。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、把账读对" data-title="Q1. 哪个现象最先指向通信账？" data-answer="B. 多卡 step 比单卡快得很少" data-explain="多卡训练没有明显加速时，先怀疑 communication 或 synchronization；单卡算力排后。">
+      <div class="q-meta"><span class="pill">选择</span><span class="pill">communication</span></div>
+      <h3>Q1. 哪个现象最先指向通信账？</h3>
+      <label><input type="radio" name="q1" value="A. matrix multiplication kernel 时间最高">A. matrix multiplication kernel 时间最高</label>
+      <label><input type="radio" name="q1" value="B. 多卡 step 比单卡快得很少">B. 多卡 step 比单卡快得很少</label>
+      <label><input type="radio" name="q1" value="C. loss 已经下降">C. loss 已经下降</label>
+      <label><input type="radio" name="q1" value="D. 词表大小变了">D. 词表大小变了</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、把账读对" data-title="Q2. 判断：GPU utilization 高就说明 compute 是主要瓶颈。" data-answer="false" data-explain="GPU utilization 高只能说明设备忙，不说明忙在算、搬数据还是等同步。">
+      <div class="q-meta"><span class="pill">判断</span><span class="pill">profile</span></div>
+      <h3>Q2. 判断：GPU utilization 高就说明 compute 是主要瓶颈。</h3>
+      <label><input type="radio" name="q2" value="true">对</label>
+      <label><input type="radio" name="q2" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q3" data-group="一、把账读对" data-title="Q3. 2 张 GPU 平分 batch=20 时，每张卡的 local batch 是多少？" data-answer="10" data-explain="两张卡平分 20 条样本时，每张卡各看 10 条；这也是 DDP 测试里 local_bs 的直接推导。">
+      <div class="q-meta"><span class="pill">填空</span><span class="pill">batch</span></div>
+      <h3>Q3. 2 张 GPU 平分 <code>batch=20</code> 时，每张卡的 local batch 是多少？</h3>
+      <input type="text" name="q3" placeholder="写一个数字">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q4" data-group="一、把账读对" data-title="Q4. 用一句诊断语句说明你如何把一个慢 step 拆成四笔账。">
+      <div class="q-meta"><span class="pill">解释</span><span class="pill">诊断</span></div>
+      <h3>Q4. 用一句诊断语句说明你如何把一个慢 step 拆成四笔账。</h3>
+      <p>回答时至少写出：症状、可能资源、下一步检查。</p>
+      <p class="solve-note">答案应直接说出“我先看哪一类 kernel / 拷贝 / collective / 等待”。</p>
+      <textarea name="q4" placeholder="先写症状，再写你会看哪一笔账，最后给出下一步检查。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>好答案会包含三层：1）先说症状，例如 tokens/s 低、GPU 利用率波动、OOM；2）把它归到算 / 存 / 传 / 等中的一类；3）给出下一步检查，例如看 GEMM 形状、activation 是否过大、all-reduce / all-gather 的数据量，或者 rank 是否在等慢进程。只写“看看 profile”不够，必须说出要看什么。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、跟着机制走</h3>
+      <p>这组题直接对着 attention、DDP、FSDP 的测试信号读。你要能把“哪里错了”对应到“先查哪一个对象和哪一个阶段”。</p>
+    </div>
+    <div class="quick-review">锚点：attention 的 LSE、DDP 的 after_backward、FSDP 的 shard / full。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q5" data-group="二、跟着机制走" data-title="Q5. attention 测试里被特意检查的 saved tensor 形状是什么？" data-answer="B. (batch_size, n_queries)" data-explain="测试要找的是每个 query 的 log-sum-exp，它的形状跟 query 轴一致，不是和 key 或 head 轴一致。">
+      <div class="q-meta"><span class="pill">代码阅读</span><span class="pill">LSE</span></div>
+      <h3>Q5. attention 测试里被特意检查的 saved tensor 形状是什么？</h3>
+      <label><input type="radio" name="q5" value="A. (batch_size, n_keys, D)">A. <code>(batch_size, n_keys, D)</code></label>
+      <label><input type="radio" name="q5" value="B. (batch_size, n_queries)">B. <code>(batch_size, n_queries)</code></label>
+      <label><input type="radio" name="q5" value="C. (D, D)">C. <code>(D, D)</code></label>
+      <label><input type="radio" name="q5" value="D. (batch_size, n_queries, D)">D. <code>(batch_size, n_queries, D)</code></label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q6" data-group="二、跟着机制走" data-title="Q6. DDP 的 after-backward 钩子函数名是什么？" data-answer="ddp_on_after_backward" data-explain="测试明确要在 backward 结束、optimizer.step() 之前运行这个钩子。">
+      <div class="q-meta"><span class="pill">填空</span><span class="pill">DDP</span></div>
+      <h3>Q6. DDP 的 after-backward 钩子函数名是什么？</h3>
+      <input type="text" name="q6" placeholder="函数名">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q7" data-group="二、跟着机制走" data-title="Q7. FSDP backward 后，哪些不变量必须成立？">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">FSDP</span></div>
+      <h3>Q7. FSDP backward 后，哪些不变量必须成立？</h3>
+      <p>先自己勾选，再打开参考答案核对。这里的重点是找对象归属：full、shard、同步和 dtype。</p>
+      <label><input type="checkbox" name="q7" value="param-grad"> 每个 requires_grad 参数都有梯度</label>
+      <label><input type="checkbox" name="q7" value="shape-match"> 本地梯度形状等于本地参数 shard 形状</label>
+      <label><input type="checkbox" name="q7" value="dtype-match"> 梯度 dtype 等于 master weight dtype</label>
+      <label><input type="checkbox" name="q7" value="replicated-equal"> 非分片参数的梯度在 rank 间一致</label>
+      <label><input type="checkbox" name="q7" value="fp16-master"> master weight 可以永久改成 fp16</label>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>应选前四项，不选最后一项。理由分别是：梯度不能丢；本地 shard 的梯度 shape 要和本地参数一致；master weight 语义要求梯度回到 fp32；非分片参数在各 rank 上的梯度要一致。<code>master weight 可以永久改成 fp16</code> 是错的，它会破坏测试里维护的 fp32 更新语义。</p></details>
+    </div>
+
+    <div class="q full" data-question="q8" data-group="二、跟着机制走" data-title="Q8. attention forward 过了但 backward 错了，你先查哪三件事？">
+      <div class="q-meta"><span class="pill">诊断</span><span class="pill">attention</span></div>
+      <h3>Q8. attention forward 过了但 backward 错了，你先查哪三件事？</h3>
+      <p class="solve-note">写出顺序更重要：先查数值路径，再查保存张量，最后查 backward 公式。</p>
+      <textarea name="q8" placeholder="按顺序写：scale / mask / saved LSE / dQ dK dV 依赖，至少三项。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>参考顺序可以是：1）<code>scale = 1 / sqrt(d)</code> 和 mask 是否对齐；2）forward 是否真的保存了一个形状为 <code>(batch_size, n_queries)</code> 的 LSE；3）<code>dQ / dK / dV</code> 是否依赖同一套归一化信息。答题时最好再补一句：不要先改 Triton block size，因为语义还没闭合。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、接上作业</h3>
+      <p>这组题把前面的概念直接接回仓库文件和测试命令。你答对以后，就应该知道下一步真正要打开什么。</p>
+    </div>
+    <div class="quick-review">锚点：<code>tests/adapters.py</code>、<code>tests/test_attention.py</code>、<code>tests/test_ddp.py</code>、<code>tests/test_fsdp.py</code>。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q9" data-group="三、接上作业" data-title="Q9. 第一份应该打开的文件是哪一个？" data-answer="A. tests/adapters.py" data-explain="adapter 文件先定义测试和实现之间的接口契约，先读它能少走很多弯路。">
+      <div class="q-meta"><span class="pill">选择</span><span class="pill">入口文件</span></div>
+      <h3>Q9. 第一份应该打开的文件是哪一个？</h3>
+      <label><input type="radio" name="q9" value="A. tests/adapters.py">A. <code>tests/adapters.py</code></label>
+      <label><input type="radio" name="q9" value="B. tests/test_fsdp.py">B. <code>tests/test_fsdp.py</code></label>
+      <label><input type="radio" name="q9" value="C. README.md">C. <code>README.md</code></label>
+      <label><input type="radio" name="q9" value="D. test_and_make_submission.sh">D. <code>test_and_make_submission.sh</code></label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q10" data-group="三、接上作业" data-title="Q10. 判断：没有 CUDA 时，Triton 测试跳过就是环境限制，不是实现失败。" data-answer="true" data-explain="Triton 相关用例在没有 GPU 时会 skip；先把 PyTorch 语义和 CPU 可跑测试做通，再回头看 GPU-only 分支。">
+      <div class="q-meta"><span class="pill">判断</span><span class="pill">Triton</span></div>
+      <h3>Q10. 判断：没有 CUDA 时，Triton 测试跳过就是环境限制，不是实现失败。</h3>
+      <label><input type="radio" name="q10" value="true">对</label>
+      <label><input type="radio" name="q10" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q11" data-group="三、接上作业" data-title="Q11. 哪个测试文件会直接检查 FSDP 的 full params gather？" data-answer="tests/test_fsdp.py" data-explain="FSDP 的 full params gather 和 gradient sync 都在这个测试文件里出现。">
+      <div class="q-meta"><span class="pill">填空</span><span class="pill">测试</span></div>
+      <h3>Q11. 哪个测试文件会直接检查 FSDP 的 full params gather？</h3>
+      <input type="text" name="q11" placeholder="写文件名">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="三、接上作业" data-title="Q12. 写出你会怎么开始第一轮排查。">
+      <div class="q-meta"><span class="pill">综合解释</span><span class="pill">行动路线</span></div>
+      <h3>Q12. 写出你会怎么开始第一轮排查。</h3>
+      <p>要求包含：先打开哪份文件、先跑哪一条测试、如果失败先看什么。</p>
+      <p class="solve-note">这题看的是你能不能把抽象概念翻成具体动作。</p>
+      <textarea name="q12" placeholder="例如：先读 adapters，再跑对应 test_*，先看 NotImplementedError / saved tensor / sync 时机。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>好答案至少要包含三步：1）打开 <code>tests/adapters.py</code> 或相应的 <code>tests/test_*.py</code>；2）先跑最窄的那条测试，例如 <code>uv run pytest -v tests/test_attention.py</code>；3）把失败归到具体对象或阶段，例如 adapter 没实现、LSE 没保存、DDP 同步时机不对、FSDP full params 没 gather。只写“先跑测试”不够，必须说清失败后看什么。</p></details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><strong>CS336 Spring 2025 课程页快照</strong>：用于确认本单元在课程主线里的位置，尤其是 Assignment 2: Systems 的任务边界、lecture 顺序和“先做系统，再做性能优化”的节奏。</li>
+  <li><strong><code>stanford-cs336/assignment2-systems</code>，commit <code>ca8bc81a59b70516f7ebb2da4808daade877c736</code></strong>：用于确认 <code>tests/adapters.py</code> 的接口、<code>tests/test_attention.py</code> / <code>tests/test_ddp.py</code> / <code>tests/test_fsdp.py</code> / <code>tests/test_sharded_optimizer.py</code> 的检查点，以及 <code>uv run pytest</code>、<code>test_and_make_submission.sh</code> 这类操作路径。</li>
+  <li><strong><code>tests/adapters.py</code></strong>：用于确认 <code>get_flashattention_autograd_function_pytorch</code>、<code>get_flashattention_autograd_function_triton</code>、<code>get_ddp</code>、<code>ddp_on_after_backward</code>、<code>get_fsdp</code>、<code>fsdp_on_after_backward</code>、<code>fsdp_gather_full_params</code> 和 <code>get_sharded_optimizer</code> 这些公开入口。</li>
+  <li><strong><code>tests/test_attention.py</code>、<code>tests/test_ddp.py</code>、<code>tests/test_fsdp.py</code>、<code>tests/test_sharded_optimizer.py</code></strong>：用于确认每一类失败会落在哪个测试上，尤其是 attention 的 LSE 保存、DDP 的同步时机、FSDP 的 full params gather 和 shard 语义。</li>
+  <li><strong><code>README.md</code> 与 <code>test_and_make_submission.sh</code></strong>：用于确认仓库层面的运行方式，尤其是先用 <code>uv</code> 管环境，再按最窄测试推进。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

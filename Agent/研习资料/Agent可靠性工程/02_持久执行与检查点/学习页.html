@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>持久执行与检查点</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="智能体可靠性工程" data-unit="02">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>智能体可靠性工程</strong>
+        <span>02</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#mechanism"><span class="dot"></span>核心机制</a>
+        <a href="#ledger"><span class="dot"></span>状态台账</a>
+        <a href="#case"><span class="dot"></span>案例</a>
+        <a href="#bridge"><span class="dot"></span>落地顺序</a>
+        <a href="#trace"><span class="dot"></span>追踪字段</a>
+        <a href="#mistakes"><span class="dot"></span>常见错误</a>
+        <a href="#boundary"><span class="dot"></span>边界与去向</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把恢复点、事件历史、Activity 边界和 trace 证据拆开。能说清“恢复什么、重放什么、看什么”，就能继续往 03 / 04 / 05 / 06 走。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">持久执行</div>
+          <h1>持久执行与检查点</h1>
+          <p>这一页先把“中断后继续”讲清楚：长任务为什么不能只靠内存、检查点到底保存什么、Workflow 和 Activity 为什么要分开、以及恢复时该用哪些字段把过程看回来。你会沿着“研究助理生成报告并等待确认后发送”这条锚点，把恢复点、事件历史、业务存储和 trace 证据串成一条能操作的链。</p>
+
+          <div class="course-links">
+            <a href="../01_可靠性问题地图/学习页.html">先看 01 故障分流</a>
+            <a href="../03_确定性幂等与副作用隔离/学习页.html">接着看 03 幂等与副作用隔离</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页后能做什么</h3>
+          <ul>
+  <li>能把一次长任务拆成“可重放的编排”和“不可随便重复的外部动作”。</li>
+  <li>能说清 checkpoint、事件历史、业务记录和 trace 分别保存什么、读什么、写什么。</li>
+  <li>能根据恢复症状判断下一步该去看 03、04、05 还是 06，而不是先改提示词。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">foundation</span>
+  </div>
+  <p>本单元要把“持久执行”落到可判断的动作上：一个长任务断掉以后，系统到底该从哪里续、哪些动作可以复用、哪些状态必须被保存、哪些字段能把过程看回来。你先把这四件事分开，后面的幂等、重试和追踪才有位置。</p>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>先找恢复点</h3>
+      <p>知道任务已经走到哪一步，哪些步骤完成过，哪些步骤还没有开始。</p>
+    </div>
+    <div class="box info">
+      <h3>再分编排和动作</h3>
+      <p>把决定下一步做什么的 Workflow，和真正会碰外部世界的 Activity 分开。</p>
+    </div>
+    <div class="box warn">
+      <h3>最后补证据</h3>
+      <p>用 trace、span、错误类型、幂等键和运行标识，把恢复前后的过程串起来。</p>
+    </div>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">roadmap</span>
+  </div>
+  <p>持久执行解决的是“进程没了、网络断了、用户晚点才确认，任务还能不能继续”。它不负责让外部系统永不失败，也不负责让模型输出完全稳定。它只做一件事：把已经确认过的执行事实留下来，让系统知道自己已经走到哪里，恢复时从正确位置接着走。</p>
+  <div class="table-wrap">
+    <table data-export-context="持久执行主线表" data-export-lang="table">
+      <thead>
+        <tr><th>看到什么</th><th>优先怀疑</th><th>下一步看什么</th><th>通常去哪里</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>重启后不知道任务做到哪了</td><td>checkpoint 不足</td><td>事件历史、继续位置、已完成步骤</td><td>02</td></tr>
+        <tr><td>同一意图又准备执行一次外部动作</td><td>副作用边界没隔开</td><td>幂等键、业务唯一键、状态写入顺序</td><td>03</td></tr>
+        <tr><td>任务卡住、超时或间歇失败</td><td>工具失败 / 重试策略</td><td>timeout、retry、error.type、耗时</td><td>04</td></tr>
+        <tr><td>输出字段漂移，后续读不动</td><td>结构化边界松了</td><td>schema、字段定义、解析条件</td><td>05</td></tr>
+        <tr><td>只能看到最后回答，看不见过程</td><td>追踪缺失</td><td>trace、span、事件语义、版本</td><td>06</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>先把这张表记住。它是一张分流表：一旦看见症状，就先决定去补哪一层，不要直接把所有故障都归给模型。</p>
+</section>
+
+<section id="mechanism">
+  <div class="head">
+    <h2>核心机制</h2>
+    <span class="tag">workflow / activity</span>
+  </div>
+  <p>一个可恢复的长任务通常会被拆成两层：上层是 Workflow，负责记住流程骨架和下一步该做什么；下层是 Activity，负责真正碰外部世界。这个拆法的意义很直接：Workflow 要可重放，Activity 要可重试。把两者混在一起，恢复时就会把不该重复的动作重复掉。</p>
+  <div class="table-wrap">
+    <table data-export-context="Workflow / Activity 读写矩阵" data-export-lang="table">
+      <thead>
+        <tr><th>对象</th><th>重启前</th><th>重启后</th><th>读什么</th><th>写什么</th><th>错了会怎样</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Workflow 决策</td><td>已有目标、计划、已完成步骤</td><td>根据历史重新走一遍</td><td>事件历史、signal、定时器</td><td>下一步调度位置</td><td>把已经走过的分支再走一遍</td></tr>
+        <tr><td>Activity 执行</td><td>调用过 LLM、工具或数据库</td><td>可以按历史结果复用</td><td>幂等键、参数摘要、历史结果</td><td>外部请求、状态变更</td><td>重复扣款、重复发信、重复写入</td></tr>
+        <tr><td>检查点</td><td>任务停在某个中间步骤</td><td>恢复到可继续的位置</td><td>步骤状态、摘要、引用</td><td>继续点</td><td>从头开始猜，或者跳错位置</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这张矩阵的重点是读写关系。Workflow 读历史，写下一步；Activity 读参数，写外部结果；checkpoint 读当前状态，写继续位置。只要这一层没说清，恢复时就容易把“已经做过但系统不记得”的动作再做一遍。</p>
+  <div class="codebar"><span>最小边界示意</span><button class="copy" data-copy="workflow-split">复制</button></div>
+  <pre id="workflow-split" data-export-context="最小边界示意" data-export-lang="python"><code class="language-python">class ReportWorkflow:
+    async def run(self, request):
+        plan = await execute_activity(plan_with_llm, request)
+        sources = await execute_activity(fetch_sources, plan)
+        draft = await execute_activity(write_report, sources)
+
+        approval = await wait_for_signal("approved")
+        if approval.ok:
+            await execute_activity(send_report_once, draft.id, idempotency_key=draft.id)
+        return {"status": "done", "draft_id": draft.id}</code></pre>
+  <p>这段伪代码只做一件事：把可重放的编排和真实副作用分开。LLM、检索、写报告、发邮件都不该直接放在可重放的编排里；等待人工确认应进入可恢复的等待状态，而不是挂住一个 HTTP 请求。</p>
+</section>
+
+<section id="ledger">
+  <div class="head">
+    <h2>状态台账</h2>
+    <span class="tag">ledger</span>
+  </div>
+  <p>当你分不清“恢复问题”还是“副作用问题”时，先不要争概念，直接列台账。看每一步谁在读、谁在写、写完以后谁会再读、状态会在什么时候过期。把这四个问题列清楚，很多看似模糊的故障会立刻露出位置。</p>
+  <div class="table-wrap">
+    <table data-export-context="报告任务状态台账" data-export-lang="table">
+      <thead>
+        <tr><th>步骤</th><th>读什么</th><th>写什么</th><th>何时会过时</th><th>错了的症状</th><th>下一步检查</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>目标进入</td><td>任务说明、订单号、用户意图</td><td>任务标识、版本、初始状态</td><td>当新一轮任务覆盖它</td><td>把旧任务当成新任务</td><td>确认输入窗口和任务 id</td></tr>
+        <tr><td>计划生成</td><td>目标、约束、已有上下文</td><td>plan_version、摘要、引用</td><td>模型版本变化或重新规划时</td><td>重启后重新生成一份完全不同的计划</td><td>看事件历史是否保存了计划结果</td></tr>
+        <tr><td>资料检索</td><td>计划、source_ids、检索条件</td><td>source_ids、摘要、可引用结果</td><td>数据源变化或重试后</td><td>同一次任务看到不同资料</td><td>确认 Activity 结果是否持久化</td></tr>
+        <tr><td>草稿写入</td><td>检索结果、写入目标</td><td>draft_id、摘要、存储引用</td><td>正文被覆盖或文件移动后</td><td>重启后找不到草稿</td><td>检查 draft_id 是否进入历史</td></tr>
+        <tr><td>人工等待</td><td>审批状态、用户信号</td><td>approval_state、等待位置</td><td>用户晚些时候才确认时</td><td>流程卡住但不知道卡在哪里</td><td>看 signal 和等待点是否被记录</td></tr>
+        <tr><td>确认发送</td><td>draft_id、发送标识、幂等键</td><td>发送结果、外部请求 id</td><td>发送成功但确认丢失时</td><td>恢复后又发一次</td><td>先看 03，再看外部状态</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>读这张表时，先看“写什么”。如果你说不出写入点，这层还只是口头概念；如果你能说出写入点，下一步就能追问它会被谁再次读取，以及写错以后会出现什么症状。</p>
+  <div class="codebar"><span>最小检查点清单</span><button class="copy" data-copy="checkpoint-checklist">复制</button></div>
+  <pre id="checkpoint-checklist" data-export-context="最小检查点清单" data-export-lang="text"><code class="language-text">1. 这一步写了什么状态？
+2. 下一个步骤会从哪里读这个状态？
+3. 这个状态什么时候会过时？
+4. 能不能靠 checkpoint 或事件历史把它恢复回来？
+5. 读不到时，先去补哪类运行记录？</code></pre>
+</section>
+
+<section id="fresh-history">
+  <div class="head">
+    <h2>历史收口</h2>
+    <span class="tag">continue-as-new</span>
+  </div>
+  <p>Event History 是恢复的基础，但历史越长，重放越慢。任务跑得久、活动很多、信号很多时，历史会越来越大。Temporal 里的 Continue-As-New 思路很简单：把当前最相关的状态传给一个新的 Workflow Execution，给它一份新的历史，让旧历史收口，新历史继续往前跑。</p>
+  <div class="table-wrap">
+    <table data-export-context="Continue-As-New 决策表" data-export-lang="table">
+      <thead>
+        <tr><th>何时考虑</th><th>保留什么</th><th>新历史从哪里开始</th><th>你要注意什么</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>任务很长，活动很多</td><td>最新相关状态、继续位置、必要引用</td><td>新的 Workflow Execution</td><td>别把无关历史一并搬过去</td></tr>
+        <tr><td>历史开始膨胀</td><td>能继续任务所需的最小状态</td><td>同一个 Workflow Id，新的 Run Id</td><td>新旧执行要能关联，但不要混成一条旧历史</td></tr>
+        <tr><td>代码版本切换太多</td><td>当前版本能理解的状态摘要</td><td>fresh Event History</td><td>避免老代码和新代码在同一条历史里互相打架</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这里最重要的一句是：checkpoint 只保住“下一次能继续”的最小状态。Continue-As-New 让你把这一点做成新的历史边界，避免把一条越来越长的历史硬拖到底。</p>
+</section>
+
+<section id="recovery-protocol">
+  <div class="head">
+    <h2>最小恢复协议</h2>
+    <span class="tag">read / run / write</span>
+  </div>
+  <p>知道 checkpoint 的定义还不够。真正能让长任务稳定跑下去的，是一套固定的读写顺序：先读历史，再决定下一步，接着跑一个 Activity，最后只写恢复必需的状态。顺序不能反过来。你如果先把“已完成”写进 checkpoint，再去跑外部动作，重启后就会以为这一步已经完成；你如果把完整 prompt、原文资料和所有工具返回都塞进历史，恢复虽然也许还能做，但历史会越来越大，重放会越来越慢。</p>
+  <p>对“研究助理生成报告并等待确认后发送”这个锚点来说，最小恢复状态很具体：任务 id、plan_version、source_ids、draft_id、approval_state、发送幂等键，以及能指向当前步骤的继续位置。真正的正文、长篇资料和外部系统返回不应该都待在历史里，它们应该放在业务存储或对象存储，只把引用留在历史里。这样做的好处是，重启后你只需要恢复“现在走到哪一步”和“接下来做什么”，不需要把整个世界重新喂给 worker 一遍。</p>
+  <div class="table-wrap">
+    <table data-export-context="最小恢复协议表" data-export-lang="table">
+      <thead>
+        <tr><th>步骤</th><th>读什么</th><th>写什么</th><th>错位后症状</th><th>先看哪里</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>读历史</td><td>事件历史、signal、已有的继续位置</td><td>当前要做的下一步</td><td>把已经完成的步骤又执行一遍</td><td>确认历史里是否有上一步结果</td></tr>
+        <tr><td>跑 Activity</td><td>任务参数、稳定引用、必要摘要</td><td>外部结果、返回 id、错误类型</td><td>外部世界已经变了，但系统没记住</td><td>看 Activity 是否有独立结果记录</td></tr>
+        <tr><td>写 checkpoint</td><td>刚刚确认过的结果、继续位置</td><td>最小恢复状态</td><td>重启后从错误位置继续，或以为已经做完</td><td>确认写入点是不是在动作之后</td></tr>
+        <tr><td>切下一轮</td><td>当前状态、历史长度、是否继续等待</td><td>新的历史边界或新的等待点</td><td>历史越来越长，重放越来越慢</td><td>考虑是否需要 Continue-As-New</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>最小恢复伪代码</span><button class="copy" data-copy="recovery-protocol-code">复制</button></div>
+  <pre id="recovery-protocol-code" data-export-context="最小恢复伪代码" data-export-lang="python"><code class="language-python">async def run_report_task(task_id):
+    state = load_history(task_id)
+    step = state.get("step", "plan")
+
+    if step == "plan":
+        plan = await execute_activity(plan_with_llm, task_id)
+        save_checkpoint(task_id, step="fetch", plan_version=plan["version"])
+        step = "fetch"
+
+    if step == "fetch":
+        sources = await execute_activity(fetch_sources, task_id)
+        save_checkpoint(task_id, step="write", source_ids=sources["ids"])
+        step = "write"
+
+    if step == "write":
+        draft = await execute_activity(write_report, task_id)
+        save_checkpoint(task_id, step="wait", draft_id=draft["id"])
+        step = "wait"
+
+    if step == "wait":
+        await wait_for_signal("approved")
+        save_checkpoint(task_id, step="send", approval_state="approved")
+        step = "send"
+
+    if step == "send":
+        await execute_activity(send_report_once, task_id, idempotency_key=task_id)</code></pre>
+  <p>这段代码真正要你看的是写入时机。每次 Activity 结束之后，才写下一步 checkpoint；每个 checkpoint 只保留恢复所需的最小字段。这样做有两个直接后果：重启后知道应该从哪一步续，也不会把整份资料和所有工具返回都拖进历史里。</p>
+  <p>如果顺序写错，症状会很明确：写早了，会把还没真正发生的步骤标成已完成；写晚了，会让同一动作在恢复时再执行一次。你做 q7 时如果不知道该保留哪些字段，就回到这张表；你做 q10 时如果讲不清“为什么不能把完整 prompt 写进历史”，就把这段代码里的写入点按顺序复述一遍。</p>
+</section>
+
+<section id="confirmation-window">
+  <div class="head">
+    <h2>确认窗口</h2>
+    <span class="tag">success / ack</span>
+  </div>
+  <p>最容易出事故的地方，往往是“动作已经成功，但系统还没来得及记住”。邮件发送、退款、提交 PR、删除文件，都有一个短窗口：外部世界已经变了，本地 checkpoint 还没写完，worker 就崩了。恢复后如果只看本地状态，就会把这个动作当成还没做，于是再做一遍。</p>
+  <p>这个窗口要靠顺序来缩短：先让 Activity 完成并返回结果，再把结果写进 checkpoint 或历史，最后才继续下一步。不要把“成功标记”提前写进去，也不要把完整正文拖到最后才补。对于长任务来说，最稳的做法是把“动作成功”和“系统确认”之间的间隔压到最短，并且把这段间隔留下可查的记录。</p>
+  <div class="table-wrap">
+    <table data-export-context="确认窗口风险表" data-export-lang="table">
+      <thead>
+        <tr><th>场景</th><th>外部世界</th><th>本地记录</th><th>典型症状</th><th>先查什么</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>邮件已发出</td><td>项目组已经收到邮件</td><td>checkpoint 还没写到 send 完成</td><td>恢复后又发一次</td><td>发送结果和幂等键</td></tr>
+        <tr><td>草稿已保存</td><td>正文已经写到对象存储</td><td>draft_id 还没进入历史</td><td>恢复后找不到草稿</td><td>草稿写入点和历史写入点</td></tr>
+        <tr><td>审批已通过</td><td>用户已经确认</td><td>approval_state 还没写入恢复状态</td><td>系统一直等人或重复问确认</td><td>signal 到 checkpoint 的顺序</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>发送完成的最小顺序</span><button class="copy" data-copy="ack-window-code">复制</button></div>
+  <pre id="ack-window-code" data-export-context="发送完成的最小顺序" data-export-lang="python"><code class="language-python">result = await execute_activity(send_report_once, draft.id, idempotency_key=draft.id)
+save_checkpoint(task_id, step="done", send_id=result["request_id"])
+return {"status": "done", "send_id": result["request_id"]}</code></pre>
+  <p>这三行代码看的是顺序：外部动作先完成，结果再进入 checkpoint，最后才返回结束状态。只要这个顺序守住，恢复后就能判断“这一步已经成功”，不会把系统确认和外部成功混成一件事。</p>
+  <p>如果你在 q6 里看到“最终回复的语气”，就别把它当证据；如果你在 q10 里不知道该怎么讲“成功但确认丢失”，就回到这里，把这个窗口和上一段的最小恢复协议连起来看。你已经能把一次长任务的状态顺序说清楚了。</p>
+</section>
+
+<section id="case">
+  <div class="head">
+    <h2>案例</h2>
+    <span class="tag">worked case</span>
+  </div>
+  <div class="grid2">
+    <div>
+      <h3>研究助理生成报告并等待确认后发送</h3>
+      <p>一个 agent 接到任务：收集资料，生成中文报告，等待用户确认，再把报告发给项目组。任务可能持续十几分钟，也可能因为人工确认跨越一天。中间任何一步都可能因为 worker 重启、网络中断或部署发布而停住。</p>
+      <div class="timeline">
+        <div class="step"><b>T0 目标进入</b><span>创建 workflow execution，记录 task_id、目标、发起人和版本。</span></div>
+        <div class="step"><b>T1 计划生成</b><span>调用 LLM Activity 生成计划，历史保存结果，trace 记录 generation span。</span></div>
+        <div class="step"><b>T2 资料检索</b><span>调用检索工具 Activity，保存 source_ids 和摘要，不把整份资料硬塞进历史。</span></div>
+        <div class="step"><b>T3 草稿写入</b><span>正文写入业务存储，checkpoint 只保存 draft_id 和必要摘要。</span></div>
+        <div class="step"><b>T4 人工等待</b><span>Workflow 等待 approved signal，任务暂停在可恢复状态里，而不是挂死一个请求。</span></div>
+        <div class="step"><b>T5 确认发送</b><span>发送 Activity 使用 idempotency_key，避免恢复或重试导致重复发送。</span></div>
+      </div>
+    </div>
+    <div class="box warn">
+      <h3>中断点推演</h3>
+      <p><strong>如果 T2 前 worker 崩溃：</strong>恢复后 replay 会重建 T0、T1，继续调度 T2。</p>
+      <p><strong>如果 T3 后 worker 崩溃：</strong>恢复后不应重新生成草稿，而应读取已记录的 draft_id。</p>
+      <p><strong>如果 T5 邮件已发但结果未确认：</strong>本页先把“成功但确认丢失”的窗口看见，完整修法放到 03 的幂等和副作用隔离。</p>
+    </div>
+  </div>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1">
+        <code>读取对话</code><span>表面症状</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-2">
+        <code>检查 checkpoint</code><span>是否能续跑</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-3">
+        <code>检查 draft_id</code><span>是否能找到草稿</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-4">
+        <code>查看 trace</code><span>是否能定位</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1">
+        <b>先看到什么</b><span>只有用户意图和一段对话文本</span><p>这一步只能说明“问题出现了”，不能说明问题在哪里。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-2">
+        <b>再看什么</b><span>流程是否记录了可恢复位置</span><p>有 checkpoint 才能把“重启后怎么办”变成可回答的问题。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-3">
+        <b>继续看什么</b><span>草稿是否有稳定的业务引用</span><p>没有 draft_id，就很容易重算、重写或丢失中间成果。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-4">
+        <b>最后看什么</b><span>trace 是否带工具参数、耗时和错误类型</span><p>看不见过程，就很难把一次失败和下一步动作连起来。</p>
+      </div>
+    </div>
+  </div>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1">T2 前崩溃</button>
+      <button class="ghost" data-terminal-case="case-2">T3 后崩溃</button>
+      <button class="ghost" data-terminal-case="case-3">T5 发送风险</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">系统已有目标和计划生成结果。恢复时 Workflow 通过事件历史重建到“计划已完成、资料未检索”的状态，接着调度检索 Activity。</pre>
+    <template data-terminal-output="case-1">系统已有目标和计划生成结果。恢复时 Workflow 通过事件历史重建到“计划已完成、资料未检索”的状态，接着调度检索 Activity。</template>
+    <template data-terminal-output="case-2">系统已经把草稿写入业务存储，并在恢复记录中持有 draft_id。恢复后应该使用 draft_id 继续等待人工确认，重新生成草稿会造成内容漂移。</template>
+    <template data-terminal-output="case-3">最危险的窗口是外部邮件 API 已经成功，但本地还没来得及记录成功结果。恢复后如果没有幂等键或发送记录，就可能重复发信。</template>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>操作桥</h2>
+    <span class="tag">next check</span>
+  </div>
+  <p>把这页放回真实系统时，先打开三处：Workflow history、业务存储、trace。先看历史里的 step 和 signal，确认恢复位置有没有被记住；再看业务存储里的 <code>draft_id</code>、<code>approval_state</code>、<code>send_id</code>，确认中间成果有没有稳定引用；最后看 trace 里的 <code>tool.call.plan</code>、<code>tool.call.fetch</code>、<code>tool.call.send</code>，确认失败发生在编排、工具还是发送窗口。</p>
+  <div class="table-wrap">
+    <table data-export-context="操作桥排查表" data-export-lang="table">
+      <thead>
+        <tr><th>先看哪里</th><th>你要找什么</th><th>说明什么</th><th>接下来去哪里</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Workflow history</td><td>step、signal、continue-as-new、run id</td><td>恢复位置是否被记住</td><td>如果没有，回到 checkpoint / fresh-history</td></tr>
+        <tr><td>业务存储</td><td>draft_id、approval_state、send_id、对象存储引用</td><td>中间成果是否有稳定引用</td><td>如果断了，回到状态台账</td></tr>
+        <tr><td>trace</td><td>tool 名、参数摘要、error.type、耗时</td><td>失败发生在编排、工具还是发送窗口</td><td>如果看不见，回到追踪字段</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这张桥表只做一件事：把“先补什么”排成顺序。恢复记忆先补 checkpoint，外部结果先补业务引用，过程证据先补 trace。等这三处能对上，再去看 03 的幂等、04 的重试和 06 的追踪语义，排查会快很多。</p>
+</section>
+
+<section id="trace">
+  <div class="head">
+    <h2>追踪字段</h2>
+    <span class="tag">observability</span>
+  </div>
+  <p>持久执行解决的是“能不能继续”，追踪解决的是“为什么会这样继续”。两者都需要，但职责不同。历史负责恢复，trace 负责解释；如果把 trace 当成恢复状态，系统一旦要重放，就会把“观察记录”误当成“执行依据”。</p>
+  <div class="table-wrap">
+    <table data-export-context="恢复排查的 trace 字段表" data-export-lang="table">
+      <thead>
+        <tr><th>span / 事件</th><th>记录了什么</th><th>对排查有什么用</th><th>缺失时会怎样</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>workflow.start</td><td>任务 id、输入摘要、目标</td><td>帮你确认是否同一单任务</td><td>你会把老任务和新任务混在一起</td></tr>
+        <tr><td>tool.call.plan</td><td>工具名、参数摘要、计划版本</td><td>帮你看计划是否重新生成了</td><td>你不知道计划是不是第二次算出来的</td></tr>
+        <tr><td>tool.call.fetch</td><td>source_ids、查询条件、耗时</td><td>帮你判断资料检索是否卡住</td><td>你只能看到“失败了”，不知道慢在哪</td></tr>
+        <tr><td>tool.call.send</td><td>draft_id、幂等键、外部请求 id</td><td>帮你判断有没有重复发送</td><td>恢复后重发的风险看不见</td></tr>
+        <tr><td>workflow.wait</td><td>approval_state、等待位置</td><td>帮你知道任务是在等人还是卡住了</td><td>排查的人会误以为流程死了</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>真正有用的 trace 会把过程拆成几次有意义的写入，而不是把所有文本都堆进去。每个写入点都要回答一个问题：这一步有没有改变状态、有没有改变外部世界、有没有留下可回放的证据。只要这三个问题没答清，回放就还不能算回放。</p>
+  <div class="codebar"><span>trace 最小清单</span><button class="copy" data-copy="trace-checklist">复制</button></div>
+  <pre id="trace-checklist" data-export-context="trace 最小清单" data-export-lang="text"><code class="language-text">1. 输入摘要和任务标识有没有记录
+2. 工具调用有没有带幂等键或稳定引用
+3. 工具结果有没有带 error.type 和耗时
+4. 人工等待点有没有记录 approval_state
+5. 如果这些字段都没有，先去补哪一层</code></pre>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见错误</h2>
+    <span class="tag">fixes</span>
+  </div>
+  <div class="grid2">
+    <div class="box danger">
+      <h3>错误 1：把 LLM 调用写进可重放编排代码</h3>
+      <p>LLM 输出会随模型版本、采样和服务状态变化。放在 Workflow 里会破坏 replay 的确定性。</p>
+      <p><strong>修法：</strong>把 LLM 调用封装为 Activity，结果只留下引用和必要摘要。</p>
+    </div>
+    <div class="box danger">
+      <h3>错误 2：把 trace 当检查点</h3>
+      <p>trace 很适合排查，但它不能驱动恢复状态机。trace 丢了不该影响业务继续，事件历史坏了才会影响恢复。</p>
+      <p><strong>修法：</strong>恢复状态进事件历史或 durable store，trace 用相关 id 串起来。</p>
+    </div>
+    <div class="box danger">
+      <h3>错误 3：恢复后重复发送外部副作用</h3>
+      <p>邮件、扣款、提交 PR、删除文件都要考虑“已经成功但确认丢失”的窗口。</p>
+      <p><strong>修法：</strong>这一步先记录窗口，下一页去 03 处理幂等、唯一约束和外部状态查询。</p>
+    </div>
+    <div class="box danger">
+      <h3>错误 4：把完整 prompt 和工具结果都写进历史</h3>
+      <p>这会放大成本、隐私和性能问题。历史只保留恢复必须的信息，大内容放受控存储。</p>
+      <p><strong>修法：</strong>保存 task_id、plan_version、source_ids、draft_id、approval_state、idempotency_key。</p>
+    </div>
+    <div class="box danger">
+      <h3>错误 5：用系统时间、随机数、全局状态驱动 Workflow 分支</h3>
+      <p>这些值在 replay 时可能不同，导致历史与代码生成的命令不一致。</p>
+      <p><strong>修法：</strong>把不确定计算放进 Activity，或者使用 replay-safe 的历史事件结果。</p>
+    </div>
+    <div class="box danger">
+      <h3>错误 6：观测字段没有统一命名</h3>
+      <p>一个服务叫 tool，另一个叫 function，另一个只写 message，后续就很难跨系统查询。</p>
+      <p><strong>修法：</strong>统一用 `gen_ai.operation.name`、`gen_ai.provider.name`、`gen_ai.request.model`、`gen_ai.tool.name`、`error.type`。</p>
+    </div>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>边界与去向</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <p>这一页先不追完整的幂等实现、重试策略、结构化输出和追踪后端接入。它们当然重要，但不该抢走你对“恢复点在哪里、哪些动作会被重放、哪些状态必须被保存”的注意力。</p>
+  <div class="grid3">
+    <div class="box">
+      <h3>去 03 之前</h3>
+      <p>先确认问题是否集中在“外部动作会不会重复”，再进入幂等与副作用隔离。</p>
+    </div>
+    <div class="box">
+      <h3>去 04 之前</h3>
+      <p>先确认问题是否集中在“工具慢、偶发失败或超时”，再进入重试策略。</p>
+    </div>
+    <div class="box">
+      <h3>去 05 / 06 之前</h3>
+      <p>先确认问题是否集中在“字段漂移”或“过程看不见”，再看结构边界和追踪语义。</p>
+    </div>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>怎么答才算会</h3>
+    <p>目标是把一个长任务的中断位置、恢复点、读取对象和写入对象说清楚。回答时先说判断，再说证据，再说下一步。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>重点看三件事：你有没有把 Workflow、Activity、checkpoint、trace 分开；你有没有把“看什么”说具体；你有没有把下一单元选对。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、概念辨析</h3>
+      <p>先确认你能把恢复、重放、等待和追踪分开。</p>
+    </div>
+    <div class="quick-review">
+      <b>复习句</b>
+      <span>恢复解决运行中断，重放重建编排，Activity 负责外部动作，trace 负责把过程看见。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、概念辨析" data-title="哪一项最接近持久执行的目标？" data-answer="B" data-explain="持久执行关心任务在中断后还能不能继续；模型输出是否完全确定，属于另一类问题。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">concept</span></div>
+      <h3>哪一项最接近持久执行的目标？</h3>
+      <p>下面哪一项最接近持久执行的目标？</p>
+      <label><input type="radio" name="q1" value="A"> 让模型输出完全确定</label>
+      <label><input type="radio" name="q1" value="B"> 让任务在进程、网络或部署中断后还能继续</label>
+      <label><input type="radio" name="q1" value="C"> 把所有日志写得更详细</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、概念辨析" data-title="Trace 可以直接替代事件历史作为恢复依据。" data-answer="错" data-explain="Trace 主要服务于观察和排查，恢复需要的是事件历史或可恢复状态。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">boundary</span></div>
+      <h3>Trace 可以直接替代事件历史作为恢复依据。</h3>
+      <label><input type="radio" name="q2" value="对"> 对</label>
+      <label><input type="radio" name="q2" value="错"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q3" data-group="一、概念辨析" data-title="把 LLM 调用放在 Temporal 中更适合放入哪个边界？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">workflow / activity</span></div>
+      <h3>把 LLM 调用放在 Temporal 中更适合放入哪个边界？</h3>
+      <input type="text" name="q3" data-answer="activity" placeholder="填写一个词，并写一句理由">
+      <p class="hint">想一想 replay 时它是否应该重新产生不同结果。</p>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q4" data-group="一、概念辨析" data-title="用三句话解释恢复和重试的差别。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">explanation</span></div>
+      <h3>用三句话解释恢复和重试的差别。</h3>
+      <p>第一句说触发条件，第二句说处理对象，第三句说两者如何配合。</p>
+      <p class="solve-note">答案目标：恢复解决运行中断，重试解决单步失败；两者经常同时出现，但不能互相代替。</p>
+      <textarea name="q4" placeholder="先说恢复什么时候发生，再说重试什么时候发生，再说为什么不能混为一谈。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要有三个点：1. 恢复发生在 worker / 进程 / 网络中断之后；2. 重试发生在某个 Activity 或工具动作失败之后；3. 恢复负责接着走，重试负责重新尝试单步动作。只要你把“运行层中断”和“动作层失败”分开，就算答到了要点。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q5" data-group="一、概念辨析" data-title="把以下动作分类：生成摘要、写数据库、调用支付、读取已保存的模型输出、发送邮件。">
+      <div class="q-meta"><span class="pill">classification</span><span class="pill">side effect</span></div>
+      <h3>把以下动作分类：生成摘要、写数据库、调用支付、读取已保存的模型输出、发送邮件。</h3>
+      <p>请按“可重放逻辑、可重试活动、不可重复副作用”分类，并说明一个边界理由。</p>
+      <p class="solve-note">注意“生成摘要”如果重新调用模型，与“读取已保存的摘要”不是同一类动作。</p>
+      <textarea name="q5" placeholder="先分三类，再补一句为什么这么分。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>可重放逻辑：选择下一步、组装计划、读取已有历史结果。可重试活动：写数据库、读取外部数据、生成摘要（如果允许重新调用）。不可重复副作用：调用支付、发送邮件。关键是说明“重复一次会不会改变外部世界”。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、证据链</h3>
+      <p>把症状变成可排查的记录，别停在模糊判断。</p>
+    </div>
+    <div class="quick-review">
+      <b>诊断顺序</b>
+      <span>先找 checkpoint，再找历史，再找 trace，最后才改策略。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q6" data-group="二、证据链" data-title="分流检查清单">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">evidence</span></div>
+      <h3>分流检查清单</h3>
+      <p>下面哪些信息对判断“是恢复问题还是工具问题”最有用？选出你认为应该先看的一组，并说明为什么最终回答和语气不算核心证据。</p>
+      <label><input type="checkbox" name="q6" value="流程历史或 checkpoint"> 流程历史或 checkpoint</label>
+      <label><input type="checkbox" name="q6" value="工具参数和幂等键"> 工具参数和幂等键</label>
+      <label><input type="checkbox" name="q6" value="最终回复的语气"> 最终回复的语气</label>
+      <label><input type="checkbox" name="q6" value="trace、span、错误类型、耗时"> trace、span、错误类型、耗时</label>
+      <details>
+        <summary>展开反馈</summary>
+        <p>正确方向是：流程历史 / checkpoint、工具参数 / 幂等键、trace / span / 错误类型 / 耗时。最终回复的语气不能直接帮助分流。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q7" data-group="二、证据链" data-title="写出最小证据链">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">trace</span></div>
+      <h3>写出最小证据链</h3>
+      <p>用 3 到 5 个字段写出一次失败时你最想保留的证据。要求包含一个能定位过程、一个能定位工具、一个能定位错误的字段。写完后再补一句：如果这些字段都没有，你下一步先去哪里找。</p>
+      <p class="solve-note">答案目标：你要能说清“过程在哪里、工具做了什么、为什么失败”。</p>
+      <input type="text" name="q7" data-answer="trace_id; tool.name; error.type" placeholder="例如：trace_id；tool.name；error.type；approval_state">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>要点至少包括：一个运行标识（trace_id / run_id）、工具信息（工具名 / 参数摘要）、错误或耗时信息（error.type / duration / retry_count）。如果只写最终回答，不算完整。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、下一步去哪里</h3>
+      <p>判断完问题类型后，要知道该把它送到哪一单元。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题目标</b>
+      <span>问题类型和后续单元要对上，别把问题送错门。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q8" data-group="三、下一步去哪里" data-title="恢复点最先看什么" data-answer="A" data-explain="恢复不了时，先看 checkpoint 和事件历史，不要先跳去别的单元。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">route</span></div>
+      <h3>恢复点最先看什么</h3>
+      <p>如果你已经确认问题是“中断后恢复不了”，最先该看哪一层？</p>
+      <label><input type="radio" name="q8" value="A"> checkpoint 和事件历史</label>
+      <label><input type="radio" name="q8" value="B"> 输出 schema</label>
+      <label><input type="radio" name="q8" value="C"> 追踪字段的展示样式</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q9" data-group="三、下一步去哪里" data-title="重复副作用去哪里" data-answer="A" data-explain="重复副作用优先看 03 的幂等与副作用隔离。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">route</span></div>
+      <h3>重复副作用去哪里</h3>
+      <p>如果问题是“同一个意图会不会再次扣款、再次退款、再次写文件”，下一步该去哪里？</p>
+      <label><input type="radio" name="q9" value="A"> 03 确定性、幂等与副作用隔离</label>
+      <label><input type="radio" name="q9" value="B"> 06 追踪指标与事件语义</label>
+      <label><input type="radio" name="q9" value="C"> 07 评测回放与回归测试</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q10" data-group="三、下一步去哪里" data-title="给出分流理由">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">transfer</span></div>
+      <h3>给出分流理由</h3>
+      <p>任选一个真实或假想的 agent 失败，按“症状 -> 怀疑点 -> 证据 -> 下一单元”写出 4 句判断。不要写长篇分析，先把链条接完整。最好直接套用退款、卡住、字段漂移这三类例子之一。</p>
+      <p class="solve-note">答案目标：让别人看完就知道你为什么把它分到那一类，不能只给一个结论。</p>
+      <textarea name="q10" placeholder="例如：重启后重复退款 -> 怀疑恢复边界和幂等 -> 看 checkpoint、幂等键、trace -> 去 03。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要有四段：症状、怀疑点、证据、下一步。判断是否合理，关键看问题类型是否和后续单元对得上，措辞漂亮不算证据。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、回看误区</h3>
+      <p>把容易误判的地方再压一遍，防止你回去还是先改提示词。</p>
+    </div>
+    <div class="quick-review">
+      <b>误区提醒</b>
+      <span>先看状态，再看副作用，再看证据链，最后才谈策略。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q11" data-group="四、回看误区" data-title="判断对错 1" data-answer="false" data-explain="重启后重复退款通常指向恢复和幂等边界，提示词长度不是优先怀疑点。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">misconception</span></div>
+      <h3>判断对错 1</h3>
+      <p>“只要把提示词写长一点，重启后重复退款这类问题就会自己消失。”</p>
+      <label><input type="radio" name="q11" value="true"> 对</label>
+      <label><input type="radio" name="q11" value="false"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="四、回看误区" data-title="判断对错 2" data-answer="false" data-explain="最终回答保存下来了，不代表有完整证据链。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">observability</span></div>
+      <h3>判断对错 2</h3>
+      <p>“最终回答保存下来了，就等于有了完整证据链。”</p>
+      <label><input type="radio" name="q12" value="true"> 对</label>
+      <label><input type="radio" name="q12" value="false"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li>
+    <b>课程目录《智能体可靠性工程》</b>
+    <p>支持本单元的课程位置、前后衔接和下一步去向。02 的范围是“恢复与检查点”，幂等实现留给 03。</p>
+  </li>
+  <li>
+    <b>本单元原始学习页（2026-06-20 课程快照）</b>
+    <p>支持研究助理生成报告、等待确认、发送邮件、状态台账、时间线和常见错误这些锚点；本页在此基础上重写成更稳定的恢复课。</p>
+  </li>
+  <li>
+    <b>Temporal Durable Execution</b>
+    <p><a href="https://docs.temporal.io/" target="_blank" rel="noreferrer">Temporal Docs</a> 用来支撑持久执行、Workflow / Activity、事件历史、重放、恢复语义和 Continue-As-New 这条路径。</p>
+  </li>
+  <li>
+    <b>OpenAI Agents Tracing</b>
+    <p><a href="https://openai.github.io/openai-agents-python/tracing/" target="_blank" rel="noreferrer">Tracing 文档</a> 用来支撑 trace、span、generation、tool、handoff 和敏感数据控制的证据链视角。</p>
+  </li>
+  <li>
+    <b>OpenTelemetry GenAI 语义约定</b>
+    <p><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/" target="_blank" rel="noreferrer">GenAI semantic conventions</a> 用来支撑模型调用、工具调用、事件语义和观测字段统一命名。</p>
+  </li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

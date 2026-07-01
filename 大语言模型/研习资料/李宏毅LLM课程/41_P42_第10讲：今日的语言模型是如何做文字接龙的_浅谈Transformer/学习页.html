@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>41_P42｜第10讲：今日的语言模型是如何做文字接龙的 — 浅谈Transformer</title>
+  <link rel="stylesheet" href="../../../../assets/study-page.css">
+</head>
+<body data-study-kind="extension" data-feynman-keywords="Transformer, tokenization, token, BPE, embedding, positional embedding, attention, causal attention, multi-head attention, feedforward network, Transformer block, output layer, probability distribution, 文字接龙">
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <strong>41_P42</strong>
+      <span>第10讲：今日的语言模型是如何做文字接龙的 — 浅谈Transformer<br>核心讲义 · 李宏毅生成式 AI 课程</span>
+    </div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>学习目标</a>
+      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
+      <a href="#terms"><span class="dot"></span>术语表</a>
+      <a href="#lecture"><span class="dot"></span>讲义主线</a>
+      <a href="#source"><span class="dot"></span>课程线索</a>
+      <a href="#worked"><span class="dot"></span>核心精讲</a>
+      <a href="#example"><span class="dot"></span>最小例子</a>
+      <a href="#viz"><span class="dot"></span>交互观察</a>
+      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>学习记录</a>
+    </nav>
+    <div class="side-note">这一节不是背 Transformer 的名词，而是看一串文字怎样一步步变成“下一个 token 的概率分布”。抓住这条线，后面学模型内部机制会轻很多。</div>
+  </aside>
+  <main>
+    <section class="hero" id="goal">
+      <div>
+        <div class="kicker">TRANSFORMER · AUTOREGRESSIVE LM · ATTENTION</div>
+        <h1>语言模型怎样做文字接龙</h1>
+        <p>这一讲终于进入语言模型内部：现代大型语言模型通常可以看成一个带大量参数的函数，输入一串 token，输出“下一个 token 应该是什么”的概率分布。GPT 名字里的 T 就是 Transformer。本页要把视频里口语化的流程改写成一条可复述、可画图、可做题的学习链路。</p>
+        <p>先把文字切成 token，再把 token 查表变成 embedding；然后加上位置信息，通过一层又一层 Transformer block。每个 block 里，attention 负责从上下文收集相关信息，feedforward network 负责整理这些信息。最后 output layer 把句尾向量转成概率分布，模型选出下一个 token，再把它接回输入，继续文字接龙。</p>
+        <div class="map"><span class="node">文字</span><span class="arrow">→</span><span class="node">tokenization</span><span class="arrow">→</span><span class="node">embedding + position</span><span class="arrow">→</span><span class="node">attention + feedforward</span><span class="arrow">→</span><span class="node">下一个 token 概率</span></div>
+        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=42">https://www.bilibili.com/video/BV1JKoeBiEt4?p=42</a></p>
+      </div>
+      <div class="route">
+        <h3>学完后要能做四件事</h3>
+        <ol><li>能从输入文字开始，按顺序讲清 tokenization、embedding、positional embedding、Transformer block、output layer。</li><li>能解释 attention 的基本动作：算相关性、得到 attention weight、按权重加总上下文信息。</li><li>能说明 causal attention 为什么只看左边 token，以及长文本为什么让 attention 成本快速上升。</li><li>能区分 token、token id、token embedding、contextualized embedding，不把它们混成一个东西。</li></ol>
+      </div>
+    </section>
+
+    <section id="skeleton">
+      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
+      <div class="grid3">
+        <div class="box soft"><h3>1. 先把文字变成模型能算的东西</h3><p>语言模型不能直接“读懂”自然语言字符，它先通过 tokenization 把文本切成 token sequence，再用 embedding table 把每个 token 转成向量。token 是离散符号，embedding 才是可以参与神经网络计算的一串数字。</p><p>判断句：如果你只说“模型读入一句话”，但说不出 token 和 embedding 的区别，就还没进入 Transformer 的输入层。</p></div>
+        <div class="box"><h3>2. 再让每个位置读取上下文</h3><p>原始 token embedding 是固定的，bank 不管在“银行”还是“河岸”语境里都先查到同一个向量。attention 的作用就是考虑上下文，把每个位置的表示变成 contextualized embedding。</p><p>核心动作是：当前位置和其他位置计算相关性，得到 attention weight，然后按权重把相关信息加总进来。</p></div>
+        <div class="box warn"><h3>3. 最后转成下一步接龙的概率</h3><p>多层 Transformer block 反复更新表示后，模型取最后一个位置的向量，交给 output layer。output layer 经过 linear transform 和 softmax，得到下一枚 token 的 probability distribution。</p><p>生成不是一次写完整段，而是选出一个 token、贴回上下文、再重复同一流程。</p></div>
+      </div>
+      <div class="mini-graph">
+        <div class="box"><h3>Tokenizer</h3><p>文字切成 token；BPE 会把常见片段当作 token。</p></div>
+        <div class="box"><h3>Input layer</h3><p>token 查表得到 embedding，并加入 positional embedding。</p></div>
+        <div class="box"><h3>Transformer blocks</h3><p>attention 收集上下文，feedforward 整理信息，层层更新表示。</p></div>
+        <div class="box"><h3>Output layer</h3><p>句尾向量变成下一个 token 的概率分布。</p></div>
+      </div>
+    </section>
+
+    <section id="terms">
+      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
+      <table class="metric-table">
+        <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
+        <tr><td>语言模型</td><td>一个会文字接龙的函数。</td><td>输入 token sequence，输出下一个 token 的概率分布；现代实现常用神经网络，核心架构常是 Transformer。</td><td>以为它一次性生成整段答案，或以为它天然等同于事实数据库。</td></tr>
+        <tr><td>Transformer</td><td>现代语言模型最常用的内部架构。</td><td>由多层 Transformer block 堆叠而成，每个 block 主要包含 attention 和 feedforward network。</td><td>把 Transformer 当成整个产品，忘了它只是语言模型内部的一种神经网络架构。</td></tr>
+        <tr><td>tokenization</td><td>把文字切成模型的基本单位。</td><td>根据预设词表和算法把输入转成 token sequence；这一模块通常没有训练参数。</td><td>以为 token 一定等于中文一个字或英文一个词。</td></tr>
+        <tr><td>BPE</td><td>从大量文字中找常见片段当 token。</td><td>Byte Pair Encoding 会逐步合并常见相邻片段，建立可覆盖文本的 token list。</td><td>以为 BPE 会理解语义；它主要是统计频率和切分策略。</td></tr>
+        <tr><td>token embedding</td><td>token 的向量身份证。</td><td>每个 token 对应 embedding table 中的一串数字，这些向量是语言模型参数的一部分，由训练学出。</td><td>以为 embedding 由人手工设定，或以为同一个 token 在不同上下文会先查到不同向量。</td></tr>
+        <tr><td>positional embedding</td><td>告诉模型“这个 token 在第几个位置”。</td><td>把代表位置的向量加到 token embedding 上，让输入同时包含语义与位置信息。</td><td>只关心 token 含义，忘了顺序变化会改变句子含义。</td></tr>
+        <tr><td>attention weight</td><td>当前位置对其他位置的参考比例。</td><td>相关性函数对两个 embedding 打分，所有位置的分数用于加权汇总上下文信息。</td><td>把 attention weight 简单等同于人类解释；它是模型内部计算权重，不必然是可读理由。</td></tr>
+        <tr><td>multi-head attention</td><td>从多种角度看相关性。</td><td>多组相关性计算模块各自学参数，分别产生 attention weight 和输出，再由后续网络整合。</td><td>以为只有一种“相关”，忽略 dog-cat 和 dog-bark 是不同类型关系。</td></tr>
+        <tr><td>causal attention</td><td>只看左边，不偷看未来。</td><td>自回归语言模型生成当前位置时只允许参考前面的 token，便于逐 token 生成并复用已有计算。</td><td>以为算完整 attention 一定更准；GPT 系列主要使用左侧注意力也能表现很好。</td></tr>
+        <tr><td>output layer</td><td>把内部向量翻译成“下一 token 概率”。</td><td>通常由 linear transform 加 softmax 组成，将最后位置表示映射到词表上的 probability distribution。</td><td>以为最后层直接输出文字；实际先输出概率，再由采样或解码策略选 token。</td></tr>
+      </table>
+      <p class="checkpoint">读完这一段，你应该能做什么：拿到一句输入文字时，能说清它先被切成 token，再变成向量、加位置、进 attention，最后变成概率分布。</p>
+    </section>
+
+    <section id="lecture">
+      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>1. 从“带参数的函数”理解语言模型</h3>
+          <p>视频开头把语言模型说成一个带参数的函数，这个说法很重要。函数的输入是一串文字，输出是下一步接什么；参数则是在训练资料中学出来的大量数字。现代语言模型通常用神经网络实现，而今天最常见的核心架构就是 Transformer。</p>
+          <p>直觉上，你可以把语言模型想成一个极复杂的接龙器：给它“User: 请解释 Transformer。AI:”这串前文，它不会先在脑中写完整篇答案，而是先判断第一个 token 应该接什么。接出第一个 token 后，再把它贴回输入，继续判断第二个 token。</p>
+          <p>正式一点说，这种逐步预测下一个 token 的方式叫自回归生成。它解释了为什么采样策略会影响输出，也解释了为什么模型上下文窗口、缓存、长文本成本会成为真实系统中的大问题。</p>
+        </div>
+        <div class="box">
+          <h3>2. tokenization：文字进模型前要先切块</h3>
+          <p>token 是模型处理输入和输出的基本单位，但它不一定等于人眼看到的字或词。很多中文模型可能把一个方块字当作 token；像 ChatGPT 这类多语言模型，中文一个字也可能被拆成多个 token。token list 由模型设计者或算法决定，不同模型可以完全不同。</p>
+          <p>BPE 是常见切分方法之一。它会从大量文字中寻找频繁出现的片段，把这些片段放进词表。这样既能覆盖罕见字串，又能让常见词组用较少 token 表示。注意，tokenization 通常不是训练出来的神经网络参数，而是预设的切分规则和词表。</p>
+          <p>学习边界：tokenization 只负责把文字变成离散符号，不负责理解语义。run 和 jump 在 token 层面只是两个不同编号，模型还需要 embedding 才能把语义相近关系表示出来。</p>
+        </div>
+      </div>
+      <div class="grid3" style="margin-top:12px">
+        <div class="box soft"><h3>3. embedding：让符号有可计算的距离</h3><p>token 本身只是符号，run 和 jump 并不会因为都是动作就天然更接近。embedding 做的事是把每个 token 映射成一串数字，让语义相近的 token 在向量空间中更接近。</p><p>这个映射不是人手写的同义词表，而是 embedding table。模型看到某个 token，就去表里查对应向量。表里的数字是模型参数的一部分，会在训练中自动学出来。</p><p>你现在应该能做什么：区分 token id 和 embedding。id 是离散编号，embedding 是参与后续神经网络计算的向量。</p></div>
+        <div class="box warn"><h3>4. positional embedding：光有语义还不够</h3><p>句子顺序会改变意思，所以模型还需要知道每个 token 的位置。一个常见做法是给每个位置也准备一个向量，再把位置向量加到 token embedding 上。</p><p>这样输入向量同时带有两种信息：这个 token 大概是什么，以及它出现在第几个位置。早期 Transformer 的位置向量可以人工设计，后来也常被当作可学习参数。</p><p>你现在应该能做什么：解释为什么“我打你”和“你打我”即使 token 相同，模型也不能忽略位置。</p></div>
+        <div class="box"><h3>5. attention：把上下文信息加进来</h3><p>同一个 token 的初始 embedding 是固定的。bank 在“去银行开户”和“河岸边散步”里先查到同一个 token embedding。attention 负责根据整句上下文更新它，让它变成 contextualized embedding。</p><p>简化地说，attention 输入一排向量，输出另一排同样长度的向量。对每个位置，它先和句子中其他位置计算相关性，也就是 attention weight；再按这些权重把其他位置的向量加权求和。</p><p>你现在应该能做什么：不用公式也能说清 attention 是“先判断相关，再汇总相关信息”。</p></div>
+        <div class="box soft"><h3>6. multi-head attention：相关性不只一种</h3><p>视频用 dog、cat、bark 说明：dog 和 cat 都是动物，所以相关；dog 和 bark 也相关，因为 bark 是狗会做的动作。这两种相关性不是同一个角度。</p><p>multi-head attention 就是准备多组相关性计算模块。每个 head 有自己的参数，能学到不同类型的联系，分别算出一组 attention weight 和输出，再交给后续网络整合。</p><p>你现在应该能做什么：解释为什么只有一个“相关性分数”往往不够。</p></div>
+        <div class="box warn"><h3>7. Transformer block：attention 后还要整理</h3><p>attention 会产生一组或多组带上下文的信息，但这些信息还要被整理、压缩、转换。feedforward network 的角色就是综合 attention 输出，产生新的 embedding。</p><p>attention 加 feedforward network 合起来就是一个 Transformer block。一个语言模型通常不是只有一个 block，而是堆很多层；文献里常把一个 block 称作一个 layer，虽然 block 内部本身也包含多层神经网络。</p><p>你现在应该能做什么：看到“第几层 Transformer”时，知道它大致指的是经过多少个 block 的表示更新。</p></div>
+        <div class="box"><h3>8. output layer：从向量回到词表概率</h3><p>多层 block 处理完后，模型取句尾位置的向量，送入 output layer。这个层通常包含 linear transform 和 softmax，输出整个词表上的 probability distribution。</p><p>概率最高的 token 不一定总被选中，实际生成还会受 temperature、top-k、top-p 等解码策略影响。但本讲先抓核心：Transformer 负责把上下文变成句尾向量，output layer 负责把句尾向量变成“下一步接什么”的概率。</p><p>你现在应该能做什么：把“输出文字”拆成“输出概率分布”和“按策略选 token”两个步骤。</p></div>
+      </div>
+      <div class="box greenbox" style="margin-top:12px">
+        <h3>完整知识链路</h3>
+        <p>把本节串起来，可以这样讲：语言模型先把输入文字切成 token sequence，再把每个 token 查表变成 token embedding，并加入 positional embedding。接下来，这串向量通过多层 Transformer block；每个 block 里的 attention 让当前位置从上下文收集相关信息，multi-head attention 从多种角度计算相关，feedforward network 再把这些信息整理成新的表示。最后，模型取最右边，也就是当前句尾位置的向量，通过 output layer 得到下一个 token 的概率分布。生成出一个 token 后，它会被接回原输入，模型再次执行同一套流程，直到产生结束符号。你现在应该能做什么：不看视频，也能画出“文字输入到下一 token 概率”的流程图。</p>
+      </div>
+    </section>
+
+    <section id="source">
+      <div class="head"><h2>课程线索</h2><span class="tag">内容线索</span></div>
+      <p class="muted">下面是从 P42 字幕整理出的关键线索。它们不是逐字稿，而是把老师口头强调重新放回可学习结构中。</p>
+      <div class="source-lines">
+        <div class="box"><h3>线索 1：为什么此处要讲 Transformer</h3><p>本讲的目的不是追论文细节，而是为后续“语言模型内部到底在想什么”铺路。只有知道 token 怎样进入 Transformer、attention 怎样更新表示，下一讲谈可解释性才有落点。</p><p class="checkpoint">你现在应该能做什么：说明本讲是后续模型内部机制课程的前置课。</p></div>
+        <div class="box"><h3>线索 2：token 不等于人类直觉里的字词</h3><p>中文模型可能一个方块字一个 token，多语言模型未必如此；有时好几个 token 才组成一个中文字。token list 可以由人设计，也可以由 BPE 这类算法从语料中产生。</p><p class="checkpoint">你现在应该能做什么：解释为什么不能用字数直接判断 token 数。</p></div>
+        <div class="box"><h3>线索 3：embedding 是训练出来的参数</h3><p>token 本身互相独立，run、jump、apple 在符号层面没有距离感。embedding table 把 token 映射到向量空间，让相近语义可以在后续神经网络中被利用；这些向量是待学习参数的一部分。</p><p class="checkpoint">你现在应该能做什么：说明“查表”不代表人手写死，表里的数字来自训练。</p></div>
+        <div class="box"><h3>线索 4：attention 不是那篇论文才发明的</h3><p>《Attention Is All You Need》的贡献不是首次提出 attention，而是证明可以不靠 RNN，只用 attention 也能把序列任务做好。这个历史点能帮助你理解 Transformer 为什么取代了很多 RNN 用法。</p><p class="checkpoint">你现在应该能做什么：说清“attention 机制”和“Transformer 架构”的关系。</p></div>
+        <div class="box"><h3>线索 5：multi-head 来自多种相关性</h3><p>相关性不只有一种。dog-cat 是同类关系，dog-bark 是动作关系。多头注意力让模型用多组参数从不同角度计算 attention weight，再把多组输出整合。</p><p class="checkpoint">你现在应该能做什么：用一个新例子说明为什么多头比单头更合理。</p></div>
+        <div class="box"><h3>线索 6：长文本难在平方级 attention 成本</h3><p>如果输入有 100K token，attention 不是读 100K 次就结束，而要计算大量 token 两两关系。理想化全 attention 的计算量随长度平方增长，所以长上下文成为模型效能竞争的重要指标。</p><p class="checkpoint">你现在应该能做什么：解释为什么长文本不是“多读一点”这么简单。</p></div>
+      </div>
+    </section>
+
+    <section id="worked">
+      <div class="head"><h2>核心概念精讲</h2><span class="tag">WORKED</span></div>
+      <div class="grid3">
+        <div class="box soft"><h3>核心直觉：语言模型每一步只选下一个 token</h3><p>长回答看起来像一次性想完，其实生成过程是一格一格推进：把文字切成 token，转成向量，加上位置信息，经过 Transformer blocks，最后在词表上得到下一个 token 的概率分布。选出一个 token 后，它又变成下一步的上下文。</p><p>你现在应该能做什么：把一段生成结果拆成多个“预测下一个 token”的步骤。</p></div>
+        <div class="box warn"><h3>易混边界：Token、id、embedding 不是一回事</h3><p>Token 是切分后的符号；token id 是词表编号；embedding 是模型训练出来的向量。id 接近不代表意思接近，embedding 接近才可能表示模型内部认为它们在某些上下文中有相似用法。经过 attention 后，embedding 还会变成带上下文的表示。</p><p>你现在应该能做什么：看到 token 编号时，不把数字大小当作语义关系。</p></div>
+        <div class="box info"><h3>Worked example：从“机器学习”到下一个字</h3><p>输入“机器学习很”先被 tokenizer 切成若干 token，例如“机器”“学习”“很”。模型把这些 token 转成向量，并用 causal attention 只看左侧上下文。最后一格输出词表概率：可能“有趣”概率 0.31，“重要”概率 0.22，“困难”概率 0.08。采样若选“有趣”，下一轮上下文就变成“机器学习很有趣”。</p><p>你现在应该能做什么：说明 temperature 或 top-p 为什么会改变最终文字，而不改变模型已经算出的上下文表示本身。</p></div>
+      </div>
+    </section>
+
+    <section id="example">
+      <div class="head"><h2>最小例子</h2><span class="tag">EXAMPLE</span></div>
+      <p>下面用伪代码把本讲流程压成最小可读版本。它不是可运行模型，而是帮助你检查每个名词在流程里出现在哪里。</p>
+      <div class="codebar"><span class="label">最小示例：从文字到下一个 token</span><span class="kind">python-like</span></div>
+      <pre><code>context = &quot;大型语言模型的基本动作是&quot;
+token_ids = tokenizer.encode(context)          # tokenization：文字 -> token id
+token_vecs = embedding_table[token_ids]        # token embedding：token id -> 向量
+pos_vecs = positional_embedding[:len(token_ids)]
+x = token_vecs + pos_vecs                      # 同时带有语义和位置
+
+for block in transformer_blocks:
+    x = block.attention(x, causal=True)         # 只看当前位置左侧上下文
+    x = block.feedforward(x)                    # 整理 attention 收集的信息
+
+last_vec = x[-1]                                # 当前句尾位置
+logits = output_layer(last_vec)                 # 映射到整个词表
+probs = softmax(logits)                         # probability distribution
+next_token = sample(probs)
+context = context + tokenizer.decode(next_token)
+
+# 重复这个步骤，就得到一段完整回答。</code></pre>
+      <div class="box soft"><h3>逐行理解</h3><p>这段伪代码把语言模型的核心动作压到最小：根据上下文输出下一个 token 的概率分布，再按采样策略选择 token。温度、top-p、停止条件都会影响最后看到的文字。</p><p>你现在应该能做的事：给这段例子补一个输入样本，再写出至少两条验收标准。</p></div>
+      <div class="codebar"><span class="label">错误示例：把 token id 当语义距离</span><span class="kind">diagnosis</span></div>
+      <pre><code># 错误想法：id 数字接近，所以语义接近
+if abs(token_id(&quot;run&quot;) - token_id(&quot;jump&quot;)) &lt; 10:
+    print(&quot;run 和 jump 一定语义相近&quot;)
+
+# 修正：语义关系主要看训练得到的 embedding 或上下文表示
+similarity = cosine(embedding(&quot;run&quot;), embedding(&quot;jump&quot;))</code></pre>
+      <div class="box warn"><h3>为什么这是错的</h3><p>token id 只是词表里的编号，编号接近不代表意思接近。真正承载可计算语义关系的是 embedding。并且初始 embedding 还没考虑上下文，经过 attention 之后才会变成 contextualized embedding。</p><p>你现在应该能做什么：看到“token 编号”“词表顺序”“向量距离”三个词时，能说清哪个才更接近语义关系。</p></div>
+    </section>
+
+    <section id="viz">
+      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
+      <div class="viz-panel">
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <h3>长文本成本</h3>
+            <div class="slider-row"><span>token 数</span><input id="complexity" type="range" min="10" max="100" value="45"><b id="complexityOut">45</b></div>
+            <div class="demo-meter"><div class="demo-fill" id="complexityFill"></div></div>
+            <p id="complexityText" class="checkpoint"></p>
+          </div>
+          <div class="viz-cell">
+            <h3>attention 观察角度</h3>
+            <div class="seg">
+              <button data-check="loose" class="active">单头相关性</button>
+              <button data-check="normal">多头相关性</button>
+              <button data-check="strict">只看左边</button>
+            </div>
+            <p id="checkText" class="checkpoint"></p>
+          </div>
+        </div>
+      </div>
+      <p>观察重点：长文本成本近似随 token 数平方增加；多头注意力不是重复计算同一种相关性，而是让模型从不同关系角度收集上下文；生成时只看左边，是自回归文字接龙能高效运作的关键。</p>
+    </section>
+
+    <section id="diagnosis">
+      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
+      <div class="grid2">
+        <div class="box redsoft">
+          <h3>常见坑</h3>
+          <ol><li>把 token 当作人类直觉里的字或词。错因：忽略 tokenizer 和词表差异。后果：上下文预算、切分分析和输出长度估计都会错。修法：用 tokenizer 工具查看实际切分。</li><li>把 token id 当作语义距离。错因：编号只是词表索引。后果：会误判 run、jump、apple 之间的关系。修法：看 embedding 或上下文化后的表示。</li><li>以为同一个 token 在不同语境里一开始就有不同 embedding。错因：混淆 token embedding 和 contextualized embedding。后果：看不懂 attention 为什么必要。修法：先查固定 embedding，再通过 attention 加入上下文。</li><li>把《Attention Is All You Need》理解成发明 attention。错因：忽略历史背景。后果：误读论文贡献。修法：记住它的关键是不用 RNN，只靠 attention 构建 Transformer。</li><li>认为完整 attention 一定比 causal attention 更好。错因：没从文字接龙生成过程看问题。后果：低估计算复用和自回归约束的重要性。修法：理解生成第 n 个 token 时，未来 token 尚不存在。</li><li>把长文本成本想成线性增长。错因：只想到读入 token，没有想到两两相关性。后果：低估 100K token 上下文的算力需求。修法：记住 attention 成本大致随长度平方增长。</li></ol>
+        </div>
+        <div class="box">
+          <h3>易混概念</h3>
+          <table class="metric-table">
+            <tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr>
+            <tr><td>token</td><td>embedding</td><td>token 是离散符号；embedding 是可计算向量。</td></tr>
+            <tr><td>token embedding</td><td>contextualized embedding</td><td>前者同一 token 固定；后者经过 attention 后会随上下文变化。</td></tr>
+            <tr><td>attention</td><td>Transformer</td><td>attention 是机制；Transformer 是把 attention、feedforward 等组件堆成的架构。</td></tr>
+            <tr><td>output layer</td><td>采样策略</td><td>output layer 给概率分布；采样策略决定从分布中选哪个 token。</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
+      <div class="practice-intro">
+        <div class="review-card"><strong>作答前先抓主线</strong><p>先写“文字到 token”，再写“token 到 embedding”，再写“attention 加上下文”，最后写“output layer 到概率分布”。开放题不要只复述术语，要把步骤串起来。</p></div>
+        <div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起 Transformer、tokenization、embedding、attention、feedforward network、output layer、probability distribution 和文字接龙。</p></div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>这一组先检查术语和边界。答案短一点也可以，但要说准。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. 语言模型生成整段回答时，本质上可以看成不断预测下一个 token。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. 语言模型生成整段回答时，本质上可以看成不断预测下一个 token。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
+          <div class="q" data-role="homework" data-title="2. tokenization 的主要作用是什么？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. tokenization 的主要作用是什么？</h3><div class="choices"><label><input type="radio" name="q2" value="把文字切成模型词表中的 token 序列">把文字切成模型词表中的 token 序列</label><label><input type="radio" name="q2" value="把所有语义关系直接算出来">把所有语义关系直接算出来</label><label><input type="radio" name="q2" value="替模型选择最终答案">替模型选择最终答案</label></div></div>
+          <div class="q short" data-role="homework" data-title="3. 请区分 token 和 embedding。"><div class="q-meta"><span class="pill">对照</span></div><h3>3. 请区分 token 和 embedding。</h3><textarea name="q3"></textarea></div>
+          <div class="q short" data-role="homework" data-title="4. 为什么中文一个字不一定等于一个 token？"><div class="q-meta"><span class="pill">解释</span></div><h3>4. 为什么中文一个字不一定等于一个 token？</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、主线理解</h3><p>这一组要求你把概念连成一条可复述的链路。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="5. 把下列步骤排成顺序：output layer、tokenization、Transformer blocks、embedding + position。"><div class="q-meta"><span class="pill">排序</span></div><h3>5. 把下列步骤排成顺序：output layer、tokenization、Transformer blocks、embedding + position。</h3><textarea name="q5"></textarea></div>
+          <div class="q short" data-role="homework" data-title="6. 为什么需要 positional embedding？"><div class="q-meta"><span class="pill">解释</span></div><h3>6. 为什么需要 positional embedding？</h3><textarea name="q6"></textarea></div>
+          <div class="q short" data-role="homework" data-title="7. 用 bank 或“苹果”的例子说明 token embedding 和 contextualized embedding 的差别。"><div class="q-meta"><span class="pill">例子</span></div><h3>7. 用 bank 或“苹果”的例子说明 token embedding 和 contextualized embedding 的差别。</h3><textarea name="q7"></textarea></div>
+          <div class="q short" data-role="homework" data-title="8. attention 的两步核心动作是 ______ 和 ______。"><div class="q-meta"><span class="pill">填空</span></div><h3>8. attention 的两步核心动作是 ______ 和 ______。</h3><input type="text" name="q8"></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、例子阅读</h3><p>这一组把讲义里的最小例子转成可检查的问题。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="9. 在伪代码中，embedding_table[token_ids] 做了什么？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>9. 在伪代码中，embedding_table[token_ids] 做了什么？</h3><textarea name="q9"></textarea></div>
+          <div class="q short" data-role="homework" data-title="10. causal=True 表示什么？为什么生成时要这样？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>10. causal=True 表示什么？为什么生成时要这样？</h3><textarea name="q10"></textarea></div>
+          <div class="q short" data-role="homework" data-title="11. output_layer(last_vec) 和 softmax(logits) 分别负责什么？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>11. output_layer(last_vec) 和 softmax(logits) 分别负责什么？</h3><textarea name="q11"></textarea></div>
+          <div class="q" data-role="homework" data-title="12. 编号接近的 token，一定语义更接近。"><div class="q-meta"><span class="pill">判断</span></div><h3>12. 编号接近的 token，一定语义更接近。</h3><div class="choices"><label><input type="radio" name="q12" value="对">对</label><label><input type="radio" name="q12" value="错">错</label></div></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、错误诊断</h3><p>这一组按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="13. 有人说 tokenization 会自动理解语义。错因是什么、后果是什么、怎么改？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 有人说 tokenization 会自动理解语义。错因是什么、后果是什么、怎么改？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q13"></textarea></div>
+          <div class="q short" data-role="homework" data-title="14. 有人把 token embedding 和 contextualized embedding 混用。这个误解会导致什么问题？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. 有人把 token embedding 和 contextualized embedding 混用。这个误解会导致什么问题？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q14"></textarea></div>
+          <div class="q short" data-role="homework" data-title="15. 有人认为《Attention Is All You Need》发明了 attention。请诊断这个说法。" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 有人认为《Attention Is All You Need》发明了 attention。请诊断这个说法。</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q15"></textarea></div>
+          <div class="q short" data-role="homework" data-title="16. 有人说长文本只是 token 多一点，成本线性增加。请诊断。 " data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 有人说长文本只是 token 多一点，成本线性增加。请诊断。</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q16"></textarea></div>
+          <div class="q short" data-role="homework" data-title="17. 有人认为完整 attention 一定比只看左侧 token 更适合文字接龙。请诊断。" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>17. 有人认为完整 attention 一定比只看左侧 token 更适合文字接龙。请诊断。</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q17"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>五、场景迁移</h3><p>这一组检查你能不能换个场景继续判断。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="18. 如果要解释“模型为什么下一步接这个词”，你会从哪三个中间结果入手？"><div class="q-meta"><span class="pill">应用</span></div><h3>18. 如果要解释“模型为什么下一步接这个词”，你会从哪三个中间结果入手？</h3><textarea name="q18"></textarea></div>
+          <div class="q short" data-role="homework" data-title="19. 如果上下文窗口从 10K 扩到 100K token，attention 计算压力为什么会变大？"><div class="q-meta"><span class="pill">应用</span></div><h3>19. 如果上下文窗口从 10K 扩到 100K token，attention 计算压力为什么会变大？</h3><textarea name="q19"></textarea></div>
+          <div class="q short" data-role="homework" data-title="20. 设计一个最小流程图，说明模型如何从“AI:”生成第一个回答 token。"><div class="q-meta"><span class="pill">流程</span></div><h3>20. 设计一个最小流程图，说明模型如何从“AI:”生成第一个回答 token。</h3><textarea name="q20"></textarea></div>
+          <div class="q short" data-role="homework" data-title="21. 用 dog-cat 和 dog-bark 的例子解释 multi-head attention。"><div class="q-meta"><span class="pill">迁移</span></div><h3>21. 用 dog-cat 和 dog-bark 的例子解释 multi-head attention。</h3><textarea name="q21"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>六、表达输出</h3><p>最后三题检查你能不能讲给别人听。</p></div><div class="quick-review"><b>REMIND</b>表达题要从输入到输出，不要停在“attention 很重要”。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="22. 如果面试官问“Transformer block 里 attention 和 feedforward network 分别做什么”，你会怎么答？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>22. 如果面试官问“Transformer block 里 attention 和 feedforward network 分别做什么”，你会怎么答？</h3><textarea name="q22"></textarea></div>
+          <div class="q short" data-role="homework" data-title="23. 请用 3 句话解释 causal attention 为什么适合自回归文字接龙。"><div class="q-meta"><span class="pill">短答</span></div><h3>23. 请用 3 句话解释 causal attention 为什么适合自回归文字接龙。</h3><textarea name="q23"></textarea></div>
+          <div class="q full" data-role="homework" data-title="24. 用 6-9 句话讲清楚语言模型如何通过 Transformer 做文字接龙。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>24. 用 6-9 句话讲清楚语言模型如何通过 Transformer 做文字接龙。请串联 tokenization、embedding、positional embedding、attention、feedforward network、output layer 和 probability distribution。</h3><div class="solve-note">先说输入如何变成向量，再说 Transformer 如何更新表示，最后说概率分布如何接出下一个 token。</div><textarea name="q24"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>导出练习记录</h2><span class="tag">EXPORT</span></div>
+      <p class="muted">完成练习后生成记录，方便后续回看订正。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+
+<script src="../../../../assets/study-page.js"></script>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){
+  const max=document.documentElement.scrollHeight-innerHeight;
+  progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";
+  let current=sections[0]?.id;
+  for(const section of sections){
+    const rect=section.getBoundingClientRect();
+    if(rect.top<innerHeight*.36) current=section.id;
+    section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);
+  }
+  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));
+}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+document.querySelectorAll(".codebar").forEach(bar=>{
+  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
+  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});
+  bar.appendChild(btn);
+});
+const complexity=document.getElementById("complexity");
+function updateComplexity(){
+  const value=Number(complexity.value);
+  document.getElementById("complexityOut").textContent=value;
+  document.getElementById("complexityFill").style.width=value+"%";
+  const approx=value*value;
+  document.getElementById("complexityText").textContent=value>75?"token 数变大时，attention 需要考虑的两两关系会快速膨胀；这里的平方示意约为 "+approx+"。":value<30?"token 较少时，attention matrix 还小，重点先看流程是否能从输入走到概率分布。":"token 数适中时，已经能观察到成本不是线性加法，而更接近两两关系的增长；平方示意约为 "+approx+"。";
+}
+complexity.addEventListener("input",updateComplexity);updateComplexity();
+const checkTexts={
+  loose:"单头相关性只能从一个角度判断哪些 token 重要，适合理解 attention 的最小动作。",
+  normal:"多头相关性让不同 head 学到不同关系，例如同类关系、动作关系、指代关系。",
+  strict:"causal attention 只允许看左侧 token，因为自回归生成时右侧内容还没有被产生。"
+};
+document.querySelectorAll("[data-check]").forEach(btn=>btn.addEventListener("click",()=>{
+  document.querySelectorAll("[data-check]").forEach(b=>b.classList.toggle("active",b===btn));
+  document.getElementById("checkText").textContent=checkTexts[btn.dataset.check];
+}));
+document.getElementById("checkText").textContent=checkTexts.loose;
+function valueOfQuestion(q){
+  const radio=q.querySelector("input[type=radio]:checked"); if(radio) return radio.value;
+  const text=q.querySelector("textarea,input[type=text],select"); return text?text.value.trim():"";
+}
+function questionGroup(q){return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";}
+function generateRecord(){
+  const qs=[...document.querySelectorAll('[data-role="homework"]')],groups={},warnings=[];
+  qs.forEach((q,i)=>{
+    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";
+    const hint=q.querySelector(".solve-note")?.innerText.trim()||"";
+    const answer=valueOfQuestion(q);
+    if(!answer) warnings.push("第 "+(i+1)+" 题未填写："+title);
+    if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))) warnings.push("第 "+(i+1)+" 题建议补齐“错因 / 后果 / 修法”。");
+    if(q.dataset.type==="feynman"){
+      const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
+      if(answer&&answer.length<120) warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");
+      const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):[];
+      if(lack.length) warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");
+    }
+    const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
+  });
+  let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";
+  Object.keys(groups).forEach(group=>{out+="## "+group+"\n\n";groups[group].forEach(item=>{out+="### "+item.title+"\n";if(item.hint) out+="提示摘要："+item.hint+"\n\n";out+=item.answer+"\n\n";});});
+  document.getElementById("record").textContent=out;
+  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，适合回看订正。";
+}
+function fallbackCopy(text,onOk,onFail){
+  const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";document.body.appendChild(ta);ta.focus();ta.select();
+  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
+}
+function copyText(text,onOk,onFail){
+  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
+  else fallbackCopy(text,onOk,onFail);
+}
+function copyRecord(){
+  copyText(document.getElementById("record").textContent,()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";},()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";});
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>23 定时调度｜Claude Code 工作流</title>
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand"><strong>Claude Code 工作流</strong><span>23｜定时调度</span></div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>目标与主线</a>
+      <a href="#why"><span class="dot"></span>为什么调度</a>
+      <a href="#cron"><span class="dot"></span>Cron表达式</a>
+      <a href="#record"><span class="dot"></span>调度记录</a>
+      <a href="#loop"><span class="dot"></span>检查与通知</a>
+      <a href="#pitfall"><span class="dot"></span>常见误区</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>整理学习答案</a>
+    </nav>
+    <div class="side-note">调度器不是第二个 Agent loop，它只是到时间后把提示注入同一个消息系统。</div>
+  </aside>
+  <main>
+    <header class="hero" id="goal">
+      <div>
+        <div class="kicker">Scheduler</div>
+        <h1>定时调度</h1>
+        <p class="muted">定时调度让 Agent 能处理未来工作：夜间跑测试、每周一写周报、每天固定时间检查状态。系统把“在时间 Y 执行 X”的意图保存成 schedule 记录，后台 check loop 对照时钟匹配 Cron 表达式，到点后把通知放进队列，Agent loop 再把通知注入 messages。</p>
+        <div class="map">
+          <span class="node">schedule_create</span><span class="arrow">→</span>
+          <span class="node">schedule.json</span><span class="arrow">→</span>
+          <span class="node">check_loop</span><span class="arrow">→</span>
+          <span class="node">notification queue</span><span class="arrow">→</span>
+          <span class="node">agent loop</span>
+        </div>
+        <p>学完本页，你应该能解释 Cron 五字段、调度记录结构，以及为什么通知回流后 Agent 不需要关心消息来自用户还是时钟。</p>
+      </div>
+      <div class="box soft">
+        <h3>来源材料</h3>
+        <p>视频：《Learn Claude Code 源码详解》给任务设个闹钟：定时调度，开发实战分享屋，2026-04-27。</p>
+        <p>重点：Cron、schedule_create/list/delete、recurring、durable、jitter、last_fired、防重复触发、自动过期。</p>
+      </div>
+    </header>
+
+    <section id="why">
+      <div class="head"><h2>1. Agent 需要“未来时间”的入口</h2><span class="tag">future work</span></div>
+      <p>没有调度时，Agent 只能响应现在的输入。用户必须记得每天晚上输入“跑测试”，或每周一早上输入“写周报”。这类重复任务不应该依赖用户记忆，而应该记录成未来触发规则。</p>
+      <p>调度系统的解决方案由三部分组成：调度记录、时间检查器、通知队列。调度记录保存“什么时候做什么”；时间检查器持续看当前时间是否匹配；通知队列把触发结果送回主循环。</p>
+      <p>调度的边界是“未来时间触发输入”，不是“后台自动完成全部工作”。真正执行工具、检查权限、写入结果仍然交给同一个 Agent loop，这样定时任务不会绕过原有安全和上下文机制。</p>
+      <div class="grid3">
+        <div class="box soft"><h3>调度记录</h3><p>持久化保存 Cron、prompt、是否重复等。</p></div>
+        <div class="box soft"><h3>时间检查器</h3><p>后台线程每分钟检查是否到点。</p></div>
+        <div class="box soft"><h3>通知队列</h3><p>把触发提示送回 Agent loop。</p></div>
+      </div>
+    </section>
+
+    <section id="cron">
+      <div class="head"><h2>2. Cron 表达式：五个字段描述时间规则</h2><span class="tag">cron</span></div>
+      <p>Cron 表达式常见五字段：分钟、小时、每月第几天、月份、每周第几天。星号表示任意值，`*/5` 表示每 5 个单位，具体数字表示固定时间。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>字段</th><th>含义</th><th>范围</th></tr></thead>
+          <tbody>
+            <tr><td>minute</td><td>分钟</td><td>0-59</td></tr>
+            <tr><td>hour</td><td>小时</td><td>0-23</td></tr>
+            <tr><td>day of month</td><td>每月第几天</td><td>1-31</td></tr>
+            <tr><td>month</td><td>月份</td><td>1-12</td></tr>
+            <tr><td>day of week</td><td>每周第几天</td><td>0-6</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="codebar"><span class="label">Cron 示例</span><span>Text</span></div>
+      <pre><code>*/5 * * * *     # 每 5 分钟
+0 9 * * 1      # 每周一 9:00
+30 14 * * *    # 每天 14:30</code></pre>
+      <p>调度器的 `cron_matches` 会把表达式 split 成五段，再把当前时间拆成 minute、hour、day、month、weekday，逐项匹配。</p>
+      <p>公开实现时要明确时区、星期编号和边界日期。例如有的 Cron 约定周日是 0，有的也允许 7；如果系统跨时区运行，应在记录中保存 timezone，避免用户说“每天 9 点”却按服务器时区触发。</p>
+    </section>
+
+    <section id="record">
+      <div class="head"><h2>3. 调度记录：把未来意图写下来</h2><span class="tag">schedule record</span></div>
+      <p>`schedule_create` 创建一条任务记录。模型必须提供 Cron 和 prompt；`recurring` 默认 true，表示重复任务；`durable` 默认 false，表示不一定持久化到磁盘。持久化任务会写到类似 `schedule.json` 的文件里，重启后可以加载。</p>
+      <div class="codebar"><span class="label">调度记录结构</span><span>JSON</span></div>
+      <pre><code>{
+  "id": "task_1",
+  "cron": "0 9 * * 1",
+  "prompt": "Write my weekly report",
+  "recurring": true,
+  "durable": true,
+  "created_at": 1714200000,
+  "last_fired": null,
+  "jitter_offset": 0
+}</code></pre>
+      <p>`last_fired` 用于防止同一分钟重复触发。`jitter_offset` 用于给整点或半点任务加一点抖动，避免多个实例同时触发。重复任务如果超过一定时间，例如 7 天，可以自动过期清理，防止孤岛任务累积。</p>
+      <div class="codebar"><span class="label">Worked example：创建每周报告提醒</span><span>schedule_create</span></div>
+      <pre><code>用户：每周一 9 点提醒我整理周报。
+
+模型调用：
+  schedule_create(
+    cron="0 9 * * 1",
+    prompt="整理上周完成事项、风险和本周计划。",
+    recurring=true,
+    durable=true,
+    timezone="Asia/Shanghai"
+  )
+
+调度记录保存后：
+  check_loop 每分钟检查一次
+  命中后把 prompt 放入 notification queue
+  Agent loop 像处理普通用户消息一样处理它</code></pre>
+    </section>
+
+    <section id="loop">
+      <div class="head"><h2>4. check loop 触发通知，Agent loop 统一处理</h2><span class="tag">queue</span></div>
+      <p>`CronScheduler.start()` 会加载 durable schedules，并启动后台线程执行 `check_loop`。check loop 每秒醒来一次，但通过 `last_check_minute` 保证每分钟只检查一次任务。若当前时间匹配 Cron，就把通知 put 到队列，并更新 `last_fired`。</p>
+      <div class="viz-panel">
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <div class="viz-actions">
+              <button data-sched="create" class="active">创建</button>
+              <button data-sched="check">检查</button>
+              <button data-sched="fire">触发</button>
+              <button data-sched="drain">回流</button>
+            </div>
+            <div class="sched-view" id="schedText"></div>
+          </div>
+          <div class="viz-cell">
+            <h3 id="schedTitle">创建调度</h3>
+            <p id="schedExplain">说明会显示在这里。</p>
+            <div class="sched-step" data-sched-step="record">1. 保存 schedule record</div>
+            <div class="sched-step" data-sched-step="clock">2. check_loop 对照时钟</div>
+            <div class="sched-step" data-sched-step="queue">3. put notification</div>
+            <div class="sched-step" data-sched-step="agent">4. drain 到 messages</div>
+            <div class="viz-note">Agent loop 只看到一条 user message，不需要知道它来自手动输入还是定时器。</div>
+          </div>
+        </div>
+      </div>
+      <div class="codebar"><span class="label">伪代码：检查与通知回流</span><span>Python</span></div>
+      <pre><code>def check_loop():
+    while not stop_event.is_set():
+        now = datetime.now()
+        if current_minute(now) != last_check_minute:
+            last_check_minute = current_minute(now)
+            for task in tasks:
+                if cron_matches(task["cron"], now) and not fired_this_minute(task, now):
+                    queue.put({"role": "user", "content": task["prompt"]})
+                    task["last_fired"] = now.timestamp()
+        stop_event.wait(1)</code></pre>
+      <p>如果程序停机错过 durable 任务，重启时可以做 missed run 检查：读取 last_fired 和当前时间，判断中间是否有本该触发的时间点。处理策略要明确，是补发一次、标记 missed，还是按任务类型跳过，避免恢复后突然堆积大量过期任务。</p>
+    </section>
+
+    <section id="pitfall">
+      <div class="head"><h2>5. 常见误区：调度器不是另一个 Agent</h2><span class="tag">pitfalls</span></div>
+      <p>调度器不自己思考，也不自己调用模型。它只是时间触发器：到了时间，把 prompt 作为通知送回同一个 Agent loop。这样用户手动输入和定时触发走同一套消息处理、工具调用和权限系统。</p>
+      <div class="grid2">
+        <div class="box warn"><h3>误区</h3><p>为定时任务再做一个独立 Agent loop，导致状态、权限、工具结果分裂。</p></div>
+        <div class="box ok"><h3>正确</h3><p>定时器只注入消息，所有执行仍由统一 Agent loop 处理。</p></div>
+      </div>
+      <p>另一个误区是忘记防重复触发。check loop 每秒醒来，如果没有 `last_check_minute` 和 `last_fired`，同一分钟内可能触发很多次同一个任务。</p>
+      <p>调度日志至少应记录 task id、cron、计划触发时间、实际触发时间、是否补发、入队结果和后续 Agent 执行状态。没有日志时，用户很难判断任务是没到点、没匹配、没入队，还是执行失败。</p>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、调度直觉</h3><p>先说清要解决的问题。</p></div><div class="box soft">未来时间触发，而不是现在输入触发。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="1. 核心问题"><div class="q-meta"><span class="pill">短答</span></div><h3>1. 定时调度解决 Agent 的什么能力缺口？</h3><textarea name="q1"></textarea></div>
+          <div class="q" data-title="2. 三部分"><div class="q-meta"><span class="pill">填空</span></div><h3>2. 调度系统由哪三部分组成？</h3><input type="text" name="q2"></div>
+          <div class="q" data-title="3. 非第二Loop"><div class="q-meta"><span class="pill">解释</span></div><h3>3. 为什么调度器不是第二个 Agent loop？</h3><textarea name="q3"></textarea></div>
+          <div class="q" data-title="4. 后台任务对比"><div class="q-meta"><span class="pill">比较</span></div><h3>4. 定时调度和后台任务分别解决什么问题？</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、Cron 与记录</h3><p>掌握时间表达和持久化字段。</p></div><div class="box warn">五字段：分、时、日、月、周。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="5. Cron字段"><div class="q-meta"><span class="pill">清单</span></div><h3>5. Cron 五个字段分别是什么？</h3><textarea name="q5"></textarea></div>
+          <div class="q" data-title="6. Cron例子"><div class="q-meta"><span class="pill">解释</span></div><h3>6. `0 9 * * 1` 表示什么？</h3><input type="text" name="q6"></div>
+          <div class="q" data-title="7. 记录字段"><div class="q-meta"><span class="pill">清单</span></div><h3>7. 调度记录至少应包含哪些字段？</h3><textarea name="q7"></textarea></div>
+          <div class="q" data-title="8. durable"><div class="q-meta"><span class="pill">解释</span></div><h3>8. durable=true 和 durable=false 有什么区别？</h3><textarea name="q8"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、检查与触发</h3><p>理解 check loop。</p></div><div class="box soft">每分钟检查一次，触发后入队。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="9. cron_matches"><div class="q-meta"><span class="pill">流程</span></div><h3>9. `cron_matches` 大致如何判断当前时间是否匹配？</h3><textarea name="q9"></textarea></div>
+          <div class="q" data-title="10. last_check"><div class="q-meta"><span class="pill">解释</span></div><h3>10. `last_check_minute` 用来防止什么？</h3><textarea name="q10"></textarea></div>
+          <div class="q" data-title="11. last_fired"><div class="q-meta"><span class="pill">解释</span></div><h3>11. `last_fired` 用来防止什么？</h3><textarea name="q11"></textarea></div>
+          <div class="q" data-title="12. queue"><div class="q-meta"><span class="pill">机制</span></div><h3>12. 通知队列里的消息如何回流到 Agent loop？</h3><textarea name="q12"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、设计迁移</h3><p>做一个更稳的调度器。</p></div><div class="box soft">考虑 jitter、过期、遗漏任务和审计。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="13. jitter"><div class="q-meta"><span class="pill">解释</span></div><h3>13. 为什么整点或半点任务要加 jitter？</h3><textarea name="q13"></textarea></div>
+          <div class="q" data-title="14. 过期清理"><div class="q-meta"><span class="pill">设计</span></div><h3>14. 为什么重复任务需要自动过期或清理？</h3><textarea name="q14"></textarea></div>
+          <div class="q" data-title="15. 遗漏任务"><div class="q-meta"><span class="pill">边界</span></div><h3>15. 如果程序停机错过了一次 durable 任务，应该如何检查遗漏？</h3><textarea name="q15"></textarea></div>
+          <div class="q" data-title="16. 审计日志"><div class="q-meta"><span class="pill">设计</span></div><h3>16. 调度触发日志应该记录哪些字段？</h3><textarea name="q16"></textarea></div>
+          <div class="q full" data-title="17. 面试表达"><div class="q-meta"><span class="pill">表达</span></div><h3>17. 用 3-5 句话解释定时调度在 Agent Harness 中的价值。</h3><textarea name="q17"></textarea></div>
+          <div class="q full" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：定时调度如何让 Agent 在未来时间自动开始工作。</h3><div class="solve-note">请串联 Cron、schedule_create、durable、check_loop、cron_matches、last_fired、notification queue、messages。</div><textarea name="q18"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>整理学习答案</h2><span class="tag">学习输出</span></div>
+      <p class="muted">完成练习后生成 Markdown 学习笔记，便于保存和继续学习。</p>
+      <div class="actions"><button onclick="generateRecord()">生成学习笔记</button><button class="ghost" onclick="copyRecord()">复制内容</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">学习笔记会显示在这里。</div>
+    </section>
+  </main>
+</div>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+const schedStates={
+  create:["创建调度","schedule_create\ncron = '* * * * *'\nprompt = 'Run nightly tests'\nrecurring = true\ndurable = false\n\nscheduler.tasks.append(task)\nif durable: save_durable()","用户的未来意图先保存为一条 schedule record。",["record"]],
+  check:["检查时间","check_loop thread:\nnow = datetime.now()\ncurrent_minute = hour * 60 + minute\nif current_minute == last_check_minute: wait\n\nfor task in tasks:\n  check expired\n  check cron_matches(task.cron, now + jitter)","后台检查器对照时钟，不直接调用模型。",["clock"]],
+  fire:["触发通知","if cron_matches and not fired_this_minute:\n  queue.put({role:'user', content: task.prompt})\n  task.last_fired = now\n  print('fired task')","匹配时间后，只是把通知放入队列，并更新 last_fired。",["queue"]],
+  drain:["回流主循环","agent_loop start:\nnotifications = scheduler.drain_notifications()\nfor item in notifications:\n  messages.append({role:'user', content:item.prompt})\n\nLLM sees it like a user message.","Agent loop 统一处理手动输入和定时触发消息。",["agent"]]
+};
+function renderSched(name){const d=schedStates[name]||schedStates.create;document.querySelectorAll("[data-sched]").forEach(b=>b.classList.toggle("active",b.dataset.sched===name));document.querySelectorAll("[data-sched-step]").forEach(s=>s.classList.toggle("active",d[3].includes(s.dataset.schedStep)));document.getElementById("schedTitle").textContent=d[0];document.getElementById("schedText").textContent=d[1];document.getElementById("schedExplain").textContent=d[2]}
+document.querySelectorAll("[data-sched]").forEach(btn=>btn.addEventListener("click",()=>renderSched(btn.dataset.sched)));renderSched("create");
+document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
+const questions=[
+  ["调度直觉","1. 调度解决什么能力缺口。","q1","text"],["调度直觉","2. 调度系统三部分。","q2","text"],["调度直觉","3. 为什么不是第二个 loop。","q3","text"],["调度直觉","4. 与后台任务对比。","q4","text"],["Cron记录","5. Cron 五字段。","q5","text"],["Cron记录","6. 0 9 * * 1 含义。","q6","text"],["Cron记录","7. 调度记录字段。","q7","text"],["Cron记录","8. durable 区别。","q8","text"],["检查触发","9. cron_matches 判断。","q9","text"],["检查触发","10. last_check_minute。","q10","text"],["检查触发","11. last_fired。","q11","text"],["检查触发","12. 通知队列回流。","q12","text"],["设计迁移","13. jitter 作用。","q13","text"],["设计迁移","14. 自动过期清理。","q14","text"],["设计迁移","15. 遗漏任务检查。","q15","text"],["设计迁移","16. 调度触发日志。","q16","text"],["设计迁移","17. Harness 价值。","q17","text"],["费曼解释","18. 定时调度费曼解释。","q18","text"]
+];
+function val(q){const el=document.querySelector(`[name="${q[2]}"]`);return el?el.value.trim():""}
+function generateRecord(){const groups={};const missing=[];questions.forEach(q=>{const v=val(q);if(!v)missing.push(q[1]);if(!groups[q[0]])groups[q[0]]=[];groups[q[0]].push({t:q[1],a:v||"（未填写）"})});let out="# 23 定时调度｜学习笔记\n\n";Object.keys(groups).forEach(g=>{out+=`## ${g}\n\n`;groups[g].forEach(item=>{out+=`### ${item.t}\n${item.a}\n\n`})});document.getElementById("record").textContent=out;const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=val(["","","q18","text"]);const keys=["Cron","schedule_create","check_loop","cron_matches","last_fired","notification","messages"];const lack=keys.filter(k=>!f.includes(k));if(f&&f.length<120)warnings.push("费曼解释偏短，建议讲成 6-9 句话。");if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join("、")}。`);const q=document.getElementById("quality");q.style.display="block";q.textContent=warnings.length?warnings.join("\n"):"学习笔记已生成，便于保存和继续学习。"}
+function copyRecord(){navigator.clipboard.writeText(document.getElementById("record").textContent).catch(()=>alert("复制失败，请手动复制。"))}
+</script>
+<script src="../assets/study-page.js"></script>
+</body>
+</html>

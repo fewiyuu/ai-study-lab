@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>P41｜作业六：Learning from Human Preference</title>
+  <link rel="stylesheet" href="../../../../assets/study-page.css">
+</head>
+<body data-study-kind="homework" data-feynman-keywords="Learning from Human Preference, values alignment, RLHF, DPO, reward model, preferred response, non-preferred response, support_ratio, data_size, num_epoch, Breeze 7B, report, JSON, PDF">
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <strong>40_P41</strong>
+      <span>作业六：Learning from Human Preference<br>核心讲义 · 李宏毅生成式 AI 课程</span>
+    </div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>学习目标</a>
+      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
+      <a href="#terms"><span class="dot"></span>术语表</a>
+      <a href="#lecture"><span class="dot"></span>讲义主线</a>
+      <a href="#source"><span class="dot"></span>作业线索</a>
+      <a href="#worked"><span class="dot"></span>核心精讲</a>
+      <a href="#example"><span class="dot"></span>最小例子</a>
+      <a href="#viz"><span class="dot"></span>交互观察</a>
+      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>学习记录</a>
+    </nav>
+    <div class="side-note">作业六的重点不是让模型背一个标准答案，而是观察 DPO 怎样把“人类偏好哪种回答”变成模型输出立场的变化。</div>
+  </aside>
+
+  <main>
+    <section class="hero" id="goal">
+      <div>
+        <div class="kicker">DPO · VALUES ALIGNMENT · HUMAN PREFERENCE</div>
+        <h1>用偏好资料调整模型立场</h1>
+        <p>作业六要让 Breeze 7B 从人类偏好中学习，让模型输出更符合指定价值观的开放式回答。主题例子是“动漫真人化”：原模型可能中立、拒绝表达立场，或输出与期望相反的观点；DPO 训练后，希望它更倾向输出你设定为 preferred response 的立场。</p>
+        <p>这节课把 P39 的 RLHF 落成作业：标准 RLHF 通常先训练 reward model，再用强化学习优化语言模型；作业为了降低计算和调参难度，使用 Direct Preference Optimization。DPO 直接吃“问题，偏好回答，不偏好回答”的资料，让模型提高 preferred response 的概率，降低 non-preferred response 的概率。</p>
+        <div class="map">
+          <span class="node">开放问题<br>没有唯一答案</span>
+          <span class="node">偏好资料<br>support / oppose</span>
+          <span class="node">DPO<br>直接偏好优化</span>
+          <span class="node">测试输出<br>比较训练前后</span>
+          <span class="node">报告提交<br>JSON + PDF</span>
+        </div>
+        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=41">Bilibili P41：Learning from Human Preference</a></p>
+      </div>
+      <div class="route">
+        <h3>学完后要能做四件事</h3>
+        <ol>
+          <li>区分 supervised learning、RLHF 和 DPO 的训练信号。</li>
+          <li>读懂 label_data.json 中 prompt、support、oppose、preferred / non-preferred 的关系。</li>
+          <li>解释 support_ratio、data_size、num_epoch 对输出立场的影响。</li>
+          <li>知道 report 三题怎么观察，最终为什么要交对话 JSON 和截图 PDF。</li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="skeleton">
+      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
+      <div class="grid3">
+        <div class="box soft">
+          <h3>为什么不用标准答案</h3>
+          <p>地球到太阳距离有标准答案，动漫真人化好不好没有唯一答案。开放式问题的回答会受到立场、价值观和偏好影响。</p>
+          <p>判断句：如果问题没有客观标准答案，就要先定义你希望模型对齐到哪种偏好。</p>
+        </div>
+        <div class="box">
+          <h3>DPO 简化了 RLHF</h3>
+          <p>标准 RLHF 需要 reward model 和强化学习过程。DPO 不额外训练 reward model，而是直接用 preferred / non-preferred response 对训练语言模型。</p>
+          <p>它仍然是偏好学习，不是监督微调。它关心哪个回答更符合人类偏好。</p>
+        </div>
+        <div class="box warn">
+          <h3>作业要做的是观察</h3>
+          <p>你要改 support_ratio、num_epoch、data_size，观察训练前后在 10 个测试问题上的输出变化，并回答 report questions。</p>
+          <p>判断句：报告重点是内容立场变化，不是只写长度、格式或跑分。</p>
+        </div>
+      </div>
+      <div class="timeline">
+        <div class="box"><h3>1. 设定偏好</h3><p>决定资料偏向支持或反对动漫真人化。</p></div>
+        <div class="box"><h3>2. DPO 训练</h3><p>用 preferred 与 non-preferred pair 调整模型。</p></div>
+        <div class="box"><h3>3. 比较输出</h3><p>对比 original model 和 trained model 在测试集上的回答。</p></div>
+        <div class="box"><h3>4. 写报告</h3><p>回答三题，提交达哥对话 JSON 与截图 PDF。</p></div>
+      </div>
+    </section>
+
+    <section id="terms">
+      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
+      <table class="metric-table">
+        <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
+        <tr><td>Learning from Human Preference</td><td>从人类偏好里学。</td><td>用人类标注的回答偏好来调整模型输出行为。</td><td>不是让人类写唯一标准答案。</td></tr>
+        <tr><td>values alignment</td><td>让模型回答符合指定价值观。</td><td>把模型输出对齐到某套人类偏好、立场或价值标准。</td><td>以为 alignment 一定是客观正确；很多时候是立场设定。</td></tr>
+        <tr><td>RLHF</td><td>用人类反馈训练模型。</td><td>通常先训练 reward model，再用 RL 优化语言模型。</td><td>以为作业六完整实现标准 RLHF；本作业用 DPO 简化。</td></tr>
+        <tr><td>DPO</td><td>直接用偏好对训练。</td><td>Direct Preference Optimization，利用 preferred / non-preferred response 直接优化语言模型。</td><td>把 DPO 当成普通监督微调，忽略“成对偏好”。</td></tr>
+        <tr><td>reward model</td><td>虚拟评审。</td><td>标准 RLHF 中用来给回答打偏好分的模型。</td><td>DPO 不需要额外训练 reward model，但仍在学偏好。</td></tr>
+        <tr><td>preferred response</td><td>希望模型更常输出的回答。</td><td>在同一 prompt 下，被标注为更符合偏好的答案。</td><td>preferred 不等于事实正确，只表示更符合当前偏好。</td></tr>
+        <tr><td>non-preferred response</td><td>希望模型少输出的回答。</td><td>同一 prompt 下，被标注为较不符合偏好的答案。</td><td>它不一定完全错误，可能只是立场不符合。</td></tr>
+        <tr><td>support_ratio</td><td>训练资料中支持立场占多少。</td><td>0 到 1 的比例，决定多少资料把 support 标成 preferred。</td><td>设为 1 就全支持，设为 0 就全反对，中间值会混合偏好。</td></tr>
+        <tr><td>data_size</td><td>用多少笔训练资料。</td><td>作业要求在 10 到 50 范围内调整。</td><td>越多不只影响强度，也可能影响输出一致性和训练时间。</td></tr>
+        <tr><td>num_epoch</td><td>完整看训练集几遍。</td><td>模型在训练过程中遍历完整训练资料的次数。</td><td>epoch 越多不一定越好，可能过度强化某种立场或模板。</td></tr>
+      </table>
+      <p class="checkpoint">读完这一段，你应该能看懂作业六 Colab 中最重要的三个可调超参数。</p>
+    </section>
+
+    <section id="lecture">
+      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>1. 开放式问题需要偏好学习</h3>
+          <p>监督学习适合有标准答案的问题，例如“地球到太阳距离是多少”。但很多真实问题没有唯一答案，比如“是否支持动漫真人化”。回答会随着人的立场而变化。</p>
+          <p>作业六要你观察：当训练资料把“支持动漫真人化”标为 preferred response 时，模型是否更倾向支持；当反对立场被标为 preferred 时，模型是否转向反对。你现在应该能做的事：判断一个问题适合标准答案训练，还是适合偏好学习。</p>
+        </div>
+        <div class="box">
+          <h3>2. DPO 和标准 RLHF 的关系</h3>
+          <p>标准 RLHF 通常分两步：先训练 reward model 学会给回答打分，再让语言模型用 RL 向高分回答靠近。这个过程成本高，也比较不稳定。</p>
+          <p>DPO 简化了这条路。它不额外训练 reward model，而是直接利用成对资料：同一个 prompt 下，preferred response 应该比 non-preferred response 更容易被模型生成。</p>
+        </div>
+      </div>
+      <div class="grid3" style="margin-top:12px">
+        <div class="box soft">
+          <h3>3. label_data.json 长什么样</h3>
+          <p>训练资料共有约 50 笔。每笔都有 prompt，也就是关于动漫真人化的开放问题；同时有 support 回答和 oppose 回答。</p>
+          <p>support_ratio 决定哪一部分资料把 support 当 preferred，哪一部分把 oppose 当 preferred。这个比例越偏向 1，模型越被推向支持立场。</p>
+        </div>
+        <div class="box warn">
+          <h3>4. report 不是写感想</h3>
+          <p>三道 report questions 都要求观察超参数对测试输出的影响。第一题固定 data_size=50、num_epoch=3，比较 support_ratio=0 与 1。第二题固定 data_size=50、support_ratio=1，比较 num_epoch=1 与 3。第三题固定 num_epoch=3、support_ratio=1，比较 data_size 变化。</p>
+          <p>重点是输出内容怎么变，尤其是立场、理由、偏好强度，而不是只写“变长了”。</p>
+        </div>
+        <div class="box">
+          <h3>5. 支持比例影响立场方向</h3>
+          <p>support_ratio 是最直接的方向盘。设为 1 时，所有训练资料都鼓励支持动漫真人化；设为 0 时，所有训练资料都鼓励反对。</p>
+          <p>如果输出没有明显转向，可能是训练不够、资料数量不够、测试问题表达和训练资料差异太大，或模型原本倾向太强。</p>
+        </div>
+        <div class="box">
+          <h3>6. epoch 影响偏好强化程度</h3>
+          <p>num_epoch 表示模型完整看过训练资料几次。epoch 增加，偏好信号通常更强，模型更可能稳定采用训练偏好的立场。</p>
+          <p>但 epoch 太多也可能让模型输出更模板化，或者过度强化单一表达。观察时要看内容是否真的更符合偏好，而不是只看语气更强。</p>
+        </div>
+        <div class="box soft">
+          <h3>7. data_size 影响覆盖和稳定性</h3>
+          <p>data_size 决定使用多少笔训练资料。资料越多，模型看到的问题表达和理由越丰富，测试时更可能稳定迁移。</p>
+          <p>但资料品质同样重要。如果资料虽然多，却理由重复、立场表达单一，模型也可能只学到固定模板。</p>
+        </div>
+        <div class="box warn">
+          <h3>8. 提交流程也会影响分数</h3>
+          <p>作业总分包括 report 的 9 分和截图 PDF 的 1 分。report 分数来自达哥批改助教第一轮对话记录的 JSON，不是随便下载某个 JSON。</p>
+          <p>截图 PDF 要展示任意一次模型在测试资料集上的输出结果，并按学号命名。文件格式、文件名或 JSON 来源错了，对应部分可能零分。</p>
+        </div>
+      </div>
+      <div class="box greenbox" style="margin-top:12px">
+        <h3>完整知识链路</h3>
+        <p>作业六用 DPO 训练模型从人类偏好中学习。任务不是让模型回答客观事实，而是让 Breeze 7B 在“动漫真人化”这类开放式议题上对齐到指定偏好。训练资料由 prompt、support、oppose 组成，Colab 会根据 support_ratio 把某些回答标为 preferred response，把另一侧标为 non-preferred response。DPO 训练后，模型应提高 preferred 立场回答的概率，降低 non-preferred 立场回答的概率。你要通过四次左右训练比较 support_ratio、num_epoch、data_size 对测试输出内容的影响，并把报告回答交给达哥批改，最后提交对话 JSON 和一次输出截图 PDF。</p>
+      </div>
+    </section>
+
+    <section id="source">
+      <div class="head"><h2>作业线索</h2><span class="tag">内容线索</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>课程线索一：values alignment 是立场对齐</h3>
+          <p>助教用“支持动漫真人化”举例，说明对齐不是让模型变得绝对正确，而是让它输出更符合某种偏好的回答。</p>
+          <p>你现在应该能做的事：看到 alignment 任务时先问“对齐到谁的价值观”。</p>
+        </div>
+        <div class="box">
+          <h3>课程线索二：DPO 避开 reward model</h3>
+          <p>标准 RLHF 有 reward model 和不稳定的 RL training；作业六用 DPO，是为了适合 Colab 资源和教学观察。</p>
+          <p>你现在应该能做的事：解释为什么作业叫 Human Preference，但不需要自己训练 reward model。</p>
+        </div>
+        <div class="box">
+          <h3>课程线索三：四次训练够回答报告</h3>
+          <p>三道 report questions 的参数组合有重叠，所以不需要乱试很多次。核心是有计划地固定两个参数，改变一个参数，看测试输出内容差异。</p>
+          <p>你现在应该能做的事：把实验表格设计成参数组合和观察结论，而不是截图堆叠。</p>
+        </div>
+        <div class="box">
+          <h3>课程线索四：提交 JSON 来源很关键</h3>
+          <p>作业要求提交的是“和达哥对话记录的 JSON”，并且只取第一轮对话评分。直接下载错误 JSON、改 JSON、文件名错误都会带来分数风险。</p>
+          <p>你现在应该能做的事：提交前检查文件来源、文件名、扩展名和第一轮对话内容。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="worked">
+      <div class="head"><h2>核心概念精讲</h2><span class="tag">WORKED</span></div>
+      <div class="grid3">
+        <div class="box soft"><h3>核心直觉：DPO 直接拉开好坏回答的概率差</h3><p>作业六的重点不是让模型背一个标准答案，而是用成对偏好告诉它：同一问题下，哪种立场或表达应更容易出现。DPO 会把 preferred response 的相对概率往上拉，把 non-preferred response 的相对概率往下压，不需要先单独训练 reward model。</p><p>你现在应该能做什么：把一组 support/oppose 资料翻译成 preferred 与 non-preferred。</p></div>
+        <div class="box warn"><h3>易混边界：support 不是天然 preferred</h3><p><code>support</code> 只是回答立场，<code>preferred</code> 才是训练标签。support_ratio 决定多少比例的样本把支持回答标为 preferred。如果 support_ratio 设反，模型会被训练到相反方向；如果只看回答长度，不看立场和理由，就看不出 DPO 有没有学到偏好。</p><p>你现在应该能做什么：检查一次实验到底在强化支持、反对，还是只是改变输出风格。</p></div>
+        <div class="box info"><h3>Worked example：support_ratio 怎样改变同一笔资料</h3><p>题目是“你赞成动漫真人化吗？”support 回答说“赞成，因为能吸引新观众”；oppose 回答说“反对，因为可能破坏角色形象”。当 <code>support_ratio = 1</code>，support 是 preferred，模型会更常赞成；当 <code>support_ratio = 0</code>，oppose 是 preferred，模型会更常反对。测试时要比较同一类问题下立场是否稳定改变，而不是只看句子是否更长。</p><p>你现在应该能做什么：为报告写出“参数变化 -> 偏好标签变化 -> 输出立场变化”的因果链。</p></div>
+      </div>
+    </section>
+
+    <section id="example">
+      <div class="head"><h2>最小例子</h2><span class="tag">EXAMPLE</span></div>
+      <p>下面用一笔简化资料看懂 DPO 在作业六里学什么。</p>
+      <div class="codebar"><span class="label">偏好资料：同一问题下支持与反对回答</span><span class="kind">json</span></div>
+      <pre><code>{
+  "prompt": "你同意动漫真人化吗？请说明理由。",
+  "support": "我同意。真人化可以让更多观众接触原作，也能用新的表演方式诠释角色。",
+  "oppose": "我不同意。真人化常常难以保留原作风格，也可能破坏角色形象。"
+}</code></pre>
+      <div class="grid2">
+        <div class="box soft">
+          <h3>support_ratio 怎样改标注</h3>
+          <p>如果 <code>support_ratio = 1</code>，这类资料会把 support 标为 preferred，把 oppose 标为 non-preferred。模型被训练成更常支持动漫真人化。</p>
+          <p>如果 <code>support_ratio = 0</code>，标注方向相反，oppose 会变成 preferred。模型会被训练成更常反对。</p>
+        </div>
+        <div class="box warn">
+          <h3>这不是事实题</h3>
+          <p>support 和 oppose 都可能写得通顺，区别在立场。DPO 训练的目标不是证明哪一边客观正确，而是让模型跟随你指定的偏好。</p>
+          <p>判断句：偏好学习的资料要成对比较，不能只看单个回答好不好。</p>
+        </div>
+      </div>
+      <div class="codebar"><span class="label">实验记录：四次训练如何服务 report</span><span class="kind">text</span></div>
+      <pre><code>实验 A：support_ratio=0, data_size=50, num_epoch=3
+实验 B：support_ratio=1, data_size=50, num_epoch=3
+实验 C：support_ratio=1, data_size=50, num_epoch=1
+实验 D：support_ratio=1, data_size=10 或 30, num_epoch=3
+
+观察重点：
+- 输出是否支持动漫真人化
+- 理由是否更贴近 preferred response
+- 立场是否稳定迁移到 10 个测试问题
+- 是否只是长度变化，而内容立场没有变化</code></pre>
+      <p class="checkpoint">读完例子，你应该能自己规划四次训练，并知道每次输出该观察什么。</p>
+    </section>
+
+    <section id="viz">
+      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
+      <div class="viz-panel">
+        <div class="viz-head">
+          <div>
+            <h3>support_ratio 如何推动立场</h3>
+            <p>调节支持比例，观察模型输出向支持或反对移动。</p>
+          </div>
+        </div>
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <div class="slider-row"><span>support_ratio</span><input id="supportSlider" type="range" min="0" max="100" value="50"><output id="supportOut">0.50</output></div>
+            <div class="barrow"><span>支持倾向</span><div class="bar"><div class="fill" id="supportBar"></div></div><b id="supportVal">0</b></div>
+            <div class="barrow"><span>反对倾向</span><div class="bar"><div class="fill" id="opposeBar"></div></div><b id="opposeVal">0</b></div>
+            <div class="barrow"><span>立场混合</span><div class="bar"><div class="fill" id="mixBar"></div></div><b id="mixVal">0</b></div>
+          </div>
+          <div class="viz-cell">
+            <h3>观察提示</h3>
+            <p id="supportText"></p>
+            <p class="viz-note">真正写 report 时，请用测试输出的具体内容支持你的判断，不要只复述这个直觉。</p>
+          </div>
+        </div>
+      </div>
+      <div class="viz-panel">
+        <div class="viz-head">
+          <div>
+            <h3>data_size 与 num_epoch 的作用</h3>
+            <p>切换观察对象，理解资料量和训练轮数的不同。</p>
+          </div>
+          <div class="viz-actions">
+            <button type="button" data-exp="size" class="active">data_size</button>
+            <button type="button" data-exp="epoch">num_epoch</button>
+            <button type="button" data-exp="submit">提交检查</button>
+          </div>
+        </div>
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <table class="metric-table" id="expTable"></table>
+          </div>
+          <div class="viz-cell">
+            <h3 id="expTitle"></h3>
+            <p id="expText"></p>
+            <p class="viz-note" id="expHint"></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="diagnosis">
+      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
+      <div class="grid2">
+        <div class="box redsoft">
+          <h3>六个常见坑</h3>
+          <ol>
+            <li>把 DPO 当监督微调。错因是忽略成对偏好；修法是说明 preferred 与 non-preferred 的概率变化。</li>
+            <li>report 只写输出变长。后果是没有回答参数对内容的影响；修法是比较立场、理由和偏好强度。</li>
+            <li>support_ratio 理解反了。后果是把模型训练到相反立场；修法是确认 support 或 oppose 哪个被标为 preferred。</li>
+            <li>重复运行前不保存截图或输出。后果是 Colab 清空后找不到证据；修法是每次训练后保存关键输出。</li>
+            <li>提交错误 JSON。后果是 report 零分；修法是提交达哥第一轮对话记录 JSON，而不是其他下载项。</li>
+            <li>PDF 截图格式错误。后果是截图 1 分丢失；修法是按学号命名，并保存为 PDF。</li>
+          </ol>
+        </div>
+        <div class="box">
+          <h3>易混概念对照</h3>
+          <table class="metric-table">
+            <tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr>
+            <tr><td>supervised learning</td><td>DPO</td><td>前者学标准答案；后者学哪个回答更受偏好。</td></tr>
+            <tr><td>support</td><td>preferred</td><td>support 是回答立场；preferred 是训练标注，取决于 support_ratio。</td></tr>
+            <tr><td>data_size</td><td>num_epoch</td><td>前者是用多少笔资料；后者是完整看这些资料几遍。</td></tr>
+            <tr><td>report JSON</td><td>截图 PDF</td><td>JSON 记录达哥批改对话，占报告分；PDF 是模型测试输出截图。</td></tr>
+            <tr><td>原模型输出</td><td>训练后输出</td><td>原模型用于比较 baseline；训练后输出用于观察偏好学习效果。</td></tr>
+          </table>
+        </div>
+      </div>
+      <p class="checkpoint">读完这一节，你应该能定位作业六的问题：概念错、参数错、观察错、提交错，分别怎么修。</p>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
+      <div class="practice-intro">
+        <div class="review-card"><strong>作答前先抓主线</strong><p>按“开放问题，偏好资料，DPO 训练，测试输出，报告提交”组织答案。</p></div>
+        <div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起 Learning from Human Preference、values alignment、RLHF、DPO、reward model、preferred response、non-preferred response、support_ratio、data_size、num_epoch、Breeze 7B、report、JSON、PDF。</p></div>
+      </div>
+      <div class="practice-check">
+        <div class="check-item"><b>偏好</b>能否说清 preferred 是谁。</div>
+        <div class="check-item"><b>参数</b>能否解释三个超参数影响。</div>
+        <div class="check-item"><b>观察</b>能否比较内容立场变化。</div>
+        <div class="check-item"><b>提交</b>能否避免 JSON/PDF 错误。</div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>这一组检查 DPO 和偏好学习。</p></div><div class="quick-review"><b>REMIND</b><span>写清楚“偏好”不是“标准答案”。</span></div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. 作业六用 DPO 让模型从 preferred / non-preferred response 中学习偏好。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. 作业六用 DPO 让模型从 preferred / non-preferred response 中学习偏好。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
+          <div class="q" data-role="homework" data-title="2. 作业六为什么不适合只用 supervised learning 的标准答案思路？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. 作业六为什么不适合只用 supervised learning 的标准答案思路？</h3><div class="choices"><label><input type="radio" name="q2" value="因为动漫真人化这类开放问题没有唯一标准答案">因为动漫真人化这类开放问题没有唯一标准答案</label><label><input type="radio" name="q2" value="因为 Breeze 7B 不能输出中文">因为 Breeze 7B 不能输出中文</label><label><input type="radio" name="q2" value="因为 report 不需要观察输出">因为 report 不需要观察输出</label></div></div>
+          <div class="q short" data-role="homework" data-title="3. 填空：DPO 会提高 ______ response 的概率，降低 ______ response 的概率。"><div class="q-meta"><span class="pill">填空</span></div><h3>3. 填空：DPO 会提高 ______ response 的概率，降低 ______ response 的概率。</h3><input type="text" name="q3"></div>
+          <div class="q short" data-role="homework" data-title="4. 用 1-2 句话解释 values alignment。"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 用 1-2 句话解释 values alignment。</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、流程理解</h3><p>这一组检查你能不能跑通作业。</p></div><div class="quick-review"><b>REMIND</b><span>把 Colab、达哥和 NTU Core 的关系写清楚。</span></div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="5. 按顺序写出作业六从 Colab 到提交的最小流程。"><div class="q-meta"><span class="pill">排序</span></div><h3>5. 按顺序写出作业六从 Colab 到提交的最小流程。</h3><textarea name="q5"></textarea></div>
+          <div class="q short" data-role="homework" data-title="6. 为什么要比较 original model 和 trained model 的输出？"><div class="q-meta"><span class="pill">解释</span></div><h3>6. 为什么要比较 original model 和 trained model 的输出？</h3><textarea name="q6"></textarea></div>
+          <div class="q short" data-role="homework" data-title="7. report 三题为什么可以用约四次训练完成？"><div class="q-meta"><span class="pill">解释</span></div><h3>7. report 三题为什么可以用约四次训练完成？</h3><textarea name="q7"></textarea></div>
+          <div class="q short" data-role="homework" data-title="8. 为什么 report 观察重点应放在内容变化，而不是格式或长短？"><div class="q-meta"><span class="pill">解释</span></div><h3>8. 为什么 report 观察重点应放在内容变化，而不是格式或长短？</h3><textarea name="q8"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、参数理解</h3><p>这一组检查三个超参数。</p></div><div class="quick-review"><b>REMIND</b><span>写出变量改变时，输出立场会怎样变化。</span></div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="9. support_ratio=1 和 support_ratio=0 分别会怎样标注 preferred response？"><div class="q-meta"><span class="pill">参数</span></div><h3>9. <code>support_ratio=1</code> 和 <code>support_ratio=0</code> 分别会怎样标注 preferred response？</h3><textarea name="q9"></textarea></div>
+          <div class="q short" data-role="homework" data-title="10. num_epoch 从 1 增加到 3，可能怎样影响测试输出？"><div class="q-meta"><span class="pill">参数</span></div><h3>10. <code>num_epoch</code> 从 1 增加到 3，可能怎样影响测试输出？</h3><textarea name="q10"></textarea></div>
+          <div class="q short" data-role="homework" data-title="11. data_size 从 10 增加到 50，可能带来什么变化？"><div class="q-meta"><span class="pill">参数</span></div><h3>11. <code>data_size</code> 从 10 增加到 50，可能带来什么变化？</h3><textarea name="q11"></textarea></div>
+          <div class="q short" data-role="homework" data-title="12. 如果 support_ratio=0.5，模型可能学到什么混合信号？"><div class="q-meta"><span class="pill">参数</span></div><h3>12. 如果 <code>support_ratio=0.5</code>，模型可能学到什么混合信号？</h3><textarea name="q12"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、错误诊断</h3><p>这一组按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b><span>诊断时定位是参数、观察还是提交问题。</span></div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="13. 有人把 support 当成永远 preferred。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 有人把 support 当成永远 preferred。错因、后果、修法是什么？</h3><div class="solve-note">从 support_ratio 的作用回答。</div><textarea name="q13"></textarea></div>
+          <div class="q short" data-role="homework" data-title="14. report 只写“训练后答案更长”。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. report 只写“训练后答案更长”。错因、后果、修法是什么？</h3><div class="solve-note">从 report 评分关注内容变化回答。</div><textarea name="q14"></textarea></div>
+          <div class="q short" data-role="homework" data-title="15. 重新运行 Colab 前没有保存输出截图，结果页面被清空。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 重新运行 Colab 前没有保存输出截图，结果页面被清空。错因、后果、修法是什么？</h3><div class="solve-note">从实验记录和截图 PDF 回答。</div><textarea name="q15"></textarea></div>
+          <div class="q short" data-role="homework" data-title="16. 提交了达哥界面中错误的 JSON 下载项。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 提交了达哥界面中错误的 JSON 下载项。错因、后果、修法是什么？</h3><div class="solve-note">从“对话记录 JSON”和第一轮评分回答。</div><textarea name="q16"></textarea></div>
+          <div class="q short" data-role="homework" data-title="17. 截图交成 PNG 而不是 PDF。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>17. 截图交成 PNG 而不是 PDF。错因、后果、修法是什么？</h3><div class="solve-note">从作业文件格式要求回答。</div><textarea name="q17"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>五、场景迁移</h3><p>这一组检查你能不能迁移偏好学习。</p></div><div class="quick-review"><b>REMIND</b><span>迁移时先定义 preferred / non-preferred。</span></div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="18. 如果要让模型偏好“更环保”的消费建议，你会怎样构造 pair 数据？"><div class="q-meta"><span class="pill">应用</span></div><h3>18. 如果要让模型偏好“更环保”的消费建议，你会怎样构造 pair 数据？</h3><textarea name="q18"></textarea></div>
+          <div class="q short" data-role="homework" data-title="19. 如果一个开放问题有多个价值面向，DPO 数据该注意什么？"><div class="q-meta"><span class="pill">应用</span></div><h3>19. 如果一个开放问题有多个价值面向，DPO 数据该注意什么？</h3><textarea name="q19"></textarea></div>
+          <div class="q short" data-role="homework" data-title="20. 你会怎样判断训练后模型是真的学到偏好，而不是只背训练句式？"><div class="q-meta"><span class="pill">应用</span></div><h3>20. 你会怎样判断训练后模型是真的学到偏好，而不是只背训练句式？</h3><textarea name="q20"></textarea></div>
+          <div class="q short" data-role="homework" data-title="21. 如果 preferred response 本身质量很差，DPO 会有什么风险？"><div class="q-meta"><span class="pill">应用</span></div><h3>21. 如果 preferred response 本身质量很差，DPO 会有什么风险？</h3><textarea name="q21"></textarea></div>
+        </div>
+      </div>
+
+      <div class="practice-group">
+        <div class="group-head"><div><h3>六、表达输出</h3><p>最后三题检查你能不能讲给别人听。</p></div><div class="quick-review"><b>REMIND</b><span>把作业目标、DPO 机制和提交要求都讲到。</span></div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="22. 面试短答：DPO 相比标准 RLHF 简化在哪里？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>22. 面试短答：DPO 相比标准 RLHF 简化在哪里？</h3><textarea name="q22"></textarea></div>
+          <div class="q short" data-role="homework" data-title="23. 面试短答：作业六的三个超参数分别在观察什么？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>23. 面试短答：作业六的三个超参数分别在观察什么？</h3><textarea name="q23"></textarea></div>
+          <div class="q full" data-role="homework" data-title="24. 用 6-9 句话讲清楚作业六 Learning from Human Preference。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>24. 用 6-9 句话讲清楚作业六 Learning from Human Preference。请串联 Learning from Human Preference、values alignment、RLHF、DPO、reward model、preferred response、non-preferred response、support_ratio、data_size、num_epoch、Breeze 7B、report、JSON、PDF。</h3><div class="solve-note">先说为什么需要偏好学习，再说 DPO 怎么训练，最后说报告观察和提交文件。</div><textarea name="q24"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>导出练习记录</h2><span class="tag">EXPORT</span></div>
+      <p class="muted">完成练习后生成记录，方便回看本节的 DPO 机制、参数观察和提交风险。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+
+<script src="../../../../assets/study-page.js"></script>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){
+  const max=document.documentElement.scrollHeight-innerHeight;
+  progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";
+  let current=sections[0]?.id;
+  for(const section of sections){
+    const rect=section.getBoundingClientRect();
+    if(rect.top<innerHeight*.36) current=section.id;
+    section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);
+  }
+  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));
+}
+addEventListener("scroll",updateReadingState,{passive:true});
+addEventListener("resize",updateReadingState);
+updateReadingState();
+
+function copyText(text,onOk,onFail){
+  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
+  else fallbackCopy(text,onOk,onFail);
+}
+function fallbackCopy(text,onOk,onFail){
+  const ta=document.createElement("textarea");
+  ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";
+  document.body.appendChild(ta);ta.focus();ta.select();
+  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
+}
+document.querySelectorAll(".codebar").forEach(bar=>{
+  const btn=document.createElement("button");
+  btn.type="button";btn.className="copy-code";btn.textContent="复制";
+  btn.addEventListener("click",()=>{
+    const code=bar.nextElementSibling?.innerText||"";
+    copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});
+  });
+  bar.appendChild(btn);
+});
+
+const supportSlider=document.getElementById("supportSlider");
+function clamp(v){return Math.max(0,Math.min(100,Math.round(v)));}
+function setBar(id,val){document.getElementById(id+"Bar").style.width=clamp(val)+"%";document.getElementById(id+"Val").textContent=clamp(val);}
+function updateSupport(){
+  const s=Number(supportSlider.value);
+  document.getElementById("supportOut").textContent=(s/100).toFixed(2);
+  setBar("support",s);
+  setBar("oppose",100-s);
+  setBar("mix",100-Math.abs(s-50)*2);
+  let text="支持与反对信号混合，模型输出可能更中立或不稳定。";
+  if(s>75) text="支持信号占多数，训练后模型更可能同意动漫真人化，并给出支持理由。";
+  if(s<25) text="反对信号占多数，训练后模型更可能反对动漫真人化，并给出反对理由。";
+  document.getElementById("supportText").textContent=text;
+}
+supportSlider.addEventListener("input",updateSupport);
+updateSupport();
+
+const expData={
+  size:{title:"data_size：资料覆盖",text:"data_size 增加时，模型看到更多问题表达和理由，测试输出通常更稳定，也更可能迁移到不同问法。",hint:"报告第三题要固定 num_epoch=3、support_ratio=1，再比较 data_size 变化。",rows:[["改什么","训练资料笔数"],["范围","10 到 50"],["观察","立场是否更稳定、理由是否更丰富"]]},
+  epoch:{title:"num_epoch：训练强度",text:"num_epoch 增加时，同一批偏好资料被看更多遍，偏好信号通常更强，但也可能更模板化。",hint:"报告第二题要固定 data_size=50、support_ratio=1，比较 epoch=1 与 3。",rows:[["改什么","完整看资料几次"],["风险","过度强化或模板化"],["观察","支持立场是否更明显"]]},
+  submit:{title:"提交检查：文件来源",text:"作业要交两个文件：达哥第一轮对话记录 JSON，以及任意一次模型测试输出截图 PDF。文件名都按学号命名。",hint:"不要下载错误 JSON，不要修改 JSON，不要把截图交成 PNG。",rows:[["JSON","达哥对话记录"],["PDF","模型测试输出截图"],["计分","report 9 分 + 截图 1 分"]]}
+};
+let currentExp="size";
+function updateExp(){
+  const data=expData[currentExp];
+  document.getElementById("expTitle").textContent=data.title;
+  document.getElementById("expText").textContent=data.text;
+  document.getElementById("expHint").textContent=data.hint;
+  document.getElementById("expTable").innerHTML="<tr><th>维度</th><th>说明</th></tr>"+data.rows.map(r=>"<tr><td>"+r[0]+"</td><td>"+r[1]+"</td></tr>").join("");
+  document.querySelectorAll("[data-exp]").forEach(btn=>btn.classList.toggle("active",btn.dataset.exp===currentExp));
+}
+document.querySelectorAll("[data-exp]").forEach(btn=>btn.addEventListener("click",()=>{currentExp=btn.dataset.exp;updateExp();}));
+updateExp();
+
+function valueOfQuestion(q){
+  const checked=q.querySelector("input[type=radio]:checked");
+  if(checked) return checked.value;
+  const field=q.querySelector("textarea,input[type=text],select");
+  return field?field.value.trim():"";
+}
+function questionGroup(q){
+  return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";
+}
+function generateRecord(){
+  const qs=[...document.querySelectorAll('[data-role="homework"]')];
+  const groups={},warnings=[];
+  qs.forEach((q,i)=>{
+    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";
+    const hint=q.querySelector(".solve-note")?.innerText.trim()||"";
+    const answer=valueOfQuestion(q);
+    if(!answer) warnings.push("第 "+(i+1)+" 题未填写："+title);
+    if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在|混淆/.test(answer)&&/后果|影响|风险|导致/.test(answer)&&/修法|修正|解决|改|检查/.test(answer))){
+      warnings.push("第 "+(i+1)+" 题建议补齐错因、后果和修法。");
+    }
+    if(q.dataset.type==="feynman"){
+      const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
+      if(answer&&answer.length<120) warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");
+      const lower=answer.toLowerCase();
+      const lack=answer?keys.filter(k=>!lower.includes(k.toLowerCase())):[];
+      if(lack.length) warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");
+    }
+    const group=questionGroup(q);
+    (groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
+  });
+  let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";
+  Object.keys(groups).forEach(group=>{
+    out+="## "+group+"\n\n";
+    groups[group].forEach(item=>{
+      out+="### "+item.title+"\n";
+      if(item.hint) out+="提示摘要："+item.hint+"\n\n";
+      out+=item.answer+"\n\n";
+    });
+  });
+  document.getElementById("record").textContent=out;
+  const quality=document.getElementById("quality");
+  quality.style.display="block";
+  quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，适合回看订正。";
+}
+function copyRecord(){
+  copyText(document.getElementById("record").textContent,()=>{
+    const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";
+  },()=>{
+    const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";
+  });
+}
+</script>
+</body>
+</html>

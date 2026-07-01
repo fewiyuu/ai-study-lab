@@ -1,0 +1,1087 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>训练循环、优化器与检查点</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="从零训练小语言模型" data-unit="04">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>从零训练小语言模型</strong>
+        <span>04</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#step"><span class="dot"></span>一次训练 step</a>
+        <a href="#optimizer"><span class="dot"></span>优化器与学习率</a>
+        <a href="#checkpoint"><span class="dot"></span>检查点与恢复</a>
+        <a href="#examples"><span class="dot"></span>例子与诊断</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#bridge"><span class="dot"></span>下一步</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把训练 step 看成状态转移链：batch 进来，loss 变成梯度，优化器改参数，日志和 checkpoint 留下可恢复证据。卡住时先查 step、lr、optimizer state 和 scheduler state。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">训练闭环</div>
+          <h1>训练循环、优化器与检查点</h1>
+          <p>这一页只讲一次训练 step 怎么从 batch 走到参数更新，再走到日志和 checkpoint。你读完后，应该能把 <code>batch</code>、<code>loss</code>、<code>grad</code>、<code>optimizer state</code>、<code>scheduler state</code> 和恢复检查串成一条线；GPU kernel、分布式和大规模吞吐留到下一页再看。</p>
+
+          <div class="course-links">
+            <a href="../03_Transformer最小实现/学习页.html">上一节：Transformer 最小实现</a><a href="../index.html">课程地图</a><a href="../05_GPU系统与性能瓶颈/学习页.html">下一节：GPU 系统与性能瓶颈</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页，你应该能做什么</h3>
+          <ul>
+  <li>能画出一次训练 step 的顺序，知道 <code>zero_grad</code>、前向、<code>backward</code>、<code>optimizer.step()</code>、<code>scheduler.step()</code> 和记录日志分别在做什么。</li>
+  <li>能解释为什么 <code>AdamW</code>、学习率计划、梯度累积和梯度裁剪会一起影响稳定性。</li>
+  <li>能列出恢复同一次训练至少要保存哪些状态，并说出只存模型权重会丢掉什么。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goal</span>
+  </div>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>先看顺序</h3>
+      <p>这页先盯住 <code>batch → logits → loss → grad → update → log → checkpoint</code>。只要顺序一乱，后面讨论再多超参也只是绕圈。</p>
+    </div>
+    <div class="box info">
+      <h3>先看状态</h3>
+      <p>训练过程带状态。<code>optimizer</code>、<code>scheduler</code>、<code>step</code>、随机数和数据迭代位置都会变，恢复训练时要一起对齐。</p>
+    </div>
+    <div class="box">
+      <h3>先看证据</h3>
+      <p>一条可信的训练记录至少要回答三件事：模型有没有在学、更新稳不稳、断掉以后能不能接回同一个位置。</p>
+    </div>
+  </div>
+  <div class="box warn">
+    <h3>本页边界</h3>
+    <p>这一页不讲 GPU kernel、分布式训练、混合精度实现细节，也不讲大规模 scaling 规律。它只负责把训练闭环、状态和恢复说清楚；下一页再接系统瓶颈。</p>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">map</span>
+  </div>
+  <p>把一次训练 step 看成一条状态转移链更有用。数据进来以后，模型先前向得到 <code>logits</code>，再把目标 token 的误差压成 <code>loss</code>，随后 <code>backward</code> 写梯度，优化器和学习率计划决定参数怎么动，最后日志和 checkpoint 负责把这次变化留下来。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" type="button" data-trace-step="batch">
+        <code>batch</code><span>读数据迭代器，写当前小批输入</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="forward">
+        <code>forward</code><span>读模型参数，写 logits 和 loss</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="backward">
+        <code>backward</code><span>读 loss，写每个参数的梯度</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="update">
+        <code>update</code><span>读梯度和优化器状态，写新参数与新状态</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="log">
+        <code>log</code><span>写 step、loss、lr、tokens/s 和异常</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="checkpoint">
+        <code>checkpoint</code><span>写可恢复的训练现场</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="batch">
+        <b>batch 阶段</b>
+        <span>输入与目标</span>
+        <p>这一阶段读的是数据迭代器、batch size 和序列长度。输出是当前一批样本和它的 next-token 目标。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="forward">
+        <b>前向阶段</b>
+        <span>logits / loss</span>
+        <p>模型读参数和输入，写出 logits，再把 logits 和目标 token 变成 loss。这里还没有真正改参数。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="backward">
+        <b>反向阶段</b>
+        <span>grad</span>
+        <p><code>loss.backward()</code> 只负责算梯度。它把 loss 对每个参数的影响方向写到 <code>.grad</code>，不会顺手改权重。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="update">
+        <b>更新阶段</b>
+        <span>parameters + optimizer state</span>
+        <p><code>optimizer.step()</code> 才会真的改参数，同时也会更新 <code>AdamW</code> 这种优化器自己的状态。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="log">
+        <b>日志阶段</b>
+        <span>step / lr / tokens/s</span>
+        <p>没有这条记录，就很难判断训练是慢了、抖了、坏了，还是恢复时错位了。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="checkpoint">
+        <b>checkpoint 阶段</b>
+        <span>weights + states</span>
+        <p>checkpoint 保存的是训练现场，包括 step、优化器、调度器和随机数状态。</p>
+      </div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="训练 step 状态台账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>阶段</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>如果错了，先看什么症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>batch</td>
+          <td>数据迭代器、batch size、序列长度</td>
+          <td>当前输入、目标 token、计数器</td>
+          <td>样本越界、长度不对、micro-step 和 global step 混掉</td>
+        </tr>
+        <tr>
+          <td>forward</td>
+          <td>模型参数、输入 token</td>
+          <td><code>logits</code>、<code>loss</code></td>
+          <td>输出形状不对、目标错位、loss 异常高或异常低</td>
+        </tr>
+        <tr>
+          <td>backward</td>
+          <td><code>loss</code> 和计算图</td>
+          <td>每个参数的 <code>.grad</code></td>
+          <td>梯度残留、未清零、梯度消失或爆炸</td>
+        </tr>
+        <tr>
+          <td>update</td>
+          <td>梯度、优化器状态、学习率</td>
+          <td>新参数、新优化器状态</td>
+          <td>恢复后曲线跳、权重没变、学习率位置错</td>
+        </tr>
+        <tr>
+          <td>log</td>
+          <td>step、loss、lr、tokens/s、grad norm</td>
+          <td>训练记录</td>
+          <td>看不出训练在学、在慢、还是在坏</td>
+        </tr>
+        <tr>
+          <td>checkpoint</td>
+          <td>权重、优化器、调度器、随机数、配置</td>
+          <td>可恢复状态</td>
+          <td>只能重训，不能续训</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>你现在应该能做什么</h3>
+    <p>拿到一段训练日志时，先判断它是在描述 batch、forward、update 还是 recovery，再找对应检查点。这个顺序会让你更快定位问题。</p>
+  </div>
+</section>
+
+<section id="step">
+  <div class="head">
+    <h2>一次训练 step</h2>
+    <span class="tag">loop</span>
+  </div>
+  <p>下面这段伪代码只保留一次训练 step 的关键动作。它的价值不在于“能不能运行”，而在于让你看清每一行是在读什么、写什么、依赖什么，以及哪些顺序不能换。</p>
+  <div class="codebar"><span>train_step.py</span><button class="copy" data-copy="train-step-code">复制</button></div>
+  <pre id="train-step-code" data-export-context="训练 step 教学代码" data-export-lang="python"><code class="language-python">model.train()
+optimizer.zero_grad(set_to_none=True)
+
+x, y = next(train_iter)                      # x/y 是当前 batch
+logits = model(x)                            # 读参数，写 logits
+loss = cross_entropy(logits[:, :-1], y[:, 1:])
+loss.backward()                              # 只写梯度，不改参数
+
+if grad_clip is not None:
+    clip_grad_norm_(model.parameters(), grad_clip)
+
+optimizer.step()                             # 真正改参数
+scheduler.step()                             # 推进学习率计划
+
+if step % log_every == 0:
+    log({
+        "step": step,
+        "train_loss": float(loss),
+        "lr": scheduler.get_last_lr()[0],
+        "tokens_seen": tokens_seen,
+    })
+
+if step % save_every == 0:
+    save_checkpoint(model, optimizer, scheduler, step, tokens_seen)</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="step 代码读写表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>代码行</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>如果这行漏掉或换序，会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>zero_grad</code></td>
+          <td>上一轮残留的梯度缓存</td>
+          <td>把 <code>.grad</code> 清空</td>
+          <td>旧梯度会跨 step 混进来，更新幅度变脏</td>
+        </tr>
+        <tr>
+          <td><code>loss.backward()</code></td>
+          <td>loss 和计算图</td>
+          <td>参数梯度</td>
+          <td>没有梯度，优化器就没有东西可更新</td>
+        </tr>
+        <tr>
+          <td><code>clip_grad_norm_</code></td>
+          <td>当前梯度范数</td>
+          <td>把过大的梯度压回可控区间</td>
+          <td>偶发坏 batch 可能把参数一下推飞</td>
+        </tr>
+        <tr>
+          <td><code>optimizer.step()</code></td>
+          <td>梯度和优化器状态</td>
+          <td>新参数</td>
+          <td>参数不动，训练表面上还在跑，实际上没学</td>
+        </tr>
+        <tr>
+          <td><code>scheduler.step()</code></td>
+          <td>当前 step 和调度器状态</td>
+          <td>新学习率</td>
+          <td>恢复后 lr 会错位，曲线很难比较</td>
+        </tr>
+        <tr>
+          <td><code>save_checkpoint</code></td>
+          <td>当前权重和运行状态</td>
+          <td>可恢复文件</td>
+          <td>中断后只能从头来，或者恢复后曲线跳变</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>顺序不能乱的地方</h3>
+    <p><code>zero_grad</code> 一般放在前面，<code>loss.backward()</code> 只管写梯度，<code>optimizer.step()</code> 才改参数，<code>scheduler.step()</code> 需要和更新次数对齐。把这几步分清，后面的诊断才有意义。</p>
+  </div>
+</section>
+
+<section id="optimizer">
+  <div class="head">
+    <h2>优化器与学习率</h2>
+    <span class="tag">AdamW + schedule</span>
+  </div>
+  <p>优化器决定参数沿着什么方向动，学习率决定每一步跨多大。<code>AdamW</code> 会记住梯度的近期均值和幅度，再把权重衰减单独拆出来；warmup 负责把早期步幅抬得慢一点，cosine decay 负责把后期步幅收回来。</p>
+  <div class="math-block" data-export-context="AdamW 更新式" data-export-lang="math">
+    $$
+    \begin{aligned}
+    g_t &= \nabla_{\theta} L_t \\
+    m_t &= \beta_1 m_{t-1} + (1-\beta_1) g_t \\
+    v_t &= \beta_2 v_{t-1} + (1-\beta_2) g_t^2 \\
+    \theta_{t+1} &= \theta_t - \eta \, \frac{\hat m_t}{\sqrt{\hat v_t} + \epsilon} - \eta \, \lambda \theta_t
+    \end{aligned}
+    $$
+    <p><code>g_t</code> 是当前梯度，<code>m_t</code> 和 <code>v_t</code> 是一阶、二阶矩，<code>\theta_t</code> 是参数，<code>\eta</code> 是学习率，<code>\lambda</code> 是权重衰减。这里的重点是：<code>AdamW</code> 不只存参数，还存自己的状态。</p>
+  </div>
+  <div class="math-block" data-export-context="学习率计划" data-export-lang="math">
+    $$
+    \eta(t)=
+    \begin{cases}
+    \eta_{\max} \cdot \frac{t}{T_{\text{warmup}}}, & t < T_{\text{warmup}} \\
+    \eta_{\max} \cdot \frac{1}{2}\left(1+\cos \frac{\pi (t-T_{\text{warmup}})}{T_{\text{total}}-T_{\text{warmup}}}\right), & t \ge T_{\text{warmup}}
+    \end{cases}
+    $$
+    <p><code>t</code> 是当前 step，<code>T<sub>warmup</sub></code> 是 warmup 步数，<code>T<sub>total</sub></code> 是总步数，<code>\eta_{\max}</code> 是峰值学习率。你要先知道曲线在哪一段，才知道恢复时该不该对得上。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="AdamW 状态台账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>它记什么</th>
+          <th>如果丢了会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>参数 <code>\theta</code></td>
+          <td>模型当前权重</td>
+          <td>只能重新训练，不能继续同一次训练轨迹</td>
+        </tr>
+        <tr>
+          <td>一阶矩 <code>m_t</code></td>
+          <td>近期梯度方向的平滑均值</td>
+          <td>更新方向会突然变硬，恢复后前几步抖动更大</td>
+        </tr>
+        <tr>
+          <td>二阶矩 <code>v_t</code></td>
+          <td>近期梯度幅度的平滑均值</td>
+          <td>参数尺度判断会错，步幅看起来像变了一个优化器</td>
+        </tr>
+        <tr>
+          <td>学习率计划</td>
+          <td>当前 step 对应的 <code>\eta</code></td>
+          <td>恢复后 lr 可能回到 warmup 或衰减的错误位置</td>
+        </tr>
+        <tr>
+          <td>梯度裁剪阈值</td>
+          <td>控制极端梯度</td>
+          <td>偶发坏 batch 可能把参数推太远</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>先记一个判断</h3>
+  <p>有效 batch 变了以后，学习率曲线也要重新看；两次实验的更新频率不同，曲线就不该直接对比。</p>
+  </div>
+</section>
+
+<section id="checkpoint">
+  <div class="head">
+    <h2>检查点与恢复</h2>
+    <span class="tag">state</span>
+  </div>
+  <p>checkpoint 保存的是训练现场。想从第 <code>20000</code> step 继续同一次训练，就要把权重、优化器状态、调度器状态、step、随机数状态和训练配置放在一起保存。这样恢复时才能接回同一条训练轨迹。</p>
+  <div class="table-wrap">
+    <table data-export-context="checkpoint 对象台账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>为什么要存</th>
+          <th>缺失后的症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>model state</td>
+          <td>模型参数本体</td>
+          <td>只能得到旧权重，不能接着同一条训练线往下走</td>
+        </tr>
+        <tr>
+          <td>optimizer state</td>
+          <td>AdamW 的一阶矩、二阶矩等状态</td>
+          <td>恢复后前几步更新幅度异常，loss 可能跳</td>
+        </tr>
+        <tr>
+          <td>scheduler state</td>
+          <td>当前学习率计划走到哪一步</td>
+          <td>lr 回到错误位置，训练曲线很难对齐</td>
+        </tr>
+        <tr>
+          <td>step / tokens_seen</td>
+          <td>定位日志和评估间隔</td>
+          <td>重复评估、错过保存点，或者横轴不可信</td>
+        </tr>
+        <tr>
+          <td>随机数状态</td>
+          <td>控制采样、打乱和 dropout</td>
+          <td>无法复现同一轨迹，排查时更难比对</td>
+        </tr>
+        <tr>
+          <td>配置与版本</td>
+          <td>解释这份 checkpoint 是什么设置产出的</td>
+          <td>过几天就分不清 batch、lr、模型结构是否变过</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>checkpoint.py</span><button class="copy" data-copy="checkpoint-code">复制</button></div>
+  <pre id="checkpoint-code" data-export-context="checkpoint 保存与恢复示意" data-export-lang="python"><code class="language-python">checkpoint = {
+    "step": step,
+    "tokens_seen": tokens_seen,
+    "model": model.state_dict(),
+    "optimizer": optimizer.state_dict(),
+    "scheduler": scheduler.state_dict(),
+    "scaler": scaler.state_dict(),  # 混合精度时需要
+    "rng": {
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all(),
+    },
+    "config": train_config,
+    "last_metrics": {
+        "train_loss": train_loss,
+        "val_loss": val_loss,
+        "lr": current_lr,
+    },
+}
+
+save_atomically(checkpoint, path)</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="恢复顺序台账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>恢复步骤</th>
+          <th>先做什么</th>
+          <th>为什么要按这个顺序</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td>先加载模型权重</td>
+          <td>先把参数放回原位，后面的状态才有参照点</td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>再加载优化器状态</td>
+          <td>否则 moments 会丢，更新幅度会像刚开训一样</td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>再加载调度器状态</td>
+          <td>学习率要接回原曲线，不然 recovery 之后的 lr 不可比</td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td>再恢复 step、tokens_seen 和随机数状态</td>
+          <td>日志、评估间隔和随机过程都要继续同一条轨迹</td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td>最后跑一个短 sanity check</td>
+          <td>先确认第一条日志接上，再继续长跑</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>原子保存的意思</h3>
+    <p>先写临时文件，确认写完整后再替换正式文件。这样可以减少“写到一半断掉，留下损坏 checkpoint”的风险。训练里最怕的是中断后你以为自己保存成功了。</p>
+  </div>
+</section>
+
+<section id="state-ledger">
+  <div class="head">
+    <h2>恢复时的状态台账</h2>
+    <span class="tag">ledger</span>
+  </div>
+  <p>恢复训练最容易出问题的地方是状态分叉。权重看起来对了，不代表训练现场已经对了。下面这张表把常见状态拆开，方便你按“读什么、写什么、什么时候会旧、第一眼查什么”来排查。</p>
+  <div class="table-wrap">
+    <table data-export-context="恢复状态台账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>状态</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>什么时候会旧</th>
+          <th>第一眼查什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>model state</td>
+          <td>恢复前的模型参数</td>
+          <td>当前权重</td>
+          <td>只要权重文件没加载，就还是旧模型</td>
+          <td>参数值、层名是否匹配</td>
+        </tr>
+        <tr>
+          <td>optimizer state</td>
+          <td>梯度历史、moments、动量缓存</td>
+          <td>更新方向和更新幅度</td>
+          <td>漏掉后，前几步更新会像刚开训</td>
+          <td><code>state_dict()</code> 是否完整</td>
+        </tr>
+        <tr>
+          <td>scheduler state</td>
+          <td>当前学习率阶段</td>
+          <td>下一步 lr</td>
+          <td>漏掉后，warmup 或 decay 会回错位置</td>
+          <td>第一条恢复日志里的 lr</td>
+        </tr>
+        <tr>
+          <td>step / tokens_seen</td>
+          <td>训练进度和横轴</td>
+          <td>日志、评估和保存间隔</td>
+          <td>回退或跳号后，记录就不再连续</td>
+          <td>第一条日志的 step 与 tokens_seen</td>
+        </tr>
+        <tr>
+          <td>rng state</td>
+          <td>采样、shuffle、dropout 的随机流</td>
+          <td>下一次随机结果</td>
+          <td>漏掉后，复现时轨迹会变</td>
+          <td>是否有 torch / cuda 随机状态</td>
+        </tr>
+        <tr>
+          <td>log file</td>
+          <td>上一段训练写下的证据</td>
+          <td>恢复后的连续记录</td>
+          <td>如果断开，排查时缺少前后对照</td>
+          <td>恢复第一条和中断前最后一条</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>恢复时的第一轮检查</h3>
+    <p>先看 <code>step</code> 和 <code>lr</code>，再看 <code>loss</code> 和 <code>tokens_seen</code>，最后看 <code>grad norm</code>。这三层信息分别告诉你进度、曲线和更新有没有接上。</p>
+  </div>
+</section>
+
+<section id="logging">
+  <div class="head">
+    <h2>日志怎么读</h2>
+    <span class="tag">trace</span>
+  </div>
+  <p>日志的作用是把训练过程变成可比较的轨迹。你不需要每个字段都盯住，但要知道哪些字段放在一起，能判断学习、速度、稳定性和恢复是否正常。</p>
+  <div class="math-block" data-export-context="吞吐读法" data-export-lang="math">
+    $$
+    \text{tokens/s}=\frac{\text{tokens per update}}{\text{step time}}
+    $$
+    <p>如果一次更新处理 <code>196608</code> 个 token，而 step time 是 <code>1.12</code> 秒，吞吐大约是 <code>175k tokens/s</code>。这类数字不是装饰，它们能告诉你数据加载、算子或通信有没有掉速。</p>
+  </div>
+  <div class="codebar"><span>train.log</span><button class="copy" data-copy="log-example">复制</button></div>
+  <pre id="log-example" data-export-context="训练日志样例" data-export-lang="text">step=12000 train_loss=3.58 val_loss=3.71 lr=1.8e-4 grad_norm=0.91 tokens/s=174k ckpt=run_012000.pt
+step=12016 train_loss=3.49 val_loss=3.69 lr=1.7e-4 grad_norm=0.88 tokens/s=176k ckpt=run_012016.pt
+resume step=12017 train_loss=3.50 val_loss=3.70 lr=1.7e-4 grad_norm=0.89 tokens/s=175k ckpt=run_012016.pt</pre>
+  <div class="table-wrap">
+    <table data-export-context="日志字段判读表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>字段</th>
+          <th>它主要告诉你什么</th>
+          <th>恢复后先和什么比</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>step</td>
+          <td>进度有没有接上</td>
+          <td>上一次保存点的 step</td>
+        </tr>
+        <tr>
+          <td>train loss</td>
+          <td>当前 batch 是否还在学习</td>
+          <td>中断前最近几条 loss</td>
+        </tr>
+        <tr>
+          <td>val loss</td>
+          <td>泛化有没有变坏</td>
+          <td>恢复前的验证曲线</td>
+        </tr>
+        <tr>
+          <td>lr</td>
+          <td>学习率是否处于正确阶段</td>
+          <td>scheduler 记录的当前阶段</td>
+        </tr>
+        <tr>
+          <td>grad norm</td>
+          <td>更新是否太猛</td>
+          <td>同一批次附近的更新幅度</td>
+        </tr>
+        <tr>
+          <td>tokens/s</td>
+          <td>训练速度是否稳定</td>
+          <td>同一硬件、同一 batch 设置下的速度</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>常见读法</h3>
+    <p>step 连续但 lr 回跳，先查 scheduler；loss 单点尖峰而下一步恢复，先查坏 batch 或数值问题；tokens/s 突然掉，先查数据加载和系统瓶颈。先把字段和症状一一对上，再下结论。</p>
+  </div>
+</section>
+
+<section id="restore-lab">
+  <div class="head">
+    <h2>恢复实战</h2>
+    <span class="tag">lab</span>
+  </div>
+  <p>把恢复训练当成一次有顺序的操作。下面这条小流程把权重、优化器、调度器和日志检查拆开，你可以照着排查一遍，看看哪里会先断。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" type="button" data-terminal-case="case-order">恢复顺序</button>
+      <button class="ghost" type="button" data-terminal-case="case-missing-optim">漏掉 optimizer</button>
+      <button class="ghost" type="button" data-terminal-case="case-missing-sched">漏掉 scheduler</button>
+    </div>
+    <pre class="terminal-output" data-export-context="恢复实战日志" data-export-lang="text" aria-live="polite">load model -> load optimizer -> load scheduler -> restore step/tokens -> short sanity check
+status: first log after resume should match the previous run's scale and lr phase</pre>
+    <template data-terminal-output="case-order">load model -> load optimizer -> load scheduler -> restore step/tokens -> short sanity check
+status: first log after resume should match the previous run's scale and lr phase</template>
+    <template data-terminal-output="case-missing-optim">load model -> skip optimizer -> load scheduler -> restore step/tokens -> short sanity check
+symptom: 前几步更新幅度突然变硬，loss 可能抖得更厉害
+first check: optimizer.state_dict() 是否丢了 moments</template>
+    <template data-terminal-output="case-missing-sched">load model -> load optimizer -> skip scheduler -> restore step/tokens -> short sanity check
+symptom: lr 回到错误阶段，恢复后的曲线不再连续
+first check: scheduler.state_dict() 和 current step 是否同一个位置</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="恢复检查链路表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>检查点</th>
+          <th>要看什么</th>
+          <th>它能抓住什么问题</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>第一条日志</td>
+          <td>step、lr、train loss、tokens_seen</td>
+          <td>判断是否真的接回同一条训练线</td>
+        </tr>
+        <tr>
+          <td>第一轮参数更新</td>
+          <td>grad norm、更新幅度、loss 变化方向</td>
+          <td>判断 optimizer state 有没有恢复完整</td>
+        </tr>
+        <tr>
+          <td>第一次验证</td>
+          <td>val loss 和保存前是否同量级</td>
+          <td>判断恢复后的模型是否仍在同一分布上</td>
+        </tr>
+        <tr>
+          <td>第一条 checkpoint 续写</td>
+          <td>文件名、step、tokens_seen 是否递增</td>
+          <td>判断保存间隔和续写逻辑有没有错位</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>为什么要先做短检查</h3>
+    <p>短检查的作用是把明显错位拦在第一分钟内。你不需要等到长跑后才知道 lr 回到了 warmup，或者 optimizer 还停在第 0 step。</p>
+  </div>
+</section>
+
+<section id="examples">
+  <div class="head">
+    <h2>例子与诊断</h2>
+    <span class="tag">cases</span>
+  </div>
+  <p>这部分把前面的概念压成几个可检查的例子。先算一个数，再看一条日志，最后看几种恢复失败的典型样子。你不需要把每个问题背下来，但要知道它们会从哪里露出破绽。</p>
+  <div class="math-block" data-export-context="有效 batch tokens" data-export-lang="math">
+    $$
+    tokens\_per\_update = G \times M \times T \times A
+    $$
+    <p><code>G</code> 是 GPU 数，<code>M</code> 是每张卡的 micro batch，<code>T</code> 是序列长度，<code>A</code> 是梯度累积步数。例子里如果 <code>G=4</code>、<code>M=8</code>、<code>T=1024</code>、<code>A=6</code>，一次参数更新对应 <code>196608</code> 个 token。横轴如果只写 step，就很容易看错训练速度。</p>
+  </div>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" type="button" data-terminal-case="case-good">正常恢复</button>
+      <button class="ghost" type="button" data-terminal-case="case-weights">只恢复权重</button>
+      <button class="ghost" type="button" data-terminal-case="case-lr">调度器错位</button>
+      <button class="ghost" type="button" data-terminal-case="case-batch">坏 batch 尖峰</button>
+    </div>
+    <pre class="terminal-output" data-export-context="恢复训练日志样例" data-export-lang="text" aria-live="polite">step=18000 train_loss=3.21 val_loss=3.44 lr=2.0e-4 grad_norm=0.81 tokens/s=186k
+ckpt=run_018000.pt status=continue-ok
+next-check: first log after resume should keep step and lr continuous</pre>
+    <template data-terminal-output="case-good">step=18000 train_loss=3.21 val_loss=3.44 lr=2.0e-4 grad_norm=0.81 tokens/s=186k
+ckpt=run_018000.pt status=continue-ok
+next-check: first log after resume should keep step and lr continuous</template>
+    <template data-terminal-output="case-weights">restore=weights-only
+step=18001 train_loss=4.96 val_loss=3.47 lr=2.0e-4 grad_norm=1.92
+symptom: 参数在第 18000 step，但 optimizer state 回到第 0 step 的味道
+first check: optimizer.state_dict() 是否真的加载</template>
+    <template data-terminal-output="case-lr">restore=weights+optimizer
+step=18001 train_loss=3.28 val_loss=3.51 lr=8.0e-5 grad_norm=0.84
+symptom: 学习率跳回 warmup 或错误衰减点，曲线不再接续
+first check: scheduler.state_dict() 和 step 是否对齐</template>
+    <template data-terminal-output="case-batch">step=18000 train_loss=3.18 -> 8.74 -> 3.25
+val_loss=3.45
+symptom: 单点尖峰后立刻恢复
+first check: 数据 shard、坏样本、重复 token、数值溢出、grad norm</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="异常诊断对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>现象</th>
+          <th>更像什么</th>
+          <th>先查什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>训练 loss 单点尖峰，下一步回去</td>
+          <td>坏 batch 或偶发数值问题</td>
+          <td>batch id、数据 shard、重复 token、NaN/Inf、grad norm</td>
+        </tr>
+        <tr>
+          <td>训练 loss 下降，验证 loss 上升</td>
+          <td>过拟合、验证集分布变化、评估代码有偏差</td>
+          <td>验证集、数据切分、去重、评估口径</td>
+        </tr>
+        <tr>
+          <td>恢复后前几步抖得更厉害</td>
+          <td>optimizer state 或 scheduler state 丢了</td>
+          <td>state_dict 是否完整加载</td>
+        </tr>
+        <tr>
+          <td>日志里 step 在走，参数像没动</td>
+          <td>更新链路有断点</td>
+          <td><code>backward</code> 是否写了梯度，<code>optimizer.step()</code> 是否真的执行</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见误区</h2>
+    <span class="tag">debug</span>
+  </div>
+  <p>这页最容易出的错，常常是把状态链路看短了。训练能跑不代表训练对，日志看着正常也不代表恢复正确。</p>
+  <div class="table-wrap">
+    <table data-export-context="常见误区与首查点" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>误区</th>
+          <th>实际问题</th>
+          <th>先查什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>忘记清梯度</td>
+          <td>旧梯度跨 step 混进去，更新越来越脏</td>
+          <td><code>zero_grad</code> 是否在前面执行</td>
+        </tr>
+        <tr>
+          <td>把 micro-step 当 global step</td>
+          <td>梯度累积时，真正的参数更新次数被数错</td>
+          <td>日志横轴和更新次数是否同一口径</td>
+        </tr>
+        <tr>
+          <td>只保存 best model</td>
+          <td>预训练里一旦中断，可能找不到可以续跑的最近状态</td>
+          <td>是否保留 last checkpoint</td>
+        </tr>
+        <tr>
+          <td>只看训练 loss</td>
+          <td>看不出过拟合、数据泄漏或评估偏差</td>
+          <td>验证 loss 和验证频率</td>
+        </tr>
+        <tr>
+          <td>恢复后不检查学习率</td>
+          <td>scheduler 错位会让曲线假装正常</td>
+          <td>第一条恢复日志里的 lr 是否连续</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>这里先别追的东西</h3>
+    <p>先别把混合精度 scaler、ZeRO、FSDP、通信重排和 kernel 级优化一股脑塞进来。那些都是真的问题，但它们属于后面那条系统线，不属于这页的主线。</p>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>下一步</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <p>如果你已经能把一次 step 说清楚，就可以去下一页看 GPU 系统与性能瓶颈了。下一页会接着这页的日志和 checkpoint 习惯，继续看吞吐、显存和算子；在那之前，先把 <code>optimizer state</code>、<code>scheduler state</code>、<code>step</code> 和 <code>tokens_seen</code> 认稳。</p>
+  <div class="table-wrap">
+    <table data-export-context="课程衔接台账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>本页已经学会的东西</th>
+          <th>下一页会接什么</th>
+          <th>先别提前钻进去的内容</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>训练 step 的顺序</td>
+          <td>吞吐、step time、数据加载时间</td>
+          <td>kernel 细节、profiling API、通信瓶颈</td>
+        </tr>
+        <tr>
+          <td>checkpoint 和恢复</td>
+          <td>OOM、显存压力、混合精度状态</td>
+          <td>分布式并行策略和参数切分</td>
+        </tr>
+        <tr>
+          <td>日志字段</td>
+          <td>系统性能日志和规模比较</td>
+          <td>缩放律推导和更大规模训练配方</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>带着什么走</h3>
+    <p>带着一条能解释恢复行为的训练记录往前走。只要日志里能看见 step、lr、loss、tokens/s 和 checkpoint 路径，后面的系统页就有东西可对照；如果这些字段都不稳，先回头补这页。</p>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、训练 step 的顺序</h3>
+      <p>先区分清楚反传、更新和记录分别在做什么。</p>
+    </div>
+    <div class="quick-review">
+      <b>先抓顺序</b>
+      <span><code>zero_grad → forward → loss → backward → step → log → checkpoint</code></span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、训练 step 的顺序" data-title="Q1. backward 在做什么" data-answer="B" data-explain="loss.backward() 只负责把梯度写到参数的 .grad 里，不会直接改参数。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">backward</span></div>
+      <h3>Q1. <code>loss.backward()</code> 的作用是什么？</h3>
+      <label><input type="radio" name="q1" value="A">A. 直接把模型参数更新一遍。</label>
+      <label><input type="radio" name="q1" value="B">B. 计算梯度并写入参数的 <code>.grad</code>。</label>
+      <label><input type="radio" name="q1" value="C">C. 立刻保存 checkpoint。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、训练 step 的顺序" data-title="Q2. 梯度累积时 step 的判断">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">accumulation</span></div>
+      <h3>Q2. 梯度累积时，每一个 micro-step 都应该调用一次 <code>optimizer.step()</code>。</h3>
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q3" data-group="一、训练 step 的顺序" data-title="Q3. 先写哪个函数">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">order</span></div>
+      <h3>Q3. 每个更新周期开始前，应该先调用哪个函数来清掉上一轮梯度？</h3>
+      <input type="text" name="q3" data-answer="zero_grad;zero grad" placeholder="填函数名">
+      <p class="hint">只写函数名，不要把整段代码抄进来。</p>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、优化器与学习率</h3>
+      <p>确认你知道为什么更新幅度会变。</p>
+    </div>
+    <div class="quick-review">
+      <b>先抓状态</b>
+      <span><code>AdamW</code> 记住的是梯度的近期统计，不是只记参数。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q4" data-group="二、优化器与学习率" data-title="Q4. warmup 的作用" data-answer="B" data-explain="warmup 让早期步幅慢一点，避免一上来更新太猛。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">warmup</span></div>
+      <h3>Q4. warmup 最主要解决什么问题？</h3>
+      <label><input type="radio" name="q4" value="A">A. 让训练集变得更大。</label>
+      <label><input type="radio" name="q4" value="B">B. 让早期更新不要太猛。</label>
+      <label><input type="radio" name="q4" value="C">C. 让 checkpoint 文件更小。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q5" data-group="二、优化器与学习率" data-title="Q5. 学习率过大症状" data-answer="C" data-explain="过大的学习率最常见的症状是 loss 震荡、发散，甚至出现 NaN。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">lr</span></div>
+      <h3>Q5. 学习率过大时，下面哪组症状最像？</h3>
+      <label><input type="radio" name="q5" value="A">A. loss 平稳下降，grad norm 也平稳。</label>
+      <label><input type="radio" name="q5" value="B">B. 只看到 tokens/s 变快，loss 没变化。</label>
+      <label><input type="radio" name="q5" value="C">C. loss 震荡、发散或出现 NaN。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q6" data-group="二、优化器与学习率" data-title="Q6. batch 变大以后先看什么">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">calibration</span></div>
+      <h3>Q6. 有效 batch 翻倍后，如果前 2000 step 的训练变得更不稳，你先检查哪两个字段或状态？</h3>
+      <div class="mini-fields">
+        <label><span class="field-label">字段 1</span><input type="text" name="q6_a" data-answer="learning rate;lr" placeholder="例如：learning rate"></label>
+        <label><span class="field-label">字段 2</span><input type="text" name="q6_b" data-answer="warmup;warmup steps" placeholder="例如：warmup"></label>
+      </div>
+      <p class="hint">也可以写梯度裁剪、grad norm、loss scale，但这两个字段先查最直接。</p>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、日志、checkpoint 与恢复</h3>
+      <p>确认你能把训练现场保存完整。</p>
+    </div>
+    <div class="quick-review">
+      <b>先抓恢复</b>
+      <span>权重是结果，<code>optimizer state</code> 和 <code>scheduler state</code> 才是同一次训练的轨迹。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q7" data-group="三、日志、checkpoint 与恢复" data-title="Q7. checkpoint 最少要有哪两项">
+      <div class="q-meta"><span class="pill">mini fields</span><span class="pill">restore</span></div>
+      <h3>Q7. 恢复一条训练轨迹时，先检查下面两个状态是否真的被加载了。</h3>
+      <div class="mini-fields">
+        <label><span class="field-label">状态 1</span><input type="text" name="q7_a" data-answer="optimizer state;optim state" placeholder="例如：optimizer state"></label>
+        <label><span class="field-label">状态 2</span><input type="text" name="q7_b" data-answer="scheduler state;lr scheduler state" placeholder="例如：scheduler state"></label>
+      </div>
+      <p class="hint">写出状态名，不要写保存文件名。</p>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q8" data-group="三、日志、checkpoint 与恢复" data-title="Q8. 稳定性日志字段" data-answer="B" data-explain="稳定性日志至少要同时看到 step、train loss、val loss、lr、grad norm、tokens/s 和 checkpoint 路径。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">logging</span></div>
+      <h3>Q8. 下列哪组日志最适合排查训练是否稳定？</h3>
+      <label><input type="radio" name="q8" value="A">A. 只记录最终权重文件名。</label>
+      <label><input type="radio" name="q8" value="B">B. step、train loss、val loss、lr、grad norm、tokens/s、checkpoint 路径。</label>
+      <label><input type="radio" name="q8" value="C">C. 只记录训练开始时间。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q9" data-group="三、日志、checkpoint 与恢复" data-title="Q9. 原子保存判断" data-answer="对" data-explain="原子保存通常是先写临时文件，再替换正式文件，能减少半写入损坏。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">save</span></div>
+      <h3>Q9. 原子保存可以降低 checkpoint 写到一半失败导致文件损坏的风险。</h3>
+      <label><input type="radio" name="q9" value="对">对</label>
+      <label><input type="radio" name="q9" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q10" data-group="三、日志、checkpoint 与恢复" data-title="Q10. 恢复后前 5 分钟检查清单">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">recovery</span></div>
+      <h3>Q10. 写一份“恢复训练后前 5 分钟”的检查清单。</h3>
+      <p class="solve-note">至少写 5 项，并说明每一项能发现什么问题。可以从 <code>step</code>、<code>lr</code>、<code>tokens_seen</code>、<code>loss</code>、<code>grad norm</code>、checkpoint 路径这几项入手。</p>
+      <textarea name="q10" placeholder="例如：确认 step 连续、lr 连续、loss 没有突然跳、tokens_seen 没回退、第一条日志和 checkpoint 路径对得上。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要覆盖至少 5 个检查点：step 是否接上、lr 是否连续、train loss 是否和中断前同量级、tokens_seen 是否没有回退、checkpoint 路径和保存间隔是否一致、grad norm 是否异常、验证间隔是否正常。写出每项能发现什么问题，说明你知道恢复不是“加载完就算结束”。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、诊断与迁移</h3>
+      <p>把日志和 checkpoint 放回真实故障里看。</p>
+    </div>
+    <div class="quick-review">
+      <b>先看症状</b>
+      <span>单点尖峰、持续上升、恢复抖动，各自对应的首查点不一样。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q11" data-group="四、诊断与迁移" data-title="Q11. 训练 loss 和验证 loss 分叉" data-answer="B" data-explain="训练 loss 下降而验证 loss 上升，最常见的方向是过拟合、验证集分布变化或评估口径有偏差。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">generalization</span></div>
+      <h3>Q11. 训练 loss 持续下降，但验证 loss 开始上升。你更先怀疑什么？</h3>
+      <label><input type="radio" name="q11" value="A">A. 模型一定完全没学会。</label>
+      <label><input type="radio" name="q11" value="B">B. 过拟合、验证集分布变化或评估口径有偏差。</label>
+      <label><input type="radio" name="q11" value="C">C. checkpoint 保存得太频繁。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q12" data-group="四、诊断与迁移" data-title="Q12. 单点 loss 尖峰" data-answer="A" data-explain="单点尖峰又立刻恢复，更像坏 batch、异常 token 或偶发数值问题，而不是长期学习率过大。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">spike</span></div>
+      <h3>Q12. 训练 loss 单点从 3.1 跳到 9.0，下一步又回到 3.2。你先怀疑什么？</h3>
+      <label><input type="radio" name="q12" value="A">A. 坏 batch、异常样本或偶发数值问题。</label>
+      <label><input type="radio" name="q12" value="B">B. 一定是模型结构写错了。</label>
+      <label><input type="radio" name="q12" value="C">C. 一定是学习率计划没开 warmup。</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q13" data-group="四、诊断与迁移" data-title="Q13. checkpoint 策略设计">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">policy</span></div>
+      <h3>Q13. 设计一个小模型预训练的 checkpoint 策略。</h3>
+      <p class="solve-note">写清保存间隔、保留策略、best/last 的区别、失败恢复策略，以及恢复后要做的一个短检查。</p>
+      <textarea name="q13" placeholder="例如：每 N step 保存 last，按验证 loss 保留 best，始终保留最近 K 个，原子保存，恢复后先打印 step/lr/loss 做 sanity check。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案至少要包含：固定间隔保存 last、按验证 loss 保存 best、保留最近 K 个 checkpoint、原子保存、恢复后先做短 sanity check。更好的答案会说明什么时候该优先保留 last、为什么 best 不能替代 last，以及恢复后为什么必须先看第一条日志再继续长跑。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li>
+    <b>Stanford CS336: Language Modeling from Scratch (Spring 2025)</b>
+    <p>访问日期：2026-06-21。用来确认这门课的主线顺序：语言建模、Tokenizer、Transformer、训练闭环，再到系统与评估。这里把训练循环放在 Transformer 之后、GPU 系统之前，是按这条顺序写的。</p>
+  </li>
+  <li>
+    <b>PyTorch documentation: <code>torch.optim.AdamW</code></b>
+    <p>访问日期：2026-06-21。用来核对 <code>AdamW</code> 会维护自己的状态，恢复训练时不能只看模型权重。它也支持我们把 <code>state_dict()</code> 和 <code>load_state_dict()</code> 作为 checkpoint 语义的一部分来讲。</p>
+  </li>
+  <li>
+    <b>PyTorch documentation: <code>Optimizer.state_dict()</code> 和 <code>load_state_dict()</code></b>
+    <p>访问日期：2026-06-21。用来说明优化器状态、调度器状态和加载顺序的重要性。恢复训练时，权重先回位，随后优化器和调度器状态要一起对齐。</p>
+  </li>
+  <li>
+    <b>karpathy/llm.c</b>
+    <p>访问日期：2026-06-21。用来把“训练循环”落到一个公开、可读的训练实现上。它的 README 和 <code>train_gpt2.py</code> 都强调训练过程、模型权重和恢复材料是公开训练的一部分。</p>
+  </li>
+  <li>
+    <b>Ai2 OLMo / OLMo 2 materials</b>
+    <p>访问日期：2026-06-21。用来对齐 fully open 训练应该公开到什么程度：数据、代码、权重、训练配方、检查点、日志和评估都要可追踪。这里用它来强调 checkpoint 和可恢复性的边界。</p>
+  </li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

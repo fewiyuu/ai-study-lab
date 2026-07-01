@@ -1,0 +1,917 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>数据配方：来源比例与阶段</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="预训练数据工程与数据配方" data-unit="单元 05">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>预训练数据工程与数据配方</strong>
+        <span>单元 05</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>主线图</a>
+        <a href="#terms"><span class="dot"></span>术语与误区</a>
+        <a href="#source-map"><span class="dot"></span>来源与能力</a>
+        <a href="#mix"><span class="dot"></span>比例与权重</a>
+        <a href="#recipe"><span class="dot"></span>配方文件</a>
+        <a href="#lab"><span class="dot"></span>失败实验</a>
+        <a href="#stages"><span class="dot"></span>阶段与节奏</a>
+        <a href="#trace"><span class="dot"></span>配方追踪</a>
+        <a href="#walkthrough"><span class="dot"></span>完整走读</a>
+        <a href="#cases"><span class="dot"></span>案例推演</a>
+        <a href="#boundary"><span class="dot"></span>边界说明</a>
+        <a href="#bridge"><span class="dot"></span>怎么接到下一页</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">本页承接过滤、去重和泄漏控制，下一步就进入小模型消融。先把来源、比例、阶段和验证放进同一个闭环，再谈配方好坏。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">数据混合 / 阶段配方</div>
+          <h1>数据配方：来源比例与阶段</h1>
+          <p>这一页接在过滤、去重和泄漏控制后面，回答的是另一个更难的问题：当你已经有一批“能用”的数据时，应该怎么分来源、怎么定比例、什么时候换配方。这里先不追求万能答案，只追求一份能解释、能计算、能验证的数据配方。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../04_去重去污染与泄漏控制/学习页.html">上一单元</a><a href="../06_小模型消融与数据验证/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完这一页，你应该能做什么</h3>
+          <ul>
+  <li>你能把一个数据池说清楚：它贡献什么能力、有哪些噪声、为什么要进配方。</li>
+  <li>你能区分库存占比、采样权重和训练 token 占比，不再把三者混成一张表。</li>
+  <li>你能写出一个分阶段配方，并说明要用什么评测或消融来确认它是否真的有效。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">deep unit</span>
+  </div>
+  <div class="grid3">
+    <div class="box">
+      <h3>先分清对象</h3>
+      <p>看到网页、代码、论文、百科、论坛、合成文本时，能判断它们分别给模型补什么能力，不会只按文件类型分桶。</p>
+    </div>
+    <div class="box">
+      <h3>再定权重</h3>
+      <p>能把库存规模、采样权重和训练 token 占比分开说，知道为什么小而重要的数据池可以被过采样。</p>
+    </div>
+    <div class="box">
+      <h3>最后看阶段</h3>
+      <p>能解释为什么同一套来源在主体预训练、质量增强、退火收尾时要换配方，也能说出对应的验证方式。</p>
+    </div>
+  </div>
+</section>
+
+<section id="map">
+  <div class="head">
+    <h2>主线图</h2>
+    <span class="tag">recipe loop</span>
+  </div>
+  <div class="map">
+    <span class="node">来源池</span>
+    <span class="arrow">→</span>
+    <span class="node">能力贡献</span>
+    <span class="arrow">→</span>
+    <span class="node">质量权重</span>
+    <span class="arrow">→</span>
+    <span class="node">阶段系数</span>
+    <span class="arrow">→</span>
+    <span class="node">评测反馈</span>
+  </div>
+  <p>数据配方不是一张比例表，而是一个闭环。先按能力贡献把来源池分好，再把质量、目标和阶段写成权重，最后用评测和消融去检查这份配方到底在改善什么、牺牲了什么。</p>
+  <div class="box info">
+    <h3>先记住这一句</h3>
+    <p>库存多，不等于训练多；训练多，也不等于一定更好。真正要看的，是某个来源在当前阶段为目标能力提供了多少有效 token，以及它把别的能力挤掉了多少。</p>
+  </div>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语与误区</h2>
+    <span class="tag">terms</span>
+  </div>
+  <table class="metric-table" data-export-context="数据配方术语表" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>术语</th>
+        <th>直觉</th>
+        <th>精确定义</th>
+        <th>常见误解</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>来源池</td>
+        <td>一个可单独抽样的数据来源。</td>
+        <td>如网页、代码、论文、百科、论坛、合成文本，每个池都记录规模、许可、过滤和版本。</td>
+        <td>只记网站名，不记清洗和分桶规则。</td>
+      </tr>
+      <tr>
+        <td>采样权重</td>
+        <td>抽得更频繁还是更少。</td>
+        <td>对训练采样器的偏好设置，可能高于或低于库存占比。</td>
+        <td>把权重当成来源本身的“质量事实”。</td>
+      </tr>
+      <tr>
+        <td>训练占比</td>
+        <td>训练时真正消耗的 token 比例。</td>
+        <td>模型实际看到的 token 分布，受库存、权重和阶段系数共同影响。</td>
+        <td>把硬盘里有多少数据直接当成训练占比。</td>
+      </tr>
+      <tr>
+        <td>阶段系数</td>
+        <td>某个阶段是否更偏向某类来源。</td>
+        <td>按训练阶段对来源施加的额外权重，如主体、增强、退火。</td>
+        <td>以为全程一套配方最稳。实际常常要随阶段调整。</td>
+      </tr>
+      <tr>
+        <td>消融</td>
+        <td>看改动到底带来什么变化。</td>
+        <td>在固定模型、预算和评测下，只改变来源、比例或阶段，观察结果。</td>
+        <td>把最终大模型分数直接归因给某个小改动。</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="source-map">
+  <div class="head">
+    <h2>来源与能力</h2>
+    <span class="tag">source map</span>
+  </div>
+  <p>配方先从“来源能教什么”开始，而不是从“这个来源是不是干净”开始。干净只是门槛，能力贡献才是排位的依据。一个来源池如果只提供自然语言流畅度，那它就不该占满训练预算；如果它能带来代码、数学、结构化论证或稳定事实，那它就值得在某些阶段被提高权重。</p>
+  <div class="table-wrap">
+    <table class="metric-table source-table" data-export-context="来源能力映射表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>来源池</th>
+          <th>主要能力贡献</th>
+          <th>常见风险</th>
+          <th>配方处理</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>通用网页</td>
+          <td>长尾知识、日常表达、实体关系、跨域连通。</td>
+          <td>模板页、SEO 垃圾、重复、语言混杂。</td>
+          <td>作为主体来源，但要靠过滤、去重和污染控制托底。</td>
+        </tr>
+        <tr>
+          <td>代码</td>
+          <td>语法、API 使用、程序结构、符号推理。</td>
+          <td>许可证复杂、自动生成代码、密钥泄漏、仓库重复。</td>
+          <td>按语言和仓库质量分层，常在代码能力阶段提高占比。</td>
+        </tr>
+        <tr>
+          <td>论文与教材</td>
+          <td>严谨概念、长链论证、数学表达、术语精度。</td>
+          <td>PDF 抽取噪声、版权边界、排版破碎。</td>
+          <td>更适合质量增强和领域阶段，不宜替代通用覆盖。</td>
+        </tr>
+        <tr>
+          <td>百科与参考资料</td>
+          <td>结构化事实、定义、实体描述。</td>
+          <td>风格单一、覆盖边界固定、时间点偏旧。</td>
+          <td>适合补稳定知识，但不能代替开放网页。</td>
+        </tr>
+        <tr>
+          <td>论坛与问答</td>
+          <td>问题分解、口语表达、排错路径、多轮上下文。</td>
+          <td>偏见、错误答案、隐私内容、攻击性内容。</td>
+          <td>适合补交互和问题解决能力，但要小心污染和偏差。</td>
+        </tr>
+        <tr>
+          <td>合成文本</td>
+          <td>稀缺格式补齐、结构化推理样式、可控任务模板。</td>
+          <td>同质化、回声放大、模式塌缩。</td>
+          <td>更适合特定阶段或特定任务，不宜当作默认主体来源。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>来源表至少要写清什么</h3>
+    <p>每个来源池都要能回到同一张记录：来源名称、采集时间、许可边界、语言、文档数、token 数、过滤规则、去重版本、质量分数、污染检查结果、采样权重。缺了这些字段，后面就很难解释模型为什么变了。</p>
+  </div>
+</section>
+
+<section id="mix">
+  <div class="head">
+    <h2>比例与权重</h2>
+    <span class="tag">weights</span>
+  </div>
+  <div class="grid2">
+    <div>
+      <h3>比例先别写成库存表</h3>
+      <p>库存占比只说明某个池在硬盘上有多少 token。训练占比才说明模型到底从这个池里看了多少 token。小而重要的池可以过采样，大而低效的池可以降采样。只要训练目标不同，比例就不该完全跟库存走。</p>
+      <p>一个常见错误是把“网页 80%、代码 10%、论文 10%”当成完整答案，却没有说这些比例按文档、样本还是 token 算，也没有说能不能重复抽样。这样的表格看起来整齐，实际上不能执行。</p>
+      <div class="math-block" data-export-context="训练占比公式" data-export-lang="math">
+        $$
+        p_i = \frac{n_i \cdot w_i \cdot s_i}{\sum_j n_j \cdot w_j \cdot s_j}
+        $$
+        <p>这里的 $n_i$ 是库存 token，$w_i$ 是来源权重，$s_i$ 是阶段系数。这个式子不是唯一方案，但它把“有多少”“想抽多少”“当前阶段要不要强化”三件事拆开了。</p>
+      </div>
+    </div>
+    <div class="box info">
+      <h3>一个判断句</h3>
+      <p>如果一份配方不能回答“为什么这个来源要抽这么多、抽多了会牺牲什么、如何验证收益”，它还只是清单，不是可执行的工程配方。</p>
+    </div>
+  </div>
+  <div class="viz-panel">
+    <h3>一个简化配方的训练占比</h3>
+    <div class="bar-list" aria-label="简化数据配方占比">
+      <div class="bar-row"><span>网页</span><div class="bar-track"><div class="bar-fill" style="width:52%"></div></div><strong>52%</strong></div>
+      <div class="bar-row"><span>代码</span><div class="bar-track"><div class="bar-fill" style="width:16%"></div></div><strong>16%</strong></div>
+      <div class="bar-row"><span>论文教材</span><div class="bar-track"><div class="bar-fill" style="width:14%"></div></div><strong>14%</strong></div>
+      <div class="bar-row"><span>百科参考</span><div class="bar-track"><div class="bar-fill" style="width:10%"></div></div><strong>10%</strong></div>
+      <div class="bar-row"><span>论坛问答</span><div class="bar-track"><div class="bar-fill" style="width:8%"></div></div><strong>8%</strong></div>
+    </div>
+    <p class="hint">这张图表达的是训练 token 占比，不是原始库存。代码库存很小但训练占比高，说明它被过采样了。</p>
+  </div>
+  <div class="viz-panel">
+    <h3>来源权重如何改变占比</h3>
+    <div class="calc">
+      <label>网页权重<input type="number" id="wWeb" min="0" step="0.1" value="0.7" oninput="updateMixCalc()"></label>
+      <label>代码权重<input type="number" id="wCode" min="0" step="0.1" value="2.0" oninput="updateMixCalc()"></label>
+      <label>论文教材权重<input type="number" id="wPaper" min="0" step="0.1" value="1.6" oninput="updateMixCalc()"></label>
+      <label>计算结果<input type="text" id="mixResult" readonly></label>
+    </div>
+    <p class="hint">固定库存：网页 900B token，代码 80B token，论文教材 120B token。这里的结果会随着权重变化而变化，目的是把“质量权重是决策”这件事看得更直观。</p>
+  </div>
+</section>
+
+<section id="recipe">
+  <div class="head">
+    <h2>把目标写成配方</h2>
+    <span class="tag">recipe</span>
+  </div>
+  <p>一份能执行的数据配方，通常不是“网页多一点、代码多一点”这种口语句，而是一份能被平台读懂的配置。你至少要写清楚来源池、权重、阶段、以及每一段的回退条件。下面这个简化配置只演示结构，不声称它对所有模型都最优。</p>
+  <div class="codebar"><span>简化配方示例</span><button class="copy" data-copy="recipe-config">复制</button></div>
+  <pre id="recipe-config" data-export-context="简化配方配置" data-export-lang="yaml"><code class="language-yaml">target: technical-doc-understanding
+tokens_total: 100B
+sources:
+  web:
+    inventory_tokens: 900B
+    base_weight: 0.7
+    stage_weights: [1.0, 0.8, 0.5]
+  code:
+    inventory_tokens: 80B
+    base_weight: 2.0
+    stage_weights: [0.8, 1.2, 1.0]
+  papers_books:
+    inventory_tokens: 120B
+    base_weight: 1.6
+    stage_weights: [0.6, 1.2, 1.5]
+  forums:
+    inventory_tokens: 40B
+    base_weight: 0.8
+    stage_weights: [0.7, 0.9, 0.6]
+decision:
+  primary_metric: "task_cluster_score"
+  guardrails:
+    - "no benchmark contamination"
+    - "monitor language regression"
+    - "recheck stage-3 overfit"
+</code></pre>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1"><code>inventory_tokens</code><span>库存 token</span></button>
+      <button class="trace-line" data-trace-step="step-2"><code>base_weight</code><span>来源偏好</span></button>
+      <button class="trace-line" data-trace-step="step-3"><code>stage_weights</code><span>阶段系数</span></button>
+      <button class="trace-line" data-trace-step="step-4"><code>sampler output</code><span>训练批次</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1"><b>库存 token</b><span>900B / 80B / 120B / 40B</span><p>先看池里有什么，再决定配方能不能撑住目标 token 预算。</p></div>
+      <div class="tensor-card" data-trace-target="step-2"><b>来源偏好</b><span>0.7 / 2.0 / 1.6 / 0.8</span><p>权重不是质量本身，而是你希望训练采样器多看谁。</p></div>
+      <div class="tensor-card" data-trace-target="step-3"><b>阶段系数</b><span>[1.0,0.8,0.5] 等</span><p>同一来源在不同阶段可以被放大、压低，或者保持。</p></div>
+      <div class="tensor-card" data-trace-target="step-4"><b>训练批次</b><span>按阶段生成 batch</span><p>最后落到 batch 的不是“库存表”，而是“某阶段的实际抽样结果”。</p></div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="metric-table" data-export-context="配方对象读写表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>失效症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>来源池条目</td>
+          <td>规模、许可、语言、过滤日志</td>
+          <td>是否进入配方、进入哪一阶段</td>
+          <td>配方里有名字，训练器却找不到可用池</td>
+        </tr>
+        <tr>
+          <td>权重记录</td>
+          <td>目标能力、评测方向、风险边界</td>
+          <td>基础权重和阶段权重</td>
+          <td>权重填了，但解释不了为什么这么填</td>
+        </tr>
+        <tr>
+          <td>阶段计划</td>
+          <td>token 预算、学习率、评测节奏</td>
+          <td>阶段顺序和切换条件</td>
+          <td>同一配方拖到最后，后段开始偏科或噪声变大</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="lab">
+  <div class="head">
+    <h2>失败小实验</h2>
+    <span class="tag">terminal lab</span>
+  </div>
+  <p>下面这个终端不是在跑真实训练，而是在模拟训练平台对配方做审查时会出现的三个常见告警。看输出时，先找它说的是“单位错了、阶段错了，还是记录不够”。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1">单位混了</button>
+      <button class="ghost" data-terminal-case="case-2">阶段没切</button>
+      <button class="ghost" data-terminal-case="case-3">记录太少</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">[audit] case-1
+ERROR mix.unit is ambiguous: inventory share was written where training token share is required.
+Hint: convert the table to token-based proportions before resubmitting.</pre>
+    <template data-terminal-output="case-1">[audit] case-1
+ERROR mix.unit is ambiguous: inventory share was written where training token share is required.
+Hint: convert the table to token-based proportions before resubmitting.</template>
+    <template data-terminal-output="case-2">[audit] case-2
+WARN stage schedule missing for the final 10%.
+Hint: write the late-stage weights explicitly, or the sampler will keep using the middle-stage mix.</template>
+    <template data-terminal-output="case-3">[audit] case-3
+ERROR recipe log incomplete: source version, filter rule, and contamination check are absent.
+Hint: the recipe cannot be audited if the source state is not recorded.</template>
+  </div>
+  <div class="box info">
+    <h3>这个实验在诊断什么</h3>
+    <p>它诊断的不是模型能力，而是配方本身的可执行性。单位不清，训练器会读错；阶段不写，后段会默认沿用旧配方；记录太少，结果即使变了也说不清是来源、权重还是阶段造成的。</p>
+  </div>
+</section>
+
+<section id="stages">
+  <div class="head">
+    <h2>阶段与节奏</h2>
+    <span class="tag">stages</span>
+  </div>
+  <div class="grid3">
+    <div class="box">
+      <h3>主体预训练</h3>
+      <p>这一段的目标是广覆盖和稳定学习。通用网页通常是主体，但还要混入代码、百科、书籍和论文，避免模型只学到一种语气或一种结构。</p>
+    </div>
+    <div class="box">
+      <h3>质量增强</h3>
+      <p>当模型已经学到基本语言和事实分布后，可以把高质量、长文档、专业材料或人工筛选数据的权重抬高，让后段 token 更集中地塑造能力。</p>
+    </div>
+    <div class="box">
+      <h3>退火与收尾</h3>
+      <p>训练后段常会同时降低学习率和噪声来源，把注意力放回更干净、更目标相关的数据上。这里不是补规模，而是减少最后一段对表示和输出风格的扰动。</p>
+    </div>
+  </div>
+  <table class="metric-table" data-export-context="阶段配方表" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>阶段</th>
+        <th>配方重点</th>
+        <th>可提高的来源</th>
+        <th>要监控的风险</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>0-60%</td>
+        <td>覆盖、稳定、低重复</td>
+        <td>通用网页、百科、代码、公开参考资料</td>
+        <td>低质网页占比过高、语言失衡、重复样本浪费预算</td>
+      </tr>
+      <tr>
+        <td>60-90%</td>
+        <td>能力塑形、专业补强</td>
+        <td>代码、教材、论文、领域文档</td>
+        <td>通用能力下滑、过度偏科、旧知识被挤掉</td>
+      </tr>
+      <tr>
+        <td>90-100%</td>
+        <td>收尾、收敛、去噪</td>
+        <td>更干净的数据、目标领域材料、短而稳定的高质量池</td>
+        <td>收尾阶段过度放大某种风格，或者误把收尾当成补规模</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="trace">
+  <div class="head">
+    <h2>配方追踪</h2>
+    <span class="tag">trace</span>
+  </div>
+  <p>配方最容易出错的地方，不是写错一个百分比，而是写清楚了比例，却没写清楚这份比例在不同阶段会怎么变。下面这张表把“读什么、写什么、失效时看什么症状”放在一起，方便你回查。</p>
+  <div class="table-wrap">
+    <table class="metric-table" data-export-context="配方状态追踪表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>环节</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>错了会看到什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>来源盘点</td>
+          <td>数据池、许可、规模、语言、过滤日志</td>
+          <td>来源清单、版本号、可用池</td>
+          <td>配方表看起来完整，实际却找不到可复现的池</td>
+        </tr>
+        <tr>
+          <td>权重分配</td>
+          <td>目标能力、池大小、质量分桶、重复率</td>
+          <td>来源权重、过采样倍数、阶段系数</td>
+          <td>库存很大但训练里几乎没看到，或者小池被抽得过头</td>
+        </tr>
+        <tr>
+          <td>阶段切换</td>
+          <td>当前 token 预算、任务目标、评测趋势</td>
+          <td>阶段配方、学习率、来源重排</td>
+          <td>同一配方硬拖到最后，后段信号变得越来越弱</td>
+        </tr>
+        <tr>
+          <td>结果回看</td>
+          <td>统一评测、消融结果、污染和泄漏检查</td>
+          <td>保留、回退、重采样、进入下一轮实验</td>
+          <td>平均分没变，但某个任务簇明显退化，却没人追问为什么</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box soft">
+    <h3>从一份配方回到执行层</h3>
+    <p>如果你在训练平台上维护配方，最少要能回答这四件事：哪个来源池被读到了、该池的权重是多少、这一阶段是否改过系数、结果变坏时应该回看哪张表。这个顺序比记住一个漂亮比例更重要。</p>
+  </div>
+</section>
+
+<section id="walkthrough">
+  <div class="head">
+    <h2>完整走一遍</h2>
+    <span class="tag">walkthrough</span>
+  </div>
+  <p>把前面的概念放回一个具体任务里，最容易看出它们到底是不是一回事。下面这份目标是“做一个技术文档理解模型”，总预算 100B token。它不需要极强的代码生成，但需要稳定的术语理解、结构化表达和一定的问题解决能力。这个目标很普通，所以最适合拿来练配方：它逼你同时考虑广覆盖、专业材料和阶段切换，而不是只盯着某一种来源。</p>
+  <div class="grid2">
+    <div class="box">
+      <h3>第一步：先写来源，不先写百分比</h3>
+      <p>很多人一上来就写网页 50%、代码 20%、教材 20%、论坛 10%。这个顺序反了。正确做法是先列出你手里有哪些来源池：通用网页、代码仓库、论文教材、百科参考、论坛问答。然后问每个池能补什么能力。网页补通用覆盖，代码补符号推理，论文教材补长链论证，百科补稳定事实，论坛补真实问题和对话风格。你先知道每个池的角色，才知道它应该在配方里占多重。</p>
+      <p>如果某个池只会重复同一种表达，却不能补目标能力，就不要因为它“看起来很多”而给太高占比。配方不是库存竞赛。一个来源池只有在它能改变模型行为时，才有资格在表里留下位置。</p>
+    </div>
+    <div class="box">
+      <h3>第二步：把角色写成权重</h3>
+      <p>假设你得到一个初版：网页 0.7、代码 2.0、论文教材 1.6、百科 1.0、论坛 0.8。这个版本的意思不是“代码最干净”，而是“在当前目标下，代码对能力贡献更高”。再加上阶段系数，网页在早段可以是 1.0，到了后段可能降到 0.5；论文教材在后段可能上升到 1.5，因为你要把前面学到的通用表达收束到更稳定的知识结构里。</p>
+      <p>这一层最容易犯的错，是把权重写成道德判断，好像“代码就是高级，网页就是低级”。不是这样。权重是对训练资源的分配决策，不是对数据身价的评语。它只对当前目标和当前阶段负责。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="metric-table" data-export-context="完整配方走读表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>阶段</th>
+          <th>来源怎么排</th>
+          <th>为什么这样排</th>
+          <th>错了以后最先坏什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>早段</td>
+          <td>网页为主，少量代码和百科</td>
+          <td>先学语言基本盘和事实分布，避免一开始就偏科</td>
+          <td>模型会更快地学到某种风格，但通用覆盖不稳</td>
+        </tr>
+        <tr>
+          <td>中段</td>
+          <td>提高代码、论文教材和领域文档</td>
+          <td>开始塑形，补结构化表达和专业知识</td>
+          <td>如果切得太猛，通用网页被压掉，很多日常能力会掉</td>
+        </tr>
+        <tr>
+          <td>后段</td>
+          <td>更干净的高质量池 + 适量目标领域</td>
+          <td>收尾时减少噪声，把输出风格压稳</td>
+          <td>如果后段还沿用早段配方，模型会在噪声里收尾</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn">
+    <h3>第三步：识别失败症状，而不是只看均分</h3>
+    <p>当你把网页压得太低，模型可能会显得更“专业”，但事实题、常识题和长尾表达会掉；当你把论坛问答放得太后，聊天会更顺，但事实保持和引用稳定性会掉；当你把代码过采样得太多，符号推理会变好，但自然语言风格会开始发硬。每一种退化都不是空洞的“变差”，而是可以在任务簇里被具体看见的症状。</p>
+    <p>这就是为什么本页一直强调“验证方式”要跟配方绑在一起。你不是只在做一个表格，你是在做一个会改变模型行为的决策系统。没有反馈的配方，只能算初稿。</p>
+  </div>
+  <p>如果你现在要把这套方法迁移到新的模型，先别急着追最优。先复写一份这样的走读表：目标是什么、来源池有哪些、每段权重怎么变、最可能坏掉的是哪一簇任务。写完以后，再去看下一页的小模型消融。那一页会告诉你，今天这份配方到底是把能力做出来了，还是只是把某类分数抬高了。</p>
+</section>
+
+<section id="cases">
+  <div class="head">
+    <h2>案例推演</h2>
+    <span class="tag">cases</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>案例 1：代码库存小，但目标是代码能力</h3>
+      <p>如果代码库存只有 8%，训练占比却想给到 16%，这并不矛盾。矛盾的是你是否知道这 16% 会从哪里挤出来，以及重复暴露是否会伤到通用表达。做法通常是先保留通用网页，再把高质量代码池在中后段适度过采样，同时监控自然语言和数学任务是否被挤压。</p>
+    </div>
+    <div class="box">
+      <h3>案例 2：论坛问答放到后 10%，聊天更顺但事实题掉了</h3>
+      <p>这时不要急着把论坛删掉。先看它的质量分布、是否和 benchmark 近似、是否在收尾阶段被放大过头，再看事实题下降是不是因为通用网页被压缩。问题可能出在阶段位置，也可能出在比例，而不是出在来源本身。</p>
+    </div>
+  </div>
+  <div class="box warn">
+    <h3>案例 3：法律领域继续预训练</h3>
+    <p>如果目标改成法律领域，来源就不能只看通用网页了。要增加法规、判例、注释性材料和专业教材，同时把许可、时效、地区差异和隐私边界写进配方记录。这里的风险不是“数据不够”，而是“来源对了但版本不对”。</p>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>边界说明</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="grid2">
+    <div class="box info">
+      <h3>这里先不追的事</h3>
+      <p>这页先不展开最优混合搜索、长期课程学习、动态重加权、最优控制和多阶段自动调度。它们会在更后面的实验设计和系统化流水线里回来。现在先把“来源-权重-阶段-验证”四件事写顺。</p>
+    </div>
+    <div class="box warn">
+      <h3>这页不承诺的事</h3>
+      <p>这里不会给出一个放之四海而皆准的比例表。不同模型、预算、语言、任务和发布时间点，都会把配方改写。你要学的是怎么解释和验证配方，不是死记一组百分比。</p>
+    </div>
+  </div>
+  <p class="muted">下一页会把这份配方拿去做小模型消融和统一评测。到那时，才真正知道某个来源池是贡献能力，还是只是填满了 token。</p>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>怎么接到下一页</h2>
+    <span class="tag">operation bridge</span>
+  </div>
+  <p>这一页的任务，不是把配方写漂亮，而是把它写到可以送去做实验。下一页你会看到的，不是更长的说明，而是更短的决策：哪些来源池进入了对照组，哪些阶段权重被固定，哪些变量被单独改动。换句话说，05 页负责把目标翻成配方，06 页负责把配方翻成对照实验。</p>
+  <div class="grid2">
+    <div class="box">
+      <h3>送去 06 页前先准备什么</h3>
+      <p>先保留一份来源池清单，再保留一份阶段权重表，然后把当前配方里最关键的两个可变项标出来：一个是来源比例，一个是阶段位置。这样到了下一页，你就知道应该只动哪一项，而不是整份配方一起乱改。</p>
+    </div>
+    <div class="box">
+      <h3>常见第一失败</h3>
+      <p>最常见的失败不是“结果不好”，而是“你说不清哪一项导致了变化”。如果你没有先把来源、权重和阶段拆开，下一页的消融就会变成一次大杂烩训练，测到什么都像是对的，却什么都解释不清。</p>
+    </div>
+  </div>
+  <div class="box info">
+    <h3>这页留下的作业</h3>
+    <p>把你自己的配方写成三行：来源池、阶段系数、验证指标。三行都写完，再去看下一页的消融设计。只要能把这三行写清楚，你就已经比“凭感觉调比例”多走了一步。</p>
+  </div>
+  <div class="box warn">
+    <h3>如果阶段系数写错，会先坏哪里</h3>
+    <p>最先坏掉的通常不是最终分，而是任务簇的方向：代码可能变强一点，但事实题和通用表达开始下滑；或者聊天更顺，但结构化理解不稳。这个时候别先改模型结构，先回到配方表，看是不是中后段把某个来源放得太重了。</p>
+  </div>
+  <div class="box">
+    <h3>给平台看的最短记录</h3>
+    <p>如果你要把这页内容抄进训练平台，最少写四行就够：来源池名称、基础权重、阶段权重、验证指标。下面这段可以直接当作起点，再根据你的任务目标改数值。</p>
+    <div class="codebar"><span>四行记录模板</span><button class="copy" data-copy="record-template">复制</button></div>
+    <pre id="record-template" data-export-context="四行记录模板" data-export-lang="text"><code class="language-text">source_pools: web / code / papers_books / forums
+base_weights: 0.7 / 2.0 / 1.6 / 0.8
+stage_weights: early=1.0/0.8/0.6/0.7, middle=0.8/1.2/1.2/0.9, late=0.5/1.0/1.5/0.6
+validation: task_cluster_score + contamination_check + language_regression</code></pre>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>作答目标</strong>
+    <p>练习不是背一套漂亮比例，而是把来源、权重、阶段和验证说成一条可执行链。每道题都要能回到某个决策点。</p>
+  </div>
+  <div class="review-card">
+    <strong>检查重点</strong>
+    <p>答案里至少要出现 token 单位、来源分层、阶段位置和验证方式。只写“提高高质量数据”还不够。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、概念判断</h3>
+      <p>先确认你没有把库存、权重和训练占比混成一个东西。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速回看</b>
+      <span>库存是池里有多少，权重是想抽多少，占比是训练里真消耗多少。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、概念判断" data-title="Q1. 混合比例最准确的单位是什么？" data-answer="B" data-explain="训练占比看的是训练时实际消耗的 token，不是库存文件数。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">比例单位</span></div>
+      <h3>Q1. 混合比例最准确的单位是什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q1" value="A">A. 原始文件数量占比</label>
+        <label><input type="radio" name="q1" value="B">B. 训练中实际消耗的 token 占比</label>
+        <label><input type="radio" name="q1" value="C">C. 来源网站数量占比</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、概念判断" data-title="Q2. 小而高质量的数据池一定不能过采样。" data-answer="false" data-explain="过采样是常见手段，但要监控重复暴露和通用能力下滑。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">过采样</span></div>
+      <h3>Q2. 小而高质量的数据池一定不能过采样。</h3>
+      <label><input type="radio" name="q2" value="true">对</label>
+      <label><input type="radio" name="q2" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q3" data-group="一、概念判断" data-title="Q3. 填空：配方闭环的最后一步是用什么反馈修正配方？" data-answer="评测;消融;污染检查" data-explain="最后一步要看评测、消融或污染检查后的反馈，不能只盯着表格本身。">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">闭环</span></div>
+      <h3>Q3. 填空：配方闭环的最后一步是用什么反馈修正配方？</h3>
+      <input type="text" name="q3" placeholder="例如：评测、消融、污染检查">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>可以写“评测”“消融”“污染检查”或“统一评测后的结果反馈”。关键不是某个固定词，而是要说出：配方不是定死的，最后要靠结果回修。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q4" data-group="一、概念判断" data-title="Q4. 质量权重等于数据本身的客观质量。" data-answer="false" data-explain="权重是采样决策，不是数据本身的客观事实。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">权重含义</span></div>
+      <h3>Q4. 质量权重等于数据本身的客观质量。</h3>
+      <label><input type="radio" name="q4" value="true">对</label>
+      <label><input type="radio" name="q4" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q5" data-group="一、概念判断" data-title="Q5. 哪个字段最能帮助复现一个数据池？" data-answer="B" data-explain="复现要靠来源、时间、规则和规模，而不是只有一个好听的名字。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">可复现</span></div>
+      <h3>Q5. 哪个字段最能帮助复现一个数据池？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q5" value="A">A. “高质量网页”这个名称</label>
+        <label><input type="radio" name="q5" value="B">B. 采集时间、过滤规则、去重版本和 token 数</label>
+        <label><input type="radio" name="q5" value="C">C. 模型最终总分</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q6" data-group="一、概念判断" data-title="Q6. 写出一个训练阶段名称和它的主要目标。" data-answer="主体预训练;质量增强;退火;收尾" data-explain="答案要同时写出阶段名和主要目标，例如“主体预训练：广覆盖和稳定学习”。">
+      <div class="q-meta"><span class="pill">short fill</span><span class="pill">阶段</span></div>
+      <h3>Q6. 写出一个训练阶段名称和它的主要目标。</h3>
+      <input type="text" name="q6" placeholder="例如：主体预训练：广覆盖和稳定学习。">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>答案要同时出现“阶段名”和“该阶段的目标”。例如“主体预训练：广覆盖和稳定学习”就合格；只写“预训练”不够，因为没有说明这段训练要解决什么问题。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、配方计算与解释</h3>
+      <p>把直觉转成数字，再解释数字背后的取舍。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速回看</b>
+      <span>比例要能解释，也要能被评测验证。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q7" data-group="二、配方计算与解释" data-title="Q7. 计算：网页 900B 权重 0.5，代码 100B 权重 2.0，代码训练占比约是多少？" data-answer="B" data-explain="加权后网页 450，代码 200，所以代码占比约 31%。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">计算</span></div>
+      <h3>Q7. 计算：网页 900B 权重 0.5，代码 100B 权重 2.0，代码训练占比约是多少？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q7" value="A">A. 约 10%</label>
+        <label><input type="radio" name="q7" value="B">B. 约 31%</label>
+        <label><input type="radio" name="q7" value="C">C. 约 69%</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q8" data-group="二、配方计算与解释" data-title="Q8. 解释：为什么代码库存只有 8%，训练占比可以设到 16%？">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">过采样</span></div>
+      <h3>Q8. 解释：为什么代码库存只有 8%，训练占比可以设到 16%？</h3>
+      <p class="solve-note">作答脚手架：先说目标能力，再说采样机制，最后说要监控的风险。</p>
+      <textarea name="q8" placeholder="从目标能力、采样权重、重复风险三个角度解释。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>要点应包含：代码库存小不等于不能提高训练占比；过采样是为了在固定预算下提升代码能力；但要监控重复暴露、风格单一和通用能力下滑。回答里如果只写“代码更重要”，还不够。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q9" data-group="二、配方计算与解释" data-title="Q9. 诊断：某团队说“我们把网页降到 40%，模型就一定更聪明”。这句话有什么问题？">
+      <div class="q-meta"><span class="pill">error diagnosis</span><span class="pill">因果</span></div>
+      <h3>Q9. 诊断：某团队说“我们把网页降到 40%，模型就一定更聪明”。这句话有什么问题？</h3>
+      <textarea name="q9" placeholder="指出至少 3 个问题：指标、替代来源、能力分组、实验控制等。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>至少要指出三件事：没有说明“更聪明”对应什么评测；没有说明被网页让出的 token 去了哪里；没有控制其他变量；没有说明是否分阶段；没有考虑语言、领域和污染风险。只批评“太绝对”不算完整。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q10" data-group="二、配方计算与解释" data-title="Q10. 设计：给一个技术文档理解模型分配 100B token 的三类来源比例。">
+      <div class="q-meta"><span class="pill">scenario transfer</span><span class="pill">比例</span></div>
+      <h3>Q10. 设计：给一个技术文档理解模型分配 100B token 的三类来源比例。</h3>
+      <textarea name="q10" placeholder="写出至少三类来源、比例、为什么这么配。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>回答里要有三类来源、比例之和、以及为什么不能 100% 都给专业材料。最好能说明通用网页负责广覆盖，教材或论文负责结构化表达，代码或问答负责工具和问题解决能力。只写一串百分比不够。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q11" data-group="二、配方计算与解释" data-title="Q11. 比较：质量权重和阶段系数有什么不同？">
+      <div class="q-meta"><span class="pill">comparison</span><span class="pill">概念区分</span></div>
+      <h3>Q11. 比较：质量权重和阶段系数有什么不同？</h3>
+      <textarea name="q11" placeholder="从作用对象、是否随阶段变化、例子三个角度比较。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>质量权重更像全局偏好，说明某个来源池在整体训练里该被抽得多还是少；阶段系数则说明当前阶段是否要额外放大或缩小这个池。一个是“这池重要不重要”，一个是“现在这个阶段要不要更强调它”。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="二、配方计算与解释" data-title="Q12. 解释：为什么平均评测分不足以判断配方好坏？">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">评测</span></div>
+      <h3>Q12. 解释：为什么平均评测分不足以判断配方好坏？</h3>
+      <textarea name="q12" placeholder="从能力分组、语言分组、领域退化和污染四个角度选至少三个。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>平均分会掩盖方向性变化。一个配方可能让代码和推理更强，却牺牲通用语言、某些语种或事实题；也可能是 benchmark 污染导致分数虚高。好答案要说明“平均值背后有哪些分组差异”。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、阶段化方案</h3>
+      <p>把配方放进训练过程，而不是只给一张静态比例表。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速回看</b>
+      <span>阶段 = token 预算 + 目标 + 来源比例 + 监控指标。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q13" data-group="三、阶段化方案" data-title="Q13. 设计一个 3 阶段配方。">
+      <div class="q-meta"><span class="pill">scenario transfer</span><span class="pill">阶段</span></div>
+      <h3>Q13. 设计一个 3 阶段配方。</h3>
+      <textarea name="q13" placeholder="写出每阶段的 token 预算、目标、提高或降低哪些来源。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>一个合格答案至少要写出：早段以广覆盖和低重复为主；中段提高代码、教材或论文来塑形；后段收尾时放大更干净、更目标相关的来源。还要说明每段要看什么指标来决定是否继续或回退。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q14" data-group="三、阶段化方案" data-title="Q14. 诊断：后 10% token 加入大量论坛问答，模型聊天更自然但事实题下降。你会怎么查？">
+      <div class="q-meta"><span class="pill">error diagnosis</span><span class="pill">退化</span></div>
+      <h3>Q14. 诊断：后 10% token 加入大量论坛问答，模型聊天更自然但事实题下降。你会怎么查？</h3>
+      <textarea name="q14" placeholder="从数据质量、占比、污染、能力分组和对照实验角度回答。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>先查论坛问答本身是否质量稳定、是否和 benchmark 近似、是否在后段被放大过头；再查是否因为后段挤掉了高质量网页或百科；最后用对照实验拆成“来源问题、阶段问题、比例问题”三条线分别验证。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q15" data-group="三、阶段化方案" data-title="Q15. 迁移：如果目标是法律领域继续预训练，来源和风险会如何变化？">
+      <div class="q-meta"><span class="pill">scenario transfer</span><span class="pill">领域数据</span></div>
+      <h3>Q15. 迁移：如果目标是法律领域继续预训练，来源和风险会如何变化？</h3>
+      <textarea name="q15" placeholder="写出可能来源、提高比例的理由、许可/隐私/时效风险。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>应包含法律法规、判例、注释性材料、专业教材或合同文本等来源，同时说明地区差异、版本时效、隐私和许可边界。最好还能提到：领域数据要提高，但通用覆盖不能完全消失。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q16" data-group="三、阶段化方案" data-title="Q16. 设计一个小模型消融实验来验证“论文教材占比提高有用”。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">消融</span></div>
+      <h3>Q16. 设计一个小模型消融实验来验证“论文教材占比提高有用”。</h3>
+      <textarea name="q16" placeholder="说明控制变量、对照组、改变项、评测和结论标准。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>要固定模型、token 总量、训练设置和评测协议，只改论文教材的占比或放置阶段；要有对照组；要选能体现结构化理解和事实保持的评测；结论不能只看单项，而要看任务簇和退化风险。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q17" data-group="三、阶段化方案" data-title="Q17. 写一段审查意见：下面配方缺什么？">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">审查</span></div>
+      <h3>Q17. 写一段审查意见：下面配方缺什么？</h3>
+      <p><code>web 60%, code 20%, books 20%, train until convergence</code></p>
+      <textarea name="q17" placeholder="指出缺少单位、阶段、来源版本、质量规则、去重、污染检查、评测等。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>这条审查意见至少要指出：比例单位不明；没有来源版本；没有阶段信息；没有质量或去重规则；没有污染和泄漏检查；没有评测和回退条件。它更像一句口号，不像一份配方。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q18" data-group="三、阶段化方案" data-title="Q18. 用自己的话讲完整闭环。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">Feynman</span></div>
+      <h3>Q18. 用自己的话讲完整闭环。</h3>
+      <textarea name="q18" placeholder="面向一个刚学完过滤和去重的人，解释如何从来源表走到分阶段配方，再用消融修正。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>回答里要出现“来源”“比例”“质量权重”“阶段”“评估反馈”五个词，但更重要的是顺序：先盘来源，再定权重，再分阶段，再做评测回看，最后根据结果回调配方。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><a href="https://ai.meta.com/blog/meta-llama-3/">Meta Llama 3 blog</a>：支撑预训练数据规模、来源类型、过滤管线和多阶段数据决策的公开说明。</li>
+  <li><a href="https://arxiv.org/abs/2305.10429">DoReMi: Optimizing Data Mixtures Speeds Up Language Model Pretraining</a>：支撑“数据混合比例会影响训练结果”这一核心判断，以及小模型代理与重采样的思路。</li>
+  <li><a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb">FineWeb dataset page</a>：支撑清洗、去重、DataTrove 流水线、分 crawl 去重和验证循环的公开案例。</li>
+  <li><a href="https://github.com/huggingface/datatrove">DataTrove repository</a>：支撑 `Document`、读写器、过滤器、token block、dedup block 和可复现流水线的结构说明。</li>
+  <li><a href="https://arxiv.org/abs/2501.00656">OLMo 2</a>：支撑晚期课程式训练、透明化训练记录和可审计配方的公开参照。</li>
+  <li>课程主页和相邻单元：支撑本页与 04、06 的衔接关系，以及“配方必须能落到下一页消融验证”这一边界。</li>
+  <li>课程目录与相邻单元：支撑本页和前后单元的课程位置、边界和衔接关系。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

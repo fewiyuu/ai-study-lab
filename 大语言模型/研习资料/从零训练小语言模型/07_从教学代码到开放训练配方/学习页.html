@@ -1,0 +1,970 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>从教学代码到开放训练配方</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="从零训练小语言模型" data-unit="07">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>从零训练小语言模型</strong>
+        <span>07</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>证据链</a>
+        <a href="#terms"><span class="dot"></span>术语误区</a>
+        <a href="#records"><span class="dot"></span>记录账本</a>
+        <a href="#stage"><span class="dot"></span>阶段记录</a>
+        <a href="#artifacts"><span class="dot"></span>产物链路</a>
+        <a href="#comparison"><span class="dot"></span>toy run 对照</a>
+        <a href="#template"><span class="dot"></span>报告骨架</a>
+        <a href="#boundary"><span class="dot"></span>复现边界</a>
+        <a href="#bridge"><span class="dot"></span>下一步</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">这一页先把一次训练结果拆成可检查的证据链：数据、超参、评估、阶段和产物。先读主线，再去练习区写一份能复查的报告。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">训练配方</div>
+          <h1>从教学代码到开放训练配方</h1>
+          <p>这页不教你再跑一次训练，而是教你看懂一份公开训练报告：哪一段是在证明代码链路跑通，哪一段是在证明数据和评估可审计，哪一段只是下载说明。读完后，你应该能把一次 run 拆成数据、超参、评估、阶段记录和产物链路五块。</p>
+
+          <div class="course-links">
+            <a href="../06_Scaling验证集与评估/学习页.html">上一节：Scaling、验证集与评估</a><a href="../index.html">课程地图</a><a href="../08_小规模复现实验设计/学习页.html">下一节：小规模复现实验设计</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+  <li>能区分 toy run、open weights 和 fully open training。</li>
+  <li>能从报告里抽出数据配方、超参账本、评估协议和 checkpoint 谱系。</li>
+  <li>能写出一份小模型训练报告骨架，并补上不能外推的边界。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goal</span>
+  </div>
+  <p>这页的目标不是帮你写一篇发布文案，而是把一份公开训练材料拆成可检查的证据。每一类证据都回答不同的问题：这条 run 是否跑通、这份数据从哪来、训练设置是否够完整、评估协议是否站得住、最终模型来自哪些阶段、哪些结论只能保守地说。</p>
+  <div class="grid-3">
+    <div class="card">
+      <b>读懂层级</b>
+      <p>能把 toy run、open weights、fully open training 分开说清，不把“能下载”误读成“可审计”。</p>
+    </div>
+    <div class="card">
+      <b>抽出证据</b>
+      <p>能从数据、超参、评估、阶段记录和产物链路里抽出一份能回查的清单。</p>
+    </div>
+    <div class="card">
+      <b>写出边界</b>
+      <p>能在报告结尾明确写出可靠结论和不能外推的部分，避免把一次 run 说成全部结论。</p>
+    </div>
+  </div>
+  <div class="table-wrap" style="margin-top:14px;">
+    <table data-export-context="公开训练报告检查清单" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>看到什么</th>
+          <th>先问什么</th>
+          <th>为什么要问</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>只有最终权重和一张截图</td>
+          <td>数据、超参、评估协议在哪里</td>
+          <td>这只说明结果存在，不说明结果可查。</td>
+        </tr>
+        <tr>
+          <td>有配置但没有数据版本</td>
+          <td>数据来源、混合比例、过滤和去重是否记录</td>
+          <td>数据变了，训练结论也会跟着变。</td>
+        </tr>
+        <tr>
+          <td>有分数但没有评估说明</td>
+          <td>验证集、prompt、shot、解码参数和污染检查在哪里</td>
+          <td>没有协议的分数，很难比较。</td>
+        </tr>
+        <tr>
+          <td>有 stage 名称但没有 checkpoint 谱系</td>
+          <td>起止 checkpoint、token budget 和选择规则在哪里</td>
+          <td>最终模型通常来自多阶段决策。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="inline-note">
+    <b>先知道，先别钻</b>
+    这页先不追 benchmark 排名、数据清洗流水线细节和完整 scaling fit；它只负责把报告里的证据链理顺。
+  </div>
+</section>
+
+<section id="map">
+  <div class="head">
+    <h2>证据链</h2>
+    <span class="tag">trace</span>
+  </div>
+  <p>把一份公开训练材料看成一条证据链，先看每一步读了什么，再看每一步写出了什么。前一步写的内容，会决定后一步有没有资格下结论。把鼠标移到左侧步骤上，你会看到证据从“原始 run”变成“可审计报告”的过程。</p>
+  <div class="shape-tracer" data-shape-tracer data-export-context="公开训练报告的证据链" data-export-lang="text">
+    <div class="trace-lines">
+      <button class="trace-line active" type="button" data-trace-step="raw">
+        <code>run.log</code><span>原始运行输出</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="data">
+        <code>data card</code><span>数据卡与切分</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="config">
+        <code>config</code><span>模型与训练设置</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="eval">
+        <code>eval</code><span>验证和基准协议</span>
+      </button>
+      <button class="trace-line" type="button" data-trace-step="bundle">
+        <code>bundle</code><span>权重与产物包</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="raw">
+        <b>原始 run</b>
+        <span>一串训练日志和最终截图</span>
+        <p>读到的是 step、loss、吞吐、NaN、OOM；写出去的是“这次执行发生了什么”。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="data">
+        <b>数据卡</b>
+        <span>来源、token 数、混合比例、过滤、去重</span>
+        <p>读到的是样本构成；写出去的是“模型到底从什么文本里学到什么”。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="config">
+        <b>配置</b>
+        <span>layers、hidden、heads、LR、batch、dtype</span>
+        <p>读到的是训练设置；写出去的是“为什么这个 run 的动态长这样”。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="eval">
+        <b>评估</b>
+        <span>验证集、benchmark、污染检查、样例</span>
+        <p>读到的是协议；写出去的是“这个分数该怎么解释”。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="bundle">
+        <b>产物包</b>
+        <span>权重、代码、日志、checkpoint、模型卡</span>
+        <p>读到的是前面的证据；写出去的是“别人能否按同一条链路复查”。</p>
+      </div>
+    </div>
+  </div>
+  <div class="inline-note">
+    <b>读法</b>
+    先看每一步“读了什么”，再看“写出了什么”。如果一环只给结论，不给来源，后面的判断就会变轻。
+  </div>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语误区</h2>
+    <span class="tag">vocabulary</span>
+  </div>
+  <p>先把几个最容易混在一起的词拆开，后面写计划和看报告才不会乱。这里的重点不是记名词，而是知道每个词对应哪一层证据。</p>
+  <div class="grid-4">
+    <div class="card"><b>toy run</b><p>教学用的小规模训练，主要验证代码路径、loss 下降、恢复和采样是否正常。</p></div>
+    <div class="card"><b>recipe</b><p>训练配方。它不是单个 YAML，而是数据、模型、优化、系统、评估和阶段决策的组合说明。</p></div>
+    <div class="card"><b>open weights</b><p>只发布最终权重或少量模型文件。它能支持推理或微调，但未必能审计数据和训练决策。</p></div>
+    <div class="card"><b>fully open</b><p>更高层级的开放：权重、训练数据、代码、配置、日志、评估和中间检查点尽量可访问。</p></div>
+    <div class="card"><b>data mix</b><p>数据混合比例。它回答“每类数据在训练中占多少”，不是简单列数据集名字。</p></div>
+    <div class="card"><b>checkpoint lineage</b><p>检查点谱系。它说明最终模型来自哪些中间点，经历了哪些继续训练、筛选或回退。</p></div>
+    <div class="card"><b>contamination</b><p>评估污染。训练数据中如果包含测试题或近似答案，benchmark 分数会被抬高。</p></div>
+    <div class="card"><b>reproducibility boundary</b><p>可复现边界。它告诉你哪些结论能重现，哪些只能近似，哪些不能外推。</p></div>
+  </div>
+  <div class="inline-note">
+    <b>先别追的旁支</b>
+    先不要把注意力放在 leaderboard 排名、数据集命名争议，或者完整 benchmark 作者学术史上；这页只处理“报告里该写什么”。
+  </div>
+</section>
+
+<section id="records">
+  <div class="head">
+    <h2>记录账本</h2>
+    <span class="tag">ledger</span>
+  </div>
+  <p>训练配方不是一份配置文件，而是一组能互相对上的账本。你只要能从记录里复原有效 batch、token budget、评估协议和阶段边界，这份报告就已经比“只给一个 config”更接近可审计。</p>
+  <div class="math-block" data-export-context="有效 batch 与训练量" data-export-lang="math">
+    $$
+    B_{\text{eff}} = B_{\text{micro}} \times N_{\text{GPU}} \times A_{\text{acc}}
+    \qquad
+    C_{\text{rough}} \approx \frac{T_{\text{tokens}}}{r_{\text{tok/s}} \times 3600} \times p_{\text{gpu}}
+    $$
+    <p><code>B_micro</code> 是每卡 micro-batch，<code>N_GPU</code> 是 GPU 数，<code>A_acc</code> 是梯度累积步数。<code>T_tokens</code> 是总 token 数，<code>r_tok/s</code> 是吞吐，<code>p_gpu</code> 是每小时 GPU 单价。这个估算只给数量级，不替代真实 profiler。</p>
+  </div>
+  <div class="table-wrap" style="margin-top:14px;">
+    <table data-export-context="训练记录账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>账本</th>
+          <th>要写什么</th>
+          <th>漏掉后会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>数据账</td>
+          <td>来源、版本、token 数、混合比例、过滤、去重、许可证、污染检查。</td>
+          <td>别人知道你用了什么名字，却不知道你到底喂给了模型什么文本。</td>
+        </tr>
+        <tr>
+          <td>模型账</td>
+          <td>layers、hidden、heads、context、vocab、位置编码、norm、初始化。</td>
+          <td>参数量有了，结构没有，结果就很难复查。</td>
+        </tr>
+        <tr>
+          <td>优化账</td>
+          <td>optimizer、学习率计划、warmup、weight decay、clip、effective batch。</td>
+          <td>训练动态会变，但你看不出为什么变。</td>
+        </tr>
+        <tr>
+          <td>系统账</td>
+          <td>GPU、dtype、并行策略、checkpointing、吞吐、显存和依赖版本。</td>
+          <td>你只能说“跑过了”，不能说“为什么只跑到这个速度”。</td>
+        </tr>
+        <tr>
+          <td>评估账</td>
+          <td>验证集大小、评估间隔、prompt、shot、解码参数、污染检查、失败样例。</td>
+          <td>分数会看起来很好，但比较口径不清。</td>
+        </tr>
+        <tr>
+          <td>结论账</td>
+          <td>哪些发现稳、哪些退步、哪些结论不能外推。</td>
+          <td>报告会把一次 run 说得比它真正支持的更多。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="inline-note">
+    <b>手感</b>
+    你先把“有效 batch”和“总训练量”写对，再谈结果是不是公平。只写 micro-batch 不够，单写 GPU 型号也不够。
+  </div>
+</section>
+
+<section id="stage">
+  <div class="head">
+    <h2>阶段记录</h2>
+    <span class="tag">state</span>
+  </div>
+  <p>真实训练经常分阶段：先做 sanity run，确认链路稳定；再做 base pretraining，建立主曲线；最后进入 annealing 或继续训练，收束到更高质量的数据和更谨慎的学习率。阶段记录要把起止 checkpoint、token budget、数据切换和选择规则写成能回头查的形式。</p>
+  <div class="table-wrap">
+    <table data-export-context="阶段状态账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>阶段</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>写错后会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Stage 0<br>sanity run</td>
+          <td>代码路径、loss、恢复、采样、显存。</td>
+          <td>确认训练链路没断，先排查 NaN、OOM 和错误 shape。</td>
+          <td>你会把实现问题误当成数据问题。</td>
+        </tr>
+        <tr>
+          <td>Stage 1<br>base pretraining</td>
+          <td>通用数据、学习率计划、验证 loss、吞吐。</td>
+          <td>记录起点 checkpoint、token budget、有效 batch 和评估间隔。</td>
+          <td>后面看不到主曲线从哪里开始变稳。</td>
+        </tr>
+        <tr>
+          <td>Stage 2<br>annealing / continued training</td>
+          <td>高质量数据、数据切换、退火策略、污染检查。</td>
+          <td>记录数据混合、学习率变化、结束 checkpoint 和选择依据。</td>
+          <td>最终模型像是“一步到位”，其实是阶段结果。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>阶段记录模板</span><button class="copy" type="button" data-copy="stage-template">复制</button></div>
+  <pre id="stage-template" data-export-context="阶段记录模板" data-export-lang="text"><code class="language-text">stage:
+  name: base_pretraining
+  start_checkpoint: step_0
+  end_checkpoint: step_180000
+  token_budget: 300B
+  data_mix:
+    web: 60%
+    code: 20%
+    math: 20%
+  lr_schedule: warmup + cosine
+  eval_every: 2000 steps
+  selection_rule: lowest validation loss with stable contamination check</code></pre>
+  <div class="inline-note">
+    <b>边界提示</b>
+    这里先不展开完整 scaling-law 拟合和阶段预算推导；这页只需要把 stage 记录写成能回头找的形式。
+  </div>
+</section>
+
+<section id="artifacts">
+  <div class="head">
+    <h2>产物链路</h2>
+    <span class="tag">artifact</span>
+  </div>
+  <p>开放训练不是只交一个权重文件。更稳的做法是把产物排成一条可追踪的链：模型卡指向权重，权重指向配置，配置指向训练代码，日志指向 checkpoint，评估表指向脚本和数据版本。只要一环断了，别人就很难复查。</p>
+  <div class="table-wrap">
+    <table data-export-context="产物链路表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>链路</th>
+          <th>应该对上什么</th>
+          <th>常见断点</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>模型卡 → 权重</td>
+          <td>版本号、下载地址、适用范围。</td>
+          <td>卡片更新了，文件还是旧版。</td>
+        </tr>
+        <tr>
+          <td>权重 → 配置</td>
+          <td>layers、hidden、context、tokenizer、dtype、seed。</td>
+          <td>只给权重，不给结构。</td>
+        </tr>
+        <tr>
+          <td>配置 → 训练代码</td>
+          <td>启动脚本、参数解析、依赖版本、训练入口。</td>
+          <td>人能看见参数，不能复跑。</td>
+        </tr>
+        <tr>
+          <td>日志 → checkpoint</td>
+          <td>step、stage、token budget、恢复点。</td>
+          <td>只保留最终曲线，断掉阶段谱系。</td>
+        </tr>
+        <tr>
+          <td>评估表 → 脚本和数据版本</td>
+          <td>prompt、shot、解码参数、验证集与污染检查。</td>
+          <td>分数看得见，协议找不到。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" type="button" data-terminal-case="toy">toy run</button>
+      <button class="ghost" type="button" data-terminal-case="small">small report</button>
+      <button class="ghost" type="button" data-terminal-case="release">release report</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">toy run 只证明训练链路跑通。你还不知道数据版本、评估协议和产物链路是否完整。</pre>
+    <template data-terminal-output="toy">toy run 只证明训练链路跑通。
+需要补的通常是：数据来源、版本、token 数、训练配置、恢复点和污染检查。
+</template>
+    <template data-terminal-output="small">small report 已经开始像一份可复查材料。
+还应该补：checkpoint 谱系、数据卡、评估脚本、日志位置、失败 run 和边界说明。</template>
+    <template data-terminal-output="release">release report 需要让外部读者复查整条链路。
+权重、模型卡、配置、训练代码、数据卡、评估脚本、日志和中间 checkpoint 都要能对上。</template>
+  </div>
+  <div class="inline-note">
+    <b>最小开放包</b>
+    小团队不一定能公开所有原始数据，但至少可以公开：训练脚本、配置、数据来源清单、处理脚本摘要、token 统计、loss 曲线、评估脚本、最终权重、若干中间 checkpoint 和训练报告。
+  </div>
+</section>
+
+<section id="audit-lab">
+  <div class="head">
+    <h2>报告断点实验室</h2>
+    <span class="tag">failure lab</span>
+  </div>
+  <p>这一小节把“看报告”变成“排查报告”。假设你拿到三种常见材料：只给权重、只给分数、或者给了一部分配置和日志。你要先判断哪一环断了，再决定下一步追问什么。这里不追华丽排版，只追证据链是否闭合。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" type="button" data-terminal-case="case-1">只有权重</button>
+      <button class="ghost" type="button" data-terminal-case="case-2">只有分数</button>
+      <button class="ghost" type="button" data-terminal-case="case-3">证据较全</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">只给权重时，你能下载模型，但还不知道数据、配置、评估和 stage 是否完整。</pre>
+    <template data-terminal-output="case-1">症状：只有权重，没有数据卡、训练配置和评估协议。
+可能断点：模型可用，但证据链不闭合。
+下一步：先追数据版本、有效 batch、评估脚本和中间 checkpoint，再问最终分数来自哪次 stage。</template>
+    <template data-terminal-output="case-2">症状：只给分数，没有协议。
+可能断点：benchmark 版本、prompt、shot、解码参数和污染检查都没写。
+下一步：先补评估协议，再看这个分数能不能和别的报告比较。</template>
+    <template data-terminal-output="case-3">症状：权重、配置、日志、评估和 stage 记录都能对上。
+可能结论：这份材料已经接近可审计报告，但仍要检查许可证、数据公开边界和不可外推结论。</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="报告断点诊断表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>看到的症状</th>
+          <th>最可能缺的证据</th>
+          <th>下一步先问什么</th>
+          <th>如果不补会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>只有下载按钮和权重文件</td>
+          <td>数据账、超参账、stage 记录、评估协议。</td>
+          <td>数据从哪来，训练怎么配，分数怎么算。</td>
+          <td>你只能说“有模型”，不能说“模型怎么来的”。</td>
+        </tr>
+        <tr>
+          <td>有 MMLU 分数，但没说明 prompt 和 shot</td>
+          <td>评估协议。</td>
+          <td>版本、prompt、shot、解码参数、污染检查。</td>
+          <td>分数看起来高，但没法横向比较。</td>
+        </tr>
+        <tr>
+          <td>有 stage 名字，却不知道前后 checkpoint</td>
+          <td>checkpoint 谱系。</td>
+          <td>起止 checkpoint、token budget、数据切换和选择依据。</td>
+          <td>最终模型像是一个黑盒，不像一个阶段化结果。</td>
+        </tr>
+        <tr>
+          <td>有配置，但没有依赖版本和 seed</td>
+          <td>环境账和随机性账。</td>
+          <td>框架版本、dtype、并行策略、seed 和恢复点。</td>
+          <td>同一份配置，别人跑出来的曲线可能完全不同。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>证据链审计口诀</span><button class="copy" type="button" data-copy="audit-mnemonic">复制</button></div>
+  <pre id="audit-mnemonic" data-export-context="证据链审计口诀" data-export-lang="text"><code class="language-text">先看数据从哪来，再看训练怎么配；
+先看 stage 从哪起，再看 checkpoint 怎么收；
+先看分数按什么协议算，再看结果能不能比；
+先看产物互相能不能对上，再决定要不要相信这份报告。</code></pre>
+  <div class="inline-note">
+    <b>失败后要做什么</b>
+    如果材料只剩权重或只剩分数，不要先补修辞；先补协议和版本。修辞只能让页面看起来像报告，不能让报告真的可审计。
+  </div>
+</section>
+
+<section id="comparison">
+  <div class="head">
+    <h2>toy run 对照</h2>
+    <span class="tag">compare</span>
+  </div>
+  <p>同样是“训练模型”，toy run 和公开训练报告要回答的问题完全不同。前者先问链路有没有 bug，后者先问结论是否可审计、可查、可复现到合理程度。</p>
+  <div class="table-wrap">
+    <table data-export-context="toy run 与公开报告对照" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>维度</th>
+          <th>toy run 常见写法</th>
+          <th>公开训练报告应补齐</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>目标</td>
+          <td>“跑通 GPT 训练，loss 会下降。”</td>
+          <td>模型目标、预算、成功标准、不能外推的边界。</td>
+        </tr>
+        <tr>
+          <td>数据</td>
+          <td>“用了 TinyShakespeare / 一个小数据集。”</td>
+          <td>来源、版本、token 数、混合比例、过滤、去重、污染检查、许可证。</td>
+        </tr>
+        <tr>
+          <td>超参</td>
+          <td>只写 batch、learning rate、step 数。</td>
+          <td>模型结构、optimizer、LR schedule、warmup、dtype、并行、有效 batch、seed、硬件。</td>
+        </tr>
+        <tr>
+          <td>评估</td>
+          <td>看训练 loss、验证 loss、生成几个样例。</td>
+          <td>验证集定义、benchmark 协议、污染检查、失败任务、样例选择规则。</td>
+        </tr>
+        <tr>
+          <td>阶段</td>
+          <td>一个命令从头跑到尾。</td>
+          <td>stage 划分、数据切换、退火、checkpoint 谱系、异常恢复、最终选择依据。</td>
+        </tr>
+        <tr>
+          <td>产物</td>
+          <td>代码片段、最终 loss、少量截图。</td>
+          <td>权重、配置、训练脚本、日志、评估脚本、模型卡、中间 checkpoint。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="inline-note">
+    <b>关键判断</b>
+    toy run 只回答“这条训练链路有没有 bug”；公开训练报告还要回答“这个模型结果是否可信、可查、可复查”。两者不能互相代替。
+  </div>
+</section>
+
+<section id="example-read">
+  <div class="head">
+    <h2>一页报告怎么读</h2>
+    <span class="tag">example</span>
+  </div>
+  <p>下面用一个教学示例演示读法。这个片段是虚构的，只用来练习“先找证据，再下结论”的顺序，不代表某个真实项目。你要看的不是数字本身，而是数字后面有没有协议、版本和链路。</p>
+  <div class="codebar"><span>教学示例：报告片段</span><button class="copy" type="button" data-copy="report-sample">复制</button></div>
+  <pre id="report-sample" data-export-context="教学示例：报告片段" data-export-lang="text"><code class="language-text"># 教学示例：小语言模型训练片段
+
+## 数据配方
+- sources: cleaned web 55%, code 25%, math 20%
+- snapshot: 2026-06-21
+- token_count: 320B
+- filtering: length > 64, dedup, contamination scan
+
+## 训练设置
+- model: 120M / 12 layers / 768 hidden / 12 heads / 1024 context
+- optimizer: AdamW, lr 3e-4, warmup 2k, cosine decay
+- batch: micro 8 x 4 GPU x accum 4 = 128 effective batch
+
+## 评估
+- valid loss: 2.31
+- contamination: pass on held-out set
+- benchmark: report only, protocol separate</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="报告片段读法" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>片段里的线</th>
+          <th>它支持什么结论</th>
+          <th>还缺什么</th>
+          <th>下一步追问</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>数据配方、snapshot、token_count、filtering</td>
+          <td>这次 run 有明确的数据来源和处理痕迹。</td>
+          <td>具体数据版本、许可证、样本抽查和切分种子。</td>
+          <td>能否把同一版数据再找回来，是否会碰到污染。</td>
+        </tr>
+        <tr>
+          <td>model、optimizer、batch</td>
+          <td>训练设置足够判断有效 batch 和模型规模。</td>
+          <td>依赖版本、dtype、并行策略、恢复点和 seed。</td>
+          <td>如果训练动态变了，问题更像模型、优化还是系统。</td>
+        </tr>
+        <tr>
+          <td>valid loss、contamination、benchmark protocol separate</td>
+          <td>作者知道验证损失和基准协议不能混着说。</td>
+          <td>完整 benchmark 协议、任务级结果、失败样例和选择依据。</td>
+          <td>分数是否可信，是否能和别的报告比较。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="inline-note">
+    <b>这一页能支持什么</b>
+    它支持你判断“这次 run 的骨架写出来了”；它还不能单独证明可复现、可比较和 fully open。要把这些结论补齐，还需要日志、脚本、数据版本和 checkpoint 谱系。
+  </div>
+</section>
+
+<section id="template">
+  <div class="head">
+    <h2>报告骨架</h2>
+    <span class="tag">template</span>
+  </div>
+  <p>下面是一份小模型也能使用的公开配方模板。你不用一字不差地照抄，但每一栏都应该能被事实填满。把这些占位符填成可追踪信息，比写一段总结更重要。</p>
+  <div class="codebar"><span>训练报告骨架</span><button class="copy" type="button" data-copy="report-template">复制</button></div>
+  <pre id="report-template" data-export-context="训练报告骨架" data-export-lang="text"><code class="language-text"># 小语言模型训练报告
+
+## 1. 目标与边界
+- 目标能力：
+- 模型规模：
+- 预算：GPU 类型 / GPU 小时 / token budget
+- 成功标准：
+- 不可外推结论：
+
+## 2. 数据配方
+- 数据来源与版本：
+- tokenizer 与 token 统计：
+- 混合比例：
+- 过滤、去重、质量控制：
+- 评估污染检查：
+- 许可证与可公开性：
+
+## 3. 模型与训练设置
+- 架构：layers / hidden / heads / context / vocab
+- optimizer：type / betas / weight decay / grad clipping
+- LR schedule：warmup / peak / decay / annealing
+- batch：micro-batch / GPU 数 / accumulation / effective batch
+- dtype 与系统：BF16 / FP16 / FP32、并行策略、FlashAttention、checkpointing
+- seed、依赖版本、硬件：
+
+## 4. 阶段记录
+- Stage 0：sanity run
+- Stage 1：base pretraining
+- Stage 2：continued training or annealing
+- 每阶段：起止 checkpoint、token 数、数据混合、LR、异常、选择依据
+
+## 5. 评估
+- 训练监控：loss、grad norm、吞吐、OOM / NaN 记录
+- 验证集：来源、大小、评估间隔
+- 下游 benchmark：版本、prompt、shot、解码参数、脚本
+- 样例与失败案例：
+
+## 6. 开放产物
+- 权重与模型卡：
+- 训练代码与配置：
+- 数据清单与处理脚本：
+- 日志、曲线、中间 checkpoint：
+- 评估脚本与结果：
+
+## 7. 结论
+- 可靠发现：
+- 失败与退步：
+- 下一步实验：</code></pre>
+  <div class="grid-3" style="margin-top:14px;">
+    <div class="card"><b>先填事实</b><p>每个空格都尽量写成可查的信息，而不是感觉词。</p></div>
+    <div class="card"><b>再写边界</b><p>凡是不能外推的地方，直接写出来，别留给读者猜。</p></div>
+    <div class="card"><b>最后对链路</b><p>报告、代码、日志和 checkpoint 要能彼此指向。</p></div>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>复现边界</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <p>好报告不是假装一切都能复现，而是诚实说明哪些部分可复现、哪些部分只能近似、哪些结论不能外推。边界写清楚以后，别人更容易相信你的结果。</p>
+  <div class="table-wrap">
+    <table data-export-context="复现边界" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>这一页能帮助你写什么</th>
+          <th>这一页先不追什么</th>
+          <th>下一步应该补什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>训练报告的证据链、数据账、超参账、阶段记录和产物链路。</td>
+          <td>完整 benchmark 实现、数据清洗流水线和 scaling-law 拟合细节。</td>
+          <td>把自己手头的小模型材料填进模板，再检查哪一环缺证据。</td>
+        </tr>
+        <tr>
+          <td>可复查的结论和不可外推的结论。</td>
+          <td>把一次小规模实验直接写成大模型承诺。</td>
+          <td>在 08 页里把预算、数据、模型和停机线写成自己的版本。</td>
+        </tr>
+        <tr>
+          <td>公开材料之间的对应关系。</td>
+          <td>把模型下载页当成训练报告的全部。</td>
+          <td>补上脚本、配置、日志、评估协议和 checkpoint 谱系。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="inline-note">
+    <b>下一页再看</b>
+    这里先不追 benchmark leaderboard、数据清洗实现细节、完整 scaling fit、提示词工程和后训练。它们在后面的单元里会重新出现。
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>下一步</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <p>把 07 的字段带到 08：问题、预算、数据、模型、指标和停机线。你不用先追“完整方案”，先把这几个字段写成自己的版本，下一页就能直接落成实验计划。</p>
+  <div class="grid-2">
+    <div class="card">
+      <b>问题</b>
+      <p>先写一句话实验问题：你要验证什么关系，控制了什么变量。</p>
+    </div>
+    <div class="card">
+      <b>预算</b>
+      <p>把 GPU 小时、token 数、重跑次数和人工排查时间写成上限。</p>
+    </div>
+    <div class="card">
+      <b>数据</b>
+      <p>列出来源、版本、过滤、去重、切分和污染检查，不要只写数据集名称。</p>
+    </div>
+    <div class="card">
+      <b>边界</b>
+      <p>把这次实验不能外推的地方提前写出来，下一页就能更快收束。</p>
+    </div>
+  </div>
+  <div class="inline-note">
+    <b>只做一件事</b>
+    打开 08 页之前，先把你手头那次小实验的四个字段写下来：问题、预算、数据、模型/指标。写完再继续，速度会更快。
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>怎么答才算会</h3>
+    <p>先分层级，再补证据，最后写边界。你不需要把报告写得很长，但每个答案都要能指到具体字段、协议或产物。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>结构化题尽量直接选；开放题要写出对象、依赖和缺失项。只说感觉不算过关。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>先分层级</h3>
+      <p>先判断 toy run、open weights 和 fully open 的层级，再谈后面的记录。</p>
+    </div>
+    <div class="quick-review">先看结论层级，再看是否可审计。能下载，不等于能复查。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="先分层级" data-title="toy run 的真实任务" data-answer="B" data-explain="toy run 的重点是训练链路、loss、恢复和采样是否正常，不是验证大规模能力。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">层级判断</span></div>
+      <h3>toy run 的真实任务</h3>
+      <p>下面哪一句最准确地描述 toy run 的作用？</p>
+      <label><input type="radio" name="q1" value="A"> 跑到更大规模时保证 SOTA</label>
+      <label><input type="radio" name="q1" value="B"> 证明训练链路、loss、恢复和采样基本正常</label>
+      <label><input type="radio" name="q1" value="C"> 证明公开报告已经 fully open</label>
+      <label><input type="radio" name="q1" value="D"> 证明 benchmark 分数可直接外推</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="先分层级" data-title="open weights 与 fully open" data-answer="B" data-explain="open weights 只说明最终权重可下载；fully open 还要看数据、代码、配置、日志、评估和中间 checkpoint。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">层级判断</span></div>
+      <h3>open weights 与 fully open</h3>
+      <p>只要能下载最终权重，就等于 fully open training。</p>
+      <label><input type="radio" name="q2" value="A"> 对</label>
+      <label><input type="radio" name="q2" value="B"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q3" data-group="先分层级" data-title="先补哪类证据" data-answer="A" data-explain="先补数据来源、版本、token 数、混合比例、过滤和污染检查，才知道模型到底学了什么。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">证据链</span></div>
+      <h3>先补哪类证据</h3>
+      <p>如果一页发布页只写了模型名和下载链接，最先该补什么？</p>
+      <label><input type="radio" name="q3" value="A"> 数据来源、版本、token 数、混合比例、过滤和污染检查</label>
+      <label><input type="radio" name="q3" value="B"> 一个更大的 hero 图</label>
+      <label><input type="radio" name="q3" value="C"> 训练吞吐截图</label>
+      <label><input type="radio" name="q3" value="D"> 再贴一张 sample 图就够了</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>读证据</h3>
+      <p>把数据账和超参账分开，才能知道哪里该追问。</p>
+    </div>
+    <div class="quick-review">数据账和超参账分开写，报告才有复查入口。名字不够，版本和数量更重要。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q4" data-group="读证据" data-title="数据账清单">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">数据账</span></div>
+      <h3>数据账清单</h3>
+      <p>从下面选出属于数据账、且缺了就该追问的项。你可以先把认为必须出现的项都勾出来，再对照说明里的边界。</p>
+      <label><input type="checkbox" name="q4" value="来源与版本"> 来源与版本</label>
+      <label><input type="checkbox" name="q4" value="token 数和混合比例"> token 数和混合比例</label>
+      <label><input type="checkbox" name="q4" value="过滤与去重"> 过滤与去重</label>
+      <label><input type="checkbox" name="q4" value="许可证和污染检查"> 许可证和污染检查</label>
+      <label><input type="checkbox" name="q4" value="最终权重下载链接"> 最终权重下载链接</label>
+      <details>
+        <summary>展开反馈</summary>
+        <p>前四项属于数据账的核心证据；最后一项是开放产物的一部分，但不能替代数据账。判断时先问“模型学了什么”，再问“文件从哪来”。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q5" data-group="读证据" data-title="可追溯的信号" data-answer="A" data-explain="数据 URL + 下载日期 + hash + 切分种子，才能把同一版数据重新找回来。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">可追溯</span></div>
+      <h3>可追溯的信号</h3>
+      <p>哪一个最能说明数据记录可追溯？</p>
+      <label><input type="radio" name="q5" value="A"> 数据 URL + 下载日期 + hash + 切分种子</label>
+      <label><input type="radio" name="q5" value="B"> 最终 sample 图</label>
+      <label><input type="radio" name="q5" value="C"> GPU 型号</label>
+      <label><input type="radio" name="q5" value="D"> loss 曲线截图</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q6" data-group="读证据" data-title="把口语改成配方">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">数据改写</span></div>
+      <h3>把口语改成配方</h3>
+      <p>把“我们用了网页和代码训练模型”改写成可检查的数据配方。至少写出来源、版本、token 数、混合比例、过滤、去重、污染检查和许可证。</p>
+      <p class="solve-note">答案目标：把“用了什么”改成“从哪来、多少、怎么处理、怎么检查”。可以自拟数字，但要写清楚它是示例还是实测。</p>
+      <textarea name="q6" placeholder="写成报告里的数据配方段落。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要能读出数据来源、版本或下载时间、每类数据的 token 数和混合比例、过滤和去重方式、评估污染检查、许可证或可公开性边界。只把数据集名称换长，不算完成。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>阶段和产物</h3>
+      <p>阶段记录和产物链路要对上，才能知道最终结果从哪里来。</p>
+    </div>
+    <div class="quick-review">阶段记录和产物链路要互相指向。只给最终分数，信息是不够的。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q7" data-group="阶段和产物" data-title="阶段记录缺口" data-answer="A" data-explain="要回溯一段 stage，必须知道它从哪里开始、到哪里结束，以及数据是否变化。">
+      <div class="q-meta"><span class="pill">code reading</span><span class="pill">stage</span></div>
+      <h3>阶段记录缺口</h3>
+      <p>看下面这段记录，最缺的是什么，才算能回溯一段 stage？</p>
+      <div class="codebar"><span>stage 片段</span><button class="copy" type="button" data-copy="stage-snippet">复制</button></div>
+      <pre id="stage-snippet" data-export-context="阶段记录片段" data-export-lang="text"><code class="language-text">stage:
+  name: base_pretraining
+  start_checkpoint: step_0
+  token_budget: 300B
+  lr_schedule: warmup + cosine</code></pre>
+      <label><input type="radio" name="q7" value="A"> 数据混合和结束 checkpoint</label>
+      <label><input type="radio" name="q7" value="B"> 一个更漂亮的名字</label>
+      <label><input type="radio" name="q7" value="C"> 最终 benchmark 截图</label>
+      <label><input type="radio" name="q7" value="D"> 模型介绍页</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q8" data-group="阶段和产物" data-title="写一段 stage 记录">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">stage</span></div>
+      <h3>写一段 stage 记录</h3>
+      <p>设计一个两阶段记录：Stage 1 用通用数据，Stage 2 用更高质量数据退火。写清起止 checkpoint、token budget、数据混合、学习率变化、评估触发点和选择标准。</p>
+      <p class="solve-note">答案目标：每个 stage 都要能看出“从哪开始、跑到哪、改了什么、凭什么收”。</p>
+      <textarea name="q8" placeholder="写成两段 stage 记录。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案至少要写出每阶段的起止 checkpoint、token budget、数据混合、学习率变化、评估间隔、选择标准。若只写“先打底，再收束”，还不够。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q9" data-group="阶段和产物" data-title="产物链路">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">artifact</span></div>
+      <h3>产物链路</h3>
+      <p>从下面勾出应该能互相对上的产物。你的判断不需要一字不差，但每个被勾中的项都应该能指向一个对应项。</p>
+      <label><input type="checkbox" name="q9" value="权重"> 权重</label>
+      <label><input type="checkbox" name="q9" value="模型卡"> 模型卡</label>
+      <label><input type="checkbox" name="q9" value="配置"> 配置</label>
+      <label><input type="checkbox" name="q9" value="训练代码"> 训练代码</label>
+      <label><input type="checkbox" name="q9" value="日志"> 日志</label>
+      <label><input type="checkbox" name="q9" value="评估脚本"> 评估脚本</label>
+      <label><input type="checkbox" name="q9" value="数据版本"> 数据版本</label>
+      <label><input type="checkbox" name="q9" value="最终分数表"> 最终分数表</label>
+      <details>
+        <summary>展开反馈</summary>
+        <p>关键不是“有什么文件”，而是“文件之间能不能互相指认”。权重要能指向配置，配置要能指向代码，日志要能指向 checkpoint，评估表要能指向脚本和数据版本。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>综合判断</h3>
+      <p>把一份报告当成结论链，判断它还缺哪一层证据。</p>
+    </div>
+    <div class="quick-review">只给最终权重、最终分数和几张样例，证据还不够完整。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q10" data-group="综合判断" data-title="最该补的证据" data-answer="A" data-explain="缺的是评估协议和污染检查，因为分数需要协议才能比较，需要污染检查才能解释可信度。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">评估</span></div>
+      <h3>最该补的证据</h3>
+      <p>如果报告只给最终权重、最终分数和两张样例，最缺哪类证据？</p>
+      <label><input type="radio" name="q10" value="A"> 评估协议和污染检查</label>
+      <label><input type="radio" name="q10" value="B"> 更多宣传语</label>
+      <label><input type="radio" name="q10" value="C"> 更复杂的封面</label>
+      <label><input type="radio" name="q10" value="D"> 更长的简介</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q11" data-group="综合判断" data-title="为什么一次 run 不是配方">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">report</span></div>
+      <h3>为什么一次 run 不是配方</h3>
+      <p>用 200-300 字解释：为什么说“一次 run 不是一份配方”？请把 toy run、数据、超参、评估、阶段记录和开放产物连成一个完整说明。</p>
+      <p class="solve-note">答案目标：先说 run 是一次执行，再说 recipe 是一组可审计的证据集合，最后把这组证据和可复查性连起来。</p>
+      <textarea name="q11" placeholder="写一段完整说明。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案要说明：run 只是一回执行，recipe 还要包括数据账、超参账、评估协议、阶段记录和产物链路；没有这些证据，别人只能看到结果，看不到结果怎么来的。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="综合判断" data-title="带去下一页">
+      <div class="q-meta"><span class="pill">scenario transfer</span><span class="pill">bridge</span></div>
+      <h3>带去下一页</h3>
+      <p>打开 08 之前，你会先把这页的哪四个字段带过去？请按“问题、预算、数据、模型/指标/边界”四类写。</p>
+      <p class="solve-note">答案目标：把 07 的证据链，转成 08 可以直接开写的实验计划字段。</p>
+      <textarea name="q12" placeholder="按四类写出你会带去下一页的字段。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>至少要写出：要验证的问题、预算上限、数据来源和处理方式、模型规模或主要指标、停机线和不可外推结论。写成自己的版本，比照搬模板更有用。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><a href="https://cs336.stanford.edu/spring2025/index.html">Stanford CS336: Language Modeling from Scratch</a>（课程主线，访问：2026-06-21）。</li>
+  <li><a href="https://github.com/karpathy/llm.c">karpathy/llm.c</a>（教学实现，访问：2026-06-21）。</li>
+  <li><a href="https://arxiv.org/abs/2501.00656">OLMo 2 论文</a>（公开训练配方的参照，访问：2026-06-21）。</li>
+  <li><a href="https://allenai.org/olmo2">Ai2 OLMo 2 项目页</a>（权重、数据、代码和评估的公开示例，访问：2026-06-21）。</li>
+  <li>本页只把这些公开材料当成学习边界，不复制课程作业、仓库说明或论文长段内容；更细的实现差异以后以最新公开文档为准。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

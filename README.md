@@ -7,7 +7,7 @@
 ## 内容范围
 
 - 大语言模型基础、提示工程、RAG、Harness Engineering
-- Agent、Agent Skills、Context Engineering 与多智能体系统
+- Agent 基础与工程、Agent Skills、Context Engineering、Claude Code 工作流与多智能体系统
 - 深度学习、PyTorch 实践、算法题型与工程基础
 - 公开课程、论文和长文资料的学习拆解
 
@@ -16,16 +16,15 @@
 ## 推荐入口
 
 - [AI Study Lab 网站首页](https://fewiyuu.github.io/ai-study-lab/)：提供学习路径、课程选读和全量目录检索
-- [AI 与算法学习资料索引](AI与算法学习资料索引.md)
-- [Agent 学习资料](Agent/研习资料/index.html)
-- [Agent Skills 研习资料](Agent%20Skills/研习资料/index.html)
-- [Context Engineering 研习资料](Context%20Engineering/研习资料/index.html)
+- [大语言模型学习地图](大语言模型/研习资料/index.html)：进入 LLM 基础、提示工程、RAG、MCP、Harness Engineering、LoRA 和李宏毅 LLM 课程
+- [Agent 学习地图](Agent/研习资料/index.html)：进入 Agent 基础与工程、Agent Skills、Context Engineering、Claude Code 工作流和多智能体系统
 - [深度学习：PyTorch 与大模型基础](深度学习/研习资料/index.html)
+- [算法学习地图](算法/研习资料/index.html)
 - [李宏毅机器学习](李宏毅%20%20机器学习/研习资料/index.html)
-- [李宏毅 LLM 大模型](李宏毅%20LLM大模型/研习资料/index.html)
+- [李宏毅 LLM 课程](大语言模型/研习资料/李宏毅LLM课程/index.html)
 - [PyTorch 深度学习实践](PyTorch深度学习实践%20刘二大人/研习资料/index.html)
 
-各课程目录中的 `index.html` 是课程地图页，包含推荐路径和各节学习页入口。
+主题目录中的 `index.html` 是学习地图，负责说明方向、前置关系、推荐路径和课程衔接；课程目录中的 `index.html` 是课程地图页，继续展开各节学习页入口。
 
 ## 使用说明
 

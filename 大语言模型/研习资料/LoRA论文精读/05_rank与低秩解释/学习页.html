@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rank 与低秩解释｜学习页</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="LoRA 论文精读" data-unit="05_rank与低秩解释">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand"><strong>LoRA 论文精读</strong><span>rank 与低秩解释</span></div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#questions"><span class="dot"></span>机制问题</a>
+        <a href="#rank-scan"><span class="dot"></span>rank 扫描</a>
+        <a href="#subspace"><span class="dot"></span>子空间解释</a>
+        <a href="#seeds"><span class="dot"></span>随机种子</a>
+        <a href="#delta"><span class="dot"></span>Delta W 与 W</a>
+        <a href="#pitfalls"><span class="dot"></span>常见误区</a>
+        <a href="#examples"><span class="dot"></span>试一试</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">这一块不背玄学：rank 小为什么还行，要靠实验现象、子空间重合和 W/Delta W 的关系来解释。</div>
+    </aside>
+    <main>
+      <div class="hero" id="goals">
+        <div>
+          <div class="kicker">第 5 块 · 机制解释</div>
+          <h1>rank 与低秩解释</h1>
+          <p>从 rank 扫描、子空间相似度和 Delta W 读懂 LoRA 为什么有效</p>
+          <div class="course-links"><a href="../index.html">课程地图</a><a href="../课程拆解.md">课程拆解</a></div>
+        </div>
+        <div class="box soft"><h3>学完你应该能做什么</h3><ol><li>解释论文中 intrinsic rank 的含义和证据。</li>
+<li>读懂 rank 扫描实验为什么支持小 r 可行。</li>
+<li>说明 normalized subspace similarity 在比较什么。</li>
+<li>解释 Delta W 与 W 的关系：不是复制 W 的最大方向，而是放大任务相关方向。</li></ol></div>
+      </div>
+      <section id="questions"><div class="head"><h2>1. 论文想回答的三个机制问题</h2><span class="tag">science</span></div>
+<p>LoRA 的实验结果说明它好用，但论文还想解释为什么低秩更新能工作。作者在 GPT-3 175B 上做了一组分析，围绕三个问题：固定参数预算时应该适配哪些权重；LoRA 学到的 <code>Delta W</code> 是否真的 rank-deficient；<code>Delta W</code> 和原始权重 <code>W</code> 到底是什么关系。</p>
+<p>这里的新概念是 intrinsic rank。直觉上，它不是矩阵代数课里的“这个矩阵实际 rank 等于几”那么简单，而是问下游任务真正需要多少有效方向来改变模型行为。如果任务更新主要集中在少数方向上，小 rank LoRA 就可能够用。</p>
+<p>术语上，论文用 rank 扫描、不同 rank 的子空间重合、不同随机种子的子空间重合，以及 <code>Delta W</code> 投影到 <code>W</code> 方向上的范数来支持这个说法。你现在应该能把“低秩有效”理解成实证假设，而不是数学定理。</p>
+<div class="grid"><div class="box blue"><h3>放哪些权重</h3><p>固定参数预算下，Wq/Wv 或四个 attention 投影往往比只放一个投影更好。</p></div>
+<div class="box ok"><h3>rank 多大</h3><p>在 GPT-3 的 WikiSQL/MNLI 实验中，小到 r=1 仍有竞争力。</p></div>
+<div class="box blue"><h3>Delta W 与 W</h3><p>Delta W 倾向放大 W 中已有但不突出的任务相关方向。</p></div></div></section>
+<section id="trace-lab">
+  <div class="head"><h2>rank 机制检查链</h2><span class="tag">mechanism</span></div>
+  <p>这一段把本页的判断流程变成可检查对象：先看公式或规则，再沿着 trace 走一遍，最后用失败输出确认自己知道哪里会错。</p>
+  <div class="math-block" data-export-context="rank 与低秩解释核心公式" data-export-lang="math">
+    $$\phi(A_r,A_R,i,j)=\frac{\lVert U_{r,i}^{T}U_{R,j}\rVert_F^2}{\min(i,j)}$$
+    <p>这个相似度比较两个 LoRA A 矩阵学到的方向是否重合；它解释 rank 扫描背后的方向结构，不是直接比较任务分数。</p>
+  </div>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines"><button class="trace-line active" data-trace-step="step-1"><code>选 target</code><span>Wq / Wv / Wk / Wo</span></button><button class="trace-line" data-trace-step="step-2"><code>扫 rank</code><span>r=1,2,4,8,64</span></button><button class="trace-line" data-trace-step="step-3"><code>做 SVD</code><span>A -&gt; U Sigma V</span></button><button class="trace-line" data-trace-step="step-4"><code>比较子空间</code><span>top directions</span></button></div>
+    <div class="trace-canvas"><div class="tensor-card active" data-trace-target="step-1"><b>选 target</b><span>Wq / Wv / Wk / Wo</span><p>先决定更新落在哪些投影。</p></div><div class="tensor-card" data-trace-target="step-2"><b>扫 rank</b><span>r=1,2,4,8,64</span><p>看小 rank 是否已经抓住主方向。</p></div><div class="tensor-card" data-trace-target="step-3"><b>做 SVD</b><span>A -&gt; U Sigma V</span><p>把矩阵变成可比较的方向。</p></div><div class="tensor-card" data-trace-target="step-4"><b>比较子空间</b><span>top directions</span><p>判断不同 rank 或种子是否学到稳定方向。</p></div></div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="rank 与低秩解释检查表" data-export-lang="table">
+      <thead><tr><th>检查对象</th><th>观察值</th><th>判断</th></tr></thead>
+      <tbody><tr><td>Wq r=1</td><td>WikiSQL 68.8</td><td>只放一个投影可能不够</td></tr>
+<tr><td>Wq/Wv r=1</td><td>WikiSQL 73.4</td><td>小 rank 已经很强</td></tr>
+<tr><td>all attention r=2</td><td>MNLI 91.7</td><td>预算分配和 target 联动</td></tr></tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>rank sweep 记录模板</span><button class="copy" data-copy="code-05">复制</button></div>
+  <pre id="code-05" data-export-context="rank sweep 记录模板" data-export-lang="python"><code class="language-python">for target_modules in [[&quot;q_proj&quot;], [&quot;q_proj&quot;, &quot;v_proj&quot;], [&quot;q_proj&quot;, &quot;k_proj&quot;, &quot;v_proj&quot;, &quot;o_proj&quot;]]:
+    for r in [1, 2, 4, 8, 16]:
+        run_lora_eval(target_modules=target_modules, rank=r)
+</code></pre>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls"><button class="ghost active" data-terminal-case="case-1">r=1 永远够</button><button class="ghost" data-terminal-case="case-2">rank+target</button><button class="ghost" data-terminal-case="case-3">子空间解释</button></div>
+    <pre class="terminal-output" data-export-context="rank 与低秩解释失败诊断输出" data-export-lang="text" aria-live="polite">FAIL: 论文只支持特定任务上的经验现象。</pre>
+    <template data-terminal-output="case-1">FAIL: 论文只支持特定任务上的经验现象。</template><template data-terminal-output="case-2">OK: rank 必须和 target modules 一起判断。</template><template data-terminal-output="case-3">OK: 顶部方向重合说明关键任务方向稳定。</template>
+  </div>
+</section><section id="rank-scan"><div class="head"><h2>2. rank 扫描：小 r 已经很强</h2><span class="tag">rank</span></div>
+<p>论文把 LoRA 加到不同 attention 权重上，并扫描 <code>r=1,2,4,8,64</code>。让人意外的是，在 GPT-3 的 WikiSQL 和 MultiNLI 上，只要适配 <code>Wq,Wv</code> 或四个 attention 投影，<code>r=1</code> 就已经很有竞争力。比如 <code>Wq,Wv</code> 在 WikiSQL 上 <code>r=1</code> 为 73.4，<code>r=8</code> 为 73.8，差距很小。</p>
+<p>这不表示 rank 1 永远够用。论文自己也提醒，如果下游任务和预训练分布差异很大，比如不同语言或需要大量新知识，小 rank 可能不够。rank 扫描支持的是“这些任务上的有效更新方向很少”，不是“所有任务都低秩到 rank 1”。</p>
+<p>一个更细的观察是：只适配 <code>Wq</code> 时，rank 变大更有帮助；适配 <code>Wq,Wv</code> 时，小 rank 已经够强。这说明 target module 选择和 rank 不是独立超参。你现在应该能解释为什么“多放几个关键矩阵、每个矩阵小 rank”有时比“只放一个矩阵、大 rank”更划算。</p>
+
+<div class="card">
+  <div class="head"><span>交互观察</span><span class="tag">interactive</span></div>
+  <div class="grid2">
+    <div class="card"><div class="flow"><button class="ghost" data-title="只适配 Wq，r=1" data-note="WikiSQL 表现明显低于 Wq/Wv，说明只改一个投影可能覆盖不够。" data-rows="target=Wq|rank=1|WikiSQL=68.8|MNLI=90.7">Wq r=1</button>
+<button class="ghost" data-title="适配 Wq/Wv，r=1" data-note="参数很少，但已经接近更高 rank 的表现。" data-rows="target=Wq,Wv|rank=1|WikiSQL=73.4|MNLI=91.3">Wq/Wv r=1</button>
+<button class="ghost" data-title="适配 Wq/Wv，r=8" data-note="比 r=1 略高，但不是数量级差距。" data-rows="target=Wq,Wv|rank=8|WikiSQL=73.8|MNLI=91.6">Wq/Wv r=8</button>
+<button class="ghost" data-title="四个 attention 投影，r=2" data-note="固定预算下覆盖更多投影，也很有竞争力。" data-rows="target=Wq,Wk,Wv,Wo|rank=2|WikiSQL=73.7|MNLI=91.7">all r=2</button></div></div>
+    <div class="card">
+      <div class="card"><b class="viz-state-title">选择一个场景</b><span class="viz-note-text">这里会显示判断结果。</span></div>
+      <table ><thead><tr><th>项目</th><th>观察</th></tr></thead><tbody class="metric-body"></tbody></table>
+      <div class="inline-note">判断提示：rank 和 target modules 要一起看。小 r 有效是实验现象，不是所有任务的保证。</div>
+    </div>
+  </div>
+</div>
+</section><section id="subspace"><div class="head"><h2>3. 子空间相似度：比较学到的方向是否重合</h2><span class="tag">subspace</span></div>
+<p>rank 扫描只能告诉你指标差不多，还不能说明学到的方向是否相似。论文进一步比较 <code>r=8</code> 和 <code>r=64</code> 学到的 <code>A</code> 矩阵子空间。做法是对 <code>A</code> 做 SVD，取右奇异向量，再看 top-i 方向和另一个矩阵 top-j 方向的重合程度。</p>
+<p>normalized subspace similarity 的值在 0 到 1 之间。1 表示两个子空间完全重合，0 表示几乎分离。论文发现，<code>r=8</code> 和 <code>r=64</code> 的顶部奇异方向有明显重合，尤其是最重要的方向；后面很多方向重合少，可能包含更多训练噪声。这解释了为什么小 rank 也能抓住主要任务方向。</p>
+<p>这段最容易误解成“r=64 没用”。更稳的说法是：在这些实验中，r=64 的额外方向没有带来同等重要的有效信号，顶部方向才是主要贡献。对于更难任务或不同模型，额外方向可能有用，需要实验确认。</p>
+<div class="math-block"><span class="big">phi(A<span class="sub">8</span>, A<span class="sub">64</span>, i, j) = ||U<span class="sub">8,i</span><sup>T</sup> U<span class="sub">64,j</span>||<span class="sub">F</span><sup>2</sup> / min(i,j)</span><br>范围：[0,1]。越接近 1，两个子空间越重合。</div>
+<div class="card">
+<svg viewBox="0 0 680 230" role="img" aria-label="子空间相似度直觉图">
+  <rect x="40" y="40" width="220" height="140" fill="#eef8fe" stroke="#1b2a4a"/><text x="150" y="70" text-anchor="middle" font-size="16">A(r=8) 的 top 方向</text>
+  <line x1="80" y1="150" x2="220" y2="80" stroke="#00a9f4" stroke-width="5"/><line x1="90" y1="90" x2="210" y2="155" stroke="#9aa8b6" stroke-width="2"/>
+  <rect x="420" y="40" width="220" height="140" fill="#fff8e1" stroke="#a66b00"/><text x="530" y="70" text-anchor="middle" font-size="16">A(r=64) 的 top 方向</text>
+  <line x1="455" y1="148" x2="600" y2="78" stroke="#00a9f4" stroke-width="5"/><line x1="455" y1="95" x2="610" y2="132" stroke="#9aa8b6" stroke-width="2"/><line x1="470" y1="165" x2="620" y2="160" stroke="#d8dee8" stroke-width="2"/>
+  <text x="340" y="113" text-anchor="middle" font-size="14">比较方向重合</text><text x="340" y="137" text-anchor="middle" font-size="12">顶部方向重合高，后续方向可能更噪</text>
+</svg>
+</div>
+<p>判断句：子空间相似度比较的是“学到的方向”，不是直接比较最终分数。你现在应该能用它解释 rank 实验背后的机制。</p>
+</section><section id="seeds"><div class="head"><h2>4. 不同随机种子：不是偶然撞上的方向</h2><span class="tag">random seeds</span></div>
+<p>为了排除“同一个模型、同一训练设置下偶然相似”的解释，论文还比较了两个不同随机种子训练出的 <code>r=64</code> LoRA 子空间。结果显示，<code>Delta Wq</code> 似乎有更多共同奇异方向，<code>Delta Wv</code> 的共同方向更少一些；随机高斯矩阵之间则没有这种结构性重合。</p>
+<p>这说明训练不是随便找到一堆等价噪声方向。不同随机种子仍会学到一些共同方向，表明任务确实在模型中牵引出稳定的适配子空间。稳定方向越靠前，越说明小 rank 可能抓住关键部分。</p>
+<p>不过，这类分析仍是经验性的。它依赖具体模型层、任务和训练过程。你不能只凭“论文说有共同方向”就跳过自己任务上的 rank sweep。正确用法是：把它当作为什么 LoRA 值得先试小 rank 的理由。</p>
+<div class="grid"><div class="box ok"><h3>同 rank 不同种子</h3><p>若顶部方向仍重合，说明任务牵引出稳定子空间。</p></div>
+<div class="box blue"><h3>随机矩阵对照</h3><p>随机矩阵没有共同方向，用来排除纯随机重合。</p></div>
+<div class="box warn"><h3>实践含义</h3><p>先用小 rank 做强基线，再按任务验证是否需要更高 rank。</p></div></div></section><section id="delta"><div class="head"><h2>5. Delta W 和 W：放大已有但不突出的方向</h2><span class="tag">delta-w</span></div>
+<p>论文最后问：LoRA 学到的 <code>Delta W</code> 和原始权重 <code>W</code> 是什么关系？如果 <code>Delta W</code> 只是复制 <code>W</code> 的最大奇异方向，那它可能只是强化原模型已经最强的通道。作者用投影范数比较发现，<code>Delta W</code> 和 <code>W</code> 比随机方向相关，但并不主要落在 <code>W</code> 的 top singular directions 上。</p>
+<p>他们的解释是：<code>Delta W</code> 放大了预训练模型已经学到、但在原始权重里没有被强烈强调的任务相关方向。用论文表中的一个数值看，<code>r=4</code> 时，某层 <code>Delta Wq</code> 的范数是 6.91，而 <code>Wq</code> 投影到这些方向上的范数只有 0.32，放大因子约 21.5。也就是说，LoRA 不是从零造出所有能力，而是在已有表示里把对任务有用的方向推高。</p>
+<p>这也是 LoRA 适合预训练大模型的原因之一。大模型已经在预训练中学到许多潜在特征，下游任务往往需要重新组合或强调其中一部分。低秩更新能以较小参数量完成这种“方向放大”。边界也在这里：如果任务需要模型没有学过的新能力，小 rank LoRA 可能不够。</p>
+<div class="card"><div class="head"><span>数值对比</span><span class="tag">scale</span></div><div class="card"><div class="bar-row"><b>W 在 DeltaW 方向上的范数</b><div class="bar"><span style="width:5%"></span></div><span>0.32</span></div>
+<div class="bar-row"><b>DeltaW 自身范数</b><div class="bar"><span style="width:100%"></span></div><span>6.91</span></div>
+<div class="bar-row"><b>放大因子</b><div class="bar"><span style="width:100%"></span></div><span>约 21.5x</span></div></div></div><p>判断句：LoRA 更像放大和重排预训练模型里的任务相关方向，不是用 35MB 权重凭空替代 350GB 模型。你现在应该能解释 LoRA 为什么仍然依赖底座模型。</p></section><section id="pitfalls"><div class="head"><h2>6. 常见误区：把低秩解释讲过头</h2><span class="tag">pitfalls</span></div><div class="grid"><div class="box bad"><h3>误区：r=1 永远够</h3><p>论文只在部分任务上观察到小 r 很强。分布差异大时可能需要更高 rank。</p></div>
+<div class="box warn"><h3>误区：rank 越大越稳</h3><p>更大 rank 会增加参数，也可能引入噪声或过拟合，不保证指标单调提升。</p></div>
+<div class="box bad"><h3>误区：低秩等于低质量</h3><p>低秩限制表达空间，但预训练模型的任务更新可能本来就集中在少数方向。</p></div>
+<div class="box warn"><h3>误区：Delta W 和 W 无关</h3><p>论文发现 Delta W 比随机方向更相关，但不是简单复制 W 的最大方向。</p></div>
+<div class="box warn"><h3>误区：机制分析等于理论证明</h3><p>这些是实证分析，能提供解释和启发，不是覆盖所有任务的定理。</p></div>
+<div class="box bad"><h3>误区：只看 rank 不看 target</h3><p>rank 和 target modules 联动。只谈 r 大小会漏掉预算分配。</p></div></div></section><section id="examples"><div class="head"><h2>7. 试一试：把机制说成判断</h2><span class="tag">examples</span></div>
+<div class="grid">
+  <div class="card"><h3>例题 1</h3><p>为什么 r=1 表现强，能支持 intrinsic rank 低的说法？</p><p class="hint">说明任务更新的关键方向可能很少，但不能推到所有任务。</p></div>
+  <div class="card"><h3>例题 2</h3><p>子空间相似度高说明什么？</p><p class="hint">不同 rank 或种子学到的顶部方向有重合，可能是稳定任务方向。</p></div>
+  <div class="card"><h3>例题 3</h3><p>Delta W 放大 W 中“不突出但有用”的方向，这句话如何理解？</p><p class="hint">底座已有相关特征，但下游任务需要把这些方向权重调高。</p></div>
+</div>
+</section>
+<section id="rank-case"><div class="head"><h2>补充案例：rank 不是容量旋钮，而是方向预算</h2><span class="tag">case</span></div>
+<p>很多人第一次读 LoRA 的 rank 实验，会把 <code>r</code> 理解成一个普通容量超参：越大越强，越小越弱。论文第五部分想纠正的正是这个直觉。LoRA 假设下游任务需要的权重变化 <code>Delta W</code> 可能集中在少数重要方向上，因此用 <code>B A</code> 这样的低秩分解就能表达主要更新。这里的 rank 更像“允许模型调整多少个方向”的预算，而不是简单的参数越多越好。</p>
+<p>先把矩阵形状说清楚。原始线性层权重 <code>W</code> 可能是 <code>d_out x d_in</code>。全量微调直接更新整个 <code>W</code>，自由度是 <code>d_out * d_in</code>。LoRA 冻结 <code>W</code>，只学习 <code>A: r x d_in</code> 和 <code>B: d_out x r</code>，更新矩阵为 <code>Delta W = B A</code>，自由度大约是 <code>r * (d_in + d_out)</code>。当 <code>r</code> 很小，LoRA 只能在少数方向上改动；如果这些方向刚好覆盖任务需要，它就很省；如果任务需要更分散的变化，小 rank 就会吃力。</p>
+<div class="math-block" data-export-context="05 rank 直觉：r 控制 Delta W 能表达的方向数，自由度约为 r*(d_in+d_out)，不是单调越大越好。" data-export-lang="math">
+  Delta W = B A, A in R^{r x d_in}, B in R^{d_out x r}, trainable ~= r(d_in+d_out)
+</div>
+<p>论文用两个证据去支撑“任务更新的 intrinsic rank 可能很低”。第一是 rank 扫描：在若干设置里，<code>r=1</code>、<code>r=2</code>、<code>r=4</code> 已经能取得强结果，继续增大 rank 的收益有限。第二是子空间相似度：不同 rank 或不同随机种子学到的顶部方向有重合，说明模型不是随便找一个方向凑分，而可能在反复找到与任务有关的稳定方向。注意，二者都是实证证据，不是数学定理。</p>
+<table data-export-context="05 rank 决策表：从任务变化、稳定性、过拟合风险和预算约束判断是否加 rank。" data-export-lang="table">
+  <thead><tr><th>观察</th><th>可能含义</th><th>下一步动作</th></tr></thead>
+  <tbody>
+    <tr><td>r=4 与 r=16 接近</td><td>关键更新可能集中在少数方向</td><td>优先保留小 rank，检查不同种子是否稳定</td></tr>
+    <tr><td>r 增大后训练分涨、验证分不涨</td><td>额外方向可能在记训练集噪声</td><td>看验证曲线、正则、数据质量，不要只加容量</td></tr>
+    <tr><td>所有 rank 都明显低于全量微调</td><td>target modules、学习率或任务边界可能不匹配</td><td>先查配置，再考虑扩大 target 或换方法</td></tr>
+    <tr><td>不同 seed 学到方向相似</td><td>任务方向较稳定</td><td>可以把小 rank 作为强基线，但仍保留任务范围</td></tr>
+  </tbody>
+</table>
+<p>把 rank 讲准，还要避免一个常见偷换：低秩不是低维输入，也不是压缩数据集，而是限制权重更新矩阵的秩。输入 token 仍在高维表示空间里流动，底座模型也仍然有完整能力。LoRA 改的是“任务适配增量”的表达方式：它让增量只能由少量方向组合出来。因此你不能说“LoRA 把模型变成低维模型”，更准确的说法是“LoRA 让下游更新落在一个低秩子空间里”。</p>
+<p>再看 <code>Delta W</code> 和 <code>W</code> 的关系。论文发现，<code>Delta W</code> 不是完全随机的外部补丁，它与预训练权重中的某些方向有关，但又不是简单复制最大奇异方向。一个好理解的说法是：预训练模型已经包含许多潜在能力，下游任务不一定需要重新学整套能力，而是需要把某些原本不突出的方向强调出来。LoRA 的低秩更新就像给这些方向加权。这个解释能说明为什么 LoRA 依赖强底座，也能说明为什么换成完全陌生任务时小 rank 可能不够。</p>
+<pre data-export-context="05 rank 决策伪代码：先验证小 rank 基线，再根据验证曲线和子空间稳定性决定是否扩大。" data-export-lang="python"><code class="language-python">def choose_rank(results):
+    base = results["r4"]
+    wider = results["r16"]
+    if wider.valid_score - base.valid_score &lt;= results["noise"]:
+        return "keep small rank; spend budget on data and target checks"
+    if wider.train_score &gt; base.train_score and wider.valid_score &lt;= base.valid_score:
+        return "do not blindly increase rank; inspect overfitting"
+    return "try wider target modules or higher rank with a held-out check"</code></pre>
+<p>失败后果很现实。若你把 rank 当成单向容量旋钮，项目里会本能地把 <code>r</code> 从 8 加到 64，希望问题自动消失；但如果真正错误是 target module 没命中、学习率过大、数据标签脏，rank 变大只会更贵、更难解释。若你把 <code>r=1</code> 的论文结果当成普适结论，又会在复杂领域任务里低估适配难度。论文给我们的不是一个固定数字，而是一套检查顺序：先小 rank 做强基线，再用任务结果、稳定性和边界决定是否加预算。</p>
+<p>把这套逻辑放到真实训练日志里，会更容易判断。假设你跑了 <code>r=4, 8, 16, 64</code> 四组实验。训练集分数从 84 到 92 一路上升，但验证集在 <code>r=8</code> 后基本不动，甚至略降。这个结果不支持“rank 越大越好”，反而提示额外方向可能在记训练集细节。此时更有价值的动作是检查验证集是否稳定、样本是否泄漏、类别是否不平衡、学习率是否对大 rank 过激，而不是继续把 <code>r</code> 加到 128。</p>
+<p>另一种日志也常见：所有 rank 都不如一个很弱的 baseline，loss 还几乎不降。很多人会立刻怀疑 LoRA 原理不行，其实更可能是工程配置错了。比如目标层名字没有命中，训练参数虽然显示存在，但接在了无关模块；或者 tokenizer、标签映射、冻结逻辑出了问题；也可能是 learning rate 与 scaling 搭配不合适。rank 分析必须建立在“训练链路正确”的前提上。链路没验收，rank 扫描只是把错误重复跑了几遍。</p>
+<table data-export-context="05 rank 日志判读：不同曲线形态对应不同排查动作。" data-export-lang="table">
+  <thead><tr><th>曲线形态</th><th>不要急着下的结论</th><th>更合理的排查</th></tr></thead>
+  <tbody>
+    <tr><td>大 rank 训练分升、验证分不升</td><td>LoRA 需要更大 rank</td><td>先查过拟合、数据噪声、学习率和 early stopping</td></tr>
+    <tr><td>所有 rank 都很差</td><td>低秩方法无效</td><td>先查 target 命中、冻结、标签和最小 batch 过拟合</td></tr>
+    <tr><td>小 rank 已接近全量微调</td><td>所有任务都小 rank 足够</td><td>保留为当前任务结论，再在新分布上复验</td></tr>
+    <tr><td>不同 seed 波动很大</td><td>某个 rank 最优</td><td>增加重复实验，看均值、方差和稳定方向</td></tr>
+  </tbody>
+</table>
+<p>子空间相似度也要谨慎复述。论文比较的是不同更新矩阵的顶部奇异向量方向是否相似。相似度高，说明这些设置可能找到了重合的任务相关方向；相似度低，不一定说明方法失败，可能是任务本来多解、rank 太小、训练噪声大，或者不同层承担了不同变化。它是机制解释工具，不是线上选型指标。你不能只拿一个相似度数字决定部署 rank，但可以用它帮助解释为什么小 rank 在某些任务上稳定。</p>
+<p>这里有一个很实用的讲法：rank 控制“最多能写多少个更新方向”，target modules 控制“这些方向写到哪些层”，alpha/scaling 控制“写入强度”，数据和优化控制“方向是否被正确找到”。四者一起决定结果。只讨论 rank，会像只看方向盘不看路面、油门和地图。论文把 rank 放在机制章节，是为了回答低秩为什么可能有效；工程上选 rank，则要把它放回完整配置里。</p>
+<div class="grid">
+  <div class="box blue"><h3>机制层</h3><p>小 rank 强，说明关键更新可能集中；子空间重合，说明学到的方向有稳定性。这一层回答“为什么可能”。</p></div>
+  <div class="box warn"><h3>配置层</h3><p>rank、target、alpha、学习率、数据质量一起影响效果。这一层回答“怎么设置”。</p></div>
+  <div class="box bad"><h3>表达层</h3><p>不要把经验观察讲成定理。应该说“论文在这些任务上观察到”，而不是“LoRA 证明所有任务低秩”。</p></div>
+</div>
+<p>如果你要写自己的实验计划，可以从 <code>r=4</code> 或 <code>r=8</code> 起步，固定数据和随机种子，先确认小 rank 能过最小验收；再做 <code>r=16</code> 或 <code>r=32</code> 的对比，记录验证指标、训练成本和 checkpoint 大小；最后只在有明确收益时扩大 rank。这样做的好处是：即便最终选择更大 rank，你也知道收益来自哪里，而不是把 rank 当成玄学按钮。</p>
+<p>还有一个常见误区是把 intrinsic rank 当成模型天生的固定属性。更准确地说，它描述的是某个任务、某个底座、某个层或某类更新在实验中呈现出的有效维度。换任务、换数据分布、换 target modules，更新方向可能就会变。比如情感分类可能只需要调动少数语义方向，代码生成或医学问答可能需要更复杂的知识组合；同样是生成任务，短模板生成和长链路推理的适配难度也不一样。因此 intrinsic rank 不是“模型身份证”，而是“这次适配需要多少有效方向”的经验观察。</p>
+<p>把这句话用于工程决策时，可以给自己三个问题。第一，当前任务和论文任务像不像：输入长度、输出形式、标签空间、领域差异是否接近。第二，当前底座是否已经具备相关能力：如果底座完全不会某种知识，小 rank adapter 很难凭空补齐。第三，当前失败是否真由容量不足造成：若错误来自数据、评估或配置，增加 rank 只会掩盖问题。三个问题回答完，再谈加 rank，判断会稳很多。</p>
+<pre data-export-context="05 rank 误区修正：先判断任务相似度、底座能力和失败来源，再解释是否需要更高 rank。" data-export-lang="python"><code class="language-python">def rank_claim(task, base_model, failure):
+    if not base_model.has_relevant_skill(task):
+        return "low-rank adapter may not add missing base capability"
+    if failure in ["bad_labels", "wrong_target", "unstable_eval"]:
+        return "fix the pipeline before increasing rank"
+    return "rank sweep can test whether more update directions help"</code></pre>
+<p>练习时如果被问到“为什么 LoRA 依赖底座”，可以把答案连回 rank：低秩更新只提供少数调整方向，它擅长重加权、重组合、放大已有表示；底座没有形成的能力，少数方向不一定能补出来。这样讲比“因为预训练模型强”更具体，也能自然解释为什么论文同时强调实验结果和低秩机制分析。你现在应该能把 rank、底座能力和任务迁移难度放在同一张判断图里。</p>
+<p>实际操作里，可以把 rank 选择写成一条日志：起始 rank 是多少，为什么选它；扩大 rank 后验证集提升是否超过随机波动；若提升很小，下一步查 target、数据还是优化；若提升明显，成本增加是否仍可接受。这条日志会迫使你把“感觉 r 不够”改成可复核判断。等以后回看实验，别人也能知道你是在根据证据加 rank，而不是跟着直觉加参数。</p>
+<p>如果只能留一句总结，就写：rank 是更新方向预算，不是万能性能旋钮。它需要和 target、底座能力、数据分布一起判断。这个句子能挡住大部分过度解释。</p>
+<p>因此，rank 实验的价值不只是找最优数值，更是帮助你判断任务更新到底集中还是分散。</p>
+<p>这个判断会直接影响后续预算。</p>
+<p>练习时，请把“为什么小 rank 有效”说成一条完整链：下游任务更新可能有低 intrinsic rank；LoRA 用 <code>B A</code> 限制增量方向；实验看到小 rank 在若干任务上强；子空间分析提示学到的方向有稳定性；但这仍是论文范围内的经验观察。你现在应该能判断一句话是否讲过头：凡是把“可能”“在这些任务上”“实证观察”删掉，直接说成“所有任务只需小 rank”，都该被改写。</p>
+<div class="callout"><b>练习钩子：</b>等会遇到 rank 判断题时，先问它是在谈数学形状、实验观察，还是工程选型。三件事混在一起，答案通常就会漂。</div>
+</section>
+      <section id="practice"><div class="head"><h2>练习</h2><span class="tag">diagnostic</span></div><div class="practice-intro">
+  <div class="card"><strong>作答方式</strong><p>先做可检查题，再写诊断和复述。导出记录会把答案和核心复盘上下文放在一起。</p></div>
+  <div class="card"><strong>自查重点</strong><p>短答题要写判断依据；诊断题写错因、后果、修法；复述题要覆盖本页核心术语。</p></div>
+</div>
+<div class="practice-group"><div class="group-head"><div><h3>一、rank 和 target</h3><p>先检查你是否能把 rank 实验读稳。</p></div><div class="quick-review"><b>检查点</b><span>rank 不单独决定效果，要和 target modules 一起看。</span></div></div><div class="drill-grid">
+<div class="q" data-question="q05_01" data-group="一、rank 和 target" data-title="intrinsic rank">
+<div class="q-meta"><span class="pill">短答</span><span class="pill">一、rank 和 target</span></div>
+<h3>用自己的话解释 LoRA 论文里的 intrinsic rank。</h3>
+<textarea name="q05_01" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>intrinsic rank 指预训练权重 W 的奇异值分解中，能有效表示任务知识的方向数量。LoRA 论文认为，虽然 W 本身是高秩的，但任务更新 Delta W 只需要在 W 的顶部奇异方向上做调整，因此可以用低秩矩阵 BA 来近似。</p></details>
+</div>
+<div class="q" data-question="q05_02" data-group="一、rank 和 target" data-title="rank 扫描" data-answer="错误" data-explain="对照本页正文里的训练对象、任务边界或部署状态。">
+<div class="q-meta"><span class="pill">判断</span><span class="pill">一、rank 和 target</span></div>
+<h3>论文中某些任务 r=1 表现强，说明所有任务都应该用 r=1。</h3>
+<label><input type="radio" name="q05_02" value="正确"> 正确</label>
+<label><input type="radio" name="q05_02" value="错误"> 错误</label>
+<button class="check" type="button">检查</button>
+<div class="feedback"></div>
+</div>
+<div class="q" data-question="q05_03" data-group="一、rank 和 target" data-title="target 联动">
+<div class="q-meta"><span class="pill">短答</span><span class="pill">一、rank 和 target</span></div>
+<h3>为什么只适配 Wq 时可能需要更大 rank，而适配 Wq/Wv 时小 rank 已经很强？</h3>
+<textarea name="q05_03" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>只适配 Wq 时，所有更新都集中在查询投影上，需要更大的 rank 才能表达足够的任务变化。适配 Wq/Wv 时，查询和值投影同时更新，两者可以互补表达任务知识，所以每个矩阵只需要更小的 rank 就能达到相近效果。</p></details>
+</div>
+<div class="q" data-question="q05_04" data-group="一、rank 和 target" data-title="参数预算">
+<div class="q-meta"><span class="pill">短答</span><span class="pill">一、rank 和 target</span></div>
+<h3>固定参数预算下，为什么适配更多矩阵通常要降低 rank？</h3>
+<textarea name="q05_04" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>固定参数预算下，适配更多矩阵意味着每个矩阵可分配的参数变少。如果 rank 不变，总参数量会超过预算；如果降低 rank，每个矩阵的更新空间变小，但矩阵数量增加可以补偿，整体表达能力可能更强。</p></details>
+</div>
+<div class="q" data-question="q05_05" data-group="一、rank 和 target" data-title="边界任务">
+<div class="q-meta"><span class="pill">场景</span><span class="pill">一、rank 和 target</span></div>
+<h3>举一个小 rank 可能不够的下游任务场景，并说明原因。</h3>
+<textarea name="q05_05" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>需要大幅改变模型底层知识或添加全新领域知识的任务。例如：从通用语言模型微调为特定医学领域模型，需要更新词嵌入和深层语义表示；或者需要改变模型基本行为（如从生成到分类）的任务。这些任务的 Delta W 可能不在 W 的顶部奇异方向上。</p></details>
+</div>
+<div class="q" data-question="q05_06" data-group="一、rank 和 target" data-title="rank 选择">
+<div class="q-meta"><span class="pill">清单</span><span class="pill">一、rank 和 target</span></div>
+<h3>在自己项目里选择 rank 时，你会看哪 4 个信号？</h3>
+<textarea name="q05_06" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>1. 验证集分数不再提升时的 rank。2. 训练 loss 和验证 loss 的差距（过拟合信号）。3. 不同 rank 的 SVD 方向重合度。4. 实际部署的延迟和内存约束。综合这 4 个信号，而不是只看分数。</p></details>
+</div>
+</div></div>
+<div class="practice-group"><div class="group-head"><div><h3>二、子空间解释</h3><p>这一组检查你是否能说清相似度分析。</p></div><div class="quick-review"><b>检查点</b><span>相似度比较方向，不是直接比较指标。</span></div></div><div class="drill-grid">
+<div class="q" data-question="q05_07" data-group="二、子空间解释" data-title="相似度范围">
+<div class="q-meta"><span class="pill">填空</span><span class="pill">二、子空间解释</span></div>
+<h3>normalized subspace similarity 的范围是 ____ 到 ____。</h3>
+<input type="text" name="q05_07" data-answer="0;1" data-explain="范围端点都要写出。">
+<button class="check" type="button">检查</button>
+<div class="feedback"></div>
+</div>
+<div class="q" data-question="q05_08" data-group="二、子空间解释" data-title="SVD 作用">
+<div class="q-meta"><span class="pill">短答</span><span class="pill">二、子空间解释</span></div>
+<h3>为什么论文要对 A 做 SVD 后比较奇异方向？</h3>
+<textarea name="q05_08" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>SVD 能分解出 Delta W 的主要奇异方向。通过比较这些方向与 W 的奇异方向，可以判断 Delta W 是否在 W 的顶部奇异方向上更新。如果方向重合，说明 LoRA 确实只在 W 的已有知识基础上做微调，而不是引入全新的方向。</p></details>
+</div>
+<div class="q" data-question="q05_09" data-group="二、子空间解释" data-title="r=8 vs r=64">
+<div class="q-meta"><span class="pill">短答</span><span class="pill">二、子空间解释</span></div>
+<h3>r=8 和 r=64 顶部方向重合，能解释什么？</h3>
+<textarea name="q05_09" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>说明小 rank 的顶部方向已经捕捉了任务更新的主要信息。r=64 的额外方向只是对 r=8 的微调，不是全新的任务知识。这解释了为什么小 rank 已经足够有效：任务更新确实集中在低秩子空间内。</p></details>
+</div>
+<div class="q" data-question="q05_10" data-group="二、子空间解释" data-title="随机种子">
+<div class="q-meta"><span class="pill">短答</span><span class="pill">二、子空间解释</span></div>
+<h3>比较不同随机种子的 LoRA 子空间，想排除什么误解？</h3>
+<textarea name="q05_10" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>想排除"LoRA 学到的方向只是随机巧合"的误解。如果不同随机种子都能收敛到相似子空间，说明这些方向是任务本身决定的，而不是随机初始化带来的巧合。</p></details>
+</div>
+<div class="q" data-question="q05_11" data-group="二、子空间解释" data-title="随机矩阵对照">
+<div class="q-meta"><span class="pill">短答</span><span class="pill">二、子空间解释</span></div>
+<h3>为什么要和随机高斯矩阵做对照？</h3>
+<textarea name="q05_11" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>随机高斯矩阵的方向是均匀分布的，和任务无关。如果 LoRA 的奇异方向与随机矩阵显著不同（更集中、更有结构），说明 LoRA 确实学到了任务相关的方向，而不是随机低秩噪声。</p></details>
+</div>
+<div class="q" data-question="q05_12" data-group="二、子空间解释" data-title="噪声方向" data-answer="正确" data-explain="对照本页正文里的训练对象、任务边界或部署状态。">
+<div class="q-meta"><span class="pill">判断</span><span class="pill">二、子空间解释</span></div>
+<h3>后续奇异方向重合低，可能意味着额外方向里有更多训练噪声。</h3>
+<label><input type="radio" name="q05_12" value="正确"> 正确</label>
+<label><input type="radio" name="q05_12" value="错误"> 错误</label>
+<button class="check" type="button">检查</button>
+<div class="feedback"></div>
+</div>
+</div></div>
+<div class="practice-group"><div class="group-head"><div><h3>三、Delta W 与 W</h3><p>这一组要求你把机制解释说准确。</p></div><div class="quick-review"><b>检查点</b><span>不要把放大方向讲成凭空创造能力。</span></div></div><div class="drill-grid">
+<div class="q" data-question="q05_13" data-group="三、Delta W 与 W" data-title="Delta W 关系">
+<div class="q-meta"><span class="pill">短答</span><span class="pill">三、Delta W 与 W</span></div>
+<h3>论文认为 Delta W 和 W 的关系是什么？</h3>
+<textarea name="q05_13" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>论文认为 Delta W 和 W 是"放大与投影"关系：Delta W 的方向与 W 的顶部奇异方向高度重合，但 Delta W 的奇异值比 W 大得多（放大因子）。这说明 Delta W 不是在 W 的空白方向上探索新知识，而是在 W 的已有方向上放大特定任务信号。</p></details>
+</div>
+<div class="q" data-question="q05_14" data-group="三、Delta W 与 W" data-title="投影范数">
+<div class="q-meta"><span class="pill">短答</span><span class="pill">三、Delta W 与 W</span></div>
+<h3>比较 W 在 Delta W 方向上的投影范数，有什么意义？</h3>
+<textarea name="q05_14" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>如果 W 在 Delta W 方向上的投影范数很小，说明 Delta W 主要覆盖 W 的弱方向（小奇异值）。但论文发现投影范数很大，说明 Delta W 主要在 W 的强方向（大奇异值）上更新，这支持了"低秩更新在已有知识上放大信号"的假设。</p></details>
+</div>
+<div class="q" data-question="q05_15" data-group="三、Delta W 与 W" data-title="放大因子">
+<div class="q-meta"><span class="pill">短答</span><span class="pill">三、Delta W 与 W</span></div>
+<h3>r=4 中 6.91/0.32 这个放大因子想说明什么？</h3>
+<textarea name="q05_15" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>放大因子 6.91/0.32 ≈ 21.6 说明 Delta W 的奇异值比 W 对应方向的奇异值大得多。这意味着 LoRA 不是在 W 的弱方向上补充新知识，而是在 W 的强方向上大幅放大任务信号，用小 rank 就能产生显著效果。</p></details>
+</div>
+<div class="q" data-question="q05_16" data-group="三、Delta W 与 W" data-title="错误诊断：机制过度">
+<div class="q-meta"><span class="pill">诊断</span><span class="pill">三、Delta W 与 W</span></div>
+<h3>诊断：“LoRA 证明大模型所有任务只需要 rank 1 更新。”按错因、后果、修法回答。</h3>
+<textarea name="q05_16" placeholder="错因：
+后果：
+修法："></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>错因：把论文的实验结论过度推广到所有任务。后果：在需要大幅改变模型底层知识的任务上失败，因为小 rank 只能调动已有知识，不能重写基础知识。修法：明确 LoRA 的适用范围，在复杂任务上尝试更大 rank 或适配更多矩阵。</p></details>
+</div>
+<div class="q" data-question="q05_17" data-group="三、Delta W 与 W" data-title="错误诊断：低秩低质">
+<div class="q-meta"><span class="pill">诊断</span><span class="pill">三、Delta W 与 W</span></div>
+<h3>诊断：“低秩就是表达能力差，所以 LoRA 不可能接近全量微调。”按错因、后果、修法回答。</h3>
+<textarea name="q05_17" placeholder="错因：
+后果：
+修法："></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>错因：把低秩等同于低质量，忽略了"任务更新在已有知识上放大信号"的机制。后果：错过一种高效的微调方法，盲目使用全量微调导致参数浪费。修法：理解 LoRA 的作用机制——不是从零学习，而是调动和放大已有知识；在适用任务上验证效果。</p></details>
+</div>
+<div class="q" data-question="q05_18" data-group="三、Delta W 与 W" data-title="面试追问">
+<div class="q-meta"><span class="pill">面试追问</span><span class="pill">三、Delta W 与 W</span></div>
+<h3>用 1-3 句话解释为什么 LoRA 小 rank 可能有效。</h3>
+<textarea name="q05_18" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>LoRA 小 rank 有效，因为预训练权重 W 已经编码了丰富的通用知识，任务更新 Delta W 只需要在 W 的顶部奇异方向上做小幅放大，而不需要探索全新的高维方向。</p></details>
+</div>
+<div class="q full" data-question="q05_19" data-group="三、Delta W 与 W" data-title="费曼解释">
+<div class="q-meta"><span class="pill">费曼解释</span><span class="pill">三、Delta W 与 W</span></div>
+<h3>用 6-9 句话解释论文如何分析 LoRA 的低秩更新。</h3>
+<p class="hint">请串联：rank、target modules、子空间相似度、随机种子、Delta W、W、任务方向。</p>
+<textarea name="q05_19" placeholder=""></textarea>
+<button class="reveal" type="button">展开反馈</button>
+<details><summary>参考答案 / 评分要点</summary><p>论文通过 SVD 分析 Delta W 的奇异方向，发现它们与 W 的顶部奇异方向高度重合，且 Delta W 的奇异值比 W 大得多（放大因子）。这说明 LoRA 低秩更新不是探索新知识，而是在已有知识上放大任务信号。小 rank 已经能捕捉主要更新方向，因为任务变化确实集中在低维子空间内。这解释了为什么 LoRA 用极少参数就能接近全量微调：它借用了预训练模型的知识基础，只做定向放大。</p></details>
+</div>
+</div></div></section>
+      <section id="export"><div class="head"><h2>导出练习记录</h2><span class="tag">markdown</span></div><div id="quality" class="quality"></div><div id="record" class="export">还没有生成练习记录。</div><div class="actions"><button class="action" onclick="generateRecord()">生成记录</button><button class="ghost" onclick="copyRecord()">复制 Markdown</button></div></section>
+      <section id="sources"><div class="head"><h2>参考资料</h2><span class="tag">source</span></div>
+<ul class="source-list">
+  <li><strong>LoRA: Low-Rank Adaptation of Large Language Models</strong>：本页关于 rank 与低秩解释 的主要论文依据。</li>
+  <li><strong><a href="../课程拆解.md">课程拆解.md</a></strong>：提供本课程的单元边界、术语表和练习范围。</li>
+  <li><strong><a href="../index.html">LoRA 论文精读课程地图</a></strong>：提供本单元在整门课中的位置和相邻页面入口。</li>
+</ul>
+<p class="muted">本页沿用课程本地材料，不引入新的外部网页来源。</p></section>
+    </main>
+  </div>
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

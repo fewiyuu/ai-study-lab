@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM 基础 09｜Agent 最小流程：让工具循环能停下来</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="LLM 基础与应用工程" data-unit="09｜Agent最小流程">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>LLM 基础与应用工程</strong>
+        <span>09｜Agent最小流程</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../08_RAG最小流程/学习页.html"><span class="dot"></span>上一节</a>
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#mechanism"><span class="dot"></span>核心机制</a>
+        <a href="#ledger"><span class="dot"></span>状态台账</a>
+        <a href="#action-schema"><span class="dot"></span>动作协议</a>
+        <a href="#tool-spec"><span class="dot"></span>工具规格</a>
+        <a href="#example"><span class="dot"></span>订单例子</a>
+        <a href="#trace"><span class="dot"></span>日志追踪</a>
+        <a href="#failure-lab"><span class="dot"></span>故障实验</a>
+        <a href="#eval"><span class="dot"></span>评测路径</a>
+        <a href="#boundary"><span class="dot"></span>边界</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <a href="../10_延迟成本可靠性约束/学习页.html"><span class="dot"></span>下一节</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">这一页把 Agent 压到一个可检查的工具循环：模型提出动作，程序校验和执行，观察回到状态，系统能继续也能停。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">agent loop</div>
+          <h1>LLM 基础 09｜Agent 最小流程：让工具循环能停下来</h1>
+          <p>这一页把 Agent 讲成一个受控循环，避开“让模型自己想办法”的黑盒想象。你会沿着同一个订单查询例子看清：模型只提出下一步动作，程序负责校验工具、执行工具、记录观察和判断是否停止。学完后，你应该能设计一个小工具集，也能看日志判断 Agent 是卡在计划、工具、状态、权限，还是停止条件。</p>
+
+          <div class="course-links">
+            <a href="../08_RAG最小流程/学习页.html">上一节：RAG 最小流程</a><a href="../index.html">课程地图</a><a href="../10_延迟成本可靠性约束/学习页.html">下一节：延迟、成本、可靠性</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+  <li>区分固定 workflow、单次 tool use 和能根据观察继续/停止的 Agent 循环。</li>
+  <li>写出最小 Agent 的状态字段、动作 schema、工具规格、权限校验和停止条件。</li>
+  <li>用日志和样例诊断循环不停、重复提问、误调用工具、越权执行和高风险动作未确认。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head"><h2>学习目标</h2><span class="tag">goals</span></div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>先把 Agent 缩到能检查的一步</h3>
+      <p>这节课不从“自主智能体”这种大词开始。工程上更稳的入口是一个小循环：给定目标和状态，模型选择一个结构化动作；应用代码校验动作和权限；工具执行后返回观察；系统更新状态，再决定继续、澄清、人工确认或停止。</p>
+      <p>08 页的 RAG 链路是固定路径：检索、拼上下文、生成回答。Agent 在这里多出“路径选择”这一层。它可以根据观察决定下一步查订单、查政策、问用户，或者直接回答。路径一旦可变，就必须把工具边界、状态和停止条件写清楚。</p>
+    </div>
+    <div class="box">
+      <h3>本页不追的内容</h3>
+      <ul>
+        <li>不讲多 Agent 协作和复杂 handoff，只保留单个 Agent 的闭环。</li>
+        <li>不讲长期记忆系统，只讲当前任务需要的短期状态。</li>
+        <li>不绑定某个框架，把 SDK、planner、浏览器自动化放到后续专题。</li>
+        <li>不让模型直接执行高风险动作，程序侧始终保留权限和确认。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head"><h2>先抓主线</h2><span class="tag">map</span></div>
+  <div class="map" data-export-context="Agent 最小循环主线" data-export-lang="text">
+    <span class="node">目标</span><span class="arrow">→</span><span class="node">状态</span><span class="arrow">→</span><span class="node">模型选择动作</span><span class="arrow">→</span><span class="node">程序校验</span><span class="arrow">→</span><span class="node">工具执行</span><span class="arrow">→</span><span class="node">观察</span><span class="arrow">→</span><span class="node">继续或停止</span>
+  </div>
+  <p>判断一个流程是否进入 Agent 形态，先看模型有没有参与下一步选择。固定执行“检索 → 生成 → 返回”的链路通常是 workflow；单次让模型生成工具参数是 tool use；模型能看见观察结果，再选择下一步工具或停止，才进入 Agent 的最小形态。</p>
+  <div class="grid3">
+    <div class="box">
+      <h3>Workflow</h3>
+      <p>路径由程序固定安排。模型只在某个步骤里填答案或提取字段。优点是可控，风险主要来自每一步质量。</p>
+    </div>
+    <div class="box">
+      <h3>Tool use</h3>
+      <p>模型可以请求工具，应用代码执行工具并把结果交回。它可能只有一次调用，也可能被放进循环。</p>
+    </div>
+    <div class="box">
+      <h3>Agent</h3>
+      <p>模型根据目标、状态和观察选择下一步。风险多了路径选择、重复调用、越权动作和无法停止。</p>
+    </div>
+  </div>
+</section>
+
+<section id="mechanism">
+  <div class="head"><h2>核心机制</h2><span class="tag">mechanism</span></div>
+  <div class="grid2">
+    <div class="box">
+      <h3>模型提出请求，程序执行动作</h3>
+      <p>Agent 里的模型不直接联网、查库、发邮件。模型输出的是结构化动作，例如 <code>ask_user</code>、<code>call_tool</code>、<code>final</code>。应用代码负责解析动作、检查 schema、校验权限、调用工具、记录日志，再把观察结果写回状态。</p>
+      <p>这个分工很重要。模型擅长在语义上下文里选择下一步；权限、事务和审计属于程序侧。只要工具能读写外部资源，执行权就应该留在程序侧。</p>
+    </div>
+    <div class="box">
+      <h3>循环能继续，也必须能停</h3>
+      <p>每一步结束后都要问两个问题：信息是否足够，风险是否可接受。足够就返回 <code>final</code>；缺关键输入就 <code>ask_user</code>；达到步数、预算、失败次数或风险阈值就停止或转人工。</p>
+      <p>停止条件是硬边界。缺少停止条件的 Agent 会反复搜索、重复提问、持续消耗 token，或者把一次工具失败误当成继续行动的理由。</p>
+    </div>
+  </div>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-state"><code>state</code><span>当前任务的可决策事实</span></button>
+      <button class="trace-line" data-trace-step="step-action"><code>action</code><span>模型提出下一步请求</span></button>
+      <button class="trace-line" data-trace-step="step-observation"><code>observation</code><span>工具结果回到状态</span></button>
+      <button class="trace-line" data-trace-step="step-stop"><code>stop</code><span>满足条件就结束或转人工</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-state">
+        <b>状态输入</b><span>goal、known_facts、observations、steps_left、budget_left、risk_flags</span><p>模型只能根据当前状态选择动作。状态缺失时，它会重复问、重复查，或者忘记刚才工具返回了什么。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-action">
+        <b>动作请求</b><span>type、tool、args、reason、risk</span><p>动作只是请求。程序先检查动作类型和参数，再决定是否允许执行。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-observation">
+        <b>观察结果</b><span>ok、data、error_code、latency_ms、source</span><p>工具结果要足够短，也要能解释下一步。只返回“失败”会让后续诊断失去依据。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-stop">
+        <b>停止判断</b><span>enough_info、needs_user、needs_human、max_steps、budget</span><p>停止可以是成功回答，也可以是澄清、拒绝、转人工。能停下来的 Agent 才能进入生产约束。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="ledger">
+  <div class="head"><h2>状态台账</h2><span class="tag">ledger</span></div>
+  <p>Agent 的状态是当前任务决策需要的压缩事实，不需要保存整段聊天记录。下面这张表用订单查询例子展示每一步读什么、写什么、错了会出现什么症状。</p>
+  <div class="table-wrap">
+    <table data-export-context="Agent 状态读写台账" data-export-lang="table">
+      <thead><tr><th>对象</th><th>进入本轮前</th><th>本轮读取</th><th>本轮写入</th><th>错了的症状</th><th>下一步小检查</th></tr></thead>
+      <tbody>
+        <tr><td><code>goal</code></td><td>解释订单为何未发货</td><td>用户问题和任务边界</td><td>通常不改，只可收窄</td><td>Agent 扩权去退款或改地址</td><td>目标里是否写了不做事项</td></tr>
+        <tr><td><code>known_facts</code></td><td>用户已登录，给了订单号</td><td>身份、订单号、已有澄清</td><td>补充新事实</td><td>重复问已经给过的信息</td><td>日志里是否写回用户输入</td></tr>
+        <tr><td><code>observations</code></td><td>空或上一轮工具结果</td><td>工具返回、错误码、来源</td><td>追加本轮观察</td><td>下一步不受工具结果影响</td><td>观察是否包含可用字段</td></tr>
+        <tr><td><code>steps_left</code></td><td>3</td><td>当前步数和最大步数</td><td>每轮递减</td><td>循环停不下来</td><td>是否在每轮末尾检查</td></tr>
+        <tr><td><code>risk_flags</code></td><td>无高风险动作</td><td>动作类型和资源范围</td><td>标记是否需人工确认</td><td>自动发送补偿承诺</td><td>高风险工具是否默认阻断</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box info">
+    <h3>读日志时先看状态</h3>
+    <p>如果 Agent 行为奇怪，先把本轮输入状态、模型动作、工具观察和停止判断打印出来。很多问题来自状态没有写回、工具观察太模糊、停止条件没有被检查，改 prompt 只能缓解表面症状。</p>
+  </div>
+</section>
+
+<section id="action-schema">
+  <div class="head"><h2>动作协议</h2><span class="tag">schema</span></div>
+  <div class="grid2">
+    <div class="box">
+      <h3>把“下一步”收进三种动作</h3>
+      <p>第一版先控制动作面。常见最小集合是：<code>final</code> 返回答案，<code>ask_user</code> 请求澄清，<code>call_tool</code> 请求工具。动作必须有固定字段，程序只接受 schema 合法、权限合法、工具名在白名单里的请求。</p>
+      <p>动作里可以保留 <code>reason</code> 字段用于日志，但理由不能当作权限证明。模型说“我需要查这个订单”不代表它有权查；权限仍由程序根据用户身份、资源归属和工具范围决定。</p>
+    </div>
+    <div class="box soft">
+      <h3>最小 action JSON</h3>
+      <div class="codebar"><span>agent-action-schema.json</span><button class="copy" data-copy="action-schema-json">复制</button></div>
+      <pre id="action-schema-json" data-export-context="Agent 最小 action schema" data-export-lang="json"><code class="language-json">{
+  "type": "call_tool",
+  "tool": "get_order_status",
+  "args": {
+    "order_id": "A-1024"
+  },
+  "reason": "需要确认订单当前发货状态",
+  "risk": "read_only"
+}</code></pre>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Agent 动作类型与程序处理" data-export-lang="table">
+      <thead><tr><th>动作类型</th><th>模型输出</th><th>程序侧处理</th><th>常见错误</th></tr></thead>
+      <tbody>
+        <tr><td><code>final</code></td><td>最终回复</td><td>检查是否有足够证据、是否越界承诺</td><td>证据不足却编答案</td></tr>
+        <tr><td><code>ask_user</code></td><td>一个澄清问题</td><td>结束本轮，等待用户输入</td><td>反复问同一个问题</td></tr>
+        <tr><td><code>call_tool</code></td><td>工具名和参数</td><td>schema 校验、权限校验、执行工具</td><td>未知工具、参数错、越权资源</td></tr>
+        <tr><td><code>handoff</code></td><td>转人工或转专门流程</td><td>暂停自动执行，写明原因</td><td>高风险动作仍自动执行</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="tool-spec">
+  <div class="head"><h2>工具规格</h2><span class="tag">tools</span></div>
+  <div class="grid2">
+    <div class="box">
+      <h3>工具描述要写“什么时候不用”</h3>
+      <p>很多工具描述只写能力，比如“查询订单状态”。这不够。Agent 还需要知道什么时候不该用：缺订单号不能查，订单不属于当前用户不能查，查询政策不等于承诺补偿，发送邮件需要人工确认。</p>
+      <p>工具越强，边界越要硬。只读工具可以自动化得多一些；写入外部系统、发消息、改订单、退款、删除文件这类动作，要默认进入确认或人工审批。</p>
+    </div>
+    <div class="box">
+      <h3>工具面先小后大</h3>
+      <p>工具多会扩大动作空间，也会增加误选工具和参数错配。最小 Agent 先给 2-3 个工具就够：查订单、查政策、请求人工确认。等 Eval 覆盖了常见路径，再逐步增加工具。</p>
+      <p>如果一个任务用固定 workflow 就能稳定完成，优先用 workflow。Agent 适合路径需要根据观察动态变化的场景。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="订单查询 Agent 工具规格" data-export-lang="table">
+      <thead><tr><th>字段</th><th><code>get_order_status</code></th><th><code>lookup_shipping_policy</code></th><th><code>request_human_review</code></th></tr></thead>
+      <tbody>
+        <tr><td>用途</td><td>查询当前用户订单状态</td><td>查发货和缺货政策</td><td>暂停并请求人工处理</td></tr>
+        <tr><td>参数</td><td><code>order_id</code></td><td><code>policy_topic</code></td><td><code>reason</code>、<code>risk_level</code></td></tr>
+        <tr><td>返回</td><td>状态、预计时间、错误码</td><td>政策摘要、来源、更新时间</td><td>工单号、等待状态</td></tr>
+        <tr><td>限制</td><td>只能查当前用户订单</td><td>不能生成赔付承诺</td><td>高风险动作必须走这里</td></tr>
+        <tr><td>失败处理</td><td>无权限、没找到、服务超时</td><td>资料缺失、版本过旧</td><td>创建失败时停止并说明</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="example">
+  <div class="head"><h2>订单例子</h2><span class="tag">worked case</span></div>
+  <div class="grid2">
+    <div class="box">
+      <h3>先看固定 workflow</h3>
+      <p>固定 workflow 可以很好用。比如客服问答固定执行“查 FAQ → 生成答案 → 记录日志”。模型没有选择下一步路径，只在固定位置生成文本。这种结构更容易控，也更容易测。</p>
+      <div class="codebar"><span>fixed-workflow.py</span><button class="copy" data-copy="fixed-workflow">复制</button></div>
+      <pre id="fixed-workflow" data-export-context="固定 workflow 不是 Agent" data-export-lang="python"><code class="language-python">def answer_with_rag(question):
+    chunks = retrieve(question)
+    answer = generate_answer(question, chunks)
+    log({"question": question, "chunks": chunks, "answer": answer})
+    return answer</code></pre>
+    </div>
+    <div class="box">
+      <h3>再看受控 Agent 循环</h3>
+      <p>下面的循环让模型选择动作，但执行权仍在程序侧。注意三个保护点：<code>max_steps</code> 限制循环，<code>validate_action</code> 检查 schema 和权限，未知工具被写成观察结果，不能直接执行。</p>
+      <div class="codebar"><span>minimal-agent-loop.py</span><button class="copy" data-copy="minimal-agent-loop">复制</button></div>
+      <pre id="minimal-agent-loop" data-export-context="最小 Agent 受控循环" data-export-lang="python"><code class="language-python">def run_agent(goal, state, model, tools, max_steps=3):
+    for step in range(max_steps):
+        action = model.decide(goal=goal, state=state, tools=tool_specs(tools))
+
+        if not validate_action(action, state):
+            state["observations"].append({
+                "ok": False,
+                "error_code": "invalid_or_unauthorized_action"
+            })
+            continue
+
+        if action["type"] == "final":
+            return action["message"]
+
+        if action["type"] == "ask_user":
+            return action["question"]
+
+        if action["type"] == "call_tool":
+            tool = tools.get(action["tool"])
+            if tool is None:
+                state["observations"].append({
+                    "ok": False,
+                    "error_code": "unknown_tool"
+                })
+                continue
+
+            observation = tool.call(action["args"])
+            state["observations"].append(observation)
+            update_state_from_observation(state, observation)
+
+    return "我先停止处理：信息不足或已达到自动处理上限。"</code></pre>
+    </div>
+  </div>
+  <div class="box info">
+    <h3>这段代码该怎么读</h3>
+    <p>模型每轮只产生动作，程序负责决定能不能执行。工具返回后，观察要写回状态。下一轮模型看到的是新的状态，随后基于新事实继续。循环末尾的停止文本也不是失败，它说明系统没有把不确定性继续放大。</p>
+  </div>
+</section>
+
+<section id="trace">
+  <div class="head"><h2>一轮日志怎么读</h2><span class="tag">trace</span></div>
+  <p>Agent 调试最容易漏掉的是“这一轮到底把什么交给了下一轮”。下面用同一个订单例子走一轮日志。最终回复只是一部分，还要同时看模型动作、程序校验、工具观察和状态更新。</p>
+  <div class="table-wrap">
+    <table data-export-context="Agent 单轮日志追踪" data-export-lang="table">
+      <thead><tr><th>时间点</th><th>可见对象</th><th>内容</th><th>应该检查什么</th></tr></thead>
+      <tbody>
+        <tr><td>输入状态</td><td><code>state</code></td><td><code>goal=解释未发货</code>，<code>order_id=A-1024</code>，<code>steps_left=2</code></td><td>订单号是否来自当前用户，本轮是否还有步数</td></tr>
+        <tr><td>模型动作</td><td><code>action</code></td><td><code>call_tool get_order_status(order_id=A-1024)</code></td><td>动作类型、工具名、参数是否符合 schema</td></tr>
+        <tr><td>程序校验</td><td><code>guardrail</code></td><td><code>owner(user_id)==current_user</code>，工具是只读</td><td>权限是否由程序判断，而不是由模型自述判断</td></tr>
+        <tr><td>工具观察</td><td><code>observation</code></td><td><code>ok=true</code>，<code>status=paid_waiting_stock</code>，<code>eta=tomorrow</code></td><td>观察是否足够支持回答，是否带错误码或来源</td></tr>
+        <tr><td>状态更新</td><td><code>known_facts</code></td><td>追加“订单已付款，仓库缺货，预计明天补货”</td><td>下一轮能否看到这个事实，避免重复查询</td></tr>
+        <tr><td>停止判断</td><td><code>stop_check</code></td><td><code>enough_info=true</code>，<code>risk=read_only</code></td><td>是否应该 final，而不是继续调用工具</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>如果状态没更新</h3>
+      <p>下一轮模型只知道“查过工具”，却不知道查到了什么。它可能再次查询同一个订单，或者问用户已经回答过的问题。这个时候改 prompt 通常没用，因为问题出在状态写回：观察结果没有变成下一轮可读的 <code>known_facts</code>。</p>
+    </div>
+    <div class="box">
+      <h3>如果停止没执行</h3>
+      <p>即使观察已经足够回答，Agent 仍可能继续查政策、查物流、查仓库，最后把一个简单问题拖成多轮工具链。修法是把 <code>enough_info</code>、<code>steps_left</code>、<code>failure_count</code> 和 <code>risk_flags</code> 放进每轮末尾的硬检查，prompt 提醒只能作为辅助手段。</p>
+    </div>
+  </div>
+  <div class="box soft">
+    <h3>练习区会怎么用这条链</h3>
+    <p>后面的诊断题会要求你按这条日志链定位问题。循环不停先看停止判断和观察写回；越权查询先看 guardrail；重复提问先看 <code>known_facts</code>；高风险动作先看风险标记和人工确认。</p>
+    <p>实际排查时可以把每一轮日志压成五行：输入状态、模型动作、程序校验、工具观察、停止判断。五行里哪一行缺字段，就先修哪一层。比如输入状态没有 <code>steps_left</code>，就先补状态和递减逻辑；工具观察只有一句“失败”，就先补错误码；停止判断没有读取 <code>risk_flags</code>，就先把高风险动作接到转人工。</p>
+    <p>修完以后，下一次日志应该能说明“为什么这轮没有继续”：例如 <code>enough_info=true</code> 导致 <code>final</code>，或 <code>risk=write</code> 导致 <code>request_human_review</code>。这就是最小验收，也方便后续稳定回归测试。</p>
+  </div>
+</section>
+
+<section id="failure-lab">
+  <div class="head"><h2>故障实验</h2><span class="tag">failure lab</span></div>
+  <p>Agent 出问题时，先看它在哪个边界坏掉：状态没写回、工具太宽、权限没拦住，还是停止条件没执行。提示词调整放在定位之后。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-cases">
+      <button class="terminal-case active" data-terminal-case="loop">循环不停</button>
+      <button class="terminal-case" data-terminal-case="permission">越权查询</button>
+      <button class="terminal-case" data-terminal-case="risk">高风险自动执行</button>
+      <button class="terminal-case" data-terminal-case="state">重复提问</button>
+    </div>
+    <pre class="terminal-output"><code data-terminal-screen>case: 循环不停
+log: step=1 call_tool search_policy(topic="shipping delay")
+log: step=2 call_tool search_policy(topic="shipping delay")
+log: step=3 call_tool search_policy(topic="shipping delay")
+symptom: 工具观察没有改变下一步，max_steps 或 enough_info 判断没有生效
+fix: 写回观察，设置最大步数，要求模型在信息足够时 final</code></pre>
+    <template data-terminal-output="loop">case: 循环不停
+log: step=1 call_tool search_policy(topic="shipping delay")
+log: step=2 call_tool search_policy(topic="shipping delay")
+log: step=3 call_tool search_policy(topic="shipping delay")
+symptom: 工具观察没有改变下一步，max_steps 或 enough_info 判断没有生效
+fix: 写回观察，设置最大步数，要求模型在信息足够时 final</template>
+    <template data-terminal-output="permission">case: 越权查询
+log: user_id=U7, order_id=A-1024, owner=U9
+log: action=call_tool get_order_status
+symptom: 模型认为用户给了订单号就能查
+fix: 程序侧校验资源归属；无权限返回 observation，而不是执行工具</template>
+    <template data-terminal-output="risk">case: 高风险自动执行
+log: action=call_tool send_compensation_email
+log: risk=write_external_message
+symptom: 模型把建议变成外部承诺
+fix: 高风险工具默认 handoff 或 request_human_review；模型不能直接执行</template>
+    <template data-terminal-output="state">case: 重复提问
+log: user provided order_id=A-1024
+log: next action=ask_user("请提供订单号")
+symptom: 用户输入没有写回 known_facts
+fix: 更新状态字段，下一轮 prompt 只传决策摘要和已知事实</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Agent 故障归因表" data-export-lang="table">
+      <thead><tr><th>症状</th><th>优先看哪里</th><th>常见根因</th><th>修法</th></tr></thead>
+      <tbody>
+        <tr><td>循环不停</td><td>停止判断和工具观察</td><td>没有 max_steps、观察没写回、模型不知道信息已够</td><td>加停止条件，压缩观察，要求足够信息时 final</td></tr>
+        <tr><td>重复提问</td><td><code>known_facts</code></td><td>用户已提供信息没有进入状态</td><td>把输入写入结构化状态，并在下一轮传入</td></tr>
+        <tr><td>误调用工具</td><td>工具描述和 schema</td><td>工具用途太泛，没有写不适用条件</td><td>缩小工具面，写限制和失败类型</td></tr>
+        <tr><td>越权查询</td><td>权限校验</td><td>把资源范围交给模型自觉判断</td><td>程序侧校验用户、资源和动作权限</td></tr>
+        <tr><td>高风险动作未确认</td><td>风险标记和 handoff</td><td>写工具直接暴露给模型</td><td>默认阻断，转人工或确认后执行</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="eval">
+  <div class="head"><h2>评测路径</h2><span class="tag">eval</span></div>
+  <div class="grid2">
+    <div class="box">
+      <h3>Agent Eval 不只看最终答案</h3>
+      <p>07 页已经讲过样本、指标、基线和回归。到了 Agent，评测对象要扩展到路径：是否该调用工具、工具选得对不对、参数是否合规、是否越权、步数是否合理、需要停时有没有停。</p>
+      <p>如果只看最终答案，一个 Agent 可能碰巧答对，但中间查了不该查的资源，或者多调用三次工具才得到结果。这种路径在生产里会变成成本、延迟和合规风险。</p>
+    </div>
+    <div class="box soft">
+      <h3>最小验收样本</h3>
+      <ul>
+        <li>信息足够：应直接 final，不额外查工具。</li>
+        <li>缺订单号：应 ask_user，不猜订单。</li>
+        <li>有订单号且属于当前用户：应调用只读查询工具。</li>
+        <li>订单属于别人：应拒绝或澄清，不执行查询。</li>
+        <li>需要补偿承诺：应转人工，不自动发送。</li>
+        <li>工具超时：应记录失败并按重试/停止规则处理。</li>
+      </ul>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="Agent 最小 Eval 指标" data-export-lang="table">
+      <thead><tr><th>指标</th><th>看什么</th><th>通过标准</th><th>失败后怎么查</th></tr></thead>
+      <tbody>
+        <tr><td>任务完成</td><td>最终是否解决用户问题</td><td>回答与观察一致</td><td>看证据和 final 文本</td></tr>
+        <tr><td>工具选择</td><td>是否调用了正确工具</td><td>该查才查，该问才问</td><td>看 action log 和工具描述</td></tr>
+        <tr><td>参数合规</td><td>工具参数是否满足 schema</td><td>类型、必填项、资源范围合法</td><td>看 validate_action 输出</td></tr>
+        <tr><td>权限安全</td><td>是否访问不该访问的资源</td><td>无越权读写</td><td>看 user_id、resource_owner、guardrail</td></tr>
+        <tr><td>停止质量</td><td>是否该停时停下</td><td>不空转，不过度重试</td><td>看 steps_left、failure_count、enough_info</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head"><h2>边界</h2><span class="tag">boundary</span></div>
+  <div class="grid2">
+    <div class="box">
+      <h3>什么时候不要上 Agent</h3>
+      <p>路径固定、风险高、可用规则明确时，优先 workflow 或普通工具调用。比如“把一段文本改成 JSON”“从固定知识库检索再回答”“按表单字段生成摘要”，路径本身无需动态选择，引入 Agent 只会增加不确定性。</p>
+      <p>Agent 的价值在于路径需要随观察变化：缺字段就问用户，查到缺货就查政策，发现高风险就转人工。没有这种分叉，先别引入循环。</p>
+    </div>
+    <div class="box">
+      <h3>下一页会追什么</h3>
+      <p>这页把循环跑通，下一页要检查循环能不能上线：每多一步工具调用都会带来延迟，每次模型决策都会消耗成本，工具失败和重试会影响可靠性。09 页的停止条件和日志，是 10 页讨论成本、延迟、可靠性的前置条件。</p>
+      <p>现在先把最小 Agent 控住：小工具、小状态、强校验、清日志、能停止。之后再扩展框架、长期记忆、多 Agent 和更复杂的任务编排。</p>
+    </div>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>练习目标</h3>
+    <p>这组题检查你能不能从日志和场景里判断 Agent 的边界，并把“计划、行动、观察”落到具体修法。客观题可本地检查，开放题用参考答案自评。</p>
+  </div>
+  <div class="box">
+    <h3>作答提醒</h3>
+    <p>遇到诊断题，按“症状 -> 根因 -> 修法”写。不要只说“优化 prompt”，先看状态、schema、工具、权限和停止条件。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head"><div><h3>一、概念边界</h3><p>先判断什么是 Agent，什么只是 workflow 或单次工具调用。</p></div><div class="quick-review"><b>复习</b>Agent 的最小特征是模型能根据观察选择下一步，并且循环能停止。</div></div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="concept" data-title="Agent 核心特征" data-answer="模型能根据观察选择下一步工具或停止">
+      <div class="q-meta"><span class="pill">单选</span></div>
+      <h3>1. 最能体现 Agent 的特征是什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q1" value="回答更长">回答更长</label>
+        <label><input type="radio" name="q1" value="模型能根据观察选择下一步工具或停止">模型能根据观察选择下一步工具或停止</label>
+        <label><input type="radio" name="q1" value="prompt 里写了 Agent">prompt 里写了 Agent</label>
+      </div>
+      <button class="check">检查</button><div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q2" data-group="concept" data-title="固定 RAG 是否一定是 Agent" data-answer="错">
+      <div class="q-meta"><span class="pill">判断</span></div>
+      <h3>2. 固定的“检索 -> 生成 -> 返回”流程一定是 Agent。</h3>
+      <div class="choices"><label><input type="radio" name="q2" value="对">对</label><label><input type="radio" name="q2" value="错">错</label></div>
+      <button class="check">检查</button><div class="feedback"></div>
+    </div>
+    <div class="q short" data-question="q3" data-group="concept" data-title="循环关键字填空" data-answer="观察">
+      <div class="q-meta"><span class="pill">填空</span></div>
+      <h3>3. Agent 最小循环常见链路是目标、状态、动作、工具、______、停止。</h3>
+      <input type="text" name="q3">
+      <button class="check">检查</button><div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q4" data-group="concept" data-title="Workflow vs Agent 排序" data-answer="B-C-A-D-E">
+      <div class="q-meta"><span class="pill">排序</span></div>
+      <h3>4. 排序：A 工具返回观察，B 模型决定 action，C 程序校验 action，D 更新状态，E 判断是否停止。</h3>
+      <input type="text" name="q4" placeholder="例如：B-C-A-D-E">
+      <button class="check">检查</button><div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head"><div><h3>二、工具和状态</h3><p>检查你能不能把工具暴露得足够小，并保留决策所需状态。</p></div><div class="quick-review"><b>复习</b>工具描述要有用途、参数、返回、限制、失败类型和权限；状态只保留当前任务要用的事实。</div></div>
+  <div class="drill-grid">
+    <div class="q" data-question="q5" data-group="tool-state" data-title="工具规格字段" data-answer="用途,参数,返回,限制,权限">
+      <div class="q-meta"><span class="pill">多选</span></div>
+      <h3>5. 哪些字段应该进入一个最小工具规格？</h3>
+      <div class="choices">
+        <label><input type="checkbox" name="q5" value="用途">用途</label>
+        <label><input type="checkbox" name="q5" value="参数">参数</label>
+        <label><input type="checkbox" name="q5" value="返回">返回</label>
+        <label><input type="checkbox" name="q5" value="限制">限制</label>
+        <label><input type="checkbox" name="q5" value="权限">权限</label>
+        <label><input type="checkbox" name="q5" value="夸张名称">夸张名称</label>
+      </div>
+      <button class="check">检查</button><div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q6" data-group="tool-state" data-title="状态字段选择" data-answer="goal,known_facts,observations,steps_left,risk_flags">
+      <div class="q-meta"><span class="pill">多选</span></div>
+      <h3>6. 订单查询 Agent 的短期状态应优先保存哪些字段？</h3>
+      <div class="choices">
+        <label><input type="checkbox" name="q6" value="goal">goal</label>
+        <label><input type="checkbox" name="q6" value="known_facts">known_facts</label>
+        <label><input type="checkbox" name="q6" value="observations">observations</label>
+        <label><input type="checkbox" name="q6" value="steps_left">steps_left</label>
+        <label><input type="checkbox" name="q6" value="risk_flags">risk_flags</label>
+        <label><input type="checkbox" name="q6" value="all_chat_tokens">all_chat_tokens</label>
+      </div>
+      <button class="check">检查</button><div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q7" data-group="tool-state" data-title="权限判断" data-answer="程序侧校验">
+      <div class="q-meta"><span class="pill">单选</span></div>
+      <h3>7. 用户给了订单号后，谁负责判断这个订单能不能查？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q7" value="模型凭上下文判断">模型凭上下文判断</label>
+        <label><input type="radio" name="q7" value="程序侧校验">程序侧校验</label>
+        <label><input type="radio" name="q7" value="不需要校验">不需要校验</label>
+      </div>
+      <button class="check">检查</button><div class="feedback"></div>
+    </div>
+    <div class="q short" data-question="q8" data-group="tool-state" data-title="工具不用条件">
+      <div class="q-meta"><span class="pill">简答</span></div>
+      <h3>8. 为什么工具描述要写“什么时候不用”？</h3>
+      <textarea name="q8"></textarea>
+      <button class="reveal">看参考答案</button>
+      <details><summary>参考答案</summary><p>因为工具描述不仅影响模型会不会调用，也影响它什么时候停手。写清不适用条件能减少误调用、越权查询和高风险动作自动执行。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head"><div><h3>三、代码和日志阅读</h3><p>把最小循环里的保护点读出来。</p></div><div class="quick-review"><b>复习</b>模型提出 action，程序校验和执行；未知工具和无权限都应该变成观察或停止，不能直接执行。</div></div>
+  <div class="drill-grid">
+    <div class="q short" data-question="q9" data-group="code" data-title="max_steps 作用">
+      <div class="q-meta"><span class="pill">代码阅读</span></div>
+      <h3>9. 代码里的 <code>max_steps</code> 解决什么问题？</h3>
+      <textarea name="q9"></textarea>
+      <button class="reveal">看参考答案</button>
+      <details><summary>参考答案</summary><p><code>max_steps</code> 是硬停止条件，防止 Agent 在工具失败、观察无效或模型反复选择同一动作时无限循环和持续消耗成本。</p></details>
+    </div>
+    <div class="q short" data-question="q10" data-group="code" data-title="unknown_tool 观察">
+      <div class="q-meta"><span class="pill">代码阅读</span></div>
+      <h3>10. 为什么未知工具不应该直接执行，而要记录成观察结果？</h3>
+      <textarea name="q10"></textarea>
+      <button class="reveal">看参考答案</button>
+      <details><summary>参考答案</summary><p>工具执行权在程序侧。未知工具说明 action 不在白名单里，直接执行会突破边界；记录观察可以让模型知道请求失败，同时保留日志用于诊断。</p></details>
+    </div>
+    <div class="q" data-question="q11" data-group="code" data-title="日志字段选择" data-answer="action,tool,args,observation,error_code,latency_ms">
+      <div class="q-meta"><span class="pill">多选</span></div>
+      <h3>11. Agent 每一步日志至少应包含哪些字段？</h3>
+      <div class="choices">
+        <label><input type="checkbox" name="q11" value="action">action</label>
+        <label><input type="checkbox" name="q11" value="tool">tool</label>
+        <label><input type="checkbox" name="q11" value="args">args</label>
+        <label><input type="checkbox" name="q11" value="observation">observation</label>
+        <label><input type="checkbox" name="q11" value="error_code">error_code</label>
+        <label><input type="checkbox" name="q11" value="latency_ms">latency_ms</label>
+        <label><input type="checkbox" name="q11" value="marketing_slogan">marketing_slogan</label>
+      </div>
+      <button class="check">检查</button><div class="feedback"></div>
+    </div>
+    <div class="q short" data-question="q12" data-group="code" data-title="删除工具白名单风险">
+      <div class="q-meta"><span class="pill">诊断</span></div>
+      <h3>12. 如果删除 <code>tools.get(...)</code> 的白名单检查，会有什么风险？</h3>
+      <textarea name="q12"></textarea>
+      <button class="reveal">看参考答案</button>
+      <details><summary>参考答案</summary><p>模型可能请求不存在或不该开放的工具。程序失去工具边界后，prompt 里的请求容易变成外部动作，带来越权、误写入和审计缺失。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head"><div><h3>四、故障诊断</h3><p>从症状倒推根因和修法。</p></div><div class="quick-review"><b>复习</b>先定位坏在哪个边界，再决定改状态、工具、schema、权限还是停止条件。</div></div>
+  <div class="drill-grid">
+    <div class="q" data-question="q13" data-group="diagnosis" data-title="循环不停根因" data-answer="停止条件">
+      <div class="q-meta"><span class="pill">单选</span></div>
+      <h3>13. Agent 反复调用同一个搜索工具，最先检查哪一项？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q13" value="停止条件">停止条件</label>
+        <label><input type="radio" name="q13" value="标题字体">标题字体</label>
+        <label><input type="radio" name="q13" value="是否用了更长 prompt">是否用了更长 prompt</label>
+      </div>
+      <button class="check">检查</button><div class="feedback"></div>
+    </div>
+    <div class="q short" data-question="q14" data-group="diagnosis" data-title="重复提问诊断">
+      <div class="q-meta"><span class="pill">诊断</span></div>
+      <h3>14. Agent 已经问过用户订单号，下一轮又问同样问题。可能哪里设计错了？</h3>
+      <textarea name="q14"></textarea>
+      <button class="reveal">看参考答案</button>
+      <details><summary>参考答案</summary><p>用户输入没有写回 <code>known_facts</code>，或者下一轮没有把结构化状态传给模型。修法是把订单号写入状态，并让模型看到已知事实。</p></details>
+    </div>
+    <div class="q short" data-question="q15" data-group="diagnosis" data-title="越权查询诊断">
+      <div class="q-meta"><span class="pill">诊断</span></div>
+      <h3>15. Agent 用用户提供的订单号查到了别人的订单。错在哪里？怎么修？</h3>
+      <textarea name="q15"></textarea>
+      <button class="reveal">看参考答案</button>
+      <details><summary>参考答案</summary><p>错在把资源范围交给模型或工具默认放行。程序侧要校验当前用户、订单归属和动作权限；无权限时返回 observation 或拒绝，而不是执行查询。</p></details>
+    </div>
+    <div class="q short" data-question="q16" data-group="diagnosis" data-title="高风险动作护栏">
+      <div class="q-meta"><span class="pill">诊断</span></div>
+      <h3>16. Agent 自动给用户发了补偿承诺邮件。为什么危险？应该加什么护栏？</h3>
+      <textarea name="q16"></textarea>
+      <button class="reveal">看参考答案</button>
+      <details><summary>参考答案</summary><p>这是外部写入和业务承诺，风险高。应把发送动作默认转人工或要求显式确认，工具规格里标记风险，并在程序侧阻断未确认执行。</p></details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head"><div><h3>五、迁移设计</h3><p>把最小循环迁移到一个新场景。</p></div><div class="quick-review"><b>复习</b>先做小工具、小状态、强停止，再扩工具和复杂路径。</div></div>
+  <div class="drill-grid">
+    <div class="q short" data-question="q17" data-group="transfer" data-title="会议纪要助手工具集">
+      <div class="q-meta"><span class="pill">设计</span></div>
+      <h3>17. 为“会议纪要整理助手”设计 3 个以内工具，并说明哪些动作需要人工确认。</h3>
+      <textarea name="q17"></textarea>
+      <button class="reveal">看参考答案</button>
+      <details><summary>参考答案</summary><p>可用工具：读取会议文本、查参会人/议题、生成待办草稿。发送纪要、创建外部任务、通知参会人需要人工确认。状态至少保存会议 id、已读文本摘要、待办草稿和确认状态。</p></details>
+    </div>
+    <div class="q short" data-question="q18" data-group="transfer" data-title="面试短答 Workflow vs Agent">
+      <div class="q-meta"><span class="pill">面试</span></div>
+      <h3>18. 用 2-3 句话区分 workflow、tool use 和 Agent。</h3>
+      <textarea name="q18"></textarea>
+      <button class="reveal">看参考答案</button>
+      <details><summary>参考答案</summary><p>Workflow 的路径由程序固定，模型只执行其中某个步骤。Tool use 是模型请求一个工具，应用代码执行并返回结果。Agent 把 tool use 放进循环，模型能根据观察选择下一步或停止。</p></details>
+    </div>
+    <div class="q short" data-question="q19" data-group="transfer" data-title="Eval 设计">
+      <div class="q-meta"><span class="pill">应用</span></div>
+      <h3>19. Agent 的 Eval 除了最终答案，还应该评估什么？</h3>
+      <textarea name="q19"></textarea>
+      <button class="reveal">看参考答案</button>
+      <details><summary>参考答案</summary><p>要评估工具选择、参数合法性、权限安全、步数和成本、是否该问用户、是否该转人工、是否该停不停，以及日志能否解释路径。</p></details>
+    </div>
+    <div class="q full" data-question="q20" data-group="transfer" data-title="费曼解释">
+      <div class="q-meta"><span class="pill">综合</span></div>
+      <h3>20. 用 6-9 句话解释：什么是 Agent 的最小流程，为什么它必须有工具边界和停止条件。</h3>
+      <textarea name="q20"></textarea>
+      <button class="reveal">看参考答案</button>
+      <details><summary>评分要点</summary><ul><li>说到目标、状态、动作、工具、观察、停止。</li><li>说明模型只提出请求，程序执行和校验。</li><li>解释权限、日志、人工确认的必要性。</li><li>能举一个失败症状，例如循环不停或越权查询。</li></ul></details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul>
+  <li>课程地图：用于确认本页处在 RAG 和生产约束之间，重点是从固定检索链路进入可控工具循环。</li>
+  <li>上一节《RAG 最小流程》：承接“证据进入上下文后再生成”的链路，说明 Agent 只是把某些步骤变成可选择动作。</li>
+  <li>OpenAI API 文档：Using tools、Function calling、Agents SDK 相关指南，用于确认工具调用、应用侧执行、状态、guardrails 和 human review 的工程边界。</li>
+  <li>OpenAI Agents SDK 文档：Agents、Tools、Guardrails 页面，用于说明 agent、工具类型和护栏的基础分工。</li>
+  <li>本课程旧版 09 页：保留订单查询 Agent、工具规格、停止条件、错误诊断和练习骨架，并重构为 learning-kit 1.0 shared runtime 页面。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

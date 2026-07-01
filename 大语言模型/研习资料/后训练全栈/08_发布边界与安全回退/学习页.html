@@ -1,0 +1,1126 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>08｜发布边界与安全回退</title>
+  <link rel="stylesheet" href="../assets/study-page.css">
+  <script src="../assets/study-page.js" defer></script>
+  </head>
+
+<body data-course="后训练全栈" data-unit="发布边界与安全回退">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>08｜发布边界与安全回退</strong>
+        <span>后训练全栈的最后一环：把模型从“评测分数不错”推进到“可以受控上线”。</span>
+      </div>
+      <nav>
+        <a href="../index.html"><span>00</span>课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>概念骨架</a>
+        <a href="#terms"><span class="dot"></span>术语与误区</a>
+        <a href="#lesson"><span class="dot"></span>核心讲解</a>
+        <a href="#examples"><span class="dot"></span>案例与清单</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#decision-chain"><span class="dot"></span>决策链</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+      </nav>
+      <div class="side-note">
+        发布边界不是“模型安全部门最后看一眼”。它是一组可执行门槛：哪些请求必须回答，哪些必须拒答，哪些要转检索、工具、人审或旧系统。
+        <div class="source-note">参考边界：TRL 与 Alignment Handbook 提供后训练方法背景；NIST AI RMF 生成式 AI 画像、OWASP LLM Top 10 提供风险分类。</div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <div>
+          <div class="kicker">后训练全栈 / Unit 08</div>
+          <h1>发布边界与安全回退</h1>
+          <p>这节课把后训练的最后问题讲清楚：模型上线前不能只看排行榜、平均胜率或一组 demo。你需要定义可发布边界，检查幻觉、拒答、隐私和偏差，并准备模型失效时的回退路径。</p>
+        </div>
+        <div class="box soft">
+          <h3>本页完成后</h3>
+          <ul>
+            <li>能把模型失败分成幻觉、拒答、隐私、偏差和策略失效。</li>
+            <li>能为一个 LLM 功能写出发布门槛、拒答规则和回退策略。</li>
+            <li>能解释为什么“更强模型”仍然需要监控、人审和降级方案。</li>
+          </ul>
+        </div>
+      </header>
+
+      <section id="goals">
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">发布前决策</span>
+        </div>
+        <div class="grid3">
+          <div class="box">
+            <h3>从分数转向风险</h3>
+            <p>理解模型评测分数只是平均表现，发布决策还要看低频高损害错误、权限边界和用户补救能力。</p>
+          </div>
+          <div class="box">
+            <h3>拆开安全失败</h3>
+            <p>区分事实错误、过度拒答、隐私泄露、群体偏差和越权执行，不把所有问题都塞进“模型不稳定”。</p>
+          </div>
+          <div class="box">
+            <h3>设计回退策略</h3>
+            <p>为不确定、高风险或系统异常的请求安排回退：检索、澄清、拒答、人审、旧流程、只读模式或关闭入口。</p>
+          </div>
+        </div>
+        <p class="muted">你现在应该能做什么：看到一个准备上线的 LLM 功能时，先问“失败会伤害谁、伤害多大、能不能补救”，而不是只问“模型答得像不像”。</p>
+      </section>
+
+      <section id="map">
+        <div class="head">
+          <h2>概念骨架</h2>
+          <span class="tag">Boundary → Fallback</span>
+        </div>
+        <div class="map">
+          <span class="node">使用场景</span>
+          <span class="arrow">→</span>
+          <span class="node">风险清单</span>
+          <span class="arrow">→</span>
+          <span class="node">发布门槛</span>
+          <span class="arrow">→</span>
+          <span class="node">回退路径</span>
+          <span class="arrow">→</span>
+          <span class="node">监控复盘</span>
+        </div>
+        <p>发布边界的直觉很简单：先说清楚模型被允许做什么，再说清楚模型不该做什么，最后说清楚模型不确定或失控时系统应该怎么退。术语上，这叫把能力边界、风险控制、运行监控和事故响应放进同一个上线流程。</p>
+        <svg class="flow-svg" viewBox="0 0 900 210" role="img" aria-label="发布前风险门控流程">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#67645d"></path>
+            </marker>
+          </defs>
+          <rect x="26" y="36" width="150" height="70" rx="7" fill="#e8f3ed" stroke="#bfd9ce"></rect>
+          <text x="101" y="68" text-anchor="middle" font-size="17" font-weight="700" fill="#24221f">任务定义</text>
+          <text x="101" y="91" text-anchor="middle" font-size="13" fill="#67645d">用户 / 权限 / 输出</text>
+          <line x1="176" y1="71" x2="245" y2="71" stroke="#67645d" stroke-width="2" marker-end="url(#arrow)"></line>
+          <rect x="246" y="36" width="150" height="70" rx="7" fill="#e8eef8" stroke="#c5d5ef"></rect>
+          <text x="321" y="68" text-anchor="middle" font-size="17" font-weight="700" fill="#24221f">风险评测</text>
+          <text x="321" y="91" text-anchor="middle" font-size="13" fill="#67645d">幻觉 / 隐私 / 偏差</text>
+          <line x1="396" y1="71" x2="465" y2="71" stroke="#67645d" stroke-width="2" marker-end="url(#arrow)"></line>
+          <rect x="466" y="36" width="150" height="70" rx="7" fill="#fff0c7" stroke="#dfc277"></rect>
+          <text x="541" y="68" text-anchor="middle" font-size="17" font-weight="700" fill="#24221f">发布门槛</text>
+          <text x="541" y="91" text-anchor="middle" font-size="13" fill="#67645d">通过 / 限量 / 暂停</text>
+          <line x1="616" y1="71" x2="685" y2="71" stroke="#67645d" stroke-width="2" marker-end="url(#arrow)"></line>
+          <rect x="686" y="36" width="170" height="70" rx="7" fill="#ffede8" stroke="#efbfb4"></rect>
+          <text x="771" y="68" text-anchor="middle" font-size="17" font-weight="700" fill="#24221f">运行回退</text>
+          <text x="771" y="91" text-anchor="middle" font-size="13" fill="#67645d">拒答 / 人审 / 降级</text>
+          <path d="M771 106 C771 162 140 162 101 106" fill="none" stroke="#216d5d" stroke-width="2" marker-end="url(#arrow)"></path>
+          <text x="445" y="179" text-anchor="middle" font-size="13" fill="#216d5d">线上样本、投诉、事故和新风险回流到下一轮后训练与评测</text>
+        </svg>
+        <p class="muted">你现在应该能做什么：把发布看成一个闭环，而不是训练完成后的单点审批。</p>
+      </section>
+
+      <section id="terms">
+        <div class="head">
+          <h2>术语与误区</h2>
+          <span class="tag">关键概念</span>
+        </div>
+        <table class="metric-table">
+          <thead>
+            <tr>
+              <th>术语</th>
+              <th>直觉解释</th>
+              <th>精确定义</th>
+              <th>常见误解</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>发布边界</td>
+              <td>给模型画上线使用范围。</td>
+              <td>对任务、用户、输入、输出、权限、风险等级和可接受失败率的明确定义。</td>
+              <td>以为“模型能力强”就等于“所有场景可上线”。</td>
+            </tr>
+            <tr>
+              <td>幻觉</td>
+              <td>模型把不确定的内容说得像真的。</td>
+              <td>输出与可验证事实、给定上下文或系统状态不一致，但表达上显得自信或完整。</td>
+              <td>以为只要接入检索就不会幻觉；检索只能减少部分事实缺口。</td>
+            </tr>
+            <tr>
+              <td>拒答</td>
+              <td>模型说“我不能帮你”。</td>
+              <td>模型基于安全、隐私、权限、能力不足或策略约束，不提供用户请求的目标内容。</td>
+              <td>把所有拒答都当成安全；过度拒答会伤害可用性，漏拒答会伤害安全。</td>
+            </tr>
+            <tr>
+              <td>隐私泄露</td>
+              <td>模型吐出了不该暴露的信息。</td>
+              <td>训练数据、上下文、日志、工具响应或其他用户信息被不当记忆、推断、输出或外传。</td>
+              <td>只盯训练数据泄露，忽视 prompt、RAG 文档、插件返回、日志和导出记录。</td>
+            </tr>
+            <tr>
+              <td>偏差</td>
+              <td>模型对某些人或场景系统性不公平。</td>
+              <td>在群体、语言、地区、职业、年龄、性别、文化或领域上出现稳定的质量差异或刻板输出。</td>
+              <td>以为偏差只是“说了冒犯的话”；许多偏差表现为漏召回、低质量建议或不合理拒答。</td>
+            </tr>
+            <tr>
+              <td>回退策略</td>
+              <td>模型不可靠时系统怎么退。</td>
+              <td>在不确定、高风险、异常或越权条件下，切换到更保守、更可控流程的机制。</td>
+              <td>把回退理解成“报错页面”；好的回退会尽量保留用户目标并降低风险。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="lesson">
+        <div class="head">
+          <h2>核心讲解</h2>
+          <span class="tag">上线前四问</span>
+        </div>
+        <div class="grid2">
+          <div>
+            <h3>1. 发布边界先于发布指标</h3>
+            <p>一个模型在通用问答榜上表现很好，不代表它适合处理医疗建议、财务决策、客户投诉、内部权限操作或儿童用户。发布边界要回答：目标用户是谁，模型能接触什么数据，能产生什么动作，哪些输出必须被阻止，失败后谁承担成本。</p>
+            <p>后训练通常会提高指令遵循和偏好对齐，但也可能带来新问题：模型更会迎合用户，可能更自信地编造；安全数据过强，可能导致正常问题也拒答；偏好数据覆盖不均，可能让小语种、少数群体或冷门领域质量更差。</p>
+            <div class="formula">可发布性 = 能力收益 - 风险暴露 + 可控回退。<br>如果风险暴露不可观测，或回退不可执行，就不应该只凭离线均分上线。</div>
+          </div>
+          <div class="box info">
+            <h3>判断句</h3>
+            <p>发布边界不是“模型最多能做什么”，而是“在可监控、可解释、可补救条件下，系统允许模型做什么”。</p>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="box">
+            <h3>2. 幻觉：从“答错”升级为“错误影响”</h3>
+            <p>幻觉的核心不是模型犯错，而是模型把错误包装成可执行事实。发布评测要按影响分层：闲聊事实错误、资料摘要误引、代码建议错误、法律医疗建议错误、权限状态错误，严重程度完全不同。</p>
+            <p>常用控制方法包括：让模型承认不确定，要求引用可见来源，把事实性任务转到检索或数据库查询，输出前做一致性检查，对高风险答案加人审或二次判别器。注意，检索增强不是万能解法：检索结果错、引用错位、上下文过长或模型忽略证据，仍会产生幻觉。</p>
+          </div>
+          <div class="box warn">
+            <h3>幻觉评测要看三件事</h3>
+            <ul>
+              <li><strong>事实正确率：</strong>答案是否被来源支持。</li>
+              <li><strong>校准程度：</strong>不确定时是否降低语气、请求澄清或拒绝编造。</li>
+              <li><strong>损害半径：</strong>错误是否会驱动用户做不可逆行动。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="box danger">
+            <h3>3. 拒答：安全与可用性的双边界</h3>
+            <p>拒答有两类错误：应该拒而没有拒，是安全漏判；应该答而拒绝，是过度保守。发布前要准备“拒答矩阵”，把请求按内容风险、用户权限、上下文充分性和任务可逆性分组。</p>
+            <p>好的拒答不是机械说“不”。它应该说明无法满足的边界，提供安全替代，例如给出一般原则、建议咨询专业人士、转人工客服、引导用户提供非敏感信息，或把危险操作改成只读说明。</p>
+          </div>
+          <div class="box">
+            <h3>拒答矩阵示例</h3>
+            <table class="metric-table">
+              <thead><tr><th>请求类型</th><th>模型行为</th><th>替代路径</th></tr></thead>
+              <tbody>
+                <tr><td>明显违法或伤害性操作</td><td>拒答</td><td>提供安全、合法、高层次信息</td></tr>
+                <tr><td>缺少权限的账户操作</td><td>拒答或要求认证</td><td>跳转权限流程或人工审核</td></tr>
+                <tr><td>事实不确定的专业建议</td><td>澄清或保守回答</td><td>引用来源、提醒限制、人审</td></tr>
+                <tr><td>正常但敏感的帮助请求</td><td>谨慎回答</td><td>最小必要信息、避免收集隐私</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="box">
+            <h3>4. 隐私：不是只防训练数据泄露</h3>
+            <p>LLM 应用的隐私风险来自多处：训练集中可能含个人信息，RAG 文档可能越权召回，prompt 可能包含用户敏感数据，工具调用可能返回内部字段，日志和导出记录也可能二次传播。发布边界要覆盖数据进入、模型处理、工具访问、输出展示和日志留存。</p>
+            <p>最小化原则很实用：不需要的隐私数据不要收集，能在权限系统里裁剪的不要交给模型，能用结构化结果表达的不要让模型自由复述。对敏感字段要做脱敏、权限检查和输出过滤，但不要把过滤器当成唯一防线。</p>
+          </div>
+          <div class="box violet">
+            <h3>隐私检查清单</h3>
+            <ul>
+              <li>输入是否包含身份证、电话、地址、健康、财务、账户或儿童信息。</li>
+              <li>检索结果是否只来自当前用户有权访问的文档。</li>
+              <li>工具响应是否返回了模型无需知道的内部字段。</li>
+              <li>日志、评测样本和导出记录是否会保留原始敏感文本。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="box">
+            <h3>5. 偏差：看均值看不出的质量差异</h3>
+            <p>偏差不是只发生在敏感话题。客服模型可能对方言用户理解更差；招聘助手可能给某些背景候选人更低质量建议；医疗问答可能对女性、老人或少数族裔症状解释不足；代码助手可能偏向英语生态。上线前要做分组评测，而不是只看总体准确率。</p>
+            <p>偏差还会和拒答交织：某些群体的问题更容易被误判为违规，某些语言的安全规则更粗糙，某些地区的事实知识更新不足。后训练数据、偏好标注、评测集和线上反馈都可能放大这种差异。</p>
+          </div>
+          <div class="box warn">
+            <h3>偏差不是一个单指标</h3>
+            <p>至少同时看：不同群体的任务成功率、拒答率、幻觉率、语气差异、建议可执行性和用户申诉率。只看“是否出现冒犯词”会漏掉更隐蔽的质量不公平。</p>
+          </div>
+        </div>
+
+        <div class="viz-panel">
+          <h3>6. 回退策略：按风险选择退路</h3>
+          <div class="scenario-tabs" role="group" aria-label="切换回退场景">
+            <button type="button" data-scenario="low" aria-pressed="true">低风险不确定</button>
+            <button type="button" data-scenario="medium" aria-pressed="false">中风险事实任务</button>
+            <button type="button" data-scenario="high" aria-pressed="false">高风险决策</button>
+            <button type="button" data-scenario="incident" aria-pressed="false">线上异常</button>
+          </div>
+          <div class="grid3" id="scenarioCards">
+            <div class="viz-cell">
+              <strong id="scenarioTrigger">触发条件：模型置信不足</strong>
+              <p id="scenarioAction">先请求澄清，或给出有限范围的回答，并明确哪些信息缺失。</p>
+            </div>
+            <div class="viz-cell">
+              <strong id="scenarioFallback">回退路径：澄清 / 保守回答</strong>
+              <p id="scenarioReason">低风险问题的重点是避免编造，同时不打断用户任务。</p>
+            </div>
+            <div class="viz-cell">
+              <strong id="scenarioMetric">监控指标：澄清后成功率</strong>
+              <p id="scenarioMetricText">如果澄清后仍频繁失败，说明路由、提示词或知识源需要修。</p>
+            </div>
+          </div>
+          <p class="hint">观察重点：回退不是统一按钮，而是按风险、权限和可逆性选择不同退路。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+        </div>
+
+        <div class="grid2">
+          <div>
+            <h3>7. 发布门槛应写成可执行规则</h3>
+            <p>“模型安全性良好”不是门槛，“在 500 条高风险拒答集中，漏拒答率不超过 1%，并且所有漏判样本经人工复核后有补丁计划”才是门槛。门槛要能被测试、能被复现、能触发上线或暂停决策。</p>
+            <p>发布门槛通常包含四类：能力门槛、安全门槛、隐私门槛、运行门槛。运行门槛容易被忽略，例如延迟、成本、超时、工具失败、日志可观测性、人工接管 SLA 和一键关闭开关。</p>
+          </div>
+          <div class="box info">
+            <h3>最小发布包</h3>
+            <ul>
+              <li>任务定义和禁止范围。</li>
+              <li>红队样本、回归样本、分组评测样本。</li>
+              <li>拒答和回退规则。</li>
+              <li>线上监控、抽检、人审和事故流程。</li>
+            </ul>
+          </div>
+        </div>
+
+        <p class="muted">你现在应该能做什么：把“模型上线”拆成可审查对象：边界、风险、门槛、回退、监控，而不是只讨论模型参数和训练算法。</p>
+      </section>
+
+      <section id="examples">
+        <div class="head">
+          <h2>案例与清单</h2>
+          <span class="tag">Worked Examples</span>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>案例 1：企业知识库助手</h3>
+            <p>场景：员工可以询问内部制度、项目文档和客户资料。模型接入 RAG，并能总结搜索结果。</p>
+            <table class="metric-table">
+              <thead><tr><th>风险</th><th>错误表现</th><th>发布控制</th></tr></thead>
+              <tbody>
+                <tr><td>幻觉</td><td>引用不存在的政策条款</td><td>要求答案带文档片段引用；没有证据时说不知道</td></tr>
+                <tr><td>隐私</td><td>跨部门召回客户信息</td><td>检索前做权限过滤；工具响应只返回最小字段</td></tr>
+                <tr><td>拒答</td><td>正常制度问题被安全策略误拒</td><td>把安全拒答和权限拒答分开评测</td></tr>
+                <tr><td>回退</td><td>检索服务超时</td><td>降级到“无法查询最新文档”，提供人工入口</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="box warn">
+            <h3>常见错误</h3>
+            <p>团队只测“回答是否流畅”，没有测“引用是否存在”“用户是否有权看引用”“检索失败时模型是否编造”。上线后用户会把模型语气当成系统事实，错误成本会被放大。</p>
+            <p><strong>修法：</strong>把事实性回答绑定到来源，把权限检查放在检索前，把检索失败纳入回退测试。</p>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="box">
+            <h3>案例 2：客服自动回复</h3>
+            <p>场景：模型根据用户投诉生成回复，可查询订单状态，但不能直接退款。</p>
+            <div class="codebar">
+              <span class="label">发布边界样例</span>
+              <span class="kind">policy.md</span>
+            </div>
+            <pre><code>允许：
+- 解释公开售后政策
+- 查询当前用户本人的订单状态
+- 生成安抚性回复草稿
+
+禁止：
+- 承诺超出政策的赔偿
+- 查看其他用户订单
+- 直接执行退款、改价、封号等不可逆操作
+
+必须回退：
+- 用户身份未确认 → 要求登录或转人工
+- 政策条款冲突 → 引用条款并转人工复核
+- 情绪激烈或威胁自伤 → 触发人工优先队列
+- 工具超时 → 告知暂时无法查询，不编造订单状态</code></pre>
+            <p>这段边界把“模型能说什么”和“系统能做什么”分开。模型可以写回复草稿，但不可逆动作仍要走权限系统或人工审核。</p>
+          </div>
+          <div class="box danger">
+            <h3>案例 3：医疗健康问答</h3>
+            <p>高风险领域的回退更严格。模型可以解释常识、提醒风险信号、建议就医路径，但不应替代医生诊断，不应根据模糊描述给确定治疗方案。</p>
+            <p><strong>发布门槛：</strong>严重症状识别、危险建议拒答、隐私最小化、紧急情况转人工或当地急救建议，都应该有专门测试集。</p>
+          </div>
+        </div>
+
+        <div class="box info">
+          <h3>发布前检查清单</h3>
+          <div class="grid4">
+            <div>
+              <span class="small-label">能力</span>
+              <p>核心任务成功率、长尾任务、上下文长度、工具失败、不同语言和不同用户表达。</p>
+            </div>
+            <div>
+              <span class="small-label">安全</span>
+              <p>危险请求漏拒、正常请求误拒、越狱、间接 prompt 注入、过度代理行为。</p>
+            </div>
+            <div>
+              <span class="small-label">隐私</span>
+              <p>敏感输入、越权检索、日志留存、输出脱敏、第三方工具传输。</p>
+            </div>
+            <div>
+              <span class="small-label">运行</span>
+              <p>延迟、成本、限流、熔断、灰度、人工接管、事故复盘和回滚开关。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="box warn">
+          <h3>五个最容易混淆的点</h3>
+          <table class="metric-table">
+            <thead><tr><th>容易混淆</th><th>区别</th><th>实务判断</th></tr></thead>
+            <tbody>
+              <tr><td>拒答 vs 回退</td><td>拒答是回答策略；回退是系统路径。</td><td>拒答后仍可给安全替代或人工入口。</td></tr>
+              <tr><td>过滤器 vs 安全架构</td><td>过滤器只处理一层输入/输出；安全架构覆盖权限、工具、日志和监控。</td><td>不要把敏感数据先交给模型再指望输出过滤。</td></tr>
+              <tr><td>幻觉率 vs 损害风险</td><td>幻觉率是频率；损害风险还看错误后果。</td><td>低频但高损害错误也可能阻止发布。</td></tr>
+              <tr><td>公平语气 vs 公平质量</td><td>不冒犯不代表质量公平。</td><td>按群体看成功率、拒答率和建议可执行性。</td></tr>
+              <tr><td>离线评测 vs 线上监控</td><td>离线评测覆盖已知风险；线上监控发现分布漂移和未知风险。</td><td>上线后仍要抽检、告警、回流样本。</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="muted">你现在应该能做什么：拿一个真实功能，从任务、数据、权限、输出和异常五个角度写出第一版发布检查表。</p>
+      </section>
+
+      <section id="mechanism">
+        <div class="head">
+          <h2>机制演示：边界分层与回退</h2>
+          <span class="tag">release</span>
+        </div>
+        <div class="math-block">
+          <p><strong>风险直觉：</strong>Risk = 严重性 × 影响面 × 可逆性</p>
+          <p>请求越敏感、影响面越大、回退越困难，系统就越应该收紧动作和输出范围。</p>
+        </div>
+        <div class="codebar"><span>release gate</span></div>
+        <pre><code class="language-python">if risk_score &gt; threshold:
+    rollback()
+else:
+    keep_monitors_on()</code></pre>
+        <div class="terminal-lab" data-terminal-lab>
+          <div class="terminal-controls">
+            <button class="ghost" type="button" data-terminal-case="low">低风险</button>
+            <button class="ghost" type="button" data-terminal-case="medium">中风险</button>
+            <button class="ghost" type="button" data-terminal-case="high">高风险</button>
+            <button class="ghost" type="button" data-terminal-case="incident">事故</button>
+          </div>
+          <pre class="terminal-output"></pre>
+          <template data-terminal-output="low"><p class="ok">先答后查就够了，记录和监控保持最小集。</p></template>
+          <template data-terminal-output="medium"><p>需要检索或工具证据，答案要绑定来源，不能只靠生成。</p></template>
+          <template data-terminal-output="high"><p class="err">高损害请求转人工或拒答，保留可补救路径，不让模型直接拍板。</p></template>
+          <template data-terminal-output="incident"><p class="err">出现越权、投诉或工具失败时，先熔断和回滚，再去看样本和根因。</p></template>
+        </div>
+        <div class="grid2">
+          <div data-export-context="边界口诀" data-export-lang="text">
+            先定允许范围，再定禁止范围，接着写回退路径，最后把监控指标接上。
+          </div>
+          <table data-export-context="请求动作表" data-export-lang="table">
+            <tr><th>请求类型</th><th>系统动作</th><th>回退</th></tr>
+            <tr><td>低风险问答</td><td>直接回答</td><td>保留日志</td></tr>
+            <tr><td>中风险事实</td><td>检索 / 引用</td><td>无证据不答</td></tr>
+            <tr><td>高损害操作</td><td>拒答 / 人审</td><td>只读或转人工</td></tr>
+          </table>
+          <div data-export-context="最小化" data-export-lang="text">
+            输入、检索、工具、输出和日志都只拿完成任务必需的信息，别让敏感字段到处流。
+          </div>
+          <div data-export-context="回滚条件" data-export-lang="text">
+            一旦漏拒答、越权或异常率升高，门禁就要切回旧版本，而不是继续赌平均分。
+          </div>
+        </div>
+        <div class="box info">
+          <h3>灰度发布怎么走</h3>
+          <p>假设你要把一个客服助手从 1% 灰度推到全量，不要只盯“平均回复质量”这一项。发布顺序应该先是低风险流量，随后是中风险事实问答，最后才是高损害动作。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>阶段</th>
+                <th>要观察什么</th>
+                <th>触发什么动作</th>
+                <th>为什么这样排</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>1% 灰度</td>
+                <td>延迟、工具错误、拒答率</td>
+                <td>若异常升高，直接回滚</td>
+                <td>先看最便宜、最容易撤回的信号</td>
+              </tr>
+              <tr>
+                <td>10% 扩大</td>
+                <td>投诉、越权、事实错误</td>
+                <td>若高损害样本出现，暂停扩量</td>
+                <td>分布开始变宽，隐藏问题更容易冒出来</td>
+              </tr>
+              <tr>
+                <td>50% 半量</td>
+                <td>人工抽检与分群指标</td>
+                <td>若群体差异扩大，回退到前一档</td>
+                <td>此时不能只看整体平均</td>
+              </tr>
+              <tr>
+                <td>100% 全量</td>
+                <td>事故告警和回流样本</td>
+                <td>若新问题持续出现，关闭入口</td>
+                <td>全量后要准备随时撤回</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="decision-chain">
+        <div class="head">
+          <h2>决策链</h2>
+          <span class="tag">trace</span>
+        </div>
+        <div class="math-block">
+          <p><strong>决策顺序：</strong>风险识别 → 任务分层 → 回退动作 → 监控阈值 → 事故日志 → 回流到评测集。</p>
+          <p>这个顺序不是写给流程图看的，是写给线上事故看的。顺序错了，系统会在最需要回退的时候没有退路。</p>
+        </div>
+        <div class="box">
+          <h3>事故日志模板</h3>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>字段</th>
+                <th>要记什么</th>
+                <th>用途</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>触发条件</td><td>哪类请求引发了问题</td><td>判断边界是否过宽</td></tr>
+              <tr><td>系统动作</td><td>当时是回答、拒答还是回退</td><td>核对门禁是否真的生效</td></tr>
+              <tr><td>失败后果</td><td>投诉、越权、误拒、延迟</td><td>决定事故优先级</td></tr>
+              <tr><td>回流结果</td><td>样本是否加入失败集</td><td>把线上问题变成后续评测项</td></tr>
+            </tbody>
+          </table>
+          <p>这个模板的作用是把一次事故变成下次的门禁条件。没有这一步，发布就会反复踩同一个坑。</p>
+        </div>
+        <div class="box warn">
+          <h3>你现在应该能做什么</h3>
+          <p>现在你可以拿一个真实功能，写出“低风险 → 中风险 → 高风险 → 事故”的四档动作表。每一档都要能说清楚，发生什么就该停、该退、该转人工，以及事故样本最后回流到哪里。</p>
+        </div>
+        <div class="box">
+          <h3>灰度失败复盘：别把平均分当终点</h3>
+          <p>很多发布事故不是“模型突然坏了”，而是系统把不同风险混在一起看。低风险问答、带证据的事实查询、高损害动作，三类请求对错误的容忍度完全不同。你如果只看平均成功率，就会把最危险的请求当成普通样本处理。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>请求类型</th>
+                <th>先看什么</th>
+                <th>失败后动作</th>
+                <th>为什么不能只看平均分</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>低风险问答</td>
+                <td>延迟、格式、最小准确率</td>
+                <td>继续观察，不必立刻停</td>
+                <td>错误损害小，平均值能部分反映问题</td>
+              </tr>
+              <tr>
+                <td>中风险事实</td>
+                <td>引用是否存在、证据是否足够</td>
+                <td>无证据时回退到检索或提示不知道</td>
+                <td>事实错误会以“看起来很自然”的方式扩散</td>
+              </tr>
+              <tr>
+                <td>高损害动作</td>
+                <td>权限、身份、不可逆操作</td>
+                <td>直接拒答或转人工</td>
+                <td>一次错判可能就是一次事故</td>
+              </tr>
+              <tr>
+                <td>事故请求</td>
+                <td>告警、投诉、越权样本</td>
+                <td>熔断、回滚、关闭入口</td>
+                <td>此时的目标不是提分，是减损</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>一旦你把请求分层，发布边界就从抽象口号变成了实操顺序：先能看见风险，再决定回退方式，最后才是灰度放量。</p>
+        </div>
+        <div class="box info">
+          <h3>事故日志怎么回流</h3>
+          <p>一次事故最有价值的部分，不是当下多紧张，而是它能不能变成下一轮评测样本。你应该记录触发条件、系统动作、失败后果和回流结果，然后把它们加入回归集或失败集。这样后训练和上线监控才会互相咬合，而不是各做各的。</p>
+        </div>
+        <div class="box">
+          <h3>事故后的回滚动作链</h3>
+          <p>当告警真的响了，系统不该继续讨论“平均分是不是还行”。正确顺序通常是：先关高风险入口，再切旧版本，接着保留样本和日志，最后把问题分流给人工和数据回流。这样做的目的不是惩罚模型，而是尽快把损害半径压小。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>动作</th>
+                <th>目的</th>
+                <th>如果漏掉会怎样</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>关闭高风险入口</td>
+                <td>先停止最危险的路径</td>
+                <td>事故继续扩散</td>
+              </tr>
+              <tr>
+                <td>切旧版本</td>
+                <td>回到已知可控状态</td>
+                <td>新问题没有缓冲区</td>
+              </tr>
+              <tr>
+                <td>保留样本</td>
+                <td>为后续分析留证据</td>
+                <td>只能凭印象复盘</td>
+              </tr>
+              <tr>
+                <td>人工分流</td>
+                <td>让重要请求先得到人接管</td>
+                <td>系统还在自动放大损害</td>
+              </tr>
+              <tr>
+                <td>回流到评测集</td>
+                <td>把事故变成新门禁</td>
+                <td>同类事故会再次出现</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>这条链路的本质是“先减损，再复盘，再修规则”。只要顺序对了，事故就会变成下一次上线更稳的原因；顺序错了，事故只会被换个名字重复一遍。</p>
+        </div>
+        <div class="box warn">
+          <h3>风险分层检查表</h3>
+          <p>当你拿到一个新功能时，先不要急着写 prompt。先把请求分层：哪些是纯信息问答，哪些需要证据，哪些涉及权限，哪些一旦错就不可逆。分层以后，再去写回退动作和监控阈值，顺序不能反。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>分层问题</th>
+                <th>判断标准</th>
+                <th>对应动作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>这是不是纯信息问答？</td>
+                <td>错了也不会造成实质损害</td>
+                <td>允许回答，但保留最小监控</td>
+              </tr>
+              <tr>
+                <td>这是不是证据驱动任务？</td>
+                <td>答案必须依赖可见来源</td>
+                <td>检索、引用、无证据不答</td>
+              </tr>
+              <tr>
+                <td>这是不是权限或身份任务？</td>
+                <td>用户身份决定可见内容</td>
+                <td>先验证身份，再允许动作</td>
+              </tr>
+              <tr>
+                <td>这是不是不可逆任务？</td>
+                <td>错一次就很难补救</td>
+                <td>默认拒答或人工接管</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>只要这张表还没写清楚，发布边界就不能算完成。它的作用是把“风险感觉”变成“系统动作”，让上线后每次出事都能知道该退到哪一步。</p>
+        </div>
+        <div class="box">
+          <h3>发布链路：从请求进入系统到最终动作</h3>
+          <p>拿“用户未登录却想查订单”这个场景来说，发布链路不是一句“拒答”就结束了。真正的链路应该是：先检查身份，再判断请求是否属于高损害动作，再决定是直接拒答、转人工、还是返回最小信息。这个顺序一旦错了，系统就可能先泄露再补救，或者先误拒再丢掉用户体验。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>链路环节</th>
+                <th>读取什么</th>
+                <th>动作</th>
+                <th>失败表现</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>身份检查</td>
+                <td>用户是否已登录</td>
+                <td>决定是否能继续查订单</td>
+                <td>未登录也被当成本人处理</td>
+              </tr>
+              <tr>
+                <td>权限检查</td>
+                <td>这个用户能看哪些字段</td>
+                <td>只开放必要信息</td>
+                <td>越权看到别人的订单或地址</td>
+              </tr>
+              <tr>
+                <td>风险判断</td>
+                <td>请求是不是不可逆或高损害</td>
+                <td>必要时直接拒答</td>
+                <td>模型替代系统做了不可逆决定</td>
+              </tr>
+              <tr>
+                <td>回退路径</td>
+                <td>当前动作是否可撤回</td>
+                <td>转人工、只读、关闭入口</td>
+                <td>事故发生后没有退路</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>把这条链路写清楚之后，你会发现发布边界不是一个单点规则，而是一串从输入到动作的控制点。每个控制点都应该有监控和回退，不然就是把责任推给最后一步。</p>
+        </div>
+        <div class="box">
+          <h3>你现在应该能做什么</h3>
+          <p>现在你可以拿一个业务功能，写一条从“请求进入系统”到“最终动作结束”的控制链。链条里至少要有身份、权限、风险、回退四步。写完以后，你就能更快看出系统到底是“不能做”，还是“还没到能做的那一步”。</p>
+        </div>
+      </section>
+
+      <section id="walkthrough">
+        <div class="head">
+          <h2>逐步推演</h2>
+          <span class="tag">trace</span>
+        </div>
+        <div class="box">
+          <h3>未登录查订单：一条样本怎么走完</h3>
+          <p>把“用户未登录却想查订单”拆开看，最容易犯的错误是只写一句“拒答”。这样写的规则太短，短到你很难知道它到底挡住了什么。更稳妥的方式，是把请求沿着身份、权限、风险、动作、日志一路走过去。这样你就能知道，系统究竟是应该直接拒，还是应该转人工，还是只给最小信息。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>环节</th>
+                <th>读取什么</th>
+                <th>允许动作</th>
+                <th>失败后果</th>
+                <th>修法</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>身份检查</td>
+                <td>用户是否已登录</td>
+                <td>继续查订单，或先引导登录</td>
+                <td>未登录也被当成本人处理</td>
+                <td>把身份校验放在最前面</td>
+              </tr>
+              <tr>
+                <td>权限检查</td>
+                <td>这个用户能看哪些字段</td>
+                <td>只返回订单号、状态、时间这类最小字段</td>
+                <td>越权看到地址、电话、备注</td>
+                <td>把返回字段做白名单</td>
+              </tr>
+              <tr>
+                <td>风险判断</td>
+                <td>请求是不是涉及退款、改价、封号</td>
+                <td>高风险时直接拒答或转人工</td>
+                <td>模型代替系统做了不可逆动作</td>
+                <td>高损害动作默认不放行</td>
+              </tr>
+              <tr>
+                <td>输出生成</td>
+                <td>模型拿到的上下文和工具结果</td>
+                <td>回答必须和证据一致</td>
+                <td>看起来很自然，但其实在编造</td>
+                <td>输出前做最小化和引用检查</td>
+              </tr>
+              <tr>
+                <td>事故日志</td>
+                <td>本次请求、动作、后果、回流结果</td>
+                <td>把样本送回失败集</td>
+                <td>同类问题以后还会再来一次</td>
+                <td>把事故变成新评测项</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="codebar"><span>order-policy.py</span></div>
+          <pre><code class="language-python">def handle_order_query(user, request):
+    if not user.logged_in:
+        return {"action": "prompt_login", "reason": "no_identity"}
+    if not user.can_view_order:
+        return {"action": "deny", "reason": "permission_block"}
+    if request.kind in {"refund", "price_change", "account_lock"}:
+        return {"action": "human_handoff", "reason": "high_risk"}
+    return {"action": "answer_with_min_fields", "reason": "low_risk"}</code></pre>
+          <p>这段伪代码的重点不是写法，而是顺序。先身份，再权限，再风险，最后才是回答。只要顺序正确，系统就能在必要的时候停下来，不会把“模型会说话”误当成“系统可以放行”。</p>
+        </div>
+        <div class="box warn">
+          <h3>失败后的信号</h3>
+          <p>如果系统把未登录请求直接答了，事故日志里通常会看到越权字段外泄；如果系统一味拒答，事故日志里会出现转人工爆量和正常请求误拒。前者说明边界太宽，后者说明边界太窄。它们都不是“模型不够强”，而是控制链的某一环写错了。</p>
+        </div>
+        <div class="box info">
+          <h3>你现在应该能做什么</h3>
+          <p>从你自己的产品里挑一个请求，按这条链路写一版动作表：先写身份，再写权限，再写风险，再写回退和日志。写完以后，你应该能说清楚“系统在这一步到底该做什么”，而不是只说“模型应该更安全一点”。</p>
+        </div>
+        <div class="box">
+          <h3>发布前五件事</h3>
+          <p>在一个功能真正进入灰度之前，最少要过五件事：先知道它处理什么请求，再知道它碰不碰证据，再知道它是不是涉及身份和权限，再知道它一旦错会不会不可逆，最后还要知道错了以后怎么退。这个顺序听起来像流程，但其实是在帮你决定风险预算。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>检查项</th>
+                <th>核心问题</th>
+                <th>最小动作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>请求类型</td><td>这是什么场景</td><td>先分层</td></tr>
+              <tr><td>证据需求</td><td>答案是否需要外部来源</td><td>检索或无证据不答</td></tr>
+              <tr><td>身份权限</td><td>用户是否有资格看见它</td><td>先验证再放行</td></tr>
+              <tr><td>不可逆性</td><td>错了能不能补救</td><td>高风险默认拒答</td></tr>
+            </tbody>
+          </table>
+          <p>如果这五件事没想清楚，灰度就会变成碰运气。把它们先写在纸上，再写到系统里，事故率通常会明显下降，因为你终于知道应该把刹车装在哪里。</p>
+          <p>更实用的做法，是把这五件事直接变成一次发布前的检查顺序：先看请求是否属于高风险场景，再看是否需要证据，接着看用户身份和权限，随后确认有没有不可逆动作，最后确认回退开关是否真的可用。这样写出来的门禁，不会只在文档里正确，而是能在灰度时真的起作用。</p>
+          <p>最后再记住一句话：边界不是为了限制模型，而是为了限制损害半径。这个思路一旦稳住，发布、回退、监控和复盘就会自然接成一条线。</p>
+        </div>
+      </section>
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">18 题混合练习</span>
+        </div>
+        <div class="practice-intro">
+          <div class="review-card">
+            <strong>作答目标</strong>
+            <p>不要只背术语。每题都尽量写出“风险来自哪里、错误会造成什么、系统如何回退”。</p>
+          </div>
+          <div class="review-card">
+            <strong>检查重点</strong>
+            <p>重点检查你是否能把幻觉、拒答、隐私、偏差和回退分开诊断，并能写成可执行发布规则。</p>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>一、概念辨析</h3>
+              <p>先确认基本概念和边界。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回顾</b>
+              <span>发布边界 = 允许范围 + 禁止范围 + 风险门槛 + 回退路径。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q1" data-group="一、概念辨析" data-title="Q1 单选：什么最像发布边界？" data-answer="B" data-explain="发布边界关心的是系统允许模型处理的范围，而不是单看平均分。">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">定义</span></div>
+              <h3>Q1 单选：什么最像发布边界？</h3>
+              <label><input type="radio" name="q1" value="A">A. 模型在公开排行榜上的平均分数。</label>
+              <label><input type="radio" name="q1" value="B">B. 模型允许处理的用户、数据、任务、输出和动作范围。</label>
+              <label><input type="radio" name="q1" value="C">C. 模型参数量、上下文长度和推理速度。</label>
+              <p class="hint">边界关心“可被允许的使用范围”，不是只关心能力。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q" data-question="q2" data-group="一、概念辨析" data-title="Q2 判断：接入检索后就不需要幻觉评测。" data-answer="false" data-explain="检索只能减少一部分事实缺口，不能消灭错误引用、检索失真和模型忽略证据。">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">幻觉</span></div>
+              <h3>Q2 判断：接入检索后就不需要幻觉评测。</h3>
+              <label><input type="radio" name="q2" value="true">对</label>
+              <label><input type="radio" name="q2" value="false">错</label>
+              <p class="hint">想想检索结果错误、引用错位、模型忽略证据时会发生什么。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q short" data-question="q3" data-group="一、概念辨析" data-title="Q3 填空：拒答的两类错误。" data-answer="漏拒答|过拒答" data-answer-mode="any" data-explain="一类是该拒而没拒，另一类是该答却拒绝。">
+              <div class="q-meta"><span class="pill">填空</span><span class="pill">拒答</span></div>
+              <h3>Q3 填空：拒答的两类错误。</h3>
+              <input type="text" name="q3" data-answer="漏拒答,过拒答" placeholder="应该拒而没有拒叫____；应该答却拒绝叫____。">
+              <p class="hint">一个偏安全，一个偏可用性。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q short" data-question="q4" data-group="一、概念辨析" data-title="Q4 填空：写出 3 个隐私风险来源。" data-answer="训练数据|RAG|日志" data-answer-mode="all" data-explain="隐私风险不只来自权重，也来自检索、日志和外部上下文。">
+              <div class="q-meta"><span class="pill">填空</span><span class="pill">隐私</span></div>
+              <h3>Q4 填空：写出 3 个隐私风险来源。</h3>
+              <div class="mini-fields">
+                <label>来源 1<input type="text" name="q4a" data-answer="训练数据" placeholder="来源 1"></label>
+                <label>来源 2<input type="text" name="q4b" data-answer="RAG" placeholder="来源 2"></label>
+                <label>来源 3<input type="text" name="q4c" data-answer="日志" placeholder="来源 3"></label>
+              </div>
+              <p class="hint">隐私不只发生在模型权重里。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q full" data-question="q5" data-group="一、概念辨析" data-title="Q5 简答：偏差为什么不能只看冒犯词？">
+              <div class="q-meta"><span class="pill">解释</span><span class="pill">偏差</span></div>
+              <h3>Q5 简答：偏差为什么不能只看冒犯词？</h3>
+              <textarea name="q5" placeholder="写出至少两种没有冒犯词、但仍然不公平的模型表现。"></textarea>
+              <p class="solve-note">从任务成功率、拒答率、语气、建议质量、群体覆盖中任选角度。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q6" data-group="一、概念辨析" data-title="Q6 排序：发布前流程。">
+              <div class="q-meta"><span class="pill">排序</span><span class="pill">流程</span></div>
+              <h3>Q6 排序：发布前流程。</h3>
+              <textarea name="q6" placeholder="把这些步骤排序并说明原因：风险清单、任务定义、回退路径、发布门槛、线上监控。"></textarea>
+              <p class="solve-note">先知道模型做什么，才能知道要测什么；上线后仍要监控。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>二、场景诊断</h3>
+              <p>把抽象风险放回真实产品场景。</p>
+            </div>
+            <div class="quick-review">
+              <b>作答框架</b>
+              <span>先判定风险类别，再写损害后果，最后写发布控制。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q full" data-question="q7" data-group="二、场景诊断" data-title="Q7 企业知识库助手：引用不存在的政策。">
+              <div class="q-meta"><span class="pill">错误诊断</span><span class="pill">幻觉</span></div>
+              <h3>Q7 企业知识库助手：引用不存在的政策。</h3>
+              <textarea name="q7" placeholder="诊断风险类型，并写出至少 3 个发布控制措施。"></textarea>
+              <p class="solve-note">考虑引用校验、无证据回答、检索失败回退、人工复核。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q8" data-group="二、场景诊断" data-title="Q8 客服机器人：用户未登录也能查询订单。">
+              <div class="q-meta"><span class="pill">错误诊断</span><span class="pill">隐私 / 权限</span></div>
+              <h3>Q8 客服机器人：用户未登录也能查询订单。</h3>
+              <textarea name="q8" placeholder="说明这是隐私问题、权限问题还是两者都有，并设计回退路径。"></textarea>
+              <p class="solve-note">先写数据边界，再写认证、最小字段、人工入口。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q9" data-group="二、场景诊断" data-title="Q9 正常心理健康求助被模型直接拒答。">
+              <div class="q-meta"><span class="pill">错误诊断</span><span class="pill">拒答</span></div>
+              <h3>Q9 正常心理健康求助被模型直接拒答。</h3>
+              <textarea name="q9" placeholder="判断这是哪类拒答错误，并写出更好的安全替代回答策略。"></textarea>
+              <p class="solve-note">不要让模型替代专业诊断，但可以提供支持性、低风险、求助路径信息。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q10" data-group="二、场景诊断" data-title="Q10 招聘助手对非名校候选人建议更敷衍。">
+              <div class="q-meta"><span class="pill">错误诊断</span><span class="pill">偏差</span></div>
+              <h3>Q10 招聘助手对非名校候选人建议更敷衍。</h3>
+              <textarea name="q10" placeholder="设计一个分组评测方案，至少包含 3 个指标。"></textarea>
+              <p class="solve-note">可以看建议长度、具体性、可执行性、成功率、拒答率、语气差异。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q11" data-group="二、场景诊断" data-title="Q11 工具调用失败后模型编造订单状态。">
+              <div class="q-meta"><span class="pill">错误诊断</span><span class="pill">回退</span></div>
+              <h3>Q11 工具调用失败后模型编造订单状态。</h3>
+              <textarea name="q11" placeholder="写出系统应该如何处理工具失败，以及如何监控这种问题。"></textarea>
+              <p class="solve-note">把“工具结果为空”和“订单真的不存在”分开。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q12" data-group="二、场景诊断" data-title="Q12 模型在小语种用户问题上更常拒答。">
+              <div class="q-meta"><span class="pill">迁移</span><span class="pill">偏差 / 拒答</span></div>
+              <h3>Q12 模型在小语种用户问题上更常拒答。</h3>
+              <textarea name="q12" placeholder="说明这可能同时是哪几类问题，并给出数据与评测修法。"></textarea>
+              <p class="solve-note">考虑训练数据覆盖、安全规则迁移、评测集分层和人工标注。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>三、发布设计</h3>
+              <p>把学习内容落成可执行规则。</p>
+            </div>
+            <div class="quick-review">
+              <b>输出要求</b>
+              <span>尽量写成“触发条件 → 系统动作 → 监控指标”。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q full" data-question="q13" data-group="三、发布设计" data-title="Q13 写一个发布门槛。">
+              <div class="q-meta"><span class="pill">规则</span><span class="pill">门槛</span></div>
+              <h3>Q13 写一个发布门槛。</h3>
+              <textarea name="q13" placeholder="为一个“内部知识库问答助手”写 4 条发布门槛，分别覆盖能力、安全、隐私、运行。"></textarea>
+              <p class="solve-note">门槛要可测试，不要写成“表现良好”。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q14" data-group="三、发布设计" data-title="Q14 设计拒答矩阵。">
+              <div class="q-meta"><span class="pill">策略</span><span class="pill">拒答</span></div>
+              <h3>Q14 设计拒答矩阵。</h3>
+              <textarea name="q14" placeholder="任选一个产品，列出至少 4 类请求：必须答、谨慎答、澄清后答、必须拒。"></textarea>
+              <p class="solve-note">每类都说明理由和替代路径。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q15" data-group="三、发布设计" data-title="Q15 设计隐私最小化方案。">
+              <div class="q-meta"><span class="pill">策略</span><span class="pill">隐私</span></div>
+              <h3>Q15 设计隐私最小化方案。</h3>
+              <textarea name="q15" placeholder="为客服机器人写一套隐私最小化方案：输入、检索、工具、输出、日志各一条。"></textarea>
+              <p class="solve-note">核心是让模型只接触完成任务所需的信息。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q16" data-group="三、发布设计" data-title="Q16 设计灰度和回滚。">
+              <div class="q-meta"><span class="pill">运行</span><span class="pill">灰度</span></div>
+              <h3>Q16 设计灰度和回滚。</h3>
+              <textarea name="q16" placeholder="写出一个 LLM 功能从 1% 流量灰度到全量发布的监控与回滚条件。"></textarea>
+              <p class="solve-note">至少包含指标、阈值、人工抽检和一键关闭条件。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q17" data-group="三、发布设计" data-title="Q17 反驳：更强模型不需要回退。">
+              <div class="q-meta"><span class="pill">论证</span><span class="pill">安全架构</span></div>
+              <h3>Q17 反驳：更强模型不需要回退。</h3>
+              <textarea name="q17" placeholder="用 5-8 句话反驳这个说法，至少提到分布漂移、权限、工具失败和高损害错误。"></textarea>
+              <p class="solve-note">把“模型能力”与“系统可靠性”分开。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q18" data-group="三、发布设计" data-title="Q18 综合：讲给同事听。">
+              <div class="q-meta"><span class="pill">综合解释</span><span class="pill">Feynman</span></div>
+              <h3>Q18 综合：讲给同事听。</h3>
+              <textarea name="q18" placeholder="用一段话解释：为什么后训练最后一节要讲发布边界与安全回退？"></textarea>
+              <p class="solve-note">答案应串起：SFT/偏好/RL 提升模型行为，但上线还要处理幻觉、拒答、隐私、偏差和异常。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">Practice Record</span>
+        </div>
+        <p>生成后会把题目和你的答案整理成 Markdown，便于后续复盘。记录只包含本页练习内容，不会读取本地文件。</p>
+        <div class="grid2">
+          <div class="box info" data-export-context="导出回顾卡" data-export-lang="text">
+            导出后先看四件事：触发条件、系统动作、失败后果、回退路径。只要其中一项说不清，说明这次复盘还不够，下一轮应该先补边界而不是继续加码模型。
+          </div>
+          <table class="metric-table" data-export-context="发布复盘表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>要保留什么</th>
+                <th>为什么要保留</th>
+                <th>复盘时怎么用</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>触发条件</td>
+                <td>先知道是哪类请求撞线</td>
+                <td>判断边界是过宽还是过窄</td>
+              </tr>
+              <tr>
+                <td>系统动作</td>
+                <td>确认当时到底是回答、拒答还是回退</td>
+                <td>核对门禁有没有真的生效</td>
+              </tr>
+              <tr>
+                <td>失败后果</td>
+                <td>把投诉、越权、误拒和延迟区分开</td>
+                <td>决定事故优先级和处置顺序</td>
+              </tr>
+              <tr>
+                <td>回流结果</td>
+                <td>让线上问题变成下一轮评测样本</td>
+                <td>避免同一个坑反复出现</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>这份记录的价值不在于“看起来完整”，而在于它能把下一次发布前的判断顺序写清楚。只要复盘里还缺一项，说明系统里的边界、监控或回退至少有一处还没补齐。</p>
+        <div class="quality" id="quality"></div>
+        <div class="answer" id="record">尚未生成练习记录。</div>
+        <div class="actions">
+          <button class="ghost" type="button" onclick="generateRecord()">生成练习记录</button>
+          <button type="button" onclick="copyRecord()">复制</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+          <li><a href="https://huggingface.co/docs/trl/index">Hugging Face TRL 文档</a>。访问于 2026-06-22，用来确认后训练语境里的评测、judge 和模型输出的常见说法。</li>
+          <li><a href="https://github.com/huggingface/alignment-handbook">Hugging Face Alignment Handbook</a>。访问于 2026-06-22，用来说明训练配方和评测门禁应该一起设计。</li>
+          <li><a href="https://www.nist.gov/itl/ai-risk-management-framework">NIST AI Risk Management Framework</a>。访问于 2026-06-22，用来整理风险、测量和监控的语言。</li>
+          <li><a href="https://owasp.org/www-project-top-10-for-large-language-model-applications/">OWASP Top 10 for LLM Applications</a>。访问于 2026-06-22，用来归纳幻觉、越权、注入和数据泄露类风险。</li>
+          <li><a href="../index.html">本课程地图</a>。这页在课程里负责把“自动评测 / judge / 回归门禁”接到“发布边界”之前。</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+
+  </body>
+</html>

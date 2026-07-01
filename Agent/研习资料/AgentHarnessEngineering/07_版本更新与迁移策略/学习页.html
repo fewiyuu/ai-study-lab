@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>07 版本更新与迁移策略｜智能体运行承载工程</title>
+  <meta name="description" content="围绕 OpenAI Agents SDK 更新、Agents SDK 文档和 LangGraph Durable Execution 建立智能体运行承载层的版本更新与迁移策略。">
+    <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="./学习页.css">
+</head>
+
+<body data-course="智能体运行承载工程" data-unit="07 版本更新与迁移策略">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>07｜版本更新与迁移策略</strong>
+        <span>智能体运行承载工程</span>
+      </div>
+      <nav aria-label="页面导航">
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>目标与位置</a>
+        <a href="#map"><span class="dot"></span>概念导图</a>
+        <a href="#terms"><span class="dot"></span>术语与误区</a>
+        <a href="#lesson"><span class="dot"></span>核心讲解</a>
+        <a href="#cases"><span class="dot"></span>迁移案例</a>
+        <a href="#mistakes"><span class="dot"></span>常见错误</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">
+        本页只使用三类公开资料：<a href="https://openai.github.io/openai-agents-python/release/">OpenAI Agents SDK 更新</a>、<a href="https://openai.github.io/openai-agents-python/">Agents SDK 文档</a>、<a href="https://docs.langchain.com/oss/python/langgraph/durable-execution">LangGraph Durable Execution</a>。
+      </div>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <div>
+          <div class="kicker">Agent Harness Engineering｜Unit 07</div>
+          <h1>版本更新与迁移策略</h1>
+          <p>智能体运行框架变化很快。真正危险的更新不只是 API 名称变化，而是默认模型、工具错误语义、会话持久化、沙箱边界和恢复逻辑发生变化。本页把更新读法、风险分级、迁移剧本和回归检查连成一套可执行方法。</p>
+          <div class="meta-line">
+            <span class="pill">工程进阶</span>
+            <span class="pill">版本锁定</span>
+            <span class="pill">行为回归</span>
+            <span class="pill">可恢复执行</span>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>本页完成后</h3>
+          <ul>
+            <li>能把 SDK 更新分成可直接吸收、需要配置锁定、必须迁移和需要灰度的几类。</li>
+            <li>能解释 Agents SDK 的版本、运行、会话、追踪和沙箱更新为什么会改变智能体行为。</li>
+            <li>能为一个已有智能体写出迁移清单、回归用例和恢复策略。</li>
+          </ul>
+        </div>
+      </header>
+
+      <section id="goals">
+        <div class="head">
+          <h2>目标与位置</h2>
+          <span class="tag">Scope</span>
+        </div>
+        <div class="grid3">
+          <div class="box">
+            <h3>学习目标</h3>
+            <p>建立一个升级判断框架：先读版本信号，再定位运行承载层受影响的位置，最后用回归测试和灰度发布控制风险。</p>
+          </div>
+          <div class="box">
+            <h3>课程位置</h3>
+            <p>这是“智能体运行承载工程”的第 7 单元。前面 6 个单元讲运行循环、工具面、状态、外部协议和追踪；本单元把这些边界变成升级时的检查表。</p>
+          </div>
+          <div class="box">
+            <h3>资料边界</h3>
+            <p>内容基于 OpenAI Agents SDK 发布说明、Agents SDK 文档，以及 LangGraph Durable Execution 文档（访问日期：2026-06-21）。其他框架和平台只作为读者可以迁移过去的通用工程直觉，不作为本页事实来源。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="map">
+        <div class="head">
+          <h2>概念导图</h2>
+          <span class="tag">Upgrade Flow</span>
+        </div>
+        <div class="map" aria-label="版本迁移流程" data-export-context="版本迁移流程概念图" data-export-lang="text">
+          <div class="node">读更新信号<span>版本号、breaking change、默认值、beta 标记</span></div>
+          <div class="node">定位承载面<span>模型、运行循环、工具、会话、沙箱、追踪</span></div>
+          <div class="node">判断状态风险<span>checkpoint、session、workspace、pending writes</span></div>
+          <div class="node">设计迁移剧本<span>锁版本、显式配置、数据迁移、灰度</span></div>
+          <div class="node">验证回归<span>golden run、trace diff、恢复演练</span></div>
+        </div>
+        <div class="shape-tracer" data-shape-tracer>
+          <div class="trace-lines">
+            <button class="trace-line active" type="button" data-trace-step="read"><code>Read</code><span>看版本信号</span></button>
+            <button class="trace-line" type="button" data-trace-step="map"><code>Map</code><span>落到承载面</span></button>
+            <button class="trace-line" type="button" data-trace-step="plan"><code>Plan</code><span>写迁移剧本</span></button>
+            <button class="trace-line" type="button" data-trace-step="verify"><code>Verify</code><span>回归与恢复</span></button>
+          </div>
+          <div class="trace-canvas">
+            <div class="tensor-card active" data-trace-target="read">
+              <b>Read</b>
+              <span>先把版本号和 release note 读清楚。</span>
+              <p>没有读清楚，就没有后面的迁移判断。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="map">
+              <b>Map</b>
+              <span>把变化映射到运行承载面。</span>
+              <p>同样是更新，影响模型、状态和沙箱的方式不同。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="plan">
+              <b>Plan</b>
+              <span>写出升级动作、灰度范围和回滚条件。</span>
+              <p>剧本要能执行，也要能被审查。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="verify">
+              <b>Verify</b>
+              <span>用 golden run、trace diff 和恢复演练验收。</span>
+              <p>只有验证过，升级才算完成。</p>
+            </div>
+          </div>
+        </div>
+        <div class="diagram" aria-label="迁移策略概念图">
+          <svg viewBox="0 0 920 240" role="img" aria-labelledby="svgTitle svgDesc">
+            <title id="svgTitle">版本更新与迁移策略概念图</title>
+            <desc id="svgDesc">从发布说明到运行承载层，再到回归测试和恢复策略的关系图。</desc>
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#216d5d"></path>
+              </marker>
+            </defs>
+            <rect x="20" y="32" width="155" height="64" rx="6" fill="#e8f3ed" stroke="#a9c7ba"></rect>
+            <text x="42" y="58" class="svg-text">Release Notes</text>
+            <text x="42" y="78" class="svg-small">0.Y.Z、默认值、错误语义</text>
+            <line x1="175" y1="64" x2="245" y2="64" stroke="#216d5d" stroke-width="2" marker-end="url(#arrow)"></line>
+            <rect x="245" y="22" width="180" height="84" rx="6" fill="#fffdfa" stroke="#d9d0bf"></rect>
+            <text x="270" y="52" class="svg-text">运行承载面</text>
+            <text x="270" y="73" class="svg-small">Runner、Tools、Sessions</text>
+            <text x="270" y="91" class="svg-small">Sandbox、Tracing</text>
+            <line x1="425" y1="64" x2="495" y2="64" stroke="#216d5d" stroke-width="2" marker-end="url(#arrow)"></line>
+            <rect x="495" y="22" width="175" height="84" rx="6" fill="#e8eef8" stroke="#c5d5ef"></rect>
+            <text x="520" y="52" class="svg-text">状态与恢复</text>
+            <text x="520" y="73" class="svg-small">session、checkpoint</text>
+            <text x="520" y="91" class="svg-small">thread_id、durability</text>
+            <line x1="670" y1="64" x2="740" y2="64" stroke="#216d5d" stroke-width="2" marker-end="url(#arrow)"></line>
+            <rect x="740" y="32" width="160" height="64" rx="6" fill="#fff0c7" stroke="#dfc277"></rect>
+            <text x="766" y="58" class="svg-text">迁移控制</text>
+            <text x="766" y="78" class="svg-small">回归、灰度、回滚预案</text>
+            <path d="M820 106 C820 176, 560 184, 332 128" fill="none" stroke="#7b3329" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)"></path>
+            <text x="438" y="176" class="svg-small">用 trace diff 和恢复演练反向验证升级是否真实安全</text>
+          </svg>
+        </div>
+        <p>直觉上，升级不是“装一个新包”。智能体运行承载层会把版本变化放大：模型默认值改变会改变回答风格和成本，工具错误语义改变会改变循环是否继续，沙箱边界改变会影响文件可见性，持久化策略改变会影响中断后从哪里恢复。</p>
+      </section>
+
+      <section id="terms">
+        <div class="head">
+          <h2>术语与误区</h2>
+          <span class="tag">Terms</span>
+        </div>
+        <table class="metric-table" data-export-context="版本语义与迁移术语表" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>术语</th>
+              <th>直觉解释</th>
+              <th>精确定义</th>
+              <th>常见误解</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>0.Y.Z 版本</td>
+              <td>还在快速演进的 SDK 版本号。</td>
+              <td>Agents SDK 发布说明把前导 0 解释为仍在快速变化；minor 版本可包含公共接口 breaking change，patch 版本用于非破坏性变更。</td>
+              <td>误以为 0.16 到 0.17 像成熟库的小版本升级一样低风险。</td>
+            </tr>
+            <tr>
+              <td>默认行为变更</td>
+              <td>你没写配置，但系统行为变了。</td>
+              <td>例如默认模型、默认 reasoning 设置、工具错误处理、handoff 历史包装、追踪开关等发生变化。</td>
+              <td>只看函数签名，没有检查“未显式配置”的路径。</td>
+            </tr>
+            <tr>
+              <td>行为回归</td>
+              <td>代码能跑，但输出、成本、权限或恢复路径变了。</td>
+              <td>升级后同一任务在模型选择、工具调用顺序、错误处理、状态保存、追踪记录或用户可见结果上偏离旧基线。</td>
+              <td>把没有异常等同于没有回归。</td>
+            </tr>
+            <tr>
+              <td>checkpoint</td>
+              <td>长流程的可恢复状态快照。</td>
+              <td>LangGraph 在配置 checkpointer 后按 thread 组织图状态快照，可用于 human-in-the-loop、memory、time travel 和 fault tolerance。</td>
+              <td>以为 checkpoint 会自动处理所有外部副作用，例如已经发出的邮件或已经写入的数据库。</td>
+            </tr>
+            <tr>
+              <td>durability</td>
+              <td>每一步状态落盘的时机。</td>
+              <td>LangGraph 文档中的持久化模式包括 sync、async、exit，分别在可靠性和性能之间取不同权衡。</td>
+              <td>只问“有没有持久化”，不问“什么时候持久化”。</td>
+            </tr>
+            <tr>
+              <td>迁移剧本</td>
+              <td>升级前后要做的固定动作清单。</td>
+              <td>包括版本锁定、差异阅读、配置显式化、状态兼容、回归用例、灰度范围、回滚条件和验收指标。</td>
+              <td>把迁移理解成一次性改 import 或改包版本。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="lesson">
+        <div class="head">
+          <h2>核心讲解</h2>
+          <span class="tag">8 Sections</span>
+        </div>
+        <div class="steps" data-export-context="版本迁移讲解链" data-export-lang="text">
+          <article class="lesson-step">
+            <span class="step-no">01</span>
+            <h3>先读版本号，不要先跑升级命令</h3>
+            <p>Agents SDK 的发布说明把版本形式写成 <code>0.Y.Z</code>，并强调前导 0 代表 SDK 仍在快速演进。这里的关键不是记住某个版本，而是建立一个动作：只要跨 minor 版本，就按“可能破坏公共接口或公共行为”处理。</p>
+            <p>直觉上，minor 版本像一道门。跨过去之前，要先问四个问题：公共接口有没有变，默认值有没有变，beta 功能有没有变，旧状态或旧工作区能不能被新代码继续使用。</p>
+            <div class="formula math-block" data-export-context="迁移风险公式" data-export-lang="math">迁移风险 = 接口变化 + 默认值变化 + 状态兼容风险 + 副作用重复风险</div>
+          </article>
+
+          <article class="lesson-step">
+            <span class="step-no">02</span>
+            <h3>把更新映射到运行承载面</h3>
+            <p>同样是 SDK 更新，影响的位置不同，迁移动作也不同。模型默认值变化影响输出质量、成本和延迟；Runner 循环变化影响终止条件和错误处理；工具与 MCP 变化影响模型能否继续推进；session 与 checkpoint 变化影响恢复；sandbox 变化影响文件读写边界；tracing 变化影响排查证据。</p>
+            <p>所以阅读 release notes 时，不要只标“breaking”或“non-breaking”。更实用的标法是：它落在哪个承载面，是否影响已有任务，是否影响未显式配置的路径，是否影响中断后的恢复。</p>
+          </article>
+
+          <article class="lesson-step">
+            <span class="step-no">03</span>
+            <h3>默认模型变化要当成产品行为变化</h3>
+            <p>发布说明中的 0.16.0 提到 SDK 默认模型从 <code>gpt-4.1</code> 变为 <code>gpt-5.4-mini</code>，并带来 GPT-5 默认设置，例如 <code>reasoning.effort="none"</code> 和 <code>verbosity="low"</code>。如果你的 Agent 没显式写模型，升级后它并不是“同一个系统使用新版库”，而是“系统换了模型和部分默认推理配置”。</p>
+            <p>迁移策略很直接：生产 Agent 显式写模型，回归测试覆盖典型任务、边界任务和拒绝场景，成本与延迟指标单独比较。若想保留旧行为，使用 Agent 或 RunConfig 的显式模型设置，或使用文档提到的默认模型环境变量。</p>
+          </article>
+
+          <article class="lesson-step">
+            <span class="step-no">04</span>
+            <h3>错误语义变化会改变运行循环</h3>
+            <p>0.15.0 的发布说明把模型拒绝显式暴露为 <code>ModelRefusalError</code>，而不是空文本或结构化输出循环重试。这类变化非常重要，因为它改变的不是异常名称，而是 Runner 什么时候结束、什么时候继续、什么时候把错误交给业务处理。</p>
+            <p>正确的迁移不是吞掉异常，而是决定拒绝在你的系统里属于哪类结果：用户可见的安全回复、需要人工处理的事件、还是任务失败。然后为该错误配置明确的处理器，并把结果放进 trace 和回归用例。</p>
+          </article>
+
+          <article class="lesson-step">
+            <span class="step-no">05</span>
+            <h3>沙箱边界变化要当成权限变更</h3>
+            <p>0.14.0 引入 Sandbox Agents 作为 beta 功能区，文档描述了持久隔离工作区、文件、目录、Git repo、mount、snapshot 和 resume 等能力。0.17.0 又调整了本地 source materialization 的边界：来自 base_dir 外的本地主机路径需要通过 manifest 级别的额外路径授权。</p>
+            <p>这说明沙箱迁移的重点不是“工具还能不能读文件”，而是“哪些主机路径被允许进入工作区”。升级时应审计所有 <code>LocalFile</code>、<code>LocalDir</code>、mount、snapshot 和恢复流程。路径授权属于可信应用配置，不应该来自模型输出。</p>
+          </article>
+
+          <article class="lesson-step">
+            <span class="step-no">06</span>
+            <h3>会话和 checkpoint 决定中断后恢复到哪里</h3>
+            <p>Agents SDK 的 Sessions 文档提供多种会话实现，用于自动管理对话历史和跨回合恢复。LangGraph Durable Execution 则把图状态保存成 checkpoint，并按 thread 组织历史状态。两者都在回答同一个工程问题：任务中断后，系统拿什么作为继续执行的依据。</p>
+            <p>迁移时最容易漏掉的是旧状态兼容。新代码会用旧 session 或旧 checkpoint 恢复吗？状态字段改名了吗？旧工具结果还能被新工具解释吗？已有 thread_id 的历史运行会不会进入新分支？这些问题要在升级前演练，而不是等用户任务卡住时再排查。</p>
+          </article>
+
+          <article class="lesson-step">
+            <span class="step-no">07</span>
+            <h3>持久执行不等于副作用安全</h3>
+            <p>LangGraph 的文档强调 checkpoint 能支持 human-in-the-loop、memory、time travel 和 fault tolerance，也提到 super-step、pending writes 与 durability mode。它可以避免某些成功节点在恢复时被重复执行，但外部副作用仍然需要你的应用自己设计。</p>
+            <p>如果一个节点已经发邮件、扣款、写外部数据库或触发部署，checkpoint 只能记录状态，不能自动撤销外部世界。迁移时要检查副作用节点是否幂等，是否有去重键，是否先记录 intent 再执行，是否能在恢复时判断“这件事已经做过”。</p>
+          </article>
+
+          <article class="lesson-step">
+            <span class="step-no">08</span>
+            <h3>追踪是迁移验收的证据，不只是日志</h3>
+            <p>Agents SDK 文档说明 tracing 会记录 LLM generation、tool call、handoff、guardrail 和自定义事件，且默认启用。迁移时，trace 不只是事故后排查用，它也是升级前后的对照证据。</p>
+            <p>一个实用做法是保留一组 golden run：固定输入、固定工具夹具、固定业务期望。升级前后比较最终输出、工具调用序列、错误处理、token 使用、耗时、span 结构和敏感数据处理。只要这些变化无法解释，就不要把它归类为“安全升级”。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="cases">
+        <div class="head">
+          <h2>迁移案例</h2>
+          <span class="tag">Cases</span>
+        </div>
+        <div class="scenario-switcher" role="group" aria-label="案例切换" data-export-context="迁移案例切换器" data-export-lang="text">
+          <button class="ghost active" type="button" data-case="model">默认模型</button>
+          <button class="ghost" type="button" data-case="refusal">拒绝处理</button>
+          <button class="ghost" type="button" data-case="sandbox">沙箱路径</button>
+          <button class="ghost" type="button" data-case="checkpoint">checkpoint 恢复</button>
+        </div>
+        <div class="case-card" id="casePanel" aria-live="polite" data-export-context="迁移案例面板" data-export-lang="text"></div>
+
+        <div class="grid2">
+          <div class="box">
+            <h3>迁移清单模板</h3>
+            <div class="codebar">
+              <span class="label">migration-ledger.md</span>
+              <span class="kind">Markdown</span>
+            </div>
+            <pre data-export-context="代码示例 1" data-export-lang="text"><code>## SDK 迁移记录
+
+- 当前版本：
+- 目标版本：
+- 跨 minor 版本：是 / 否
+- 涉及承载面：模型 / Runner / 工具 / session / sandbox / tracing / LangGraph checkpoint
+- 显式配置补齐：
+- 旧状态兼容检查：
+- 副作用幂等检查：
+- golden run 集合：
+- 灰度范围：
+- 回滚条件：
+- 验收结论：</code></pre>
+          </div>
+          <div class="box">
+            <h3>依赖锁定示例</h3>
+            <p>Python 项目应把“允许自动吸收哪些版本”写清楚。下面示例表达的是：允许吸收 0.16 的 patch，暂不自动跨到 0.17。</p>
+            <div class="codebar">
+              <span class="label">pyproject.toml</span>
+              <span class="kind">TOML</span>
+            </div>
+            <pre data-export-context="代码示例 2" data-export-lang="text"><code>[project]
+dependencies = [
+  "openai-agents&gt;=0.16,&lt;0.17",
+  "langgraph&gt;=1.0,&lt;1.1"
+]</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见错误</h2>
+          <span class="tag">Pitfalls</span>
+        </div>
+        <div class="grid3" data-export-context="迁移常见错误面板" data-export-lang="text">
+          <div class="box danger">
+            <h3>只跑单元测试，不跑行为回归</h3>
+            <p>SDK 升级常常不破坏类型，却改变默认模型、错误语义和工具循环。修法是保留 golden run，并比较输出、工具序列、trace 和成本。</p>
+          </div>
+          <div class="box danger">
+            <h3>把 beta 功能当稳定契约</h3>
+            <p>Sandbox Agents 文档明确标记为 beta。修法是把 beta 表面隔离在适配层，并对 Manifest、workspace、snapshot 和 resume 写专门测试。</p>
+          </div>
+          <div class="box danger">
+            <h3>从模型输出生成权限授权</h3>
+            <p>路径授权是可信应用配置。如果把模型输出直接变成 host path grant，迁移时会扩大文件边界。修法是白名单、只读优先、人工或配置审批。</p>
+          </div>
+          <div class="box warn">
+            <h3>忽略旧 checkpoint</h3>
+            <p>长任务升级后可能用新代码恢复旧状态。修法是保留状态 schema 版本，写迁移函数，并演练从旧 thread_id 继续执行。</p>
+          </div>
+          <div class="box warn">
+            <h3>把 checkpoint 当事务</h3>
+            <p>checkpoint 保存图状态，不自动保证外部副作用原子性。修法是为副作用增加幂等键、去重表、intent 记录和恢复检查。</p>
+          </div>
+          <div class="box warn">
+            <h3>发布说明只读最新段</h3>
+            <p>如果从 0.13 升到 0.17，中间每个 minor 的行为变化都要读。修法是逐段列出差异，不只看目标版本摘要。</p>
+          </div>
+        </div>
+        <div class="box info" data-export-context="迁移演练补充说明" data-export-lang="text">
+          <h3>补充演练说明</h3>
+          <p>把升级想成三层动作：第一层读 release notes，第二层找承载面，第三层做回归。很多失败都出在第二层被省略了。比如一个看起来只是模型默认值的更新，实际上会让同一条 trace 的工具调用序列、token 用量和拒绝语义一起变化；一个看起来只是沙箱路径的更新，实际上会让旧 checkpoint 需要重新跑路径授权演练。迁移剧本写得越清楚，灰度和回滚就越少依赖临场猜测。</p>
+        </div>
+        <div class="box" data-export-context="迁移检查清单说明" data-export-lang="text">
+          <h3>检查清单怎么写才有用</h3>
+          <p>一个有用的迁移检查清单，不会只写“升级依赖、跑测试、看结果”这种空句子。它应该能回答三类问题：第一，哪些默认值已经显式写出来，哪些还要继续锁定；第二，哪些状态需要迁移，哪些状态只要回放验证；第三，哪些失败一旦出现就必须停止灰度。写到这一步，迁移清单就不再只是文档，而是上线前的操作脚本。</p>
+          <p>实际执行时，建议把检查清单拆成四栏：变化项、影响承载面、验证方式、回滚条件。这样一来，任何一个升级点都能被放进同一个审查框架里比较。模型默认值、错误语义、沙箱路径、session 恢复、checkpoint 格式和追踪记录，都可以按这四栏去填，不会因为对象不同就写成完全不兼容的笔记。</p>
+        </div>
+        <div class="box info" data-export-context="迁移执行顺序" data-export-lang="text">
+          <h3>迁移执行顺序</h3>
+          <p>真正执行升级时，顺序比口号重要得多。先冻结版本锁和依赖范围，再把默认值显式写进配置，然后挑一组固定输入做 golden run，接着比对 trace、成本、错误和恢复路径，最后才进入小流量灰度。这个顺序的意义在于，你能先把最容易漂移的地方钉死，再看剩下的变化是不是可接受。</p>
+          <p>如果升级里涉及 checkpoint、session 或 sandbox，就要额外加一层状态和路径演练。换句话说，不只是模型输出会变，连失败以后怎么继续、继续时会不会重复动作、外部文件还能不能读到，都会跟着变。能过这层检查，升级才算真正安全；只要这层没做，版本号就只是看起来改过了，实际系统没有被理解。</p>
+        </div>
+        <div class="box info" data-export-context="迁移案例补充链" data-export-lang="text">
+          <h3>迁移案例补充链</h3>
+          <p>假设你有一个现成的资料整理智能体，升级前后最容易出问题的地方一般有三个。第一，默认模型变了，输出会更短或更快，但工具调用序列也可能少一步；第二，拒绝语义变了，原来会吞掉的失败现在可能变成显式错误；第三，沙箱路径变了，原来能读的本地资料现在可能因为授权不完整而读不到。只要这三类变化没被写进检查表，灰度阶段就会把“看起来能跑”误判成“真的安全”。</p>
+          <p>所以一个完整的迁移案例，最好先列出旧行为，再列出新行为，然后明确在哪些地方做补丁：模型显式配置、拒绝处理器、路径授权、状态迁移函数和恢复演练。最后把这些补丁放进一个 golden run 集合里，固定输入、固定工具夹具、固定回归断言，确保下次升级不会再从头猜一次。</p>
+          <p>更细一点看，迁移真正难的不是“升级版本”，而是把升级拆成可验证的动作。你要先确认旧行为里哪些是必须保留的，比如一个任务必须能在中途恢复、一个写入动作不能重复执行、一个路径授权必须只读可见；然后确认新行为里哪些是可以接受的，比如回答更简洁、工具调用更少、拒绝更明确。只要这两类目标没有分开，团队就会在评审里争论“新版本是不是更聪明”，却没人回答“旧任务还能不能按原来的方式跑完”。</p>
+          <p>如果把这个案例放进真实上线流程，顺序应该是先做依赖锁定，再做行为快照，再做差异解释，最后才做小流量切换。行为快照要覆盖一条完整链路：输入是什么、模型选了哪些工具、每个工具的参数是什么、哪个 checkpoint 被写入、恢复后有没有重复副作用。差异解释则要把“预期变化”和“事故变化”区分开。比如输出更短可能是新模型的正常行为，但如果同样输入下工具调用少了一步、路径授权少了一层，那就不是正常变化，而是迁移缺口。</p>
+          <table data-export-context="迁移快照清单" data-export-lang="table">
+            <thead>
+              <tr><th>快照项</th><th>为什么要记</th><th>升级后怎么看</th><th>回滚信号</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>模型与提示词</td><td>决定输出风格和工具倾向</td><td>对比回答长度、工具序列和成本</td><td>工具顺序或成本超阈值</td></tr>
+              <tr><td>权限与路径</td><td>决定能读什么、能写什么</td><td>确认只读范围和拒绝语义</td><td>出现越权或空授权</td></tr>
+              <tr><td>状态与 checkpoint</td><td>决定能否从中途恢复</td><td>验证旧状态是否能继续</td><td>恢复后跳错分支</td></tr>
+              <tr><td>副作用与幂等</td><td>决定是否会重复做事</td><td>检查 intent、commit 和去重表</td><td>重复写入或重复通知</td></tr>
+            </tbody>
+          </table>
+          <p>把这些项都写进迁移剧本以后，团队沟通也会明显更稳定。评审时不再只是说“这次升级风险不大”，而是能明确地说“模型默认值已锁定、拒绝分支已补、旧 checkpoint 已演练、路径授权已收窄、回滚条件已列出”。这种说法很平实，但它比“应该没问题”要可靠得多。真正可落地的迁移，不依赖勇气，依赖你能把每一个变化点都写成检查动作。</p>
+          <div class="box" data-export-context="迁移执行剧本" data-export-lang="text">
+            <h3>升级执行剧本</h3>
+            <p>一个能直接拿去执行的剧本，应该从“准备、试跑、灰度、回滚、验收”五步写起。准备阶段先冻结依赖和配置，把模型版本、路径授权、状态 schema 和回归输入都写死；试跑阶段用同一条 golden run 观察工具序列、错误语义和 checkpoint 写入点；灰度阶段只放小流量，重点看失败是否集中在某一个动作，而不是整条链路都在漂；回滚阶段则要能把新版本产生的状态和旧 checkpoint 区分开，避免撤回时把旧状态也冲掉；验收阶段最后看的是业务结果、trace 差异和恢复演练是否同时通过。</p>
+            <p>这个剧本的关键，是每一步都要对应一个可以检查的证据。准备阶段看配置文件和 manifest，试跑阶段看 trace、成本和工具调用序列，灰度阶段看错误分布和恢复时间，回滚阶段看状态是否还在，验收阶段看同样输入是否仍能得到可接受的输出。只要你能把证据写清，迁移就不再是一次性赌注，而是一个可重复、可对比、可复盘的工程动作。你现在应该能做什么：拿到一个版本升级任务，先写出试跑和回滚证据，再决定能不能进灰度。</p>
+          </div>
+          <p>最后一步别忘了把剧本和练习绑在一起。练习题里如果只问“哪个版本更大”，学到的只是版本号；如果练习题问“升级后哪一个字段最先变、哪一个步骤最容易回滚、哪一类失败必须停灰”，学到的才是迁移判断。你可以把题目答案写成自己的上线检查单，再反过来用检查单验证一次升级。这样一来，学习页不是看完就结束，而是可以直接转成团队执行文档。</p>
+          <p>为了让迁移不只是概念，建议把每次升级都固定成同一个输出格式：变更说明、影响承载面、验证证据、回滚条件、复盘结论。这个格式写一次以后，下次遇到新版本就直接套用，不需要重新想结构。它的价值不在于文字整齐，而在于让团队每次都从同一组事实出发，避免把感觉当成判断。你现在应该能做什么：把一个升级任务拆成“验证前、验证中、验证后”三段，并能说出每段需要留下什么证据。</p>
+          <p>如果只记一个口诀，就记“先证据，后结论”。先拿到配置、trace、checkpoint 和回滚条件，再谈这次升级值不值得放行，这样你不会被表面的版本号带跑。</p>
+          <p>升级之后的后果，也要在剧本里提前写出来。最轻的情况是输出风格变化，团队只需要接受新的表述方式；更重的情况是工具调用顺序变化，导致某个写入动作提前或滞后；最麻烦的情况是状态恢复点变化，旧 checkpoint 不能直接续跑，必须先跑迁移函数。把这三种后果分开，才能决定是继续灰度、修补承载面，还是立刻回滚。</p>
+          <p>比如一个长任务在旧版本里跑到一半，新的版本发布后，最稳妥的做法不是直接点继续，而是先拿旧 thread_id 和新状态 schema 做一次恢复演练。演练里如果发现 checkpoint 读得出来，但图节点已经换名，那就先补迁移函数；如果发现恢复后第一步就会重发通知，那就先加幂等键；如果发现路径授权在新环境里变窄了，那就先收回灰度。这个案例告诉你，版本迁移不是单点判断，而是把恢复、授权和副作用一起看。</p>
+          <p>回滚也要分层处理。版本回滚是把新代码撤下，状态回滚是把任务带回一个还能继续的位置，副作用回滚则通常做不到真正撤销，只能靠幂等、补偿或人工修正兜底。把这三层混在一起，团队就会误以为“回滚成功”意味着一切都回来了，实际上外部通知、文件写入或数据库提交可能已经发生。更稳的做法，是在剧本里明确写出：哪些变化可以直接回滚代码，哪些必须先迁移状态，哪些只能停住新会话再清理旧动作。你现在应该能做什么：看到一个旧 checkpoint，先判断它属于可续跑状态、需要迁移状态，还是已经进入只读收口状态。</p>
+          <p>例如某次升级后，trace 里最先变短的是模型 span，紧跟着少了一次工具授权检查，结果恢复演练里第一次重跑就重复发出通知。碰到这种情况，最先修的不是文案，而是把回滚条件、幂等键和 golden run 一起补进剧本，再重新验证一遍。</p>
+          <p>练习时可以直接写一张小表，把“代码回滚、状态迁移、幂等补偿”三件事分开列出来。</p>
+        </div>
+      </section>
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">Practice</span>
+        </div>
+        <div class="practice-intro">
+          <div class="review-card">
+            <strong>作答目标</strong>
+            <p>练习重点不是背版本号，而是把更新映射到运行承载面，并写出能落地的迁移动作。</p>
+          </div>
+          <div class="review-card">
+            <strong>检查重点</strong>
+            <p>每个回答尽量同时包含：影响位置、风险原因、验证方式、修复或迁移动作。</p>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>一、版本信号判断</h3>
+              <p>先确认你能从发布说明中读出风险等级。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回忆：</b>
+              <span>跨 minor、默认值、错误语义、beta 表面和状态兼容是优先检查项。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q1" data-group="一、版本信号判断" data-title="从 0.16 升到 0.17 应按哪类升级处理？">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">风险分级</span></div>
+              <h3>从 0.16 升到 0.17 应按哪类升级处理？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q1" value="A">A. patch 升级，通常不需要看 release notes</label>
+                <label><input type="radio" name="q1" value="B">B. 跨 minor 升级，应检查 breaking change 与行为变化</label>
+                <label><input type="radio" name="q1" value="C">C. 只要代码能 import，就可以直接上线</label>
+              </div>
+              <p class="hint">看 0.Y.Z 的含义。</p>
+            </div>
+
+            <div class="q" data-question="q2" data-group="一、版本信号判断" data-title="patch 版本一定不会改变任何行为吗？">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">版本语义</span></div>
+              <h3>patch 版本一定不会改变任何行为吗？</h3>
+              <label><input type="radio" name="q2" value="true">对</label>
+              <label><input type="radio" name="q2" value="false">错</label>
+              <p class="hint">“非 breaking”不等于“没有任何可观察差异”。</p>
+            </div>
+
+            <div class="q short" data-question="q3" data-group="一、版本信号判断" data-title="填写：未显式写模型时，升级最先检查什么？">
+              <div class="q-meta"><span class="pill">填空</span><span class="pill">默认值</span></div>
+              <h3>填写：未显式写模型时，升级最先检查什么？</h3>
+              <input type="text" name="q3" placeholder="例如：默认模型、默认 reasoning 设置、成本和延迟">
+              <button type="button" class="reveal">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>默认模型（model 默认值）、默认 reasoning 设置（如 reasoning_effort 或 model 的推理参数）、成本和延迟。升级文档通常会提到这些默认值的变化，即使你没有显式写模型，运行循环也会使用新默认值。</p>
+              </details>
+              <p class="hint">回答不需要背具体模型名，重点是检查对象。</p>
+            </div>
+
+            <div class="q" data-question="q4" data-group="一、版本信号判断" data-title="哪项最像行为回归？">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">回归识别</span></div>
+              <h3>哪项最像行为回归？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q4" value="A">A. 依赖版本字符串变长</label>
+                <label><input type="radio" name="q4" value="B">B. 同一任务升级后工具调用顺序、成本和最终答复明显变化</label>
+                <label><input type="radio" name="q4" value="C">C. 文档新增了一个你没有使用的示例</label>
+              </div>
+              <p class="hint">行为回归关注用户可见和运行可见结果。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>二、承载面定位</h3>
+              <p>把更新落到具体的系统边界上。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回忆：</b>
+              <span>模型、Runner、工具、session、sandbox、tracing、checkpoint 是不同迁移面。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q5" data-group="二、承载面定位" data-title="模型拒绝从空输出变成显式错误，影响哪个位置？">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">运行循环</span></div>
+              <h3>模型拒绝从空输出变成显式错误，影响哪个位置？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q5" value="A">A. 运行循环的错误处理与终止语义</label>
+                <label><input type="radio" name="q5" value="B">B. 页面 CSS 颜色</label>
+                <label><input type="radio" name="q5" value="C">C. 只影响依赖锁文件的文本</label>
+              </div>
+              <p class="hint">想一想 Runner 何时继续、何时结束。</p>
+            </div>
+
+            <div class="q" data-question="q6" data-group="二、承载面定位" data-title="LocalDir 读取 base_dir 外路径需要授权，影响哪个位置？">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">沙箱边界</span></div>
+              <h3>LocalDir 读取 base_dir 外路径需要授权，影响哪个位置？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q6" value="A">A. host 文件进入 sandbox workspace 的权限边界</label>
+                <label><input type="radio" name="q6" value="B">B. 模型上下文窗口大小</label>
+                <label><input type="radio" name="q6" value="C">C. Markdown 标题级别</label>
+              </div>
+              <p class="hint">关键词是 host path、manifest、workspace。</p>
+            </div>
+
+            <div class="q full" data-question="q7" data-group="二、承载面定位" data-title="解释：为什么 tracing 是迁移验收证据？">
+              <div class="q-meta"><span class="pill">解释</span><span class="pill">可观测性</span></div>
+              <h3>解释：为什么 tracing 是迁移验收证据？</h3>
+              <textarea name="q7" placeholder="从 LLM generation、tool call、handoff、guardrail、span 差异几个角度解释。"></textarea>
+              <button type="button" class="reveal">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>trace 记录了 LLM generation、tool call、handoff、guardrail 等每个 span 的输入输出和耗时。升级前后对比 trace，可以发现模型行为变化（如生成顺序不同、工具调用次数变化）、成本变化（延迟和 token 消耗）、错误模式变化（新的拒绝类型或错误频率）。普通日志只记录最终输出，trace 能看到中间每一步的差异。</p>
+              </details>
+              <p class="solve-note">回答结构：先说明 trace 记录什么，再说明升级前后比较什么，最后说明它能发现哪些普通日志看不到的问题。</p>
+            </div>
+
+            <div class="q full" data-question="q8" data-group="二、承载面定位" data-title="列出一个升级影响矩阵">
+              <div class="q-meta"><span class="pill">表格草稿</span><span class="pill">迁移设计</span></div>
+              <h3>列出一个升级影响矩阵</h3>
+              <textarea name="q8" placeholder="写 3 行即可：更新项｜影响承载面｜验证方式｜迁移动作。"></textarea>
+              <button type="button" class="reveal">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>模型默认值变更｜运行循环（Runner）｜对比升级前后同一任务的 trace，检查生成行为和工具调用顺序｜显式设置模型参数，避免依赖默认值。LocalDir 路径授权｜沙箱边界（sandbox）｜测试读取 base_dir 外文件是否被拒绝｜更新 manifest 或授权配置。session 持久化格式｜状态恢复（checkpoint）｜恢复旧 checkpoint 后检查字段兼容性｜写状态迁移脚本或重新初始化。</p>
+              </details>
+              <p class="solve-note">至少包含一个模型默认值、一个沙箱边界、一个 checkpoint 或 session 项。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>三、可恢复执行与副作用</h3>
+              <p>重点区分“状态能恢复”和“外部世界不会重复改变”。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回忆：</b>
+              <span>checkpoint 保存状态；副作用安全靠幂等、去重和恢复检查。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q9" data-group="三、可恢复执行与副作用" data-title="checkpoint 的主要作用是什么？">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">持久化</span></div>
+              <h3>checkpoint 的主要作用是什么？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q9" value="A">A. 保存图状态，使流程可恢复、可回看或可中断后继续</label>
+                <label><input type="radio" name="q9" value="B">B. 自动撤销所有外部 API 调用</label>
+                <label><input type="radio" name="q9" value="C">C. 自动保证模型输出更准确</label>
+              </div>
+              <p class="hint">checkpoint 解决的是状态问题，不是所有工程问题。</p>
+            </div>
+
+            <div class="q" data-question="q10" data-group="三、可恢复执行与副作用" data-title="durability='sync' 的典型代价是什么？">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">权衡</span></div>
+              <h3><code>durability="sync"</code> 的典型代价是什么？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q10" value="A">A. 更高持久性，可能有性能开销</label>
+                <label><input type="radio" name="q10" value="B">B. 完全不保存 checkpoint</label>
+                <label><input type="radio" name="q10" value="C">C. 自动跳过所有工具执行</label>
+              </div>
+              <p class="hint">对比 sync、async、exit 的落盘时机。</p>
+            </div>
+
+            <div class="q full" data-question="q11" data-group="三、可恢复执行与副作用" data-title="错误诊断：重复发邮件">
+              <div class="q-meta"><span class="pill">错误诊断</span><span class="pill">副作用</span></div>
+              <h3>错误诊断：重复发邮件</h3>
+              <textarea name="q11" placeholder="场景：LangGraph 节点发送邮件后进程崩溃，恢复时又发送了一次。请写出原因和修法。"></textarea>
+              <button type="button" class="reveal">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>原因：发送邮件后进程崩溃，checkpoint 没有记录邮件已发送，恢复时重跑节点会再次发送。checkpoint 和副作用的边界：checkpoint 只保存图状态，不保存外部系统的副作用。幂等键或发送记录：发送前生成 trace_id 作为幂等键，发送后记录到外部系统或本地状态。恢复时检查：恢复后先查询是否已有相同 trace_id 的邮件记录，有则跳过。</p>
+              </details>
+              <p class="solve-note">回答结构：原因｜checkpoint 与副作用的边界｜幂等键或发送记录｜恢复时检查。</p>
+            </div>
+
+            <div class="q full" data-question="q12" data-group="三、可恢复执行与副作用" data-title="设计：旧 checkpoint 恢复演练">
+              <div class="q-meta"><span class="pill">迁移</span><span class="pill">恢复演练</span></div>
+              <h3>设计：旧 checkpoint 恢复演练</h3>
+              <textarea name="q12" placeholder="写一个 5 步演练计划，验证旧 thread_id 或旧 checkpoint 能在新代码下继续执行。"></textarea>
+              <button type="button" class="reveal">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>1. 准备旧状态：记录旧 thread_id 和 checkpoint 内容。2. 升级代码：部署新版本，保留旧版本备份。3. 恢复执行：用旧 thread_id 在新代码下恢复。4. 比较 trace：对比升级前后同一任务的 trace，检查 span 差异和错误。5. 状态迁移：如果旧 checkpoint 字段不兼容，写迁移脚本或回滚。6. 验证输出：确认恢复后的任务输出和旧版本一致。</p>
+              </details>
+              <p class="solve-note">至少包含：准备旧状态、升级代码、恢复执行、比较 trace、判断是否需要状态迁移。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>四、迁移剧本输出</h3>
+              <p>把前面的判断合成一份可执行升级方案。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回忆：</b>
+              <span>迁移方案要同时写风险、动作、验证和回滚条件。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q full" data-question="q13" data-group="四、迁移剧本输出" data-title="迁移案例：Agents SDK 0.14 到 0.17">
+              <div class="q-meta"><span class="pill">迁移方案</span><span class="pill">综合</span></div>
+              <h3>迁移案例：Agents SDK 0.14 到 0.17</h3>
+              <textarea name="q13" placeholder="假设应用使用 Sandbox Agents、LocalDir、session 和 tracing。写出升级前检查、代码修改、回归测试和灰度策略。"></textarea>
+              <button type="button" class="reveal">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>升级前检查：阅读 changelog，标记 breaking 和 behavior 变更；列出使用的 API：Sandbox Agents、LocalDir、session、tracing；检查默认模型和 reasoning 设置。代码修改：更新依赖版本；显式设置模型参数；更新沙箱路径授权配置；修改错误处理逻辑。回归测试：用 golden run 集合验证普通任务、拒绝任务、工具失败、沙箱文件任务、恢复任务。灰度策略：先 5% 流量，监控拒绝率和 trace diff；异常率超过旧版本两倍时回滚。</p>
+              </details>
+              <p class="solve-note">不要只写“升级依赖”。必须覆盖沙箱路径授权、默认模型、拒绝处理、trace diff 和恢复演练。</p>
+            </div>
+
+            <div class="q full" data-question="q14" data-group="四、迁移剧本输出" data-title="写一条回滚条件">
+              <div class="q-meta"><span class="pill">发布控制</span><span class="pill">灰度</span></div>
+              <h3>写一条回滚条件</h3>
+              <textarea name="q14" placeholder="例如：如果拒绝场景异常率超过旧版本两倍，或恢复演练失败，就停止灰度并回滚。"></textarea>
+              <button type="button" class="reveal">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>如果拒绝场景异常率超过旧版本两倍，或恢复演练失败，或 golden run 中任一任务输出与旧版本不一致，就停止灰度并回滚。触发条件要可观测（能从 trace 和监控中读取）、和业务风险相关（不是无关的指标阈值）。</p>
+              </details>
+              <p class="solve-note">好的回滚条件应该可观测、可触发、和业务风险相关。</p>
+            </div>
+
+            <div class="q full" data-question="q15" data-group="四、迁移剧本输出" data-title="写一个 golden run 集合">
+              <div class="q-meta"><span class="pill">测试设计</span><span class="pill">回归</span></div>
+              <h3>写一个 golden run 集合</h3>
+              <textarea name="q15" placeholder="列 5 个固定输入或任务，说明每个任务验证哪个迁移风险。"></textarea>
+              <button type="button" class="reveal">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>1. 普通任务：验证工具发现和 schema 正常。2. 拒绝任务：验证模型拒绝行为是否变化。3. 工具失败：验证错误处理和重试逻辑。4. 沙箱文件任务：验证 LocalDir 路径授权和文件读写。5. 恢复任务：验证 checkpoint 恢复和副作用幂等。每个任务对应一个迁移风险点，用固定输入确保可重复比较。</p>
+              </details>
+              <p class="solve-note">建议覆盖：普通任务、拒绝任务、工具失败、沙箱文件任务、恢复任务。</p>
+            </div>
+
+            <div class="q full" data-question="q16" data-group="四、迁移剧本输出" data-title="综合解释：把本单元讲成一个故事">
+              <div class="q-meta"><span class="pill">综合解释</span><span class="pill">Feynman</span></div>
+              <h3>综合解释：把本单元讲成一个故事</h3>
+              <textarea name="q16" placeholder="用 200 字以内解释：为什么智能体 SDK 迁移不是普通依赖升级？"></textarea>
+              <button type="button" class="reveal">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>智能体 SDK 不只是普通依赖：它控制模型如何生成、如何调用工具、如何保存状态、如何处理错误。升级 SDK 可能改变默认模型、拒绝行为、沙箱边界、session 格式和 trace 内容。这些变化会影响运行循环的每个环节，所以迁移需要检查版本信号、定位承载面、验证可恢复性、确保副作用安全，并用 trace diff 验收。</p>
+              </details>
+              <p class="solve-note">回答顺序：版本信号｜承载面｜状态恢复｜副作用｜trace 验收。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>Markdown 导出与复制</h2>
+          <span class="tag">Practice Record</span>
+        </div>
+        <p>生成的记录包含题目、分组和你的答案，适合保存为学习复盘或发给同伴讨论。记录不包含本地路径或个人流程信息。</p>
+        <div class="quality" id="quality"></div>
+        <div class="answer" id="record">还没有生成练习记录。</div>
+        <pre class="record" id="recordPreview"></pre>
+        <div class="actions">
+          <button class="ghost" type="button" onclick="generateRecord()">生成 Markdown</button>
+          <button type="button" onclick="copyRecord()">复制 Markdown</button>
+          <button class="ghost" type="button" onclick="downloadRecord()">下载 .md</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">Sources</span>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>本页参考的公开资料</h3>
+            <ul>
+              <li><a class="text-link" href="https://openai.github.io/openai-agents-python/release/">OpenAI Agents SDK 更新记录</a></li>
+              <li><a class="text-link" href="https://openai.github.io/openai-agents-python/">OpenAI Agents SDK 文档</a></li>
+              <li><a class="text-link" href="https://docs.langchain.com/oss/python/langgraph/durable-execution">LangGraph Durable Execution</a></li>
+            </ul>
+          </div>
+          <div class="box info">
+            <h3>推导边界</h3>
+            <p>本页把版本号、默认行为、状态兼容、沙箱边界和回归策略整理成迁移读法（访问日期：2026-06-21）。这些迁移建议是基于公开文档做的工程归纳，不是单一框架的唯一实践。</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- learning-kit-progress -->
+  <script src="../assets/study-page.js"></script>
+  <script src="./学习页.js" defer></script>
+</body>
+</html>

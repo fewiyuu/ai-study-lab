@@ -1,0 +1,1024 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>小模型消融与数据验证｜统一评测、样本审查与回退</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="预训练数据工程与数据配方" data-unit="单元 06">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>预训练数据工程与数据配方</strong>
+        <span>单元 06</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>主线图</a>
+        <a href="#terms"><span class="dot"></span>术语与误区</a>
+        <a href="#mechanism"><span class="dot"></span>核心机制</a>
+        <a href="#eval"><span class="dot"></span>统一评测</a>
+        <a href="#validation"><span class="dot"></span>规则验证</a>
+        <a href="#trace"><span class="dot"></span>验证台账</a>
+        <a href="#cases"><span class="dot"></span>案例推演</a>
+        <a href="#mistakes"><span class="dot"></span>常见错误</a>
+        <a href="#boundary"><span class="dot"></span>边界说明</a>
+        <a href="#bridge"><span class="dot"></span>怎么接到下一页</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">上一单元把配方定下来，这一页看的是它能不能经得住比较、审查和回退。先抓住实验链路，再看台账和样本，最后把练习做一遍。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">消融验证 / 统一评测 / 回退决策</div>
+          <h1>小模型消融与数据验证：统一评测、样本审查与回退决策</h1>
+          <p>这一页接在数据配方后面，处理的是更具体的一步：当来源、比例和阶段已经定好后，怎么把一次改动做成一条公平、可复查的实验链。先把对比方式和回退条件定住，再谈这个改动值不值得留。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../05_数据配方_来源比例与阶段/学习页.html">上一单元</a><a href="../07_可复现流水线与运行记录/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完这一页，先能做这三件事</h3>
+          <ul>
+  <li>把一个配方改动写成消融实验，并把模型、预算、采样和评测协议固定住。</li>
+  <li>读结果时先看任务簇和异常点，再看平均分。</li>
+  <li>把规则假设、样本审查、短跑验证和长跑确认串成一条判断链。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">deep unit</span>
+  </div>
+  <div class="grid3">
+    <div class="box">
+      <h3>先固定变量</h3>
+      <p>看到一个配方改动时，能先问清楚哪一项被改了、哪些条件必须固定、结果该归因给谁。</p>
+    </div>
+    <div class="box">
+      <h3>再读早期信号</h3>
+      <p>能区分“小模型短跑给出的方向信号”和“最终大模型配方结论”，不把一次短跑当成终局。</p>
+    </div>
+    <div class="box">
+      <h3>最后做验证</h3>
+      <p>能把规则验证写成一条完整链路：假设、对照、样本审查、短跑实验、统一评测、长跑确认。</p>
+    </div>
+  </div>
+</section>
+
+<section id="map">
+  <div class="head">
+    <h2>主线图</h2>
+    <span class="tag">experimental loop</span>
+  </div>
+  <div class="map">
+    <span class="node">配方改动</span>
+    <span class="arrow">→</span>
+    <span class="node">小模型短跑</span>
+    <span class="arrow">→</span>
+    <span class="node">统一评测</span>
+    <span class="arrow">→</span>
+    <span class="node">样本审查</span>
+    <span class="arrow">→</span>
+    <span class="node">保留 / 回滚 / 再验证</span>
+  </div>
+  <p>这页要做的事很简单：把实验变成一条能重复的判断链。先选一个最小改动，用同一模型、同一预算和同一评测协议跑一轮，再回到样本审查和阈值修正。这样才知道变化是规则带来的，还是别的旋钮碰巧动了。</p>
+  <div class="callout">
+    <strong>先记一句：</strong>小模型短跑给的是方向，不是定稿。它最适合帮你筛掉明显不值得继续的规则。
+  </div>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语与误区</h2>
+    <span class="tag">terms</span>
+  </div>
+  <table class="metric-table" data-export-context="小模型消融术语表" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>术语</th>
+        <th>直觉</th>
+        <th>精确定义</th>
+        <th>常见误解</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>小模型消融</td>
+        <td>先用便宜模型试数据改动。</td>
+        <td>在较小参数量和较小训练预算下，只改变一个数据变量，比较不同数据版本的结果。</td>
+        <td>误以为小模型结果可以直接替代最终大模型结果。</td>
+      </tr>
+      <tr>
+        <td>统一评测</td>
+        <td>所有候选版本都按同一标准比。</td>
+        <td>固定 benchmark、prompt、样本上限、打分方式、checkpoint 选择和聚合方法。</td>
+        <td>误以为只要换一个“更难的”评测集就更客观。</td>
+      </tr>
+      <tr>
+        <td>规则验证</td>
+        <td>确认一个规则删的是噪声。</td>
+        <td>把过滤或阈值规则写成可审查实验，量化移除比例、样本内容和训练后变化。</td>
+        <td>误以为删得越多越好，或者规则名字专业就等于可信。</td>
+      </tr>
+      <tr>
+        <td>早期信号</td>
+        <td>低成本方向提示。</td>
+        <td>小模型、短 token、有限任务集给出的相对信号，用于筛选候选规则。</td>
+        <td>误以为 early signal 就是最终结论。</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="mechanism">
+  <div class="head">
+    <h2>核心机制：同一把尺子才有比较</h2>
+    <span class="tag">controlled ablation</span>
+  </div>
+  <div class="grid2">
+    <div>
+      <p>做消融时，关键不是把实验跑得热闹，而是让差异只来自一件事。先写出明确假设，再造基线和实验版本，最后在同一训练协议下比较结果。只要模型大小、训练 token、tokenizer、prompt 或 checkpoint 选得不一样，归因就会开始变形。</p>
+      <div class="formula" data-export-context="控制变量公式" data-export-lang="math">可信比较 = 同一模型 + 同一预算 + 同一采样 + 同一评测</div>
+      <p>前四项都要锁住，变化只留给数据变量本身。这样看见的差异，才更像规则带来的差异。</p>
+    </div>
+    <div class="box info">
+      <h3>一眼看错的地方</h3>
+      <p>很多人会先盯着总分，但真正该先看的，是这次改动到底改了什么、删掉了什么、保留了什么。总分只能告诉你方向，不能替你完成归因。</p>
+    </div>
+  </div>
+
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="base"><code>baseline</code><span>原始配方</span></button>
+      <button class="trace-line" data-trace-step="ablation"><code>ablation</code><span>只改一个变量</span></button>
+      <button class="trace-line" data-trace-step="compare"><code>compare</code><span>统一评测</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="base">
+        <b>基线</b><span>固定模型、预算、采样</span><p>先把当前配方跑一遍，记录来源版本、过滤规则、token 数和 checkpoint 选择。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="ablation">
+        <b>消融</b><span>只改一个变量</span><p>例如只提高短行过滤阈值，其他条件不变，这样才能把差异归因给该规则。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="compare">
+        <b>比较</b><span>同一把尺子</span><p>统一评测要用同一套 benchmark、同一 prompt、同一聚合方式，不然比较会失真。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="eval">
+  <div class="head">
+    <h2>统一评测：先把尺子锁死</h2>
+    <span class="tag">benchmark protocol</span>
+  </div>
+  <div class="grid2">
+    <div>
+      <p>小模型短跑最怕噪声。任务太难、方差太大、prompt 太敏感时，分数差异很可能只是随机波动。统一评测给不同版本一个共同坐标系，让你能比较相对变化，而不是在不同脚本里来回追分。</p>
+      <p>FineWeb 这类公开案例更适合拿来说明 early-signal 的挑选方式：任务之间要能区分方向，重复 run 的波动要可接受，分数还得能随着训练进展继续变化。只看一个榜单均分通常不够，至少要看任务簇和负向异常。</p>
+    </div>
+    <div class="box warn">
+      <h3>先看什么</h3>
+      <p>读表时，先看任务簇，再看负向 outlier，最后看均分。均分只适合做摘要，不适合单独下结论。</p>
+    </div>
+  </div>
+
+  <table class="metric-table" data-export-context="统一评测协议表" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>协议项</th>
+        <th>要固定什么</th>
+        <th>为什么重要</th>
+        <th>常见失败</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>训练预算</td>
+        <td>token 数、batch、步数、学习率计划。</td>
+        <td>预算不同，能力差异会被误算成数据差异。</td>
+        <td>实验版本训练更久，看起来自然更好。</td>
+      </tr>
+      <tr>
+        <td>模型协议</td>
+        <td>参数量、架构、tokenizer、上下文长度。</td>
+        <td>模型变化会混入架构收益。</td>
+        <td>一个 run 换了 tokenizer，却还当成数据改动。</td>
+      </tr>
+      <tr>
+        <td>评测执行</td>
+        <td>benchmark 版本、prompt、shot 数、样本上限。</td>
+        <td>评测实现变化会直接改变分数。</td>
+        <td>两次评测用的 prompt 模板不同。</td>
+      </tr>
+      <tr>
+        <td>结果聚合</td>
+        <td>平均方式、任务权重、checkpoint 选择。</td>
+        <td>“赢”的定义必须提前定好。</td>
+        <td>实验后挑最有利的 checkpoint 或子集。</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="validation">
+  <div class="head">
+    <h2>规则验证：从直觉到证据</h2>
+    <span class="tag">rule validation</span>
+  </div>
+  <div class="grid2">
+    <div>
+      <p>过滤规则通常不是先从论文里长出来的，而是先从样本里看出问题：短行太多像导航，重复行太多像模板，语言分数太低像杂乱来源，字符模式异常像爬虫残留。直觉能帮你起步，但规则要不要留，得看它删掉了什么、保留了什么、训练后有没有副作用。</p>
+      <p>验证一条规则，不要只问“删了多少”。还要问“删掉的是谁”“被删样本有没有同类内容”“这条规则会不会把长尾知识、少数语言或论坛表达一起削掉”。</p>
+    </div>
+    <div class="box danger">
+      <h3>越严不等于越好</h3>
+      <p>一条更严格的规则可能真的更干净，也可能只是把数据变窄。能力、覆盖和偏差要一起看。</p>
+    </div>
+  </div>
+
+  <table class="metric-table" data-export-context="规则验证层级表" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>验证层</th>
+        <th>要回答的问题</th>
+        <th>最低证据</th>
+        <th>通过后动作</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>规则假设</td>
+        <td>这条规则想移除哪类噪声？</td>
+        <td>写出可观察特征，例如短行比例、重复比例、语言分数。</td>
+        <td>进入样本审查。</td>
+      </tr>
+      <tr>
+        <td>移除比例</td>
+        <td>规则删掉了多少 token？</td>
+        <td>按来源、语言、长度分桶统计。</td>
+        <td>判断是否需要更细阈值。</td>
+      </tr>
+      <tr>
+        <td>样本审查</td>
+        <td>被删内容真的低质吗？</td>
+        <td>抽样看 removed、kept 和 borderline 三类样本。</td>
+        <td>修正 metric 或阈值。</td>
+      </tr>
+      <tr>
+        <td>短跑消融</td>
+        <td>只加这条规则后，小模型表现是否改善？</td>
+        <td>同一训练协议、同一评测协议。</td>
+        <td>保留候选或回滚。</td>
+      </tr>
+      <tr>
+        <td>长跑确认</td>
+        <td>短跑信号在更长 token 上还能保持吗？</td>
+        <td>更大预算下复核关键候选。</td>
+        <td>写入正式配方。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="formula" data-export-context="规则验证判断式" data-export-lang="math">保留规则 = 早期信号为正 + 误杀可接受 + 关键任务无明显下滑 + 后续长跑复核通过</div>
+</section>
+
+<section id="trace">
+  <div class="head">
+    <h2>验证台账：一条规则怎么留下证据</h2>
+    <span class="tag">state ledger</span>
+  </div>
+  <p>实验做完以后，最容易丢的是状态。很多人会记住分数，却忘了这条规则到底读了什么、删了什么、写回了什么。对数据验证来说，台账是能不能复查、能不能回退的底稿。</p>
+  <table class="metric-table" data-export-context="规则验证状态台账" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>步骤</th>
+        <th>读什么</th>
+        <th>写什么</th>
+        <th>状态变成什么</th>
+        <th>出错时的症状</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>规则定义</td>
+        <td>短行比例、阈值、来源分桶。</td>
+        <td>实验记录、阈值版本。</td>
+        <td>草案。</td>
+        <td>别人看不懂你删的是哪类文本。</td>
+      </tr>
+      <tr>
+        <td>样本审查</td>
+        <td>removed、kept、borderline 三类样本。</td>
+        <td>审查结论、误杀标记。</td>
+        <td>候选规则。</td>
+        <td>只看最终数据，不知道删掉了什么。</td>
+      </tr>
+      <tr>
+        <td>短跑训练</td>
+        <td>统一训练协议和同一评测集。</td>
+        <td>任务簇分数、异常点、checkpoint 选择。</td>
+        <td>有方向信号。</td>
+        <td>分数变了，却说不清是谁贡献的。</td>
+      </tr>
+      <tr>
+        <td>回写决策</td>
+        <td>短跑结果、样本审查、负向任务。</td>
+        <td>keep / tune / rollback 的决定。</td>
+        <td>正式配方候选或回退。</td>
+        <td>实验结束后没人知道下一步该怎么走。</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="draft"><code>draft</code><span>规则草案</span></button>
+      <button class="trace-line" data-trace-step="audit"><code>audit</code><span>样本审查</span></button>
+      <button class="trace-line" data-trace-step="writeback"><code>writeback</code><span>决策回写</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="draft">
+        <b>草案</b><span>阈值、来源、目标</span><p>先把规则写清楚，再决定要不要跑。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="audit">
+        <b>审查</b><span>removed / kept / borderline</span><p>确认规则删的是噪声，不是能力来源。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="writeback">
+        <b>回写</b><span>keep / tune / rollback</span><p>把实验结论写回配方日志，保证后续可复查。</p>
+      </div>
+    </div>
+  </div>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1">记录完整</button>
+      <button class="ghost" data-terminal-case="case-2">记录缺项</button>
+      <button class="ghost" data-terminal-case="case-3">记录冲突</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">ok: rule version, sample audit, and evaluation notes are all written back</pre>
+    <template data-terminal-output="case-1">ok: rule version, sample audit, and evaluation notes are all written back</template>
+    <template data-terminal-output="case-2">warn: threshold recorded, but removed-sample audit is missing; future review will be blind</template>
+    <template data-terminal-output="case-3">warn: short-run gain noted, but longer-budget rerun says rollback; keep both entries and mark the conflict</template>
+  </div>
+  <p>如果台账里没有阈值、样本审查和回写决定，下一轮实验就只能从头猜。把状态写全，后面的单元才有继续推进的基础。</p>
+  <div class="box soft">
+    <h3>最小决策清单</h3>
+    <p>拿任意一条过滤规则，先回答四个问题：它删什么、是否抽查过 removed / kept / borderline、短跑有没有稳定方向、回退条件是什么。四个问题里只要有一个答不上来，这条规则就还停留在“看起来合理”，还没到“可以执行”。</p>
+    <pre data-export-context="规则回写清单" data-export-lang="text"><code class="language-text">1. 这条规则删什么？
+2. 我是否看过 removed / kept / borderline？
+3. 短跑里是否有稳定方向？
+4. 如果长跑回落，我是否知道该回滚还是调阈值？</code></pre>
+    <p>把这四个问题写进实验记录，比再加一轮漂亮的均分更有用。均分会过时，台账会保留下一轮要用的判断条件。</p>
+    <p>少一项，先别进正式配方，回头把证据补齐。</p>
+  </div>
+  <div class="box">
+    <h3>一条坏记录长什么样</h3>
+    <pre data-export-context="缺项日志示例" data-export-lang="text"><code class="language-text">rule_name: short_line_ratio_filter
+version: 0.67 threshold
+decision: keep_candidate
+problem: removed-sample audit missing
+follow_up: rerun later</code></pre>
+    <p>这段日志看起来像结束了，其实最关键的证据缺了一半。没有 removed 样本审查，就不知道这条规则删掉的是噪声还是能力来源；没有回退条件，后面的复核也不知道该怎么处理冲突。</p>
+    <p>所以，实验记录里最少要保住三件事：规则版本、样本审查、回退条件。少一件，后面的判断就会变钝。</p>
+  </div>
+  <p>如果你现在就要把本节内容拿去做别的规则验证，先从这张清单开始，再去写样本审查和回退条件。它会直接把你从“复述概念”推进到“能做实验记录”。</p>
+</section>
+
+<section id="walkthrough">
+  <div class="head">
+    <h2>完整走读：一条规则怎么从草案走到决定</h2>
+    <span class="tag">step by step</span>
+  </div>
+  <p>下面用同一条“短行比例”规则走一遍完整流程。先把它当成草案，不把它当答案。你要看的，是它怎么经过样本、记录、评测和回退条件的检查，最后才变成可以留在配方里的东西。</p>
+  <table class="metric-table" data-export-context="规则走读状态表" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>步骤</th>
+        <th>看什么</th>
+        <th>读到什么</th>
+        <th>下一步</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>1. 草案</td>
+        <td>规则写法和阈值。</td>
+        <td>短行比例大于等于 0.67 的文档先删除。</td>
+        <td>把阈值和预期噪声写进实验记录。</td>
+      </tr>
+      <tr>
+        <td>2. 样本审查</td>
+        <td>removed、kept、borderline 三组样本。</td>
+        <td>removed 里大多是导航、目录、模板残留，borderline 里混有论坛体和问答。</td>
+        <td>检查误杀是否集中在长尾表达。</td>
+      </tr>
+      <tr>
+        <td>3. 短跑训练</td>
+        <td>同一模型和同一训练预算下的分数。</td>
+        <td>常识任务略涨，科学问答稳定，某些知识任务轻微回落。</td>
+        <td>判断是否继续或回滚。</td>
+      </tr>
+      <tr>
+        <td>4. 结果解释</td>
+        <td>任务簇和异常点。</td>
+        <td>如果只有一个簇上升，而另一个簇掉得更明显，这条规则就不适合直接进正式配方。</td>
+        <td>优先调阈值，而不是立刻加大训练。</td>
+      </tr>
+      <tr>
+        <td>5. 决策</td>
+        <td>长跑确认是否需要。</td>
+        <td>短跑信号只是候选，长跑复核才是定稿前的最后一步。</td>
+        <td>保留、局部保留，或回滚。</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="codebar">
+    <span class="label">记录模板</span>
+    <span class="kind">experiment log</span>
+  </div>
+  <pre data-export-context="消融实验记录模板" data-export-lang="text"><code class="language-text">rule_name: short_line_ratio_filter
+version: 0.67 threshold
+baseline: base_filter + independent_minhash
+experiment: base_filter + independent_minhash + short_line_ratio_filter
+fixed: model, tokenizer, budget, seed, evaluation protocol
+inspect: removed / kept / borderline
+decision: keep_candidate | tune_threshold | rollback
+next_check: longer-budget rerun or sample audit</code></pre>
+  <p>这个走读的作用，是把“我觉得规则对”换成“我能说清它在哪里通过、在哪里失败、下一步要查什么”。如果你说不出回退条件，就说明实验还没真正闭环。</p>
+</section>
+
+<section id="cases">
+  <div class="head">
+    <h2>案例推演</h2>
+    <span class="tag">worked cases</span>
+  </div>
+
+  <div class="box">
+    <h3>例 1：验证“短行比例”过滤规则</h3>
+    <p>你发现很多网页抽取后只剩导航词、菜单词和目录词，打算把“短行比例过高”的文档过滤掉。先别急着写最终规则，先把实验拆成能比较的版本。</p>
+    <div class="codebar">
+      <span class="label">实验草案</span>
+      <span class="kind">pseudo config</span>
+    </div>
+    <pre data-export-context="短行比例规则实验草案" data-export-lang="python"><code class="language-python">hypothesis:
+  metric: short_line_ratio = short_lines / total_lines
+  threshold: remove if short_line_ratio >= 0.67
+  expected_noise: navigation, category lists, template fragments
+
+datasets:
+  baseline: base_filter + independent_minhash
+  experiment: base_filter + independent_minhash + short_line_ratio_filter
+
+training:
+  model: same 1-2B class architecture
+  tokens: same 28B-token budget
+  tokenizer: same tokenizer
+  seed: same sampling plan
+
+evaluation:
+  tasks: same early-signal benchmark suite
+  report: aggregate, task cluster deltas, negative outliers
+  inspect: removed / kept / borderline samples</code></pre>
+    <p>这个设计的关键，是实验版本只多一个短行规则。若评测提升，同时被移除样本真的以导航残留为主，这条规则才值得保留。若提升只出现在单个任务，或者删掉了大量问答、论坛和代码片段，就要把阈值调松或直接回滚。</p>
+    <p>如果你手里只有一张分数表，没有 removed / kept / borderline 的切片，最容易犯的错就是把“目录残留被删掉了”误判成“所有短句都该删”。这时候先回到样本，再看边界样本有没有把有用问答一起卷进去，然后再决定阈值该往回挪还是继续保留。</p>
+  </div>
+
+  <div class="box">
+    <h3>例 2：为什么“全局去重更强”可能更差</h3>
+    <p>直觉上，重复越少越好；但全局去重并不总是更稳。如果把整个 Common Crawl 当成一个大池子做全局去重，老 crawl 里的内容会被大幅削掉，留下来的可能更偏、更窄，甚至更不像真实训练分布。FineWeb 的公开案例也提醒过：按 crawl 分开去重，往往比把整份语料一次性去重更稳。</p>
+    <table class="metric-table" data-export-context="去重策略对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>策略</th>
+          <th>直觉收益</th>
+          <th>隐藏风险</th>
+          <th>验证方式</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>跨全部 crawl 全局去重</td>
+          <td>最大化移除重复网页。</td>
+          <td>老 crawl 被过度削薄，样本分布偏移。</td>
+          <td>按 crawl 训练小模型，比较任务簇和样本质量。</td>
+        </tr>
+        <tr>
+          <td>每个 crawl 内独立去重</td>
+          <td>先清掉同一 crawl 内的大重复簇。</td>
+          <td>跨 crawl 的重复仍会留下来。</td>
+          <td>短跑看质量，长跑看重复对训练效率的影响。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="box">
+    <h3>例 3：统一评测结果如何读</h3>
+    <p>下面是一组虚构结果，重点是读出规则在哪些任务簇上有帮助、在哪些地方会掉。</p>
+    <table class="metric-table" data-export-context="统一评测读表示例" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>任务簇</th>
+          <th>基线</th>
+          <th>加规则</th>
+          <th>差值</th>
+          <th>读法</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>常识推理</td>
+          <td>51.2</td>
+          <td>52.0</td>
+          <td>+0.8</td>
+          <td>方向正，但要看方差。</td>
+        </tr>
+        <tr>
+          <td>科学问答</td>
+          <td>39.5</td>
+          <td>40.1</td>
+          <td>+0.6</td>
+          <td>与假设一致，可能移除了网页噪声。</td>
+        </tr>
+        <tr>
+          <td>多学科知识</td>
+          <td>25.8</td>
+          <td>25.6</td>
+          <td>-0.2</td>
+          <td>轻微下降，检查是否删掉领域长尾。</td>
+        </tr>
+        <tr>
+          <td>平均</td>
+          <td>38.8</td>
+          <td>39.2</td>
+          <td>+0.4</td>
+          <td>可以作为候选，但不够直接进最终配方。</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="terminal-lab" data-terminal-lab>
+      <div class="terminal-controls">
+        <button class="ghost active" data-terminal-case="case-1">短跑通过</button>
+        <button class="ghost" data-terminal-case="case-2">短跑可疑</button>
+        <button class="ghost" data-terminal-case="case-3">长跑回滚</button>
+      </div>
+      <pre class="terminal-output" aria-live="polite">pass: aggregate +0.4, no critical task collapse, keep for longer run</pre>
+      <template data-terminal-output="case-1">pass: aggregate +0.4, no critical task collapse, keep for longer run</template>
+      <template data-terminal-output="case-2">warn: one cluster rises while another drops; inspect removed samples before deciding</template>
+      <template data-terminal-output="case-3">rollback: longer-budget run reverses the gain and exposes coverage loss</template>
+    </div>
+    <p>更稳的结论要同时写清三件事：短跑的方向、被移除样本、后续的长跑确认。</p>
+  </div>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见错误</h2>
+    <span class="tag">failure modes</span>
+  </div>
+  <div class="grid2">
+    <div class="box danger">
+      <h3>错误 1：把一次短跑直接当定稿</h3>
+      <p>小模型短跑本来只是在给方向。它可能提前暴露明显坏掉的规则，也可能把一些小收益放大成看起来很稳定的提升。稳一点的做法，是先看短跑方向，再看样本审查，再决定要不要拉长预算。</p>
+      <p>如果你在短跑里看到小幅增益，却没有样本审查、负向任务检查和重复 run 复核，这个结论还不能进入正式配方。</p>
+    </div>
+    <div class="box danger">
+      <h3>错误 2：只看平均分</h3>
+      <p>平均分最容易说服人，也最容易藏住问题。一个规则可能把单项任务抬高，却把另一个任务簇拉低；也可能把分布变窄，让少数长尾任务持续退化。</p>
+      <p>读表顺序是先看任务簇，再看异常点，最后才看平均。平均分只负责压缩信息，不负责解释原因。</p>
+    </div>
+    <div class="box danger">
+      <h3>错误 3：把规则验证做成“删多少”的比赛</h3>
+      <p>删得多只说明规则更激进，先看它删掉的是噪声还是长尾能力。激进规则更容易误杀论坛体、问答、少数语言、代码片段或领域长尾。验证时如果没有样本审查，删得多只是一种强度展示，不是质量证据。</p>
+    </div>
+    <div class="box danger">
+      <h3>错误 4：同时改多个旋钮</h3>
+      <p>把阈值、来源比例、训练步数和评测集一起换掉，结果再好也很难归因。你看到的变化可能来自某个规则，也可能来自更多 token、更好的 checkpoint 选择，甚至只是评测脚本换了版本。</p>
+      <p>单变量消融的价值就在这里：它把“可能是谁”缩成“最可能是谁”。</p>
+    </div>
+  </div>
+
+  <table class="metric-table" data-export-context="消融决策状态表" data-export-lang="table">
+    <thead>
+      <tr>
+        <th>观察到的信号</th>
+        <th>可能原因</th>
+        <th>下一步检查</th>
+        <th>动作</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>总分小涨，任务簇分裂</td>
+        <td>规则偏向单一任务，或评测噪声偏高。</td>
+        <td>检查负向 outlier 和重复 run。</td>
+        <td>先标记为候选，不进最终配方。</td>
+      </tr>
+      <tr>
+        <td>某任务大涨，其余基本不动</td>
+        <td>规则可能只对这个任务相关的文本有效，也可能出现污染。</td>
+        <td>看训练语料是否包含评测模板或相似文本。</td>
+        <td>做污染检查，再决定是否保留。</td>
+      </tr>
+      <tr>
+        <td>删得很多，但分数几乎没变</td>
+        <td>规则可能主要删掉了可有可无的文本，或者样本审查不充分。</td>
+        <td>抽样看 removed / borderline / kept。</td>
+        <td>优先考虑放宽阈值。</td>
+      </tr>
+      <tr>
+        <td>短跑通过，长跑回落</td>
+        <td>小预算里看起来有利的信号，在更长训练中不稳。</td>
+        <td>比较更长 token 下的任务簇变化。</td>
+        <td>回滚或只保留局部场景。</td>
+      </tr>
+      <tr>
+        <td>指标和人工判断冲突</td>
+        <td>自动指标可能抓住了局部模式，人工样本看到的是覆盖和语义。</td>
+        <td>把指标、样本和阈值放在同一页复核。</td>
+        <td>按人工审查修正规则，再重跑。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>这一步的判断标准：</strong>如果你已经能说出哪类信号出现时该继续、哪类信号出现时该回退、回退时先看什么，说明你已经把小模型消融从做实验推进到做判断了。
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>这里先不追</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="grid2">
+    <div class="box info">
+      <h3>先放一边的内容</h3>
+      <p>先别追大模型最终配方、完整训练系统、分布式调参、超长上下文训练和后训练细节。它们会在后面的单元里回来；这一页只把小模型验证的判断链条搭稳。</p>
+      <p>比如短行阈值样本先跑一轮，接着看 removed / kept / borderline，再决定是回滚阈值还是保留规则。</p>
+    </div>
+    <div class="box warn">
+      <h3>什么时候要升级验证</h3>
+      <p>如果短跑结果方向很稳、样本审查也干净，就可以进入更长 token 的确认。如果方向不稳，先别急着堆更多训练，先回头看样本和协议哪里出了问题。</p>
+    </div>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>下一页看什么</h2>
+    <span class="tag">next step</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>接下来要看什么</h3>
+      <p>下一页会把这套验证习惯继续往前走，落到可复现的流水线和运行记录上。到了那里，你不只要知道“这条规则能不能留”，还要知道“它是怎么被跑出来、记录下来、复查出来的”。</p>
+    </div>
+    <div class="box soft">
+      <h3>现在你已经能做的</h3>
+      <p>你可以先拿一个数据改动写出消融实验，再把统一评测、样本审查和回退条件写完整。只要这三件事能说清，后面的工程化记录才有意义。</p>
+    </div>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>作答目标</strong>
+    <p>这组题要检查你能不能把一个配方改动讲成可执行、可比较、可回退的实验。</p>
+  </div>
+  <div class="review-card">
+    <strong>检查重点</strong>
+    <p>答案里要出现控制变量、统一评测、样本审查和回退条件。只写“效果更好”还不够。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、基础识别</h3>
+      <p>先确认你能分清小模型消融、统一评测和规则验证。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速回看</b>
+      <span>实验改动越小，归因越清楚。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、基础识别" data-title="Q1. 小模型消融最应该固定什么？" data-answer="A" data-explain="要固定模型、训练预算和评测协议，只改变数据变量。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">控制变量</span></div>
+      <h3>Q1. 小模型消融最应该固定什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q1" value="A">A. 固定模型、训练预算和评测协议，只改变数据变量。</label>
+        <label><input type="radio" name="q1" value="B">B. 每次换更强模型，让差异更明显。</label>
+        <label><input type="radio" name="q1" value="C">C. 每个候选都用最适合自己的评测集。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、基础识别" data-title="Q2. 小模型 early signal 等于最终结论吗？" data-answer="false" data-explain="early signal 只说明值得继续，不等于最终配方结论。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">边界</span></div>
+      <h3>Q2. 小模型 early signal 等于最终结论吗？</h3>
+      <label><input type="radio" name="q2" value="true">对</label>
+      <label><input type="radio" name="q2" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q3" data-group="一、基础识别" data-title="Q3. 填空：统一评测的作用是让不同数据版本可以用什么比较？">
+      <div class="q-meta"><span class="pill">short fill</span><span class="pill">统一尺子</span></div>
+      <h3>Q3. 填空：统一评测的作用是让不同数据版本可以用什么比较？</h3>
+      <input type="text" name="q3" data-answer="同一把尺子;同一标准;同一评测协议" placeholder="例如：同一把尺子">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>答案里要体现“同一标准、同一协议、同一把尺子”的意思。只写“比较”不够，因为没有说出为什么这次比较是公平的。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q4" data-group="一、基础识别" data-title="Q4. 哪个不是规则验证的最低证据？" data-answer="C" data-explain="规则名字不提供训练证据。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">证据</span></div>
+      <h3>Q4. 哪个不是规则验证的最低证据？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q4" value="A">A. 被移除 token 比例和分布。</label>
+        <label><input type="radio" name="q4" value="B">B. 被移除样本的人工抽查。</label>
+        <label><input type="radio" name="q4" value="C">C. 规则名字听起来很专业。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full short" data-question="q5" data-group="一、基础识别" data-title="Q5. 用一句话解释小模型消融">
+      <div class="q-meta"><span class="pill">解释</span><span class="pill">直觉</span></div>
+      <h3>Q5. 用一句话解释小模型消融</h3>
+      <textarea name="q5" placeholder="用自己的话说：它解决什么问题？"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>答案里最好出现三个意思：低成本、只改一个数据变量、用统一评测看方向。只写“先试一下”太空了。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、实验设计</h3>
+      <p>把一个数据规则转成可比较的训练实验。</p>
+    </div>
+    <div class="quick-review">
+      <b>设计原则</b>
+      <span>先写假设，再写基线和实验版本。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q6" data-group="二、实验设计" data-title="Q6. 设计一个语言分数阈值消融">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">阈值</span></div>
+      <h3>Q6. 设计一个语言分数阈值消融</h3>
+      <p class="solve-note">场景：你想把英文语言分类阈值从 0.65 提到 0.8。请写基线、实验版本、固定项、评测和风险。</p>
+      <textarea name="q6" placeholder="例如：基线保留原阈值，实验版本只提高阈值，固定模型和评测协议……"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>答案至少要说清四件事：只改阈值、基线和实验版本如何区分、哪些训练条件固定、可能误杀什么内容。若没提误杀风险，说明你还没把规则当成可反驳假设。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q7" data-group="二、实验设计" data-title="Q7. 设计一个重复行过滤规则验证">
+      <div class="q-meta"><span class="pill">debug plan</span><span class="pill">重复行</span></div>
+      <h3>Q7. 设计一个重复行过滤规则验证</h3>
+      <p class="solve-note">场景：文档中重复行字符比例超过 0.1 就删除。你如何验证这个阈值？</p>
+      <textarea name="q7" placeholder="至少包含：移除比例、三类样本审查、短跑消融、分项评测、是否需要长跑确认。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案会先问规则删掉了多少，再问删掉的是谁，最后才问短跑结果。只写“看分数高不高”不够，因为这会漏掉误杀和覆盖损失。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q8" data-group="二、实验设计" data-title="Q8. 哪个实验最能验证过滤规则本身？" data-answer="A" data-explain="只有一项数据变量变化，其他条件完全固定，才能把差异归因给该规则。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">设计</span></div>
+      <h3>Q8. 哪个实验最能验证过滤规则本身？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q8" value="A">A. 基线和实验版本只差一个过滤规则，其余训练和评测完全固定。</label>
+        <label><input type="radio" name="q8" value="B">B. 实验版本用更大模型、更长训练和新评测集。</label>
+        <label><input type="radio" name="q8" value="C">C. 只人工看 20 条被删样本，不训练模型。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q9" data-group="二、实验设计" data-title="Q9. 如果短跑收益很小但删除 30% token，下一步最好是什么？" data-answer="B" data-explain="先检查误杀样本，尝试更温和阈值，并看分项任务是否受伤。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">决策</span></div>
+      <h3>Q9. 如果短跑收益很小但删除 30% token，下一步最好是什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q9" value="A">A. 直接加入最终配方，因为删得多说明干净。</label>
+        <label><input type="radio" name="q9" value="B">B. 检查误杀样本，尝试更温和阈值，并看分项任务是否受伤。</label>
+        <label><input type="radio" name="q9" value="C">C. 删除更多 token，让收益更明显。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full short" data-question="q10" data-group="二、实验设计" data-title="Q10. 写出一个消融实验记录字段清单">
+      <div class="q-meta"><span class="pill">checklist</span><span class="pill">复现</span></div>
+      <h3>Q10. 写出一个消融实验记录字段清单</h3>
+      <textarea name="q10" placeholder="至少写 8 个字段，例如数据版本、规则阈值、训练 token、评测版本等。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>比较像样的清单会包括：数据版本、规则阈值、训练 token、模型规格、采样方式、随机种子、评测版本、checkpoint 选择、被删样本审查结论、长跑是否安排。字段越接近复现所需，越好。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、结果诊断</h3>
+      <p>从分数表里判断这条规则该不该继续。</p>
+    </div>
+    <div class="quick-review">
+      <b>读表顺序</b>
+      <span>先看任务簇，再看负向 outlier，最后看均分。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q11" data-group="三、结果诊断" data-title="Q11. 诊断一个单项提升的规则">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">诊断</span></div>
+      <h3>Q11. 诊断一个单项提升的规则</h3>
+      <p class="solve-note">结果：HellaSwag +1.2，MMLU -0.8，ARC -0.5，PIQA +0.1，均分 +0.0。你会如何判断？</p>
+      <textarea name="q11" placeholder="写出：可能原因、需要检查的样本、是否重跑、是否分领域使用。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合理答案通常不会直接说“好”或“坏”，而是先判断这条规则是否偏向单一任务，再问是否伤害了更重要的任务簇。如果负向任务已经明显掉分，就该先查样本和阈值，不要急着进最终配方。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="三、结果诊断" data-title="Q12. 诊断一个疑似评测污染的结果">
+      <div class="q-meta"><span class="pill">risk</span><span class="pill">污染</span></div>
+      <h3>Q12. 诊断一个疑似评测污染的结果</h3>
+      <p class="solve-note">结果：某规则只让 MMLU 大涨，其他任务基本不变。你会做哪些污染或泄漏检查？</p>
+      <textarea name="q12" placeholder="从训练语料去污染、benchmark 字符串匹配、相似文本查重、prompt 变体和分项科目变化入手。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>至少要提到训练语料去污染、题面或答案的相似匹配、prompt 变体、分科目变化和重复 run。只查一个点通常不够。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q13" data-group="三、结果诊断" data-title="Q13. 任务方差大的 benchmark 适合做主指标吗？" data-answer="false" data-explain="小模型短跑本来信号就弱，主指标要尽量稳定。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">稳定性</span></div>
+      <h3>Q13. 任务方差大的 benchmark 适合做主指标吗？</h3>
+      <label><input type="radio" name="q13" value="true">对</label>
+      <label><input type="radio" name="q13" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q14" data-group="三、结果诊断" data-title="Q14. 哪个结论最谨慎？" data-answer="B" data-explain="好结论会说清证据范围和下一步。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">结论</span></div>
+      <h3>Q14. 哪个结论最谨慎？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q14" value="A">A. 这个规则让模型变聪明了，最终模型必然更好。</label>
+        <label><input type="radio" name="q14" value="B">B. 该规则在当前小模型短跑和统一评测下有正向 early signal，建议抽样审查并长跑确认。</label>
+        <label><input type="radio" name="q14" value="C">C. 只要平均分高 0.1 就应该加入。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、迁移与综合</h3>
+      <p>把本节方法迁移到新的数据配方问题。</p>
+    </div>
+    <div class="quick-review">
+      <b>迁移关键</b>
+      <span>任何配方变化都先变成“只改一个变量”的实验。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q15" data-group="四、迁移与综合" data-title="Q15. 迁移到代码数据混合比例" data-answer="B" data-explain="代码比例变化要同时看代码能力和通用能力，不能只看单一任务分数。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">代码</span></div>
+      <h3>Q15. 迁移到代码数据混合比例</h3>
+      <div class="choices">
+        <label><input type="radio" name="q15" value="A">A. 只看代码任务分数，代码涨了就算通过。</label>
+        <label><input type="radio" name="q15" value="B">B. 固定训练协议，加入代码任务和通用任务双评测，并检查自然语言退化和重复暴露。</label>
+        <label><input type="radio" name="q15" value="C">C. 先换更大模型，再看提升来自哪里。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q16" data-group="四、迁移与综合" data-title="Q16. 迁移到中文语料过滤" data-answer="C" data-explain="中文过滤要补本地化审查，不能直接搬英文规则。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">中文</span></div>
+      <h3>Q16. 迁移到中文语料过滤</h3>
+      <div class="choices">
+        <label><input type="radio" name="q16" value="A">A. 只沿用英文分词和短句规则，不再额外检查。</label>
+        <label><input type="radio" name="q16" value="B">B. 先把所有论坛体都删掉，再看结果。</label>
+        <label><input type="radio" name="q16" value="C">C. 额外检查分词、标点、繁简体、地区词汇、少数语言混入和中文评测任务。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q17" data-group="四、迁移与综合" data-title="Q17. 面试式解释：为什么不能只看困惑度？">
+      <div class="q-meta"><span class="pill">explain</span><span class="pill">面试</span></div>
+      <h3>Q17. 面试式解释：为什么不能只看困惑度？</h3>
+      <textarea name="q17" placeholder="请用 120 字以内解释：为什么数据验证不能只看某个干净语料上的 perplexity？"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案会说出：困惑度主要衡量预测容易程度，不等于目标下游能力、覆盖、多样性和评测表现。它可以是一个信号，但不能单独替代验证闭环。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q18" data-group="四、迁移与综合" data-title="Q18. 综合复述：讲完整个数据验证闭环">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">Feynman</span></div>
+      <h3>Q18. 综合复述：讲完整个数据验证闭环</h3>
+      <textarea name="q18" placeholder="假设你要教别人本节课，请按顺序讲：假设、数据版本、训练、统一评测、规则决策、长跑确认。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>完整答案应该能按顺序串起整个闭环：先提出假设，再造对照数据版本，然后做小模型训练，接着统一评测，再结合样本审查做规则决策，最后决定是否进入更长预算确认。只列术语，没有动作顺序，说明还没真正掌握。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><a href="https://ai.meta.com/blog/meta-llama-3/">Meta Llama 3 blog</a>：支撑预训练数据规模、来源类型、过滤管线、数据混合实验和多阶段决策的公开说明。</li>
+  <li><a href="https://arxiv.org/abs/2305.10429">DoReMi: Optimizing Data Mixtures Speeds Up Language Model Pretraining</a>：支撑“数据混合比例会影响训练结果”这一核心判断，以及小模型代理与重采样思路。</li>
+  <li><a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb">FineWeb dataset page</a>：支撑清洗、去重、分 crawl 验证和 early-signal 评测的公开案例。</li>
+  <li><a href="https://github.com/huggingface/datatrove">DataTrove repository</a>：支撑 `Document`、读写器、过滤器、token block、dedup block 和可复现流水线的结构说明。</li>
+  <li><a href="https://arxiv.org/abs/2501.00656">OLMo 2</a>：支撑晚期课程式训练、透明化训练记录和可审计配方的公开参照。</li>
+  <li>访问快照：2026-06-21。以上公开材料共同支撑本页的实验设计、样本审查、统一评测和回退决策。</li>
+  <li>课程主页和相邻单元：支撑本页与 05、07 的衔接关系，以及“配方必须能落到消融验证与运行记录”这一边界。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

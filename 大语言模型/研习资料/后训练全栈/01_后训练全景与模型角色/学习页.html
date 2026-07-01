@@ -1,0 +1,933 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>后训练全景与模型角色</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="后训练全栈" data-unit="第 01 单元">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>后训练全栈</strong>
+        <span>第 01 单元</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#terms"><span class="dot"></span>关键术语</a>
+        <a href="#ledger"><span class="dot"></span>角色账本</a>
+        <a href="#trace"><span class="dot"></span>checkpoint 轨迹</a>
+        <a href="#dpo"><span class="dot"></span>DPO 流程</a>
+        <a href="#rlhf"><span class="dot"></span>RLHF / GRPO</a>
+        <a href="#cases"><span class="dot"></span>例子</a>
+        <a href="#mistakes"><span class="dot"></span>常见错误</a>
+        <a href="#boundary"><span class="dot"></span>边界与下一步</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">本页把学习目标压到能动手检查的最小闭环。先顺着主线读，再用练习区自查。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">课程入口</div>
+          <h1>后训练全景与模型角色</h1>
+          <p>这一页先把后训练里最容易混的几个对象分开：base model、SFT checkpoint、policy model、reference model、reward model 和 judge。先看它们各自读什么、写什么、谁更新参数，再看它们怎样串成 DPO、RLHF 和发布前评测的流水线。把这一层理顺，后面的 SFT 模板、偏好优化和评测单元才不会只剩名词。</p>
+
+          <div class="course-links">
+            
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+  <li>能说清 base、policy、reference、reward、judge 在后训练里的位置和职责。</li>
+  <li>能用一张表追踪同一个 checkpoint 在不同阶段为什么会扮演不同角色。</li>
+  <li>能把一条 DPO 或 RLHF 配方画成对象链，并指出常见错误会坏在哪里。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head"><h2>学习目标</h2><span class="tag">goal</span></div>
+  <p>这节先把对象关系讲清楚，再进入算法公式。你读完后，应该能把一条后训练流水线拆成“谁生成、谁约束、谁打分、谁验收”四类动作，并且看见某个对象一旦该冻结却被更新，整个闭环会怎么坏掉。</p>
+  <p>更具体一点，你应该能拿到一份 DPO、RLHF 或 GRPO 的简化配方时，先把 policy、reference、reward、judge、SFT checkpoint 放到正确位置，再决定下一步要看损失、看评测，还是看数据模板。只要这一步稳，后面的单元就不会变成一串名词。</p>
+</section>
+
+<section id="overview">
+  <div class="head"><h2>先抓主线</h2><span class="tag">overview</span></div>
+  <p>后训练要解决的问题很直接：预训练模型会续写，但不会天然按指令办事，也不会天然知道什么回答更稳、更像人要的结果。后训练的工作，就是把“会说话”改造成“会按任务说话”，再把“按任务说话”改造成“能接受偏好约束、能通过评测和发布检查”。</p>
+  <p>这条主线里，base model 是起点，SFT checkpoint 是第一次被指令数据塑形后的结果，policy model 是真正被优化的对象，reference model 负责给 policy 提供稳定参照，reward model 给训练内环提供分数，judge / evaluator 则站在训练外环看结果是否值得放行。关键不是名字，而是读写权限。</p>
+  <p>如果你先把这层角色关系看透，后面的 DPO、ORPO、PPO、GRPO 只是换了优化方式；这层没看透，公式越看越像在背标签。第 01 单元就是来把这层地基打平的。</p>
+</section>
+
+<section id="terms">
+  <div class="head"><h2>关键术语</h2><span class="tag">terms</span></div>
+  <div class="grid3">
+    <div class="role-card">
+      <strong>base model</strong>
+      <p>预训练出来的底座，只学到了通用语言规律。它能续写，但不等于能按指令稳定回答。</p>
+    </div>
+    <div class="role-card">
+      <strong>SFT checkpoint</strong>
+      <p>监督微调后的中间点。它已经看过示范答案，适合作为 policy 或 reference 的共同起点。</p>
+    </div>
+    <div class="role-card">
+      <strong>policy model</strong>
+      <p>训练时真正被更新的模型。它负责提出候选回答，也负责承受损失函数或奖励信号。</p>
+    </div>
+    <div class="role-card">
+      <strong>reference model</strong>
+      <p>保持稳定的参照模型。它不应该跟着 policy 一起漂，否则“相对变化”就失去意义。</p>
+    </div>
+    <div class="role-card">
+      <strong>reward model</strong>
+      <p>把回答映射成可优化分数的模型或函数，主要服务训练内环。</p>
+    </div>
+    <div class="role-card">
+      <strong>judge / evaluator</strong>
+      <p>训练外环或发布前使用的评审者。它看的是结果能不能放行，不负责给 policy 提供梯度。</p>
+    </div>
+  </div>
+  <p>这组词最容易混的地方在职责，不在字面。两个模型名字一样长，不代表在同一环里；一个函数看起来像打分，也不代表它一定是训练信号。先看环，再看名。</p>
+</section>
+
+<section id="ledger">
+  <div class="head"><h2>角色账本</h2><span class="tag">trace</span></div>
+  <p>先用这张表把对象的读写关系钉住。你之后只要忘了谁更新、谁冻结、谁打分，就回来看这一页。它把权限和状态直接列出来，方便后面排错。</p>
+  <div class="table-wrap">
+    <table data-export-context="后训练角色账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>前置状态</th>
+          <th>后续状态</th>
+          <th>读什么</th>
+          <th>写什么 / 是否更新</th>
+          <th>出错症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>base model</td>
+          <td>通用预训练权重</td>
+          <td>可进入 SFT 起点</td>
+          <td>通用文本分布</td>
+          <td>通常不在后训练这一步直接改</td>
+          <td>把它当 chat model，用错期待值</td>
+        </tr>
+        <tr>
+          <td>SFT checkpoint</td>
+          <td>已看过示范答案</td>
+          <td>可分叉成 policy 和 reference</td>
+          <td>指令-回答样本</td>
+          <td>在 SFT 阶段被更新，之后常被复用</td>
+          <td>分不清“训练结果”和“训练起点”</td>
+        </tr>
+        <tr>
+          <td>policy model</td>
+          <td>来自 SFT checkpoint 或其变体</td>
+          <td>随着优化继续变化</td>
+          <td>prompt、偏好对、奖励或损失</td>
+          <td>更新参数</td>
+          <td>把冻结对象写成 trainable，约束会失效</td>
+        </tr>
+        <tr>
+          <td>reference model</td>
+          <td>与 policy 同源但冻结</td>
+          <td>保持稳定</td>
+          <td>当前 policy 的偏离程度</td>
+          <td>不更新参数</td>
+          <td>reference 漂了，KL / 相对概率就失去锚点</td>
+        </tr>
+        <tr>
+          <td>reward model</td>
+          <td>偏好数据或规则函数</td>
+          <td>给训练内环提供分数</td>
+          <td>候选回答、偏好标签、规则</td>
+          <td>可能更新，也可能只是函数</td>
+          <td>分数能涨，不代表真实质量能涨</td>
+        </tr>
+        <tr>
+          <td>judge / evaluator</td>
+          <td>训练外的评审器</td>
+          <td>给发布前检查结论</td>
+          <td>最终输出、基准集、人工规则</td>
+          <td>通常不参与梯度更新</td>
+          <td>把一个高分 judge 误当成上线许可</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>如果你以后再看别的后训练页，可以先把对象往这张表里塞。只要表格里有一行你填不满，说明那个对象你还没真正搞清楚它是在读什么、写什么。</p>
+</section>
+
+<section id="trace">
+  <div class="head"><h2>为什么会分成两份</h2><span class="tag">state trace</span></div>
+  <p>第一次接触后训练时，最容易误会的一点是：既然 policy 和 reference 一开始来自同一个 checkpoint，为什么不干脆让它们一直共用一份权重？答案在于“比较”这件事本身需要一个稳定的参照。如果参照也跟着变，系统就会失去刻度，训练信号只剩自己追自己。</p>
+  <p>可以把它看成一次很普通的分工：policy 负责今天继续往前走，reference 负责保留昨天的位置，reward 负责告诉你这一步偏好有没有更好，judge 负责在外面看今天的结果值不值得放行。关键是谁在动、谁不动。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" type="button" data-trace-step="copy"><code>load_checkpoint(sft)</code><span>一份变两份</span></button>
+      <button class="trace-line" type="button" data-trace-step="update"><code>update(policy)</code><span>只有 policy 变</span></button>
+      <button class="trace-line" type="button" data-trace-step="compare"><code>compare(policy, reference)</code><span>比较偏离</span></button>
+      <button class="trace-line" type="button" data-trace-step="evaluate"><code>judge(output)</code><span>外环验收</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="copy">
+        <b>起点</b>
+        <span>policy 和 reference 都从同一个 SFT checkpoint 出发。</span>
+        <p>这样后面的差异就能明确归因到训练过程，而不是初始化。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="update">
+        <b>更新</b>
+        <span>只有 policy 接受损失或奖励更新。</span>
+        <p>如果把 reference 也改了，后面的相对约束就没有意义。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="compare">
+        <b>比较</b>
+        <span>比较的是 policy 相对 reference 的偏离。</span>
+        <p>DPO、PPO、GRPO 都需要这把尺子，不然只剩自我追赶。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="evaluate">
+        <b>外环</b>
+        <span>judge 不给梯度，只给结论。</span>
+        <p>它检查的是训练后模型是否真的更稳、更对题、更适合发布。</p>
+      </div>
+    </div>
+  </div>
+  <p>这个分工一旦建立起来，很多错误就会变得很好识别。你看到某个实现把 reference 也训练了，先不要看损失公式，先问一句：比较还剩不剩锚点？如果锚点没了，后面的分数再漂亮也只是漂在空中。</p>
+</section>
+
+<section id="matrix">
+  <div class="head"><h2>角色怎么读写</h2><span class="tag">matrix</span></div>
+  <p>下面这张矩阵把“谁读什么、谁写什么”说得更细一点。它不是算法公式，却常常比公式更能帮你排错。</p>
+  <div class="table-wrap">
+    <table data-export-context="后训练对象读写矩阵" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>主要读取</th>
+          <th>主要写入</th>
+          <th>适合的位置</th>
+          <th>不适合的位置</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>policy</td>
+          <td>prompt、reward、reference</td>
+          <td>候选回答分布</td>
+          <td>训练内环</td>
+          <td>作为稳定参照</td>
+        </tr>
+        <tr>
+          <td>reference</td>
+          <td>当前 policy 的偏离程度</td>
+          <td>不写入</td>
+          <td>对照基线</td>
+          <td>被梯度更新</td>
+        </tr>
+        <tr>
+          <td>reward model / rule</td>
+          <td>候选回答、偏好标签</td>
+          <td>分数或偏好方向</td>
+          <td>训练内环信号源</td>
+          <td>单独充当最终发布裁决</td>
+        </tr>
+        <tr>
+          <td>judge</td>
+          <td>最终输出、基准集、人工标准</td>
+          <td>评测结论</td>
+          <td>训练外环、发布前检查</td>
+          <td>直接替代训练目标</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="math-block" data-export-context="后训练最小目标式" data-export-lang="math">
+    $$
+    \mathcal{L}_{total} = \mathcal{L}_{pref} + \beta \cdot KL(\pi_{\text{policy}} \parallel \pi_{\text{ref}})
+    $$
+    <p><code>\mathcal{L}_{pref}</code> 是偏好或奖励带来的优化项，<code>\pi_{\text{policy}}</code> 是正在更新的策略，<code>\pi_{\text{ref}}</code> 是冻结的参照策略，<code>\beta</code> 是控制 policy 偏离 reference 多远的权重。你不用先背完整推导，但要知道每个符号都对应一类职责。</p>
+  </div>
+  <p>如果你以后在别的单元里看到“mask、loss、KL、reward、judge”这些词，先不要急着背。先问自己：这个对象是读信号的，还是写信号的；是内环的，还是外环的。很多表面难题，拆成这两问就简单了。</p>
+</section>
+
+<section id="mini-case">
+  <div class="head"><h2>最小案例</h2><span class="tag">case</span></div>
+  <p>把角色放进一个真实一点的客服场景，最容易看出谁在训练内环，谁在训练外环。假设用户问：“订单为什么还没发货？” policy 先生成一条回答，reward 判断这条回答是否足够清楚、是否承认了不确定性、是否给出了下一步动作；reference 则负责给 policy 提供参照，让它知道自己有没有偏离原来的回答风格。</p>
+  <div class="table-wrap">
+    <table data-export-context="客服最小案例角色分配" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>角色</th>
+          <th>这一步看什么</th>
+          <th>这一步写什么</th>
+          <th>如果放错位置，最先坏什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>policy</td>
+          <td>用户问题、示范偏好、reward、reference</td>
+          <td>当前回答分布</td>
+          <td>回答会越来越会讨好提示，稳定性反而下降</td>
+        </tr>
+        <tr>
+          <td>reference</td>
+          <td>policy 的偏离程度</td>
+          <td>不写入</td>
+          <td>一旦漂移，无法判断 policy 到底改了多少</td>
+        </tr>
+        <tr>
+          <td>reward / rule</td>
+          <td>回答是否清楚、是否安全、是否有下一步动作</td>
+          <td>分数或偏好方向</td>
+          <td>如果直接替代 judge，模型会把一次打分当成最终真理</td>
+        </tr>
+        <tr>
+          <td>judge</td>
+          <td>最终回复、回归集、人工标准</td>
+          <td>是否放行的结论</td>
+          <td>如果把它塞回训练里，外环会污染内环</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这个案例里，先盯谁读这个回答，谁改这个回答，谁只看结果。如果你把 reward 和 judge 互换，短期看起来也许还能跑，但长期会出现一种很典型的现象：模型开始学会顺着评测器说话，任务本身反而做得更差。</p>
+  <pre data-export-context="客服最小案例的角色顺序" data-export-lang="text"><code>prompt → policy 生成候选
+        → reward / rule 给分
+        → reference 约束偏离
+        → policy 更新
+        → judge 在外环验收</code></pre>
+  <p>这就是你以后看后训练配方时最先要问的事：我现在看到的是训练内环，还是训练外环？如果答案不清楚，就先别看公式，先把对象表补出来。</p>
+</section>
+
+<section id="dpo">
+  <div class="head"><h2>DPO 流程</h2><span class="tag">code reading</span></div>
+  <p>后训练页里经常会看到这种最小代码结构。它的作用是让你在看到配方时，能把“谁冻结、谁更新、谁比较”一眼认出来。</p>
+  <div class="codebar"><span>policy / reference 分叉</span><button class="copy" data-copy="dpo-code">复制</button></div>
+  <pre id="dpo-code" data-export-context="policy / reference 分叉示意" data-export-lang="python"><code class="language-python"># SFT checkpoint 只复制一次，然后分成两个职责
+policy = load_checkpoint(sft_checkpoint)
+reference = load_checkpoint(sft_checkpoint)
+freeze(reference)
+
+for prompt, chosen, rejected in batch:
+    score_chosen = policy_score(policy, prompt, chosen)
+    score_rejected = policy_score(policy, prompt, rejected)
+    ref_gap = policy_gap(policy, reference, prompt, chosen, rejected)
+    loss = dpo_loss(score_chosen, score_rejected, ref_gap)
+    update(policy, loss)
+
+# reference 不更新；它只提供稳定锚点</code></pre>
+  <p>读这段代码时，你只需要盯住四个动作：两次加载、一次冻结、一次更新。只要 reference 也被送进 update，或者 policy 的分数比较里没有 reference 的影子，整条链就已经和 DPO 的基本意图脱节了。</p>
+  <p>这类代码最常见的误读是把“同一个 checkpoint 被加载两次”当成重复劳动。实际含义是分工：一个对象继续往前走，一个对象保留原位，比较才有意义。</p>
+</section>
+
+<section id="preference-signal">
+  <div class="head"><h2>偏好信号怎么进 loss</h2><span class="tag">worked case</span></div>
+  <p>这一步最值得看的是信号方向。假设同一个 prompt 下有两个回答：chosen 更稳，rejected 更虚。训练先看 policy 有没有把 chosen 的相对分数抬高，把 rejected 压下去。reference 还在旁边提供稳定参照，让这个方向不至于乱飘。</p>
+  <div class="math-block" data-export-context="偏好信号进入损失" data-export-lang="math">
+    $$
+    \Delta = \big(\log \pi_{\text{policy}}(chosen) - \log \pi_{\text{policy}}(rejected)\big)
+            - \big(\log \pi_{\text{ref}}(chosen) - \log \pi_{\text{ref}}(rejected)\big)
+    $$
+    <p>如果 <code>\Delta</code> 变大，说明 policy 比 reference 更偏向 chosen；如果 <code>\Delta</code> 没朝这个方向走，损失就没有在推动正确的比较关系。重点在相对差。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="偏好信号的方向判断" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>观测</th>
+          <th>说明</th>
+          <th>该检查什么</th>
+          <th>下一步动作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>chosen 得分高，rejected 也一起被抬高</td>
+          <td>policy 可能在整体变“更会讨好”</td>
+          <td>reference 是否还在做参照</td>
+          <td>检查冻结与比较项是否正确</td>
+        </tr>
+        <tr>
+          <td>chosen / rejected 都没变</td>
+          <td>训练信号没有真正进入更新</td>
+          <td>loss 是否连接到了 policy</td>
+          <td>检查 optimizer、梯度和数据流</td>
+        </tr>
+        <tr>
+          <td>分数很好看，但人工一读就觉得更空</td>
+          <td>信号可能被 prompt 形式牵着走</td>
+          <td>judge / reward 是否和测试集同分布</td>
+          <td>加独立回归集和人工抽检</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>这就是为什么只看最终分数不够。偏好优化里，真正重要的是一条相对关系有没有被稳定地拉出来。你以后如果看到某个训练说“chosen 变好了”，但没法告诉你 rejected 和 reference 怎么动，那其实还没把链条讲完整。</p>
+  <p>这个小例子还有一个常见误会：很多人会把 reward、reference、judge 全都当成“给分的东西”。实际差别在于，谁参与更新，谁只给参照，谁只做验收。把这三类动作分开，后面的 DPO 公式会好读很多。</p>
+  <p>如果你在日志里看到 policy 的 chosen 分数在涨，但 judge 仍然指出回答空泛，下一步就别继续堆训练轮数。先回到这张表，看 reward 关注的是不是偏好方向，judge 看的是不是最终可用性，再决定是修 reference、换评测集，还是回到 SFT 样本本身。</p>
+</section>
+
+<section id="rlhf">
+  <div class="head"><h2>RLHF / GRPO</h2><span class="tag">inner loop</span></div>
+  <p>在 RLHF 或 GRPO 里，policy 先基于 prompt 生成候选，再由 reward model 或规则函数给分，随后 policy 按奖励和约束更新。reference 常常用来限制 policy 的漂移，judge 则站在训练外部看这一轮训练之后的结果是否真有改善。</p>
+  <div class="shift-demo" data-shift-demo>
+    <label>输入对象序列 <input type="text" value="prompt policy reward reference judge" aria-label="对象序列"></label>
+    <div class="shift-rows" aria-live="polite">
+      <div class="shift-row x"><b>训练内环</b><div class="shift-cells"><span class="shift-cell">prompt</span><span class="shift-cell">policy</span><span class="shift-cell">reward</span></div></div>
+      <div class="shift-row y"><b>训练外环</b><div class="shift-cells"><span class="shift-cell">reference</span><span class="shift-cell">judge</span></div></div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="RLHF 训练内外环" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>环节</th>
+          <th>输入</th>
+          <th>输出</th>
+          <th>是否更新 policy</th>
+          <th>常见失误</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>生成候选</td>
+          <td>prompt</td>
+          <td>多个回答</td>
+          <td>否</td>
+          <td>候选太少，比较没有信息量</td>
+        </tr>
+        <tr>
+          <td>打分</td>
+          <td>候选回答</td>
+          <td>reward / preference</td>
+          <td>否</td>
+          <td>把奖励函数当成最终真值</td>
+        </tr>
+        <tr>
+          <td>约束更新</td>
+          <td>reward、reference、policy</td>
+          <td>新 policy</td>
+          <td>是</td>
+          <td>reference 漂移，KL 失去锚点</td>
+        </tr>
+        <tr>
+          <td>外环评测</td>
+          <td>最终模型输出</td>
+          <td>judge 结论 / 报告</td>
+          <td>否</td>
+          <td>把评测分当成训练信号继续套回去</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" type="button" data-terminal-case="reference-trainable">reference 也会更新</button>
+      <button class="ghost" type="button" data-terminal-case="judge-as-loss">judge 被当成 loss</button>
+      <button class="ghost" type="button" data-terminal-case="sync-drift">policy / reference 一起漂</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">现象：policy 看起来在改，reference 也在跟着改。
+下一步：检查是否把 reference 加进了 optimizer 参数列表。
+后果：KL 或相对概率没有稳定锚点，训练解释变差。
+修正：冻结 reference，并确认它只读不写。</pre>
+    <template data-terminal-output="reference-trainable"><pre>现象：policy 看起来在改，reference 也在跟着改。
+下一步：检查是否把 reference 加进了 optimizer 参数列表。
+后果：KL 或相对概率没有稳定锚点，训练解释变差。
+修正：冻结 reference，并确认它只读不写。</pre></template>
+    <template data-terminal-output="judge-as-loss"><pre>现象：评测分数高了，但模型回答并没有更稳。
+下一步：检查是否把外环 judge 的输出直接当成训练梯度来源。
+后果：模型容易学会讨好评测提示，而不是改善真实能力。
+修正：把 judge 留在训练外环，用独立评测集和人工抽检补回判断。</pre></template>
+    <template data-terminal-output="sync-drift"><pre>现象：policy 和 reference 一起往前跑，差距看起来很小。
+下一步：检查是不是每轮都同步拷贝 reference。
+后果：比较失去锚点，reward 和 KL 都不再说明真实偏移。
+修正：reference 只在设定起点时复制，之后冻结。</pre></template>
+  </div>
+  <p class="muted">这里先记住一个判断：reward 负责训练内环，judge 负责训练外环。它们可以同源，但职责不能混成一件事。</p>
+  <div class="table-wrap">
+    <table data-export-context="RLHF 症状到动作" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>日志里看到什么</th>
+          <th>优先怀疑什么</th>
+          <th>先查哪一层</th>
+          <th>对应回到本页哪一块</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>reward 变高，回答更像模板</td>
+          <td>reward 过度追格式</td>
+          <td>训练内环的打分规则</td>
+          <td>偏好信号怎么进 loss</td>
+        </tr>
+        <tr>
+          <td>KL 很小，输出却开始跑偏</td>
+          <td>reference 没有真正冻结</td>
+          <td>optimizer 和复制时机</td>
+          <td>为什么会分成两份</td>
+        </tr>
+        <tr>
+          <td>judge 打高分，但人工一读就不稳</td>
+          <td>judge 和训练分布太近</td>
+          <td>训练外环和评测集</td>
+          <td>常见错误</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>读这张表时，关键不是记住每个名字，而是把“症状 -> 原因 -> 该查哪一层”连起来。只要你能把这条链讲顺，日志就不只是数值，而是线索。</p>
+</section>
+
+<section id="cases">
+  <div class="head"><h2>例子</h2><span class="tag">cases</span></div>
+  <div class="grid3">
+    <div class="role-card">
+      <strong>案例 1：DPO 配方</strong>
+      <p>同一个 SFT checkpoint 先被复制成 policy 和 reference。chosen / rejected 进入比较后，只有 policy 继续走。</p>
+    </div>
+    <div class="role-card">
+      <strong>案例 2：GRPO 训练环</strong>
+      <p>policy 先生成多个候选，reward model 给分，reference 约束偏移，最后 policy 按反馈改写分布。</p>
+    </div>
+    <div class="role-card">
+      <strong>案例 3：同模型换角色</strong>
+      <p>同一个 checkpoint 在一阶段是训练成果，在下一阶段可以变成 policy 起点或 reference 基线。名字没变，职责变了。</p>
+    </div>
+  </div>
+  <p>这些案例的重点，不在于你记住某个缩写，而在于你能看出同一个对象在不同阶段的身份变化。它在某一页里是训练成果，在下一页里又是起点或基线，这并不矛盾；真正会出问题的是职责没有切开。</p>
+  <pre data-export-context="后训练角色链示意" data-export-lang="text"><code>base model → SFT checkpoint → {policy, reference}
+                                   ↓
+                          reward model / rule function
+                                   ↓
+                            judge / evaluator</code></pre>
+</section>
+
+<section id="mistakes">
+  <div class="head"><h2>常见错误</h2><span class="tag">debug</span></div>
+  <div class="grid2">
+    <div class="box danger">
+      <h3>错误 1：把 base model 当 chat model</h3>
+      <p>base 只说明它是预训练底座，不说明它已经会按指令回答。直接把它当产品模型，会高估它的服从性。</p>
+    </div>
+    <div class="box danger">
+      <h3>错误 2：让 reference 跟着 policy 一起更新</h3>
+      <p>reference 一旦漂移，就不再是稳定参照。很多相对约束和 KL 控制都会失去意义。</p>
+    </div>
+    <div class="box danger">
+      <h3>错误 3：把 judge 高分当成真实能力</h3>
+      <p>judge 只是评审器，不是训练目标本身。它可能偏向某种措辞、某类题型或某个提示词。</p>
+    </div>
+    <div class="box danger">
+      <h3>错误 4：只看最终分数，不看角色链</h3>
+      <p>后训练里最常见的定位错误，就是把“分数很好”误读成“整个链条都对”。先看谁打分，再看谁被更新。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="后训练常见误区诊断" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>通常原因</th>
+          <th>先检查什么</th>
+          <th>下一步动作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>模型分数变高，但回答风格更讨好</td>
+          <td>reward 或 judge 过拟合提示词</td>
+          <td>评测集和训练信号是否同分布</td>
+          <td>分开训练内外环，增加独立回归集</td>
+        </tr>
+        <tr>
+          <td>reference 与 policy 越来越像</td>
+          <td>reference 被错误更新或周期性重置</td>
+          <td>optimizer 参数列表和复制时机</td>
+          <td>冻结 reference，确认只复制不回写</td>
+        </tr>
+        <tr>
+          <td>术语全都认识，但说不出谁负责什么</td>
+          <td>只记名词，没有看动作</td>
+          <td>读写关系表是否能填满</td>
+          <td>先按对象、再按环、最后按算法重读</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="debug-loop">
+  <div class="head"><h2>调参前先核一遍</h2><span class="tag">diagnosis</span></div>
+  <p>当训练看起来能跑，但结果还是不稳时，先不要换模型、加轮数或改学习率。先按对象顺序核查：policy 是否唯一可训练，reference 是否冻结，reward 和 judge 是否分在不同环，chosen / rejected 是否真的来自同一个 prompt。只要这四项里有一项错位，后面的分数通常都只是表面正常。</p>
+  <p>这一步的价值在于把问题定位到对象边界，而不是被最终分数带跑。很多训练失败不是算法公式错了，而是权责表已经错位：该更新的没更新，该冻结的被更新，内环和外环混成了一件事。</p>
+  <div class="table-wrap">
+    <table data-export-context="后训练调参前核查表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>常见原因</th>
+          <th>第一检查</th>
+          <th>下一步动作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>chosen / rejected 一起涨，回答还是空</td>
+          <td>reward 只看形式，不看任务完成度</td>
+          <td>reward 的判分标准和样本分布</td>
+          <td>增加独立评测集和人工抽检</td>
+        </tr>
+        <tr>
+          <td>policy 和 reference 一起漂</td>
+          <td>reference 被错误加入更新</td>
+          <td>optimizer 参数列表和复制时机</td>
+          <td>冻结 reference，确认只读不写</td>
+        </tr>
+        <tr>
+          <td>judge 打高分，真实样本却不稳</td>
+          <td>judge 过拟合提示词或题型</td>
+          <td>judge 看的是训练样本还是留出样本</td>
+          <td>把 judge 留在外环，用独立回归集校验</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>四步核查顺序</span><button class="copy" data-copy="debug-loop-order">复制</button></div>
+  <pre id="debug-loop-order" data-export-context="后训练四步核查顺序" data-export-lang="text"><code>1. 先看 policy 是否在更新
+2. 再看 reference 是否冻结
+3. 再看 reward / judge 是否分在不同环
+4. 最后看 chosen / rejected 是否来自同一 prompt</code></pre>
+  <p>如果这四步里有一步说不清，就先回到前面的角色账本和 trace。对象边界对了，再谈算法、学习率和 batch 才有意义。你也可以直接回到练习区，先答 Q7、Q11 和 Q12，看自己是不是已经把对象和信号分开了。</p>
+</section>
+
+<section id="boundary">
+  <div class="head"><h2>边界与下一步</h2><span class="tag">boundary</span></div>
+  <p>这一页只负责把角色关系立住，不展开 SFT 的模板设计、loss_mask、packing、偏好损失公式或 RL 训练细节。那些内容分别在后面的单元里展开；你现在只要知道它们会沿着这条角色链继续往下走。</p>
+  <p>接下来先不要追更复杂的推导。先不碰 tokenizer、数据清洗、packing、PPO 的完整目标函数、batch 内采样细节和多卡训练配置。等你在下一页把样本和 loss_mask 看明白，再回来学这些东西，顺序会顺很多。</p>
+  <p>如果你已经能把“谁更新、谁冻结、谁打分、谁验收”这四句话说顺，下一步就去看 SFT 数据模板与 loss_mask。那一页会把“对象是谁”继续压成“样本长什么样、哪些 token 真被学到”。</p>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>怎么答才算会</h3>
+    <p>先把对象放对位置，再说理由。选择题看职责边界，简答题看你能不能把读写关系说清楚。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>如果你能稳定区分 policy、reference、reward 和 judge，并指出错误会坏在哪个环节，说明这一页真的学进去了。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、角色识别</h3>
+      <p>先看你能不能把对象放到正确的位置上。</p>
+    </div>
+    <div class="quick-review">
+      <b>速记</b>
+      <span>policy 更新，reference 冻结，reward 给训练信号，judge 做外环判断。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、角色识别" data-title="Q1. 哪个对象通常直接被训练目标更新？" data-answer="B. policy model" data-explain="policy model 才是被优化的一方。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">角色定位</span></div>
+      <h3>Q1. 哪个对象通常直接被训练目标更新？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q1" value="A. reference model">A. reference model</label>
+        <label><input type="radio" name="q1" value="B. policy model">B. policy model</label>
+        <label><input type="radio" name="q1" value="C. judge / evaluator">C. judge / evaluator</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、角色识别" data-title="Q2. reference model 在多数 DPO / RLHF 配方里应该冻结。" data-answer="对" data-explain="reference 的价值来自稳定，不来自继续学习。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">冻结对象</span></div>
+      <h3>Q2. reference model 在多数 DPO / RLHF 配方里应该冻结。</h3>
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q3" data-group="一、角色识别" data-title="Q3. 填空：SFT 主要学习的是什么？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">SFT</span></div>
+      <h3>Q3. 填空：SFT 主要学习的是什么？</h3>
+      <input type="text" name="q3" placeholder="例如：指令到回答的映射">
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>答案可以写成“指令到回答的映射”“示范答案分布”“按任务输出的行为模式”。关键不是字面完全一样，而是要说清楚 SFT 学的是可模仿的响应方式。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q4" data-group="一、角色识别" data-title="Q4. 哪个对象更适合用于发布前回归检查？" data-answer="A. judge / evaluator" data-explain="发布前需要的是外环判断，不是训练中的梯度信号。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">评测</span></div>
+      <h3>Q4. 哪个对象更适合用于发布前回归检查？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q4" value="A. judge / evaluator">A. judge / evaluator</label>
+        <label><input type="radio" name="q4" value="B. reference model">B. reference model</label>
+        <label><input type="radio" name="q4" value="C. optimizer state">C. optimizer state</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q5" data-group="一、角色识别" data-title="Q5. 用一句话区分 reward model 和 judge。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">边界</span></div>
+      <h3>Q5. 用一句话区分 reward model 和 judge。</h3>
+      <textarea name="q5" placeholder="从它们在训练闭环中的位置来回答。"></textarea>
+      <p class="solve-note">答题脚手架：reward 在训练内环做什么；judge 在训练外环做什么；二者可以同源，但职责不同。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>一个合格答案要同时说出“reward 负责训练内环的分数或梯度方向”“judge 负责训练外环或发布前判断”“两者可以使用相似模型，但不能混同角色”。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q6" data-group="一、角色识别" data-title="Q6. 为什么同一个 SFT checkpoint 可以同时成为 policy 起点和 reference 起点？" data-answer="A. 让两个对象从同一起点分叉" data-explain="policy 要继续更新，reference 要冻结；同起点便于比较偏离。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">checkpoint 复用</span></div>
+      <h3>Q6. 为什么同一个 SFT checkpoint 可以同时成为 policy 起点和 reference 起点？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q6" value="A. 让两个对象从同一起点分叉">A. 让两个对象从同一起点分叉</label>
+        <label><input type="radio" name="q6" value="B. 让 reference 继续学习，policy 冻结">B. 让 reference 继续学习，policy 冻结</label>
+        <label><input type="radio" name="q6" value="C. 让 reward 直接替代 policy">C. 让 reward 直接替代 policy</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、流程排序与诊断</h3>
+      <p>把对象放进训练流程，检查你是否真的理解闭环。</p>
+    </div>
+    <div class="quick-review">
+      <b>速记</b>
+      <span>先生成候选，再获得信号，再约束更新，最后评测发布。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q7" data-group="二、流程排序与诊断" data-title="Q7. 哪一条最贴近 DPO 的对象顺序？" data-answer="B. SFT checkpoint 复制成 policy 和 reference，reference 冻结，policy 用 chosen / rejected 和 reference 的差异更新" data-explain="DPO 先分叉出 policy 和 reference，再用偏好对推动 policy 更新。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">DPO</span></div>
+      <h3>Q7. 哪一条最贴近 DPO 的对象顺序？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q7" value="A. policy 和 reference 轮流更新，chosen / rejected 只做展示">A. policy 和 reference 轮流更新，chosen / rejected 只做展示</label>
+        <label><input type="radio" name="q7" value="B. SFT checkpoint 复制成 policy 和 reference，reference 冻结，policy 用 chosen / rejected 和 reference 的差异更新">B. SFT checkpoint 复制成 policy 和 reference，reference 冻结，policy 用 chosen / rejected 和 reference 的差异更新</label>
+        <label><input type="radio" name="q7" value="C. judge 先训练，再把分数倒回去改 tokenizer">C. judge 先训练，再把分数倒回去改 tokenizer</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q8" data-group="二、流程排序与诊断" data-title="Q8. base model 天然等于 chat model。" data-answer="错" data-explain="base 只是底座，不等于已经按指令对齐。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">base/chat</span></div>
+      <h3>Q8. base model 天然等于 chat model。</h3>
+      <label><input type="radio" name="q8" value="对">对</label>
+      <label><input type="radio" name="q8" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q9" data-group="二、流程排序与诊断" data-title="Q9. 在 GRPO 风格训练里，reward function 的主要作用是什么？" data-answer="A. 给候选答案提供可优化分数" data-explain="reward 的作用是给训练内环提供方向，不是替代全部评测。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">RL</span></div>
+      <h3>Q9. 在 GRPO 风格训练里，reward function 的主要作用是什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q9" value="A. 给候选答案提供可优化分数">A. 给候选答案提供可优化分数</label>
+        <label><input type="radio" name="q9" value="B. 保存 tokenizer 词表">B. 保存 tokenizer 词表</label>
+        <label><input type="radio" name="q9" value="C. 替代所有人工评测">C. 替代所有人工评测</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q10" data-group="二、流程排序与诊断" data-title="Q10. 填空：reference 常用于计算相对概率或什么约束？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">约束</span></div>
+      <h3>Q10. 填空：reference 常用于计算相对概率或什么约束？</h3>
+      <input type="text" name="q10" placeholder="两个字母，常见于 RLHF。">
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>通常是 KL 约束。答案只要表达“限制 policy 不要偏离 reference 太远”就算抓住了意思。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q11" data-group="二、流程排序与诊断" data-title="Q11. 错误诊断：训练时把 reference 也设成 trainable，会出现什么问题？">
+      <div class="q-meta"><span class="pill">error diagnosis</span><span class="pill">reference</span></div>
+      <h3>Q11. 错误诊断：训练时把 reference 也设成 trainable，会出现什么问题？</h3>
+      <textarea name="q11" placeholder="从约束目标移动、训练解释困难、偏离控制变弱三个角度回答。"></textarea>
+      <p class="solve-note">答题脚手架：先说 reference 的作用，再说它更新后作用如何被破坏，最后给修法。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>参考答案至少要提到三点：reference 失去稳定参照；policy 的相对偏移不再可解释；KL 或类似约束会失去锚点。修法是把 reference 冻结，并在训练开始前明确复制来源。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q12" data-group="二、流程排序与诊断" data-title="Q12. 用一个 LLM judge 打高分就宣布模型上线，最先应该补什么？" data-answer="A. 独立评测集和人工抽检" data-explain="单个 judge 分数不够，先补独立回归和人工核查。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">judge</span></div>
+      <h3>Q12. 用一个 LLM judge 打高分就宣布模型上线，最先应该补什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q12" value="A. 独立评测集和人工抽检">A. 独立评测集和人工抽检</label>
+        <label><input type="radio" name="q12" value="B. 更大的学习率">B. 更大的学习率</label>
+        <label><input type="radio" name="q12" value="C. 让 reference 继续训练">C. 让 reference 继续训练</label>
+        <label><input type="radio" name="q12" value="D. 把同一个 judge 继续当 reward">D. 把同一个 judge 继续当 reward</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、迁移应用</h3>
+      <p>把角色语言迁移到真实项目设计里。</p>
+    </div>
+    <div class="quick-review">
+      <b>速记</b>
+      <span>任何训练计划都先写对象表，再写算法名。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q13" data-group="三、迁移应用" data-title="Q13. 你要训练一个客服模型，请列出最小后训练对象表。">
+      <div class="q-meta"><span class="pill">scenario transfer</span><span class="pill">项目设计</span></div>
+      <h3>Q13. 你要训练一个客服模型，请列出最小后训练对象表。</h3>
+      <textarea name="q13" placeholder="至少包含 base/SFT 起点、policy、reference、reward 或 judge、评测集。"></textarea>
+      <p class="solve-note">答题脚手架：每个对象写一行：来源、职责、是否更新。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>参考答案不需要写很长，但必须包含：起点模型、被更新的 policy、冻结的 reference、提供训练信号的 reward 或规则函数、以及训练外的评测集或 judge。只列算法名不算完成。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q14" data-group="三、迁移应用" data-title="Q14. 偏好数据 chosen / rejected 最直接服务于哪个阶段？" data-answer="B. DPO 或 reward modeling" data-explain="chosen / rejected 是偏好数据，直接供偏好优化或奖励建模使用。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">偏好数据</span></div>
+      <h3>Q14. 偏好数据 chosen / rejected 最直接服务于哪个阶段？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q14" value="A. tokenizer 训练">A. tokenizer 训练</label>
+        <label><input type="radio" name="q14" value="B. DPO 或 reward modeling">B. DPO 或 reward modeling</label>
+        <label><input type="radio" name="q14" value="C. 模型量化">C. 模型量化</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q15" data-group="三、迁移应用" data-title="Q15. 一个规则判分函数既可以是 reward，也可以是 judge。" data-answer="对" data-explain="同一个函数放进训练内环或评测外环，职责会变。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">位置决定角色</span></div>
+      <h3>Q15. 一个规则判分函数既可以是 reward，也可以是 judge。</h3>
+      <label><input type="radio" name="q15" value="对">对</label>
+      <label><input type="radio" name="q15" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q16" data-group="三、迁移应用" data-title="Q16. 填空：如果模型为了拿高 reward 学会钻漏洞，这通常叫做什么？">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">失败模式</span></div>
+      <h3>Q16. 填空：如果模型为了拿高 reward 学会钻漏洞，这通常叫做什么？</h3>
+      <input type="text" name="q16" placeholder="英文术语，reward ...">
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>标准说法是 reward hacking。只要你能说出“模型学会利用奖励函数漏洞”就算抓住了核心。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q17" data-group="三、迁移应用" data-title="Q17. 解释 prompt、policy、reward、reference、judge 在一次 RLHF 实验中的关系。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">闭环</span></div>
+      <h3>Q17. 解释 prompt、policy、reward、reference、judge 在一次 RLHF 实验中的关系。</h3>
+      <textarea name="q17" placeholder="请按“生成候选 -> 打分 -> 约束更新 -> 评测验收”的顺序写。"></textarea>
+      <p class="solve-note">答题脚手架：每个角色至少出现一次，并说明是否在训练内环。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>一份合格答案要把顺序说出来：prompt 进入 policy，policy 生成候选，reward 对候选打分，reference 提供稳定参照，policy 根据 reward 和 reference 的约束更新，judge 在训练外环检查是否真的更好。</p>
+      </details>
+    </div>
+
+    <div class="q full" data-question="q18" data-group="三、迁移应用" data-title="Q18. 用 150 字以内给新人讲清楚本节。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">复述</span></div>
+      <h3>Q18. 用 150 字以内给新人讲清楚本节。</h3>
+      <textarea name="q18" placeholder="目标：不用公式，但讲清 base、policy、reference、reward、judge 的关系。"></textarea>
+      <p class="solve-note">答题脚手架：先说后训练目的，再说谁生成、谁约束、谁打分、谁验收。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>答题时不要堆术语。先说后训练的目的，再用一条短链条解释：base 是底座，SFT 之后得到 checkpoint，policy 负责更新，reference 负责参照，reward 给训练信号，judge 负责外环验收。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><strong>课程地图：</strong><a href="../index.html">后训练全栈课程地图</a>。它给出了这门课的顺序、单元职责和前后衔接。</li>
+  <li><strong>公开文档：</strong><a href="https://huggingface.co/docs/trl/index">TRL</a>、<a href="https://huggingface.co/docs/transformers/chat_templating">Transformers chat templating</a>、<a href="https://github.com/huggingface/alignment-handbook">Alignment Handbook</a>。这些资料支撑 SFT、DPO、RLHF / GRPO 和模板判断，整理时按 2026-06-21 的页面状态记录。</li>
+  <li><strong>课程位置：</strong>第 01 单元是全课程入口，先讲角色和闭环，再把 SFT、偏好优化、RLHF / GRPO 与评测依次展开。</li>
+  <li><strong>学习边界：</strong>这一页先把对象、读写关系和训练内外环立住；更细的样本模板、`loss_mask`、偏好损失和训练配置会留到后续单元。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>05 行动之前先规划｜Claude Code 工作流</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand"><strong>Claude Code 工作流</strong><span>05｜行动之前先规划</span></div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>目标与主线</a>
+      <a href="#why"><span class="dot"></span>为什么要 todo</a>
+      <a href="#schema"><span class="dot"></span>工具 schema</a>
+      <a href="#validate"><span class="dot"></span>校验与渲染</a>
+      <a href="#constraints"><span class="dot"></span>状态约束</a>
+      <a href="#reminder"><span class="dot"></span>更新提醒</a>
+      <a href="#public-guide"><span class="dot"></span>讲义补强</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>导出练习记录</a>
+    </nav>
+    <div class="side-note">计划不是藏在模型脑子里，而是作为工具结果回到 messages，供下一轮继续约束行为。</div>
+  </aside>
+  <main>
+    <header class="hero" id="goal">
+      <div>
+        <div class="kicker">Todo planning</div>
+        <h1>行动之前先规划</h1>
+        <p class="muted">复杂任务不能只靠模型在后台“想一想”。todo 工具把计划显式写出来：每个任务有 id、text、status，状态变化会作为工具结果进入 messages，模型下一步就能基于可见计划行动。</p>
+        <div class="map">
+          <span class="node">todo schema</span><span class="arrow">→</span>
+          <span class="node">items</span><span class="arrow">→</span>
+          <span class="node">validate</span><span class="arrow">→</span>
+          <span class="node">render plan</span><span class="arrow">→</span>
+          <span class="node">messages</span>
+        </div>
+        <p>学完本页，你应该能解释 todo 工具为什么需要 schema，为什么同一时间最多一个 `in_progress`，以及为什么几轮没更新计划时要提醒模型。</p>
+      </div>
+      <div class="box soft">
+        <h3>来源材料</h3>
+        <p>视频：《Learn Claude Code 源码详解》行动之前先规划，开发实战分享屋，2026-03-10。</p>
+        <p>本页聚焦 todo 工具、状态校验、计划渲染和定期更新提醒。</p>
+      </div>
+    </header>
+
+    <section id="why">
+      <div class="head"><h2>1. 计划要显式，不要只藏在回复里</h2><span class="tag">visible state</span></div>
+      <p>没有 todo 工具时，模型也可能在自然语言里说“我先做 A，再做 B”。问题是这种计划不稳定：下一轮模型可能忘掉、改写或跳过某一步。todo 工具把计划变成结构化工具调用，结果会进入 messages，后续每一轮都能看到当前任务状态。</p>
+      <p>这不是要求模型暴露隐藏思维链。todo 是可见的任务状态，和内部推理不同。它告诉用户和程序：现在有哪些任务，哪个正在做，哪些还没开始，哪些已经完成。你可以把它当作 Agent 的小看板。</p>
+      <div class="grid2">
+        <div class="box warn">
+          <h3>只靠自然语言计划的问题</h3>
+          <ul>
+            <li>状态不稳定，下一轮可能忘。</li>
+            <li>用户难以检查当前进度。</li>
+            <li>模型容易同时推进多条线。</li>
+            <li>失败后不知道该回到哪一步。</li>
+          </ul>
+        </div>
+        <div class="box ok">
+          <h3>todo 工具带来的控制</h3>
+          <ul>
+            <li>计划以结构化 items 存在。</li>
+            <li>每项都有 id、text、status。</li>
+            <li>渲染后能直观看到当前任务。</li>
+            <li>更新结果会写回 messages。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="schema">
+      <div class="head"><h2>2. schema 告诉模型 todo 需要什么参数</h2><span class="tag">id / text / status</span></div>
+      <p>模型之所以知道 todo 工具要返回 `items`，并且每个 item 里有 `id`、`text`、`status`，是因为工具 schema 已经把参数结构告诉了它。schema 的作用不是执行计划，而是约束模型生成符合本地函数预期的输入。</p>
+      <p>本节里的 todo item 至少有三部分：`id` 用来稳定识别任务；`text` 描述任务内容；`status` 表示状态。常见状态是 `pending`、`in_progress`、`completed`。如果 text 为空，或者 status 不是允许值，本地 update 函数应该拒绝或返回错误。</p>
+      <div class="codebar"><span class="label">正确示例：todo 工具输入结构</span><span>JSON</span></div>
+      <pre><code>{
+  "items": [
+    {"id": "1", "text": "查看当前目录", "status": "in_progress"},
+    {"id": "2", "text": "读取 requirements.txt", "status": "pending"},
+    {"id": "3", "text": "总结依赖用途", "status": "pending"}
+  ]
+}</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>字段</th><th>作用</th><th>常见坏输入</th></tr></thead>
+          <tbody>
+            <tr><td>`id`</td><td>稳定追踪任务。</td><td>重复、缺失、每次更新都换。</td></tr>
+            <tr><td>`text`</td><td>描述任务内容。</td><td>空字符串、过度笼统。</td></tr>
+            <tr><td>`status`</td><td>表示进度状态。</td><td>拼错、发明新状态、多个 in_progress。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="validate">
+      <div class="head"><h2>3. update 不是照单全收</h2><span class="tag">validate then render</span></div>
+      <p>todo update 函数会把传入的 items 逐个提取出来，检查 text 是否为空，status 是否属于允许集合，再把合法项放进 validated 列表。校验之后才渲染成用户能看的计划。这个顺序很重要：先校验，再展示，再写回 messages。</p>
+      <div class="codebar"><span class="label">逐行拆解：校验 todo items</span><span>Python</span></div>
+      <pre><code>allowed = {"pending", "in_progress", "completed"}
+validated = []
+
+for item in items:
+    task_id = item.get("id")
+    text = item.get("text", "").strip()
+    status = item.get("status")
+
+    if not text:
+        raise ValueError("Todo text cannot be empty")
+    if status not in allowed:
+        raise ValueError(f"Unknown status: {status}")
+
+    validated.append({"id": task_id, "text": text, "status": status})</code></pre>
+      <p>渲染时，当前任务可以用 `>` 标出来，完成任务可以用 `[x]`，待办任务用 `[ ]`。符号不是重点，重点是让用户和模型都能稳定看到同一个计划状态。</p>
+      <div class="viz-panel">
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <h3>切换 todo 状态</h3>
+            <div class="viz-actions">
+              <button data-todo="good" class="active">合法计划</button>
+              <button data-todo="two">两个进行中</button>
+              <button data-todo="empty">空任务</button>
+            </div>
+            <div class="todo-render" id="todoRender"></div>
+          </div>
+          <div class="viz-cell">
+            <h3 id="todoTitle">校验通过</h3>
+            <p id="todoText">只有一个任务处于 in_progress，其他任务是 pending 或 completed，可以渲染并写回 messages。</p>
+            <div class="viz-note" id="todoHint">观察点：todo 是给下一轮模型看的状态，不只是给用户看的进度条。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="constraints">
+      <div class="head"><h2>4. 约束让计划不变成噪声</h2><span class="tag">guardrails</span></div>
+      <p>todo 工具有几个简单但有效的约束。第一，状态只能来自允许集合。第二，同一时间最多一个任务是 `in_progress`。第三，计划项不能无限多，示例里限制不超过 20 条。它们不是形式主义，而是在减少 Agent 的失控空间。</p>
+      <p>最多一个 `in_progress` 是为了避免一种隐蔽失败：模型看起来同时做很多事，实际上每条线都没收束。20 条上限是为了避免模型把任务拆成过多碎片。计划太细会脆弱，模型和用户都难以维护。</p>
+      <div class="grid3">
+        <div class="route"><h3>状态集合</h3><p>`pending`、`in_progress`、`completed`。不允许随便发明状态。</p></div>
+        <div class="route"><h3>单一当前任务</h3><p>同一时间最多一个 `in_progress`，让当前焦点清楚。</p></div>
+        <div class="route"><h3>条目上限</h3><p>限制计划长度，防止拆得太细导致计划本身难维护。</p></div>
+      </div>
+      <div class="codebar error"><span class="label">错误示例：多个任务同时进行</span><span>状态冲突</span></div>
+      <pre><code>[
+  {"id": "1", "text": "查看目录", "status": "in_progress"},
+  {"id": "2", "text": "读取文件", "status": "in_progress"},
+  {"id": "3", "text": "总结结果", "status": "pending"}
+]</code></pre>
+      <p>修法不是简单删掉一个任务，而是让计划反映真实顺序：当前只做一项，做完后再把下一项切到 `in_progress`。</p>
+    </section>
+
+    <section id="reminder">
+      <div class="head"><h2>5. runs_since_todo 是更新提醒</h2><span class="tag">stay aligned</span></div>
+      <p>如果模型调用了 todo 工具，`runs_since_todo` 会重置为 0。之后每一轮如果调用的是 Bash、read_file、write_file 等其他工具，就加 1。达到阈值后，程序会向结果里加入类似“更新你的 todo”的提醒，迫使模型回头同步计划状态。</p>
+      <p>这不是为了烦模型，而是为了防止它越做越远。复杂任务中，模型可能连续执行几个工具后忘记更新计划。提醒机制把它拉回到可见计划，让 completed 和 in_progress 状态及时变化。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>轮次</th><th>工具</th><th>`runs_since_todo`</th><th>结果</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>todo</td><td>0</td><td>生成初始计划。</td></tr>
+            <tr><td>2</td><td>bash</td><td>1</td><td>执行目录命令。</td></tr>
+            <tr><td>3</td><td>bash</td><td>2</td><td>换命令继续检查。</td></tr>
+            <tr><td>4</td><td>bash</td><td>3</td><td>加入更新 todo 的提醒。</td></tr>
+            <tr><td>5</td><td>todo</td><td>0</td><td>计划状态更新。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>判断句：todo 更新不是任务执行本身，它是任务控制机制。它让 Agent 的行动可见、可追踪、可重新对齐。</p>
+    </section>
+
+    <section id="public-guide">
+      <div class="head"><h2>6. 公开讲义补强：好计划长什么样</h2><span class="tag">planning quality</span></div>
+      <p>把这一页压缩成一句话：todo 工具不是让模型写一份漂亮清单，而是把“当前任务状态”变成程序和用户都能检查的结构化数据。一个好计划应该能指导下一步行动，也能在任务变化时被更新。</p>
+      <div class="grid3">
+        <div class="route"><h3>可执行</h3><p>每一项都能直接开始做，例如“读取配置文件”，而不是“处理一下项目”。</p></div>
+        <div class="route"><h3>粒度适中</h3><p>太粗会失去指导作用，太细会让维护计划本身变成负担。</p></div>
+        <div class="route"><h3>状态可信</h3><p>`pending`、`in_progress`、`completed` 要反映真实进展，不能只是为了好看。</p></div>
+      </div>
+      <div class="codebar"><span class="label">好计划与坏计划对比</span><span>JSON</span></div>
+      <pre><code>// 好：状态少、动作明确、当前焦点唯一
+[
+  {"id": "1", "text": "读取项目入口文件", "status": "completed"},
+  {"id": "2", "text": "梳理工具调用链路", "status": "in_progress"},
+  {"id": "3", "text": "补充验证用例", "status": "pending"}
+]
+
+// 坏：多个进行中、描述空泛
+[
+  {"id": "1", "text": "看看代码", "status": "in_progress"},
+  {"id": "2", "text": "优化一下", "status": "in_progress"}
+]</code></pre>
+      <div class="box warn">
+        <h3>常见误区</h3>
+        <ul>
+          <li>把 todo 当成隐藏推理的替代品，写一堆推理过程，而不是任务状态。</li>
+          <li>开始执行后长期不更新，导致计划和真实进展脱节。</li>
+          <li>每个小动作都建一条 todo，计划比任务本身还难读。</li>
+          <li>多个 `in_progress` 同时存在，让当前焦点变模糊。</li>
+        </ul>
+      </div>
+      <p>你现在应该能做什么：看到一个 Agent 计划时，按“是否可执行、是否只有一个当前任务、是否按结果及时更新、是否写回 messages”四项判断它是否可靠。</p>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>先分清 todo 的字段、状态和用途。</p></div><div class="box soft">复习一下：todo 是显式任务状态，不是隐藏思维链。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="1. todo 作用"><div class="q-meta"><span class="pill">选择</span></div><h3>1. todo 工具最主要的作用是什么？</h3><label><input type="radio" name="q1" value="A">A. 暴露模型全部思考</label><label><input type="radio" name="q1" value="B">B. 显式记录任务状态</label><label><input type="radio" name="q1" value="C">C. 替代所有工具调用</label></div>
+          <div class="q" data-title="2. 字段"><div class="q-meta"><span class="pill">填空</span></div><h3>2. todo item 至少包含 ______、______、______ 三个字段。</h3><input type="text" name="q2"></div>
+          <div class="q" data-title="3. 状态"><div class="q-meta"><span class="pill">判断</span></div><h3>3. 模型可以随意发明 `almost_done` 这类状态。</h3><label><input type="radio" name="q3" value="对">对</label><label><input type="radio" name="q3" value="错">错</label></div>
+          <div class="q" data-title="4. schema"><div class="q-meta"><span class="pill">短答</span></div><h3>4. 为什么模型知道 todo 工具需要 items？</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、状态与约束</h3><p>这一组检查你能不能诊断坏计划。</p></div><div class="box warn">计划约束是为了让当前焦点清楚，不是为了好看。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="5. 单一进行中"><div class="q-meta"><span class="pill">解释</span></div><h3>5. 为什么同一时间最多一个 `in_progress`？</h3><textarea name="q5"></textarea></div>
+          <div class="q" data-title="6. 空文本"><div class="q-meta"><span class="pill">诊断</span></div><h3>6. todo item 的 text 为空，会造成什么问题？</h3><textarea name="q6"></textarea></div>
+          <div class="q" data-title="7. 上限"><div class="q-meta"><span class="pill">边界</span></div><h3>7. 为什么计划项要限制数量，例如不超过 20 条？</h3><textarea name="q7"></textarea></div>
+          <div class="q" data-title="8. 状态转换"><div class="q-meta"><span class="pill">排序</span></div><h3>8. 一个任务从未开始到完成，常见状态顺序是什么？</h3><input type="text" name="q8"></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、消息流与更新</h3><p>把 todo 工具放回 Agent 循环里理解。</p></div><div class="box soft">todo 结果写回 messages，模型下一轮才能继续按计划行动。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="9. tool_result"><div class="q-meta"><span class="pill">短答</span></div><h3>9. todo 工具渲染出的计划为什么要写回 messages？</h3><textarea name="q9"></textarea></div>
+          <div class="q" data-title="10. runs_since_todo"><div class="q-meta"><span class="pill">机制</span></div><h3>10. `runs_since_todo` 是干什么的？</h3><textarea name="q10"></textarea></div>
+          <div class="q" data-title="11. 三轮提醒"><div class="q-meta"><span class="pill">场景</span></div><h3>11. 连续三轮都没更新 todo，为什么要提醒模型？</h3><textarea name="q11"></textarea></div>
+          <div class="q" data-title="12. 计划不是执行"><div class="q-meta"><span class="pill">区分</span></div><h3>12. todo 更新和真正执行 Bash / write_file 有什么区别？</h3><textarea name="q12"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、迁移与表达</h3><p>把计划工具讲成可复用的工程机制。</p></div><div class="box soft">表达重点：显式状态、状态校验、定期更新、写回上下文。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="13. 坏计划诊断"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 一个计划有 30 条任务、3 个 in_progress，你会怎么指出问题？</h3><textarea name="q13"></textarea></div>
+          <div class="q" data-title="14. 计划粒度"><div class="q-meta"><span class="pill">设计</span></div><h3>14. 怎样判断任务拆得太细？</h3><textarea name="q14"></textarea></div>
+          <div class="q" data-title="15. 面试短答"><div class="q-meta"><span class="pill">表达</span></div><h3>15. 用 2-3 句话解释 todo 工具的工程价值。</h3><textarea name="q15"></textarea></div>
+          <div class="q" data-title="16. 检查清单"><div class="q-meta"><span class="pill">清单</span></div><h3>16. todo update 至少要检查哪 5 件事？</h3><textarea name="q16"></textarea></div>
+          <div class="q full" data-title="17. 流程图"><div class="q-meta"><span class="pill">流程图</span></div><h3>17. 用文字画出一次 todo update 的完整流程。</h3><textarea name="q17"></textarea></div>
+          <div class="q full" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：todo 工具如何约束 Agent 不跑偏。</h3><div class="solve-note">请串联 schema、items、validate、in_progress、runs_since_todo、messages。</div><textarea name="q18"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>保存练习记录</h2><span class="tag">自测用</span></div>
+      <p class="muted">完成练习后生成本页记录，便于检查理解和复制留存。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+const todoCases={
+  good:["校验通过","只有一个任务处于 in_progress，其他任务是 pending 或 completed，可以渲染并写回 messages。","观察点：todo 是给下一轮模型看的状态，不只是给用户看的进度条。","> [ ] 1 查看当前目录\n  [ ] 2 读取 requirements.txt\n  [ ] 3 总结依赖用途"],
+  two:["校验失败：多个进行中","两个任务同时 in_progress，当前焦点不清楚。模型可能看起来做很多事，实际每条线都没收束。","修法：保留一个当前任务，其他任务改回 pending。","> [ ] 1 查看当前目录\n> [ ] 2 读取 requirements.txt\n  [ ] 3 总结依赖用途"],
+  empty:["校验失败：任务文本为空","空任务无法指导行动，也无法让用户判断模型下一步要做什么。","修法：给每个 item 写清可执行的任务描述。","> [ ] 1 查看当前目录\n  [ ] 2 \n  [ ] 3 总结依赖用途"]
+};
+function renderTodo(name){const d=todoCases[name]||todoCases.good;document.querySelectorAll("[data-todo]").forEach(b=>b.classList.toggle("active",b.dataset.todo===name));document.getElementById("todoTitle").textContent=d[0];document.getElementById("todoText").textContent=d[1];document.getElementById("todoHint").textContent=d[2];const box=document.getElementById("todoRender");box.textContent=d[3];box.classList.toggle("todo-good",name==="good");box.classList.toggle("todo-bad",name!=="good")}
+document.querySelectorAll("[data-todo]").forEach(btn=>btn.addEventListener("click",()=>renderTodo(btn.dataset.todo)));renderTodo("good");
+document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
+const questions=[
+  ["基础概念","1. todo 工具最主要的作用是什么？","q1","radio"],["基础概念","2. todo item 至少包含哪三个字段？","q2","text"],["基础概念","3. 模型能否随意发明状态？","q3","radio"],["基础概念","4. 为什么模型知道 todo 需要 items？","q4","text"],["状态约束","5. 为什么最多一个 in_progress？","q5","text"],["状态约束","6. text 为空有什么问题？","q6","text"],["状态约束","7. 为什么限制计划项数量？","q7","text"],["状态约束","8. 常见状态顺序。","q8","text"],["消息更新","9. todo 计划为什么写回 messages？","q9","text"],["消息更新","10. runs_since_todo 的作用。","q10","text"],["消息更新","11. 为什么三轮未更新要提醒？","q11","text"],["消息更新","12. todo 更新和真正执行工具的区别。","q12","text"],["迁移表达","13. 30 条任务和 3 个 in_progress 的问题。","q13","text"],["迁移表达","14. 怎样判断任务拆太细？","q14","text"],["迁移表达","15. todo 工具的工程价值。","q15","text"],["迁移表达","16. todo update 检查清单。","q16","text"],["迁移表达","17. todo update 完整流程。","q17","text"],["费曼解释","18. todo 工具如何约束 Agent 不跑偏。","q18","text"]
+];
+function val(q){if(q[3]==="radio"){const el=document.querySelector(`input[name="${q[2]}"]:checked`);return el?el.value:""}const el=document.querySelector(`[name="${q[2]}"]`);return el?el.value.trim():""}
+function generateRecord(){const groups={};const missing=[];questions.forEach(q=>{const v=val(q);if(!v)missing.push(q[1]);if(!groups[q[0]])groups[q[0]]=[];groups[q[0]].push({t:q[1],a:v||"（未填写）"})});let out="# 05 行动之前先规划｜练习记录\n\n";Object.keys(groups).forEach(g=>{out+=`## ${g}\n\n`;groups[g].forEach(item=>{out+=`### ${item.t}\n${item.a}\n\n`})});document.getElementById("record").textContent=out;const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=val(["","","q18","text"]);const keys=["schema","items","validate","in_progress","runs_since_todo","messages"];const lack=keys.filter(k=>!f.includes(k));if(f&&f.length<120)warnings.push("费曼解释偏短，建议讲成 6-9 句话。");if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join("、")}。`);const q=document.getElementById("quality");q.style.display="block";q.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以用于自测检查。"}
+function copyRecord(){navigator.clipboard.writeText(document.getElementById("record").textContent).catch(()=>alert("复制失败，请手动复制。"))}
+</script>
+<script src="../assets/study-page.js"></script>
+</body>
+</html>

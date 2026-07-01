@@ -1,0 +1,1061 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rollout、采样与优势估计</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="推理模型训练" data-unit="04">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>推理模型训练</strong>
+        <span>04</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#loop"><span class="dot"></span>训练闭环</a>
+        <a href="#terms"><span class="dot"></span>术语表</a>
+        <a href="#sampling"><span class="dot"></span>采样</a>
+        <a href="#advantage"><span class="dot"></span>优势估计</a>
+        <a href="#variance"><span class="dot"></span>方差</a>
+        <a href="#state"><span class="dot"></span>状态台账</a>
+        <a href="#efficiency"><span class="dot"></span>样本效率</a>
+        <a href="#tradeoff"><span class="dot"></span>关键权衡</a>
+        <a href="#pitfalls"><span class="dot"></span>误区诊断</a>
+        <a href="#bridge"><span class="dot"></span>课程衔接</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">本页只讲同题多采样、组内比较、优势归一化和方差来源。先抓住一个小组的 reward，再看更新信号。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">推理训练闭环</div>
+          <h1>Rollout、采样与优势估计</h1>
+          <p>这一页只讲一件事：同一道题生成多条回答以后，怎么把“哪条更好”变成可训练的信号。你会看到 rollout、采样温度、组内 baseline、优势归一化和方差来源如何连成一条链；KL、PPO 细节和分布式实现先不展开，下一页再接。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../03_可验证奖励与任务构造/学习页.html">上一页：可验证奖励</a><a href="#practice">先做练习</a><a href="../05_GRPO_PPO与KL稳定性/学习页.html">下一页：KL 稳定性</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+  <li>能解释为什么同题多采样会比单条回答更适合做组内比较。</li>
+  <li>能手算一组 reward 的均值、标准差和每条优势，并说出正负号代表什么。</li>
+  <li>能根据方差、成功率和有效 rollout 率判断是采样、奖励还是题目本身出了问题。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标：先把比较单位找对</h2>
+    <span class="tag">goals</span>
+  </div>
+  <p>这一页只处理推理 RL 里最靠前的一层：同一道题采样多条回答以后，怎样把“哪条更好”变成训练信号。你会反复看到 rollout、采样温度、组内 baseline、优势和方差这五个词，因为它们共同决定更新方向是否稳定。</p>
+  <p>这里的 anchor 例子固定用同一题的多个 completion。题目不变，模型不变，变化的是采样参数和 reward 分布。这样最容易看出训练信号到底来自答案本身，还是来自采样和比较方式。</p>
+  <div class="map">
+    <span class="node">Prompt</span><span class="arrow">→</span>
+    <span class="node">多条 completion</span><span class="arrow">→</span>
+    <span class="node">reward 向量</span><span class="arrow">→</span>
+    <span class="node">组内 baseline</span><span class="arrow">→</span>
+    <span class="node">advantage</span><span class="arrow">→</span>
+    <span class="node">policy update</span>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>这一页要拿住什么</h3>
+      <p>能说明 rollout 为什么不是“只跑一次就够”，能手算一组 reward 的均值和优势，也能判断一批训练信号抖不抖、浪不浪费预算。</p>
+    </div>
+    <div class="box warn">
+      <h3>先别追什么</h3>
+      <p>KL 约束、PPO 剪切、分布式 rollout 调度先放一边。那几层会在 05 和 06 继续展开，这一页先把比较单位和更新方向钉住。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="单条回答与rollout对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>你看到的对象</th>
+          <th>它在这一页里代表什么</th>
+          <th>最容易看错的地方</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>单条 completion</td>
+          <td>一次从 prompt 到完整回答的采样结果</td>
+          <td>把它当成整个训练闭环</td>
+        </tr>
+        <tr>
+          <td>一组 completion</td>
+          <td>同一题的多个候选，用来做组内比较</td>
+          <td>组内差异太小就没有优势信号</td>
+        </tr>
+        <tr>
+          <td>reward</td>
+          <td>验证器、规则或 reward model 给出的分数</td>
+          <td>把 reward 当成真正学到的能力</td>
+        </tr>
+        <tr>
+          <td>advantage</td>
+          <td>某条回答相对参照水平好多少</td>
+          <td>忘了 baseline，就只剩绝对分数</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="loop">
+  <div class="head">
+    <h2>训练闭环：先采样，再比较，再回写</h2>
+    <span class="tag">loop</span>
+  </div>
+  <p>推理训练里的闭环不是“答对就行”。更准确的顺序是：先让模型对同一题生成多条候选，再把这些候选送进 reward 计算，再把 reward 和同组参照值比较，最后才进入参数更新。采样给你候选集合，baseline 给你参照点，优势给你更新方向。</p>
+  <p>这一页最关键的阅读顺序也一样：先看采样如何决定候选集合，再看 reward 如何压缩成标量，再看标量如何变成 advantage。只看最终分数，很容易把“模型偶尔采到了正确路径”误读成“训练已经学会了正确路径”。</p>
+  <div class="shape-tracer" data-shape-tracer data-export-context="rollout到更新的追踪" data-export-lang="text">
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1">
+        <code>prompt</code><span>输入固定</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-2">
+        <code>sample G 次</code><span>得到一组 completion</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-3">
+        <code>reward</code><span>每条回答一个分数</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-4">
+        <code>baseline</code><span>给出比较参照</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-5">
+        <code>update</code><span>正优势上推，负优势下压</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1">
+        <b>输入状态</b>
+        <span>同一道题</span>
+        <p>读的是任务和当前策略，写入的是同一 prompt 的采样入口。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-2">
+        <b>采样状态</b>
+        <span>G 条 completion</span>
+        <p>写出来的是候选集合。采样温度太低时，这里几乎没有差异。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-3">
+        <b>奖励状态</b>
+        <span>reward 向量</span>
+        <p>每条回答都被压成一个分数，后面才能比较谁更好。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-4">
+        <b>参照状态</b>
+        <span>组内均值或 value 预测</span>
+        <p>baseline 读的是 reward，写出的是“这组回答的普通水平”。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-5">
+        <b>更新状态</b>
+        <span>advantage 加权的梯度</span>
+        <p>优势为正的轨迹被提高概率，优势为负的轨迹被压低概率。</p>
+      </div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="rollout到更新的读写表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>坏掉时的症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>采样</td>
+          <td>prompt、temperature、top-p、长度上限</td>
+          <td>一组 completion</td>
+          <td>每条回答都太像，组内没有差异</td>
+        </tr>
+        <tr>
+          <td>评分</td>
+          <td>completion、答案抽取结果、验证器</td>
+          <td>reward</td>
+          <td>reward 记到了格式，不记正确性</td>
+        </tr>
+        <tr>
+          <td>比较</td>
+          <td>reward 向量</td>
+          <td>baseline、advantage</td>
+          <td>全局分数看着涨，组内信号却很弱</td>
+        </tr>
+        <tr>
+          <td>更新</td>
+          <td>advantage、logprob、KL 约束</td>
+          <td>新的 policy</td>
+          <td>模型被推到只会刷分的路径上</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><b>你现在应该能做什么</b>看到一段训练日志时，先定位它属于采样、评分、比较还是更新，再判断问题从哪一步开始偏。</div>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语表：同一批回答里，谁是谁</h2>
+    <span class="tag">terms</span>
+  </div>
+  <p>这几个词不能混。rollout 说的是一次完整生成过程，completion 说的是生成出的文本本身，baseline 说的是参照水平，advantage 说的是相对参照的好坏，variance 说的是训练信号抖动的程度。它们不是同义词，只是常常一起出现。</p>
+  <div class="term-grid">
+    <div class="term-card"><b>Rollout</b><p>从 prompt 采样到完整回答的一次轨迹。LLM 场景里常把一条 completion 当成一个 rollout。</p></div>
+    <div class="term-card"><b>Completion</b><p>模型实际生成出来的文本。它可能是答案、步骤、代码，也可能是无效内容。</p></div>
+    <div class="term-card"><b>Baseline</b><p>参照水平。最常见的是同题组内均值，也可以是 value 预测或标准化后的参照。</p></div>
+    <div class="term-card"><b>Advantage</b><p>reward 减 baseline 之后的相对好坏。正值表示值得提高概率，负值表示要压低。</p></div>
+    <div class="term-card"><b>Variance</b><p>同样设置下更新信号有多抖。它高的时候，训练就像在噪声里找方向。</p></div>
+    <div class="term-card"><b>Group size</b><p>同一题采样多少条候选。组越大，比较越稳；预算越紧，覆盖面越小。</p></div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="术语边界对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>现象</th>
+          <th>最该用的词</th>
+          <th>为什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>同一题生成 8 条回答</td>
+          <td>group size / rollout batch</td>
+          <td>它描述的是采样了多少个候选</td>
+        </tr>
+        <tr>
+          <td>某条回答得 1 分，组均值是 0.5</td>
+          <td>advantage = +0.5</td>
+          <td>它描述的是相对组内参照的好坏</td>
+        </tr>
+        <tr>
+          <td>同样参数训练时稳时抖</td>
+          <td>variance</td>
+          <td>它描述的是更新信号的波动程度</td>
+        </tr>
+        <tr>
+          <td>每题只生成一条回答</td>
+          <td>single rollout</td>
+          <td>这时没有组内比较，优势信号很难稳定出现</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><b>先记住这个边界</b>这页先把组内比较和优势估计讲透。PPO 的裁剪、KL 的调节、分布式 rollout 的调度都属于下一层，不要提前把它们塞进当前单元。</div>
+</section>
+
+<section id="sampling">
+  <div class="head">
+    <h2>采样：多采几条，是为了看见差异</h2>
+    <span class="tag">sampling</span>
+  </div>
+  <p>采样参数的作用很直接：它们决定模型会不会探索到不同回答。温度太低，几条 completion 会挤在同一条路径上，组内 reward 很接近；温度太高，候选会更散，但无效样本、截断和离题也会增加。top-p、长度上限和 stop 条件会继续改变这个候选集合。</p>
+  <p>这一页里最实用的判断不是“更随机更好”或“更保守更稳”，而是：这组采样能不能给我足够的组内差异，同时又不把预算浪费在无效 completion 上。TRl 的 GRPO Trainer 里，`num_generations`、`reward_funcs` 和 reward 归一化本来就是绑在一起看的。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-low">低温</button>
+      <button class="ghost" data-terminal-case="case-mid">中温</button>
+      <button class="ghost" data-terminal-case="case-high">高温</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">低温：同一题的 4 条 completion 几乎一样，group std 很小，advantage 很难拉开。</pre>
+    <template data-terminal-output="case-low">低温：同一题的 4 条 completion 几乎一样，group std 很小，advantage 很难拉开。</template>
+    <template data-terminal-output="case-mid">中温：有两条路径能答对，另外两条暴露错误；这时组内比较最有信息量。</template>
+    <template data-terminal-output="case-high">高温：回答更散，截断、离题和格式错误明显增多。先降温，再看 reward 分布。</template>
+  </div>
+  <div class="codebar"><span>每题采样伪代码</span><button class="copy" data-copy="sampling-code">复制</button></div>
+  <pre id="sampling-code" data-export-context="每题采样伪代码" data-export-lang="python"><code class="language-python">for prompt in prompts:
+    completions = []
+    for _ in range(num_generations):
+        completion = model.generate(
+            prompt,
+            temperature=0.8,
+            top_p=0.95,
+            max_new_tokens=2048,
+        )
+        completions.append(completion)
+    rewards = [reward_fn(prompt, item) for item in completions]
+    # 后面再进入 advantage 计算</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="采样参数与现象对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>参数</th>
+          <th>它主要改变什么</th>
+          <th>过头时的风险</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>temperature</td>
+          <td>候选的随机性和探索范围</td>
+          <td>太低看不到差异，太高无效样本变多</td>
+        </tr>
+        <tr>
+          <td>top-p</td>
+          <td>保留的 token 候选集合大小</td>
+          <td>太小容易收成同一路径，太大容易放大噪声</td>
+        </tr>
+        <tr>
+          <td>num_generations</td>
+          <td>同一题采多少条 completion</td>
+          <td>组内比较更稳，但同样预算下题目覆盖会下降</td>
+        </tr>
+        <tr>
+          <td>max_new_tokens</td>
+          <td>回答能走多长</td>
+          <td>太短截断思路，太长拖高成本并引入废话</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><b>你现在应该能做什么</b>看到一组 completion 时，能先判断差异是够不够，再判断随机性是不是已经把无效样本放大了。</div>
+</section>
+
+<section id="advantage">
+  <div class="head">
+    <h2>优势估计：奖励要先减参照</h2>
+    <span class="tag">advantage</span>
+  </div>
+  <p>advantage 解决的是一个很实际的问题：reward 只是绝对分数，绝对分数里混着题目难度、采样噪声和验证器尺度。训练要用的不是“这条回答有几分”，而是“这条回答相对这一组的普通水平好多少”。</p>
+  <p>最常见的做法是把同一题的一组 reward 减去组内均值，必要时再除以组内标准差。这样可以把不同题目的尺度压得更接近，也能让正负号更稳定地对应“该不该提高概率”。</p>
+  <div class="math-block" data-export-context="组内优势公式" data-export-lang="math">
+    $$
+    A_i = R_i - \mu_G
+    \qquad
+    \tilde A_i = \frac{R_i - \mu_G}{\sigma_G + \varepsilon}
+    $$
+    <p>其中 $R_i$ 是第 $i$ 条回答的 reward，$\mu_G$ 是同组 reward 均值，$\sigma_G$ 是同组 reward 标准差。第一式给你方向，第二式把不同题目的尺度拉近。</p>
+  </div>
+  <div class="shape-tracer" data-shape-tracer data-export-context="reward到advantage的追踪" data-export-lang="text">
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-a">
+        <code>[1, 0, 1, 0]</code><span>reward 向量</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-b">
+        <code>mean=0.5</code><span>组内参照</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-c">
+        <code>[+0.5, -0.5, +0.5, -0.5]</code><span>中心化后</span>
+      </button>
+      <button class="trace-line" data-trace-step="step-d">
+        <code>正 / 负</code><span>更新方向</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-a">
+        <b>输入状态</b>
+        <span>reward 向量</span>
+        <p>读的是同一题的四条回答。只看绝对分数还看不出该往哪推。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-b">
+        <b>比较状态</b>
+        <span>组内均值</span>
+        <p>baseline 只负责给比较参照，不负责定义最终能力。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-c">
+        <b>中心化状态</b>
+        <span>advantage 向量</span>
+        <p>正值表示高于参照，负值表示低于参照。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="step-d">
+        <b>更新状态</b>
+        <span>正推 / 负压</span>
+        <p>训练不会奖励“分数高”本身，而是奖励相对更好的轨迹。</p>
+      </div>
+    </div>
+  </div>
+  <div class="codebar"><span>优势计算伪代码</span><button class="copy" data-copy="adv-code">复制</button></div>
+  <pre id="adv-code" data-export-context="优势计算伪代码" data-export-lang="python"><code class="language-python">def group_advantage(rewards):
+    mean_r = sum(rewards) / len(rewards)
+    var_r = sum((r - mean_r) ** 2 for r in rewards) / len(rewards)
+    std_r = (var_r ** 0.5)
+    adv = [r - mean_r for r in rewards]
+    norm = [a / (std_r + 1e-8) for a in adv]
+    return mean_r, std_r, adv, norm</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="手算组内优势样例表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>样本</th>
+          <th>reward</th>
+          <th>advantage</th>
+          <th>解读</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>A</td>
+          <td>1</td>
+          <td>+0.5</td>
+          <td>高于同组平均，应该上推</td>
+        </tr>
+        <tr>
+          <td>B</td>
+          <td>0</td>
+          <td>-0.5</td>
+          <td>低于同组平均，应该下压</td>
+        </tr>
+        <tr>
+          <td>C</td>
+          <td>1</td>
+          <td>+0.5</td>
+          <td>同样的正确样本，在别组里优势可能不同</td>
+        </tr>
+        <tr>
+          <td>D</td>
+          <td>0</td>
+          <td>-0.5</td>
+          <td>如果整组都错，单个 0 分并不一定有信息</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><b>你现在应该能做什么</b>给出一组 reward 时，能手算均值、标准差和每条 advantage，还能说出为什么组内参照比原始分数更适合更新策略。</div>
+</section>
+
+<section id="variance">
+  <div class="head">
+    <h2>方差：信号太抖，更新就不稳</h2>
+    <span class="tag">variance</span>
+  </div>
+  <p>方差说的是：同样的训练设置，为什么有时很稳、有时很抖。推理 RL 特别容易高方差，因为 completion 很长，reward 常常稀疏，题目难度又不均匀，采样还带随机性。不是模型突然变笨，而是信号本来就吵。</p>
+  <p>这一页里最实用的判断是：如果组内差异太小，advantage 会接近没有信息；如果组内差异太大，但大多来自异常样本，更新方向也会被噪声带歪。方差高不高，直接决定这一批 rollout 值不值得继续用。</p>
+  <div class="grid3">
+    <div class="box bad">
+      <h3>稀疏奖励</h3>
+      <p>大多数回答都是 0，少数回答才有分。模型很少看到细粒度反馈，只知道最后成败。</p>
+    </div>
+    <div class="box warn">
+      <h3>题目难度混杂</h3>
+      <p>简单题全对、难题全错，中间题反而更有训练信号。混得太厉害，组内比较就不稳。</p>
+    </div>
+    <div class="box soft">
+      <h3>采样噪声</h3>
+      <p>temperature、top-p 和长度上限都会改变候选集合。候选集合变了，advantage 也会跟着变。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="降方差手段对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>手段</th>
+          <th>直觉</th>
+          <th>代价</th>
+          <th>适用场景</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>baseline</td>
+          <td>只奖励“比参照更好”的部分</td>
+          <td>baseline 估计错会引入偏差或弱信号</td>
+          <td>几乎所有策略梯度训练</td>
+        </tr>
+        <tr>
+          <td>同题多采样</td>
+          <td>同一 prompt 内直接比较好坏</td>
+          <td>生成成本按采样数增加</td>
+          <td>GRPO / self-consistency 类训练</td>
+        </tr>
+        <tr>
+          <td>reward 标准化</td>
+          <td>让不同题目的尺度更接近</td>
+          <td>极端小组可能标准差不稳定</td>
+          <td>题目难度差异大时</td>
+        </tr>
+        <tr>
+          <td>过滤无信息题</td>
+          <td>全对或全错的小组优势接近 0</td>
+          <td>可能改变数据分布</td>
+          <td>训练预算紧张时</td>
+        </tr>
+        <tr>
+          <td>过程奖励</td>
+          <td>给中间步骤反馈，不只看最终答案</td>
+          <td>标注或 verifier 更复杂</td>
+          <td>能稳定评估步骤的任务</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><b>你现在应该能做什么</b>遇到训练曲线抖动时，先看 reward 分布、组内标准差、无效 completion 比例和题目难度，而不是直接调学习率。</div>
+</section>
+
+<section id="state">
+  <div class="head">
+    <h2>状态台账：哪一步读、哪一步写</h2>
+    <span class="tag">state</span>
+  </div>
+  <p>推理训练的麻烦之处在于，很多错误不是“模型坏了”，而是状态在某一步被写错了：采样写出了几乎一样的 completion，验证器把正确答案抽错了，baseline 读到了错误的 reward，或者更新时把低信息样本当成了高信息样本。</p>
+  <p>这张台账把最常见的读写关系摆平。你以后看日志时，优先顺着这张表找错位，而不是直接去调学习率。</p>
+  <div class="table-wrap">
+    <table data-export-context="rollout_reward_baseline_update状态台账" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>更新前</th>
+          <th>更新后</th>
+          <th>读取了什么</th>
+          <th>写入了什么</th>
+          <th>错了时的症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>采样器</td>
+          <td>单个 prompt</td>
+          <td>一组 completion</td>
+          <td>temperature、top-p、长度限制</td>
+          <td>候选集合</td>
+          <td>组内差异太小，优势几乎全靠噪声</td>
+        </tr>
+        <tr>
+          <td>reward 函数</td>
+          <td>completion 原文</td>
+          <td>reward 向量</td>
+          <td>答案抽取、测试结果、规则约束</td>
+          <td>标量分数和失败原因</td>
+          <td>格式被奖励，正确性没被看见</td>
+        </tr>
+        <tr>
+          <td>baseline</td>
+          <td>reward 向量</td>
+          <td>中心化后的参照</td>
+          <td>同组 reward</td>
+          <td>组均值或标准化参照</td>
+          <td>分数看着好，组内却没有比较价值</td>
+        </tr>
+        <tr>
+          <td>update</td>
+          <td>advantage、logprob</td>
+          <td>新 policy</td>
+          <td>正负优势、KL 约束</td>
+          <td>参数变化</td>
+          <td>模型更会刷分，不一定更会解题</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-flat">组内很平</button>
+      <button class="ghost" data-terminal-case="case-zero">全零组</button>
+      <button class="ghost" data-terminal-case="case-leak">答案泄露</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">组内很平：同一题的 reward 几乎一样，baseline 只能吃到噪声，先查采样和题目难度。</pre>
+    <template data-terminal-output="case-flat">组内很平：同一题的 reward 几乎一样，baseline 只能吃到噪声，先查采样和题目难度。</template>
+    <template data-terminal-output="case-zero">全零组：模型还没采到可用路径，先降难度、补冷启动，或检查答案抽取有没有把正确答案吃掉。</template>
+    <template data-terminal-output="case-leak">答案泄露：reward 很高，但学到的是模板和泄露片段。先修任务构造，再看验证器是否把漏洞当成正确。</template>
+  </div>
+  <div class="callout"><b>你现在应该能做什么</b>看到 reward 和评测不一致时，能先判断是采样、抽取、baseline 还是更新环节出了偏差。</div>
+</section>
+
+<section id="reward-choices">
+  <div class="head">
+    <h2>奖励和 baseline 怎么选</h2>
+    <span class="tag">reward choices</span>
+  </div>
+  <p>同样都是可验证任务，不同的奖励设计会把模型引向不同的地方。最稳妥的优先级通常是：先保证最终答案可判，再考虑格式、长度或中间步骤。baseline 也一样，先用同题组内均值做参照，只有在你确实需要更平滑的估计时，才考虑更复杂的 value 预测。</p>
+  <p>这一节不是让你背“最佳配置”，而是让你在看到训练配置时，先看主奖励是不是正对最终目标，再看辅助项有没有压过主奖励，再看 baseline 是否和这组样本真的属于同一层次。</p>
+  <div class="table-wrap">
+    <table data-export-context="奖励与baseline选择表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>配置项</th>
+          <th>适合什么时候用</th>
+          <th>常见误用</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>最终答案正确性</td>
+          <td>只要任务能稳定判分，就应该放在第一位</td>
+          <td>被长度和格式项挤到后面</td>
+        </tr>
+        <tr>
+          <td>格式辅助分</td>
+          <td>只在不影响正确性的前提下轻量使用</td>
+          <td>把它写成主目标</td>
+        </tr>
+        <tr>
+          <td>长度信号</td>
+          <td>更多时候只做观察，不做主奖励</td>
+          <td>奖励更长的废话输出</td>
+        </tr>
+        <tr>
+          <td>组内均值 baseline</td>
+          <td>同一题有多个 completion 时最直接</td>
+          <td>把不相关样本混在一起比较</td>
+        </tr>
+        <tr>
+          <td>value baseline</td>
+          <td>你已经能稳定估计价值，而且需要更平滑的梯度时</td>
+          <td>在问题还没判稳时先上复杂 baseline</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box soft" data-export-context="奖励优先级提醒" data-export-lang="text">
+    <h3>一个直接判断</h3>
+    <p>如果你看到的 reward 配置里，长度和格式项比正确性更靠前，先别急着调 optimizer。先把奖励顺序改回任务目标，再看训练曲线。很多看起来像“优化器不稳”的问题，其实是奖励排错了位。</p>
+  </div>
+</section>
+
+<section id="efficiency">
+  <div class="head">
+    <h2>样本效率：预算花在哪一层</h2>
+    <span class="tag">efficiency</span>
+  </div>
+  <p>同样一批 token 预算，花法不同，学到的东西会很不一样。多题少采能提高覆盖面，少题多采能提高组内比较质量。前者适合 reward 比较密、题目差异很大的情况；后者适合可验证任务、需要从同题中挖出少量正确轨迹的情况。</p>
+  <p>这一页的判断标准不是“采样数越大越好”，而是“这组采样产生的有效 rollout 是否足够多”。有效 rollout 指的是非空、未截断、可解析、能被 verifier 真正评分的样本。</p>
+  <div class="math-block" data-export-context="预算换算" data-export-lang="math">
+    $$
+    \text{cost per positive advantage}
+    =
+    \frac{\text{total tokens}}{\text{positive advantage count}}
+    $$
+    <p>这不是最终指标，但它能提醒你：如果一轮训练花了很多 token，却几乎没有正优势样本，预算多半烧在无效采样上了。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="样本效率检查表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>指标</th>
+          <th>怎么读</th>
+          <th>它说明什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>有效 rollout 率</td>
+          <td>可解析且能被评分的 completion 占比</td>
+          <td>预算有没有被无效样本吞掉</td>
+        </tr>
+        <tr>
+          <td>组内 reward 方差</td>
+          <td>同一题多条回答的分数差异</td>
+          <td>这组有没有比较价值</td>
+        </tr>
+        <tr>
+          <td>pass@k</td>
+          <td>多次采样里是否至少有一次成功</td>
+          <td>模型是不是“偶尔会”，适不适合继续挖</td>
+        </tr>
+        <tr>
+          <td>每正优势 token 成本</td>
+          <td>生成多少 token 才得到一个正优势样本</td>
+          <td>这一轮训练值不值</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>实验记录模板</span><button class="copy" data-copy="efficiency-code">复制</button></div>
+  <pre id="efficiency-code" data-export-context="实验记录模板" data-export-lang="text"><code class="language-text">run_id: grpo_math_small_001
+sampling:
+  temperature: 0.8
+  top_p: 0.95
+  num_generations: 8
+reward_stats:
+  mean_reward: 0.34
+  std_reward: 0.28
+  invalid_rate: 0.07
+  all_wrong_group_rate: 0.31
+efficiency:
+  positive_advantage_tokens: 18400
+diagnosis:
+  - 中等难度题太少，先补题
+  - 无效 completion 可以接受，暂不降温</code></pre>
+  <div class="callout"><b>你现在应该能做什么</b>固定 token 预算下，能说出“多采几条”和“多覆盖几题”的取舍，并知道该看哪些指标判断预算有没有浪费。</div>
+</section>
+
+<section id="tradeoff">
+  <div class="head">
+    <h2>关键权衡：探索、稳定和成本不能同时拉满</h2>
+    <span class="tag">tradeoff</span>
+  </div>
+  <p>推理 RL 里的采样设计没有一组永远正确的参数。你把 temperature 调高，探索更多，但无效样本和方差也可能上来；你把组大小调大，组内比较更稳，但同样预算下题目覆盖会下降；你把格式过滤收紧，训练更干净，却可能把少数正确但不规整的路径过滤掉。</p>
+  <p>所以这一页的判断不是“哪种参数最好”，而是“哪一层的损失最能接受”。如果当前最缺的是比较信号，就先让同题多采样；如果当前最缺的是覆盖面，就别把预算都压在一个组上；如果当前最缺的是干净的 reward，就先修验证器，再想其它参数。</p>
+  <div class="grid3">
+    <div class="box">
+      <h3>探索 vs 稳定</h3>
+      <p>探索太少，学不到新路径；探索太多，训练信号很吵。先看 reward 分布，再动采样温度。</p>
+    </div>
+    <div class="box">
+      <h3>组大小 vs 覆盖面</h3>
+      <p>组越大，同题比较越可靠；题目越多，任务覆盖越广。两者都吃生成预算。</p>
+    </div>
+    <div class="box">
+      <h3>稀疏奖励 vs 细粒度奖励</h3>
+      <p>最终答案奖励简单可靠，但信号稀疏；过程奖励更细，但更容易引入 verifier 偏差。</p>
+    </div>
+  </div>
+  <div class="codebar"><span>实验记录模板</span><button class="copy" data-copy="tradeoff-code">复制</button></div>
+  <pre id="tradeoff-code" data-export-context="实验记录模板" data-export-lang="text"><code class="language-text">run_id: grpo_math_small_001
+sampling:
+  temperature: 0.8
+  top_p: 0.95
+  num_generations: 8
+reward_stats:
+  mean_reward: 0.34
+  std_reward: 0.28
+  invalid_rate: 0.07
+  all_wrong_group_rate: 0.31
+efficiency:
+  positive_advantage_tokens: 18400
+diagnosis:
+  - 中等难度题太少，先补题
+  - 无效 completion 可以接受，暂不降温</code></pre>
+  <div class="callout"><b>你现在应该能做什么</b>设计一个小实验时，不只写 batch size 和学习率，还会记录采样参数、reward 分布、组内差异和无效样本比例。</div>
+</section>
+
+<section id="pitfalls">
+  <div class="head">
+    <h2>误区诊断：这些偏差会把比较信号带歪</h2>
+    <span class="tag">pitfalls</span>
+  </div>
+  <p>这一页最容易犯的错，不是公式写错，而是把错误信号当成了正确改进。reward 高不一定代表能力高，组内平均也不一定代表公平，更多采样也不一定更省。你要先看信号质量，再看信号数量。</p>
+  <div class="grid2">
+    <div class="box bad">
+      <h3>奖励看起来高</h3>
+      <p>先查验证器是不是只看了模板、长度或容易绕过的格式，再查训练题有没有泄露。</p>
+    </div>
+    <div class="box warn">
+      <h3>组内全对或全错</h3>
+      <p>这两种组都很少给出可比较的优势。前者几乎没有学习空间，后者还没到能挖出正确路径的阶段。</p>
+    </div>
+    <div class="box warn">
+      <h3>温度一高就乱</h3>
+      <p>先把温度拉回到能产生少量差异的区间，再看 top-p 和长度上限，不要先改优化器。</p>
+    </div>
+    <div class="box bad">
+      <h3>优势极端大</h3>
+      <p>通常说明 reward 标准差太小、异常样本太多，或者 baseline 把本来不该比较的东西也压进去了。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="常见故障与修正" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>现象</th>
+          <th>先查什么</th>
+          <th>通常怎么修</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>reward 上升，held-out 不涨</td>
+          <td>验证器漏洞、格式过拟合、训练题污染</td>
+          <td>加未见题、抽检高 reward 样本、收紧奖励规则</td>
+        </tr>
+        <tr>
+          <td>大部分组全零</td>
+          <td>模型起点太弱、题目过难、答案抽取失败</td>
+          <td>回到冷启动、降难度、修抽取器</td>
+        </tr>
+        <tr>
+          <td>completion 经常截断</td>
+          <td>max_new_tokens、stop 条件、推理长度分布</td>
+          <td>提高长度上限或改奖励里对长度的处理</td>
+        </tr>
+        <tr>
+          <td>训练曲线抖动很大</td>
+          <td>组内方差、采样噪声、无效 completion 比例</td>
+          <td>先查采样和 reward，再看学习率</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><b>你现在应该能做什么</b>看到训练异常时，能把问题归因到采样、奖励、baseline、题目分布或评测，而不是笼统说“RL 不稳定”。</div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>课程衔接：这一页结束后接什么</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <p>这一页把“多条 completion 怎么比较”讲清了，下一页就可以顺着继续看 GRPO、PPO 和 KL 稳定性。那一页会把 advantage 怎么进入损失函数、KL 为什么要约束更新、过大更新为什么会把模型推偏讲明白。</p>
+  <p>再往后到 06，重点会变成 verl 里的训练环：rollout、reward、更新和调度怎样在系统里分工。到了那一步，你已经不只是在看公式，而是在看训练过程如何落到工程实现。</p>
+  <div class="table-wrap">
+    <table data-export-context="课程衔接表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>当前单元看到的内容</th>
+          <th>下一页要找什么</th>
+          <th>常见第一误读</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>同题多采样</td>
+          <td>GRPO / PPO 里 advantage 怎么进损失</td>
+          <td>把采样差异当成优化细节</td>
+        </tr>
+        <tr>
+          <td>组内 baseline</td>
+          <td>KL 为什么能稳住更新</td>
+          <td>以为 baseline 和 KL 是同一件事</td>
+        </tr>
+        <tr>
+          <td>样本效率</td>
+          <td>分布式训练环如何省算力</td>
+          <td>以为系统复杂度只是实现问题</td>
+        </tr>
+        <tr>
+          <td>失败路径</td>
+          <td>Open-R1 里怎么排查复现偏差</td>
+          <td>只盯分数，不看数据和验证器</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box soft" data-export-context="课程衔接说明" data-export-lang="text">
+    <h3>下一步怎么读</h3>
+    <p>先读 05，重点找 advantage、KL 和 loss 的关系。等你能看懂“为什么正优势要上推、但不能推太猛”，再去 06 看 rollout 和 reward 如何在系统里被并行化。前面的 03-04 两页已经把奖励和比较单位立住了，后面的内容就不会散。</p>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="box soft">
+    <h3>怎么答才算会</h3>
+    <p>先分清 rollout、reward、baseline 和 advantage 的边界，再手算一组小样本，最后把异常归因到采样、奖励、题目难度或组大小。能说出下一步该查什么，比只写结论更重要。</p>
+  </div>
+  <div class="box info">
+    <h3>检查重点</h3>
+    <p>题型要和能力对齐：判断题看概念边界，手算题看 group mean 和正负号，诊断题看能不能先定位层级，设计题看你有没有把采样、奖励和日志绑在一起。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、术语与采样</h3>
+      <p>先确认你有没有把 rollout、completion、baseline 和 advantage 混掉。</p>
+    </div>
+    <div class="quick-review"><b>review</b><span>先看“生成了什么”，再看“怎么比较”。</span></div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="术语与采样" data-title="单选：rollout 最接近什么" data-answer="B" data-explain="rollout 指的是从 prompt 到完整回答的一次生成轨迹，completion 是它的具体文本结果。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">rollout</span></div>
+      <h3>1. 单选：rollout 最接近什么</h3>
+      <p>在这一页里，rollout 最接近下面哪一种说法？</p>
+      <label><input type="radio" name="q1" value="A"> 只指一个 token</label>
+      <label><input type="radio" name="q1" value="B"> 一次从 prompt 到完整回答的生成轨迹</label>
+      <label><input type="radio" name="q1" value="C"> 验证器给出的最终分数</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q2" data-group="术语与采样" data-title="多选：温度太低时会发生什么">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">sampling</span></div>
+      <h3>2. 多选：温度太低时会发生什么</h3>
+      <p>选择所有更贴近实际的结果。</p>
+      <label><input type="checkbox" name="q2" value="组内差异变小"> 组内差异变小</label>
+      <label><input type="checkbox" name="q2" value="advantage 更难拉开"> advantage 更难拉开</label>
+      <label><input type="checkbox" name="q2" value="无效 completion 一定更多"> 无效 completion 一定更多</label>
+      <label><input type="checkbox" name="q2" value="同题比较更容易看出好坏"> 同题比较更容易看出好坏</label>
+      <details><summary>展开反馈</summary><p>更合理的选择是“组内差异变小”和“advantage 更难拉开”。温度低不会必然带来更多无效 completion，反而常常更稳定；只是稳定得过头以后，组内比较会变弱。</p></details>
+    </div>
+    <div class="q full" data-question="q3" data-group="术语与采样" data-title="简答：为什么每题只采一条很难做组内比较">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">sampling</span></div>
+      <h3>3. 简答：为什么每题只采一条很难做组内比较</h3>
+      <p>从“信息量”和“baseline”两个角度回答。</p>
+      <p class="solve-note">答案目标：说明没有组内差异就没有稳定的相对参照。</p>
+      <textarea name="q3" placeholder="写 3-5 句。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>要点：一条回答没有组内对照，就很难知道它到底是“真的好”还是“只是这题刚好容易”；baseline 也会失去组内比较的意义。好的回答要写出“差异不足导致 advantage 不稳”和“采样预算只换来单点分数，没有比较信息”这两层。</p>
+      </details>
+    </div>
+    <div class="q" data-question="q4" data-group="术语与采样" data-title="单选：最适合先调的采样项" data-answer="A" data-explain="如果组内差异太小，先调采样温度最直接；学习率不是第一步。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">diagnosis</span></div>
+      <h3>4. 单选：最适合先调的采样项</h3>
+      <p>同一题的 4 条 completion 几乎一模一样，最先该调什么？</p>
+      <label><input type="radio" name="q4" value="A"> temperature</label>
+      <label><input type="radio" name="q4" value="B"> 学习率</label>
+      <label><input type="radio" name="q4" value="C"> optimizer 类型</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、手算与比较</h3>
+      <p>把 reward 向量变成 advantage 向量，确认正负号有没有算错。</p>
+    </div>
+    <div class="quick-review"><b>review</b><span>均值、标准差和正负优势是三个最基本的检查点。</span></div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q5" data-group="手算与比较" data-title="单选：reward=[1,0,1,0] 的均值" data-answer="B" data-explain="均值是 0.5；对应的 advantage 序列是 [+0.5, -0.5, +0.5, -0.5]。">
+      <div class="q-meta"><span class="pill">calculation</span><span class="pill">advantage</span></div>
+      <h3>5. 单选：reward=[1,0,1,0] 的均值</h3>
+      <p>同一题采样 4 条，reward 分别是 [1, 0, 1, 0]。组内均值是多少？</p>
+      <label><input type="radio" name="q5" value="A"> 0.25</label>
+      <label><input type="radio" name="q5" value="B"> 0.5</label>
+      <label><input type="radio" name="q5" value="C"> 0.75</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q6" data-group="手算与比较" data-title="诊断：全错组意味着什么">
+      <div class="q-meta"><span class="pill">diagnostic</span><span class="pill">variance</span></div>
+      <h3>6. 诊断：全错组意味着什么</h3>
+      <p>如果 60% 的 prompt 组内所有 completion 都是 0 分，这说明什么？你会先查什么？</p>
+      <p class="solve-note">答案目标：指出比较信号太少，并先查题目难度、模型起点和答案抽取。</p>
+      <textarea name="q6" placeholder="写出现象、原因和第一步检查。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>要点：这类组几乎没有组内比较信号，advantage 接近没有信息。优先查题目是否过难、模型起点是否太弱、答案抽取是否把正确答案误判掉。能把“全错组”说成“没有比较价值的小组”就已经抓到重点了。</p>
+      </details>
+    </div>
+    <div class="q" data-question="q7" data-group="手算与比较" data-title="单选：128 条 completion 的分配" data-answer="B" data-explain="如果你更需要从同题里挖出少量正确路径，16 题每题 8 条通常更适合组内比较。">
+      <div class="q-meta"><span class="pill">diagnostic</span><span class="pill">efficiency</span></div>
+      <h3>7. 单选：128 条 completion 的分配</h3>
+      <p>如果你更需要从同题里挖出少量正确路径，哪种分配更合适？</p>
+      <label><input type="radio" name="q7" value="A"> 64 题每题 2 条</label>
+      <label><input type="radio" name="q7" value="B"> 16 题每题 8 条</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q full" data-question="q8" data-group="手算与比较" data-title="诊断：reward 上升但评测不涨">
+      <div class="q-meta"><span class="pill">diagnostic</span><span class="pill">failure</span></div>
+      <h3>8. 诊断：reward 上升但评测不涨</h3>
+      <p>reward 均值上升，但 held-out 评测不涨，甚至变差。写出三个可能原因，并说明你会先看哪一个日志字段。</p>
+      <p class="solve-note">答案目标：把问题归因到验证器、格式过拟合、训练题污染或采样偏差。</p>
+      <textarea name="q8" placeholder="列 3 个原因，再写第一个检查项。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>常见原因包括：验证器有漏洞、模型开始只刷格式、训练题和评测题过近、采样太保守导致看起来 reward 高但没有真正探索。第一步通常先看 reward 分布和高 reward 样本，再去检查 held-out 题是否被污染。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、状态与失败路径</h3>
+      <p>把错误定位到采样、奖励、baseline 还是更新环节。</p>
+    </div>
+    <div class="quick-review"><b>review</b><span>先定位层级，再谈修正动作。</span></div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q9" data-group="状态与失败路径" data-title="多选：advantage 极端大可能意味着什么">
+      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">state</span></div>
+      <h3>9. 多选：advantage 极端大可能意味着什么</h3>
+      <p>选择更合理的原因。</p>
+      <label><input type="checkbox" name="q9" value="reward 标准差太小"> reward 标准差太小</label>
+      <label><input type="checkbox" name="q9" value="异常样本太多"> 异常样本太多</label>
+      <label><input type="checkbox" name="q9" value="baseline 把不该比较的东西也压进去了"> baseline 把不该比较的东西也压进去了</label>
+      <label><input type="checkbox" name="q9" value="KL 一定坏了"> KL 一定坏了</label>
+      <details><summary>展开反馈</summary><p>更合理的是前三项。advantage 极端大常常不是“模型突然很强”，而是 reward 尺度太窄、异常值太多，或者 baseline 选错了比较对象。KL 可能后面也会受影响，但不是第一层原因。</p></details>
+    </div>
+    <div class="q" data-question="q10" data-group="状态与失败路径" data-title="单选：先查哪一层" data-answer="B" data-explain="先看采样和组内差异，很多高方差问题在这里就已经能解释了。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">variance</span></div>
+      <h3>10. 单选：先查哪一层</h3>
+      <p>如果训练曲线抖得很厉害，最先该查哪一层？</p>
+      <label><input type="radio" name="q10" value="A"> optimizer 动量</label>
+      <label><input type="radio" name="q10" value="B"> reward 分布、组内方差和无效 completion 比例</label>
+      <label><input type="radio" name="q10" value="C"> 学习率余弦退火</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q11" data-group="状态与失败路径" data-title="诊断：样本效率差怎么回事">
+      <div class="q-meta"><span class="pill">diagnostic</span><span class="pill">efficiency</span></div>
+      <h3>11. 诊断：样本效率差怎么回事</h3>
+      <p>如果有效 rollout 率很低，但总生成 token 很高，你会先改哪一项？请写出顺序。</p>
+      <p class="solve-note">答案目标：优先改能减少无效样本的地方，而不是先动优化器。</p>
+      <textarea name="q11" placeholder="写出 2-3 个动作，按先后顺序排列。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>通常顺序是：先查样本是否被截断或格式错误，再查 temperature / top-p / max_new_tokens，随后再看题目是否过难、reward 是否太稀疏。有效 rollout 率低时，先降低无效样本通常比先调学习率更有用。</p>
+      </details>
+    </div>
+    <div class="q full" data-question="q12" data-group="状态与失败路径" data-title="设计：一个最小实验">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">experiment</span></div>
+      <h3>12. 设计：一个最小实验</h3>
+      <p>设计一个小型数学推理 RL 实验的采样与优势估计方案。必须包含：每题采样数、temperature / top-p、reward 形式、baseline、至少 3 个诊断指标。</p>
+      <p class="solve-note">答案目标：让采样、奖励和日志连在一起，而不是只写一串参数。</p>
+      <textarea name="q12" placeholder="写你的实验方案。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好答案应当把采样数和题目难度绑在一起，把 reward 形式和可验证条件绑在一起，把 baseline 和组内均值或标准化绑在一起。诊断指标至少要有有效 rollout 率、组内 reward 方差和 held-out 评测；更好的答案还会补上 all-wrong group rate、positive advantage token cost 和高 reward 样本抽检。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><a href="https://arxiv.org/html/2501.12948v1">DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning</a>：这页的总主线，说明推理训练为什么会围绕采样、奖励和自我改进来组织。</li>
+  <li><a href="https://huggingface.co/docs/trl/main/en/grpo_trainer">TRL GRPO Trainer</a>：用来对照 `num_generations`、reward 归一化和组内比较这些实现词汇。</li>
+  <li><a href="https://github.com/huggingface/open-r1">huggingface/open-r1</a>：帮助理解公开复现如何拆分 SFT、GRPO、评测和数据生成。</li>
+  <li><a href="https://github.com/verl-project/verl">verl / HybridFlow</a>：帮助理解 rollout、reward、baseline 和更新在训练环里怎样分工。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

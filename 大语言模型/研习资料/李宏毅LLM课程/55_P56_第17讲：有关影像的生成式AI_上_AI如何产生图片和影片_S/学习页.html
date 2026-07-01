@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>55_P56｜第17讲：有关影像的生成式 AI（上）：AI 如何产生图片和影片</title>
+  <link rel="stylesheet" href="../../../../assets/study-page.css">
+</head>
+<body data-study-kind="media" data-feynman-keywords="SORA、condition、文字生图、文字生影片、pixel、frame、FPS、patch、encoder、decoder、Transformer、attention、CLIP、ControlNet、talking head、spatial attention、temporal attention、伪3D attention、流水线">
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <strong>55_P56</strong>
+      <span>第17讲：有关影像的生成式 AI（上）<br>核心讲义 · 李宏毅生成式 AI 课程</span>
+    </div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>学习目标</a>
+      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
+      <a href="#terms"><span class="dot"></span>术语表</a>
+      <a href="#lecture"><span class="dot"></span>讲义主线</a>
+      <a href="#source"><span class="dot"></span>影像线索</a>
+      <a href="#example"><span class="dot"></span>最小例子</a>
+      <a href="#viz"><span class="dot"></span>交互观察</a>
+      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>自学记录</a>
+    </nav>
+    <div class="side-note">读这一节时，先抓住两件事：影像要先变成模型能处理的 patch，影片生成的难点主要来自 patch 数量和 attention 计算量。</div>
+  </aside>
+  <main>
+    <section class="hero" id="goal">
+      <div>
+        <div class="kicker">LI HONGYI LLM · 核心讲义</div>
+        <h1>第17讲：有关影像的生成式 AI（上）：AI 如何产生图片和影片</h1>
+        <p>这一讲先把“跟影像有关的生成式 AI”分成两类：一类是把图片或影片当作 condition，让模型产生文字或其他回应；另一类是把图片或影片本身当作目标输出。本页聚焦第二类，也就是文字、草图、姿态、录音、旧影片等条件如何驱动模型生成新的图片或影片。</p>
+        <p>课程的关键不是记住 SORA 很厉害，而是看懂它背后的工程抽象：图片由 pixel 组成，影片由 frame 组成，但现代生成模型通常不会直接处理像素，而是先用 encoder 把影像压成 patch，再让 Transformer 等模型在 patch 序列上生成、对齐和建模。影片只是“更多 patch”，但更多到足以把普通 attention 变成天文数字，所以才需要空间、时间、伪 3D attention 与分阶段流水线。</p>
+        <div class="map"><span class="node">condition</span><span class="arrow">→</span><span class="node">pixel / frame</span><span class="arrow">→</span><span class="node">encoder 压成 patch</span><span class="arrow">→</span><span class="node">Transformer + attention</span><span class="arrow">→</span><span class="node">decoder 还原影像</span></div>
+        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=56">https://www.bilibili.com/video/BV1JKoeBiEt4?p=56</a></p>
+      </div>
+      <div class="route">
+        <h3>学完后要能做五件事</h3>
+        <ol><li>区分“影像作为输入条件”和“影像作为生成目标”。</li><li>解释 SORA、talking head、ControlNet、个人化生图各自用了什么 condition。</li><li>说明 pixel、frame、FPS、patch、encoder、decoder 在影像生成链路里的角色。</li><li>比较文字生图中的自回归 patch 接龙、非自回归并行生成和 CLIP score 评估。</li><li>用数量级解释为什么文字生影片难，并说出 spatial、temporal、伪 3D attention 和流水线如何降成本。</li></ol>
+      </div>
+    </section>
+
+    <section id="skeleton">
+      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
+      <div class="grid3">
+        <div class="box soft"><h3>先看输入条件</h3><p>生成式 AI 总是在某个 condition 下生成东西。图片理解任务里，图片或影片是 condition；影像生成任务里，文字、草图、姿态、录音、低清影片或少量参考图都可以成为 condition。</p><p>判断句：看到一个影像生成应用，先问“它拿什么当条件”，不要急着问模型名字。</p></div>
+        <div class="box"><h3>再看影像表示</h3><p>人看到的是完整图片和连续影片，模型常看到的是一排 patch。encoder 把高维 pixel 或 frame 压缩成较短的 patch 表示，Transformer 在这些 patch 上建模，decoder 再把 patch 还原成图片或影片。</p><p>判断句：patch 不是简单把解析度调低；它通常来自神经网络压缩，保留了可还原的语义和局部信息。</p></div>
+        <div class="box warn"><h3>最后看规模瓶颈</h3><p>一张图的 patch 已经不少，一分钟影片会变成数百万个 patch。若所有 patch 两两做 attention，复杂度按平方增长，这就是文字生影片比文字生图难很多的核心原因。</p><p>判断句：影片生成的关键问题不是“会不会画”，而是“怎样在可承受计算量内保持空间一致和时间连贯”。</p></div>
+      </div>
+      <div class="mini-graph">
+        <div class="box"><h3>应用层</h3><p>SORA 文字生影片、影片续写、老片修复、talking head、ControlNet 控制生成。</p></div>
+        <div class="box"><h3>资料层</h3><p>文字-图片配对、视频-文字配对、少量个人化参考图，以及可能有版权风险的大规模网络资料。</p></div>
+        <div class="box"><h3>表示层</h3><p>pixel 与 frame 先被 encoder 压成 patch，二维图片和三维影片都变成序列。</p></div>
+        <div class="box"><h3>计算层</h3><p>attention 负责让 patch 彼此参考；影片中要在空间一致和时间连贯之间降成本。</p></div>
+      </div>
+    </section>
+
+    <section id="terms">
+      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
+      <table class="metric-table">
+        <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
+        <tr><td>condition</td><td>生成时给模型的约束或线索。</td><td>可以是文字、图片、影片、草图、姿态、录音、低清影像或少量参考图。</td><td>以为 condition 只能是 prompt 文字。</td></tr>
+        <tr><td>pixel</td><td>图片的颜色小点。</td><td>图片由二维像素网格构成，解析度越高像素越多。</td><td>以为模型一定逐像素生成图片。</td></tr>
+        <tr><td>frame / FPS</td><td>影片中的一张图，以及每秒有多少张图。</td><td>影片是按时间排列的一串 frame；FPS 越高通常越流畅。</td><td>只看单张 frame 质量，忘记影片还要连续。</td></tr>
+        <tr><td>patch</td><td>模型眼中的影像小块。</td><td>encoder 把图片或影片切块并压缩成 token 或低维向量；影片 patch 还可能覆盖一段时间。</td><td>把 patch 当成普通马赛克或简单降采样。</td></tr>
+        <tr><td>encoder / decoder</td><td>压缩影像和还原影像的一对模块。</td><td>encoder 将高维影像变成 patch 表示；decoder 根据 patch 与上下文还原清晰影像。</td><td>以为 decoder 只是把小图机械放大。</td></tr>
+        <tr><td>patch 接龙</td><td>像文字接龙一样一个 patch 接一个 patch 地生成。</td><td>自回归影像生成会把已生成 patch 放回上下文，再预测下一个 patch。</td><td>以为这是文字生图的主流做法。</td></tr>
+        <tr><td>非自回归生成</td><td>很多 patch 同时生成。</td><td>同一个 Transformer 可同时接收多个位置请求，让各位置通过 attention 互相参考。</td><td>以为并行生成就意味着 patch 之间完全没关系。</td></tr>
+        <tr><td>CLIP / CLIP score</td><td>让另一个模型判断图文是否匹配。</td><td>CLIP 由正确和错误图文配对训练而来；生成图片后可用输入文字和图片的匹配分数做自动评估。</td><td>以为 CLIP score 高就等于人类一定满意。</td></tr>
+        <tr><td>spatial / temporal attention</td><td>分别看空间关系和时间关系。</td><td>spatial attention 看同一 frame 内 patch 关系；temporal attention 看不同 frame 同位置 patch 的时间关系。</td><td>只用其中一种就宣称能解决影片一致性。</td></tr>
+      </table>
+      <p class="checkpoint">读完这一段，你应该能把“输入条件、影像表示、生成方式、评估方式、影片降成本”放进同一条链。</p>
+    </section>
+
+    <section id="lecture">
+      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>1. 影像相关生成式 AI 有两条路</h3>
+          <p>课程开头先拆概念：跟影像有关，不代表都是“生成图片”。第一条路是让影像当输入条件，例如把照片交给 GPT-4o，让它描述人物穿着、猜职业、回答图片相关问题。这时输出可能是文字，影像只是 condition。</p>
+          <p>第二条路才是本讲重点：输出目标本身是图片或影片。你给模型一段文字、一个草图、一张参考照片、一段录音、一段低清影片或一个姿态骨架，模型要生成对应的影像。后面所有机制都围绕这条路展开。</p>
+          <p>区分这两条路很重要，因为“看图说话”和“凭条件造图”对模型能力的要求不同。前者侧重理解和描述，后者要补出大量输入没有明说的视觉细节，还要让结果在空间和时间上自洽。</p>
+        </div>
+        <div class="box">
+          <h3>2. SORA 示例说明“能生成”不等于“完全懂物理”</h3>
+          <p>SORA 的 demo 展示了文字生影片的震撼效果：例如小怪物看着红色蜡烛融化，或者纽约街道沉在海底。这些场景现实中不太会出现，所以比普通街景更能说明模型不是只在训练集里复制一段现成影片。</p>
+          <p>但课程也特别提醒：SORA 的影片仍有瑕疵。墙面可能不自然地移动，水生生物可能从海龟变成鱼，狼崽可能越变越多，考古学家挖出的塑胶椅还会跑掉。这些错误说明模型可以产生很拟真的局部画面，却仍可能在物体恒定性、时间连续性和因果关系上犯错。</p>
+          <p>学习到这里，你应该能做一件事：评价影像生成模型时，不能只看单帧清晰度，还要看同一物体在时间中是否保持身份、位置、数量和运动逻辑。</p>
+        </div>
+      </div>
+      <div class="grid3" style="margin-top:12px">
+        <div class="box soft"><h3>3. 应用不是只有文字生图</h3><p>影片生影片可以做续写、风格转换、黑白影片上色、老电影修复和画质提升。talking head 则把录音和照片结合起来，预测人物说话时的嘴形和脸部变化。</p><p>ControlNet 代表另一类思路：给模型更多结构化条件，例如草图、姿态、边缘或深度，让它不是只靠文字猜画面。你现在应该能按 condition 类型整理应用。</p></div>
+        <div class="box warn"><h3>4. pixel 和 frame 是人的直观单位</h3><p>图片由 pixel 组成，像素越多通常越清楚。影片由一张张 frame 组成，FPS 表示每秒有多少张图。YouTube 常见影片约 24 FPS，游戏则常希望 60 FPS 才更流畅。</p><p>这些概念看似基础，却是后面数量级计算的起点：影片不是“一个文件”，而是大量图片按时间排列。</p></div>
+        <div class="box"><h3>5. patch 是模型真正处理的影像单位</h3><p>直接处理像素太复杂，所以现代模型常先用 encoder 把图片切成 patch 并压缩。patch 可以是离散符号，也可以是低维向量。图片原本是 2D，但送进 Transformer 前常被拉直成一排 patch。</p><p>decoder 不是简单把 4x4 小图放大，而是神经网络，会参考邻近甚至全局 patch 还原出清晰图片。</p></div>
+        <div class="box soft"><h3>6. 影片 patch 还压缩时间维度</h3><p>影片比图片多了时间维度。除了高和宽，encoder 还可以把相邻 frame 同位置的 patch 合并，形成 video patch。一个 video patch 可能对应一小段宽、一小段高和一小段时间。</p><p>SORA 官方图示虽然没有公开细节，但从图中可以看出类似 patch 的影像表示：影片经过 encoder 变成 patch，再进入生成模型。</p></div>
+        <div class="box warn"><h3>7. 文字生图训练依赖图文配对</h3><p>要训练模型读文字生图片，需要大量“图片 + 文字叙述”的配对资料。课程提到 LAION 这类大规模数据集，规模可到数十亿张图，并可能来自网络爬取和后处理。</p><p>这里要同时看到能力和风险：大规模资料让模型见过各种文字-影像对应关系，但资料来源、版权、成人内容过滤和图文是否真的匹配，都会影响训练和使用边界。</p></div>
+        <div class="box"><h3>8. 影片生成靠降成本而不是硬算到底</h3><p>文字生影片可视为生成更多 patch，但完整 3D attention 会让所有 patch 两两交互，成本随 patch 数平方爆炸。课程用一分钟、24 FPS、每帧 64x64 patch 的例子算出约 600 万 patch，完整 attention 约 36 兆次。</p><p>因此常见做法是把 spatial attention 和 temporal attention 交替叠加，形成伪 3D attention；再用多个模型组成流水线，逐步提高解析度和 FPS。</p></div>
+      </div>
+      <div class="box greenbox" style="margin-top:12px">
+        <h3>完整知识链路</h3>
+        <p>把本节串起来，可以这样讲：影像生成模型先接受某种 condition，例如文字、草图、姿态、录音或参考图。图片和影片本身先由 pixel、frame 和 FPS 描述，但模型通常用 encoder 把它们压成 patch 序列，再用 Transformer、attention 或其他生成模型在 patch 表示上工作，最后交给 decoder 还原。文字生图可以想象成 patch 接龙，但主流生成常常更偏向并行或多步生成；生成结果可以用人类评价，也可以用 CLIP score 这类模型评价。文字生影片在原理上是生成更多 patch，但难点在 attention 计算量和时间一致性，所以需要 spatial / temporal / 伪 3D attention，以及先低清低帧率再逐步超分辨率、补帧的流水线。你现在应该能把任意影像生成 demo 拆成 condition、表示、生成、评估、降成本五层。</p>
+      </div>
+    </section>
+
+    <section id="source">
+      <div class="head"><h2>影像线索</h2><span class="tag">线索</span></div>
+      <p class="muted">下面把字幕中的关键段落重写成学习线索。它们不是逐字稿堆叠，而是帮你回到课程原始论证。</p>
+      <div class="source-lines">
+        <div class="box"><h3>线索 1：condition 是总入口</h3><p>字幕反复说生成式 AI 有输入和 condition，并根据 condition 生成东西。本讲把 condition 扩展到文字、影片、录音、照片、草图、姿态、低清影像和少量参考图。</p><p class="checkpoint">你现在应该能先识别一个系统的 condition，再判断它是看图生成文字，还是生成图片或影片。</p></div>
+        <div class="box"><h3>线索 2：SORA 的震撼和瑕疵要一起看</h3><p>课程选了现实中少见的场景说明 SORA 可能创造新画面，也选了墙面移动、生物变形、狼崽增殖、椅子跑掉等瑕疵说明视频生成还会失去时间一致性。</p><p class="checkpoint">你现在应该能评价一个视频 demo 的空间质量、时间连贯和物体恒定性。</p></div>
+        <div class="box"><h3>线索 3：图片不是直接丢像素</h3><p>字幕强调现代模型通常不会直接处理像素，而是用 encoder 把图片切成 patch 并压缩，再把二维 patch 拉直成序列给 Transformer 处理。</p><p class="checkpoint">你现在应该能解释为什么 patch 不是“低解析度小格子”。</p></div>
+        <div class="box"><h3>线索 4：文字生图可以类比文字接龙，但不止接龙</h3><p>用图文配对资料训练时，可以想象 Transformer 看到文字后一个 patch 接一个 patch 生成；但课程也说明文字生图很少真的靠这种自回归方式，更多时候会同时生成多个 patch，让 attention 处理相互关系。</p><p class="checkpoint">你现在应该能区分“帮助理解的自回归类比”和“实际常用的并行或多步生成”。</p></div>
+        <div class="box"><h3>线索 5：CLIP 把图文匹配变成分数</h3><p>CLIP 用正确图文配对给高分、随机错配给低分的方式训练。生成图像后，把原始文字和生成图一起交给 CLIP，可得到 CLIP score 作为自动评估参考。</p><p class="checkpoint">你现在应该能说明 CLIP score 是方便指标，但不能完全替代人类判断。</p></div>
+        <div class="box"><h3>线索 6：影片难在 attention 成本</h3><p>一分钟影片在 24 FPS、每帧 64x64 patch 的假设下约有 600 万 patch。若做完整 3D attention，需要约 36 兆次两两关系计算，所以研究会改造 attention 或拆成多阶段流水线。</p><p class="checkpoint">你现在应该能用数量级解释为什么文字生影片比文字生图难。</p></div>
+      </div>
+    </section>
+
+    <section id="example">
+      <div class="head"><h2>最小例子</h2><span class="tag">EXAMPLE</span></div>
+      <p>这里用伪代码把课程主线压到最小。它不是某个真实模型的源码，而是帮你看清“条件、patch、attention、评估、解码”的顺序。</p>
+      <div class="codebar"><span class="label">最小示例：文字生图的 patch 流程</span><span class="kind">python</span></div>
+      <pre><code>text = &quot;一只奔跑的狗，在草地上&quot;
+condition = text_encoder(text)
+
+positions = make_patch_positions(height=4, width=4)
+patches = transformer_generate(condition, positions)
+
+image = image_decoder(patches)
+score = clip_score(text, image)
+review = human_check(image, checks=[&quot;是否像狗&quot;, &quot;是否在奔跑&quot;, &quot;背景是否合理&quot;])</code></pre>
+      <div class="grid2">
+        <div class="box soft"><h3>逐行理解</h3><p><code>text_encoder</code> 把文字条件变成模型可用的表示；<code>make_patch_positions</code> 告诉模型要生成哪些位置的 patch；<code>transformer_generate</code> 不是画像素，而是在 patch 表示上工作；<code>image_decoder</code> 再把 patch 还原成图片。</p><p><code>clip_score</code> 代表自动评估：看生成图片和文字是否匹配。最后还保留 <code>human_check</code>，因为 CLIP 分数无法完全判断美感、细节、物体数量和真实使用风险。</p></div>
+        <div class="box warn"><h3>和字幕的对应</h3><p>字幕先用“文字接龙”帮你类比 patch 接龙，再提醒影像生成常常并不一个 patch 一个 patch 等待，而是同时生成许多 patch，并靠 attention 让不同位置互相参考。</p><p>你现在应该能做的事：把这个流程改成 talking head 或 ControlNet 的版本，只替换 condition，不改“表示、生成、解码、评估”的骨架。</p></div>
+      </div>
+      <div class="codebar"><span class="label">最小示例：文字生影片的规模估算</span><span class="kind">python</span></div>
+      <pre><code>fps = 24
+seconds = 60
+patches_per_frame = 64 * 64
+
+frames = fps * seconds
+video_patches = frames * patches_per_frame
+full_3d_attention = video_patches ** 2
+
+spatial_attention = frames * (patches_per_frame ** 2)
+temporal_attention = patches_per_frame * (frames ** 2)
+pseudo_3d_attention = spatial_attention + temporal_attention</code></pre>
+      <div class="box"><h3>读懂计算</h3><p>在字幕设定下，一分钟影片有 1440 个 frame，每个 frame 有 4096 个 patch，总数约 600 万。完整 3D attention 要让所有 patch 两两相看，约 36 兆次。把 spatial attention 和 temporal attention 分开做，约为 240 亿加 85 亿，仍然很大，但比完整 3D 小了约千倍。</p><p>你现在应该能解释：影片生成的“难”不是抽象地难，而是 patch 数量和 attention 平方复杂度把成本推高。</p></div>
+      <div class="box info" style="margin-top:12px">
+        <h3>Worked example：30 秒影片为什么也很重</h3>
+        <p>假设影片 30 秒、24 FPS，每帧压成 <code>64 × 64 = 4096</code> 个 patch。frame 数是 <code>30 × 24 = 720</code>，总 patch 数是 <code>720 × 4096 = 2,949,120</code>，约 295 万。</p>
+        <p>如果做完整 3D attention，要比较约 <code>2,949,120²</code> 个 patch 关系，也就是约 8.7 兆次。即使只生成半分钟，也已经不是“比图片多一点”的量级。你现在应该能看到：影片生成必须用 attention 分解、低清草稿、超分辨率、补帧等流水线来降成本。</p>
+      </div>
+    </section>
+
+    <section id="viz">
+      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
+      <div class="viz-panel">
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <h3>影片 patch 规模</h3>
+            <div class="slider-row"><span>影片秒数</span><input id="complexity" type="range" min="5" max="60" value="20"><b id="complexityOut">20</b></div>
+            <div class="demo-meter"><div class="demo-fill" id="complexityFill"></div></div>
+            <p id="complexityText" class="checkpoint"></p>
+          </div>
+          <div class="viz-cell">
+            <h3>attention 简化</h3>
+            <div class="seg">
+              <button data-check="loose" class="active">完整 3D</button>
+              <button data-check="normal">spatial + temporal</button>
+              <button data-check="strict">流水线生成</button>
+            </div>
+            <p id="checkText" class="checkpoint"></p>
+          </div>
+        </div>
+      </div>
+      <p>观察重点：影片时长、FPS、每帧 patch 数都会放大计算量。完整 3D attention 最直观但最贵；spatial + temporal 分解用较低成本近似三维关系；流水线则把难任务拆成低清生成、超分辨率、补帧等小任务。</p>
+    </section>
+
+    <section id="diagnosis">
+      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
+      <div class="grid2">
+        <div class="box redsoft">
+          <h3>常见坑</h3>
+          <ol><li>把“影像作为 condition”和“生成影像”混为一谈。错因：只看输入里有没有图片。后果：解释不清任务目标。修法：先问输出是不是图片或影片。</li><li>把 patch 当成简单马赛克。错因：忽略 encoder / decoder 是神经网络。后果：误以为还原结果只能是低清小格子。修法：说明 patch 是压缩表示，decoder 会参考上下文还原。</li><li>以为文字生图主流就是 patch 接龙。错因：把类比当事实。后果：无法解释并行生成和 attention 的作用。修法：区分自回归类比与非自回归、多步生成。</li><li>只用单帧清晰度评价影片。错因：把影片当图片集合。后果：漏掉物体变形、数量变化和运动不连续。修法：加入时间一致性检查。</li><li>把 CLIP score 当最终真理。错因：忘记它也是模型评估。后果：图文匹配分高但细节、版权、审美或安全仍有问题。修法：CLIP 作为筛选，人类和任务指标做最终验收。</li><li>说“Transformer 很强所以能直接生成长视频”。错因：忽略 attention 平方复杂度。后果：看不懂为什么需要 attention 简化和流水线。修法：用 patch 数量级重新估算。</li></ol>
+        </div>
+        <div class="box">
+          <h3>易混概念</h3>
+          <table class="metric-table">
+            <tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr>
+            <tr><td>pixel</td><td>patch</td><td>pixel 是原始颜色点；patch 是压缩后的模型表示。</td></tr>
+            <tr><td>frame</td><td>video patch</td><td>frame 是某一时刻的完整图片；video patch 可覆盖局部空间和一段时间。</td></tr>
+            <tr><td>spatial attention</td><td>temporal attention</td><td>前者看同一帧内空间关系；后者看跨帧时间关系。</td></tr>
+            <tr><td>CLIP 评估</td><td>人类评估</td><td>CLIP 快速、可批量；人类更能判断细节、审美、常识和任务风险。</td></tr>
+            <tr><td>一次生成</td><td>流水线生成</td><td>一次生成直接产最终结果；流水线先粗后细，逐步提高解析度或帧率。</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
+      <div class="practice-intro">
+        <div class="review-card"><strong>作答前先抓主线</strong><p>先写 condition，再写影像如何变成 patch，接着写模型如何生成，最后写评估与影片降成本。开放题优先给可检查的判断。</p></div>
+        <div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起 SORA、condition、pixel、frame、patch、encoder、decoder、Transformer、attention、CLIP 和流水线。</p></div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>这一组先检查术语和边界。答案短一点也可以，但要说准。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. 只要任务里出现图片或影片，它就一定是在生成图片或影片。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. 只要任务里出现图片或影片，它就一定是在生成图片或影片。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
+          <div class="q" data-role="homework" data-title="2. 下列哪一项最像 SORA demo 的核心任务？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. 下列哪一项最像 SORA demo 的核心任务？</h3><div class="choices"><label><input type="radio" name="q2" value="根据文字描述产生影片">根据文字描述产生影片</label><label><input type="radio" name="q2" value="把图片转成文字摘要">把图片转成文字摘要</label><label><input type="radio" name="q2" value="只判断照片里谁比较帅">只判断照片里谁比较帅</label></div></div>
+          <div class="q short" data-role="homework" data-title="3. 填空：图片由 ______ 构成，影片由一串 ______ 构成，每秒帧数叫 ______。"><div class="q-meta"><span class="pill">填空</span></div><h3>3. 填空：图片由 ______ 构成，影片由一串 ______ 构成，每秒帧数叫 ______。</h3><input type="text" name="q3"></div>
+          <div class="q short" data-role="homework" data-title="4. 用 1-2 句话解释 condition，并举一个本讲例子。"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 用 1-2 句话解释 condition，并举一个本讲例子。</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、主线理解</h3><p>这一组要求你把概念连成一条可复述的链路。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="5. 把文字生图流程排成顺序：decoder 还原、文字 condition、encoder/patch 表示、Transformer 生成 patch、CLIP 或人类评估。"><div class="q-meta"><span class="pill">排序</span></div><h3>5. 把文字生图流程排成顺序：decoder 还原、文字 condition、encoder/patch 表示、Transformer 生成 patch、CLIP 或人类评估。</h3><textarea name="q5"></textarea></div>
+          <div class="q short" data-role="homework" data-title="6. 区分“影像作为 condition”和“生成影像作为目标”。"><div class="q-meta"><span class="pill">对照</span></div><h3>6. 区分“影像作为 condition”和“生成影像作为目标”，各举一个例子。</h3><textarea name="q6"></textarea></div>
+          <div class="q short" data-role="homework" data-title="7. 为什么 patch 不是简单把图片解析度调低？"><div class="q-meta"><span class="pill">解释</span></div><h3>7. 为什么 patch 不是简单把图片解析度调低？</h3><textarea name="q7"></textarea></div>
+          <div class="q short" data-role="homework" data-title="8. 写出 talking head 的两个输入条件和一个输出目标。"><div class="q-meta"><span class="pill">场景</span></div><h3>8. 写出 talking head 的两个输入条件和一个输出目标。</h3><input type="text" name="q8"></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、例子与计算</h3><p>这一组把伪代码和数量级计算转成可检查的问题。</p></div><div class="quick-review"><b>REMIND</b>能算出数量级，比只说“很多”更有判断力。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="9. 伪代码里的 clip_score 检查了什么？它不能检查什么？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>9. 伪代码里的 <code>clip_score</code> 检查了什么？它不能检查什么？</h3><textarea name="q9"></textarea></div>
+          <div class="q short" data-role="homework" data-title="10. 按课程设定计算：一分钟、24 FPS、每帧 64x64 patch，大约有多少 patch？"><div class="q-meta"><span class="pill">计算</span></div><h3>10. 按课程设定计算：一分钟、24 FPS、每帧 64x64 patch，大约有多少 patch？</h3><textarea name="q10"></textarea></div>
+          <div class="q short" data-role="homework" data-title="11. 为什么完整 3D attention 会到约 36 兆次计算？"><div class="q-meta"><span class="pill">计算解释</span></div><h3>11. 为什么完整 3D attention 会到约 36 兆次计算？</h3><textarea name="q11"></textarea></div>
+          <div class="q" data-role="homework" data-title="12. CLIP score 高，就代表图片在所有人类标准下都已经合格。"><div class="q-meta"><span class="pill">判断</span></div><h3>12. CLIP score 高，就代表图片在所有人类标准下都已经合格。</h3><div class="choices"><label><input type="radio" name="q12" value="对">对</label><label><input type="radio" name="q12" value="错">错</label></div></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、错误诊断</h3><p>这一组按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="13. 有人说 patch 就是把图像变成低清马赛克。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 有人说 patch 就是把图像变成低清马赛克。错因、后果、修法是什么？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q13"></textarea></div>
+          <div class="q short" data-role="homework" data-title="14. 有人看 SORA 单帧很清楚，就断言影片完全可靠。错在哪里？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. 有人看 SORA 单帧很清楚，就断言影片完全可靠。错在哪里？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q14"></textarea></div>
+          <div class="q short" data-role="homework" data-title="15. 有人说只用 spatial attention 就够做长视频。请诊断。" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 有人说只用 spatial attention 就够做长视频。请诊断。</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q15"></textarea></div>
+          <div class="q short" data-role="homework" data-title="16. 个人化生图时，有人把特殊物件命名为 dog。为什么不建议这样做？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 个人化生图时，有人把特殊物件命名为 dog。为什么不建议这样做？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q16"></textarea></div>
+          <div class="q short" data-role="homework" data-title="17. 有人说开源图文数据集能用就一定没有版权或资料质量风险。请诊断。" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>17. 有人说开源图文数据集能用就一定没有版权或资料质量风险。请诊断。</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q17"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>五、场景迁移</h3><p>这一组检查你能不能换个场景继续判断。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="18. 如果用 ControlNet 根据草图生成精细图片，你会怎样描述 condition、输出和验收？"><div class="q-meta"><span class="pill">应用</span></div><h3>18. 如果用 ControlNet 根据草图生成精细图片，你会怎样描述 condition、输出和验收？</h3><textarea name="q18"></textarea></div>
+          <div class="q short" data-role="homework" data-title="19. 做老电影修复时，输入条件、目标输出和主要风险分别是什么？"><div class="q-meta"><span class="pill">应用</span></div><h3>19. 做老电影修复时，输入条件、目标输出和主要风险分别是什么？</h3><textarea name="q19"></textarea></div>
+          <div class="q short" data-role="homework" data-title="20. 个人化图像生成为什么只用少量参考图也可能工作？特殊 token 起什么作用？"><div class="q-meta"><span class="pill">迁移</span></div><h3>20. 个人化图像生成为什么只用少量参考图也可能工作？特殊 token 起什么作用？</h3><textarea name="q20"></textarea></div>
+          <div class="q short" data-role="homework" data-title="21. 如果你要生成一分钟视频，你会选择完整 3D attention、伪 3D attention 还是流水线？说明理由。"><div class="q-meta"><span class="pill">决策</span></div><h3>21. 如果你要生成一分钟视频，你会选择完整 3D attention、伪 3D attention 还是流水线？说明理由。</h3><textarea name="q21"></textarea></div>
+          <div class="q short" data-role="homework" data-title="22. 写出 5 条验收文字生影片结果的检查清单。"><div class="q-meta"><span class="pill">清单</span></div><h3>22. 写出 5 条验收文字生影片结果的检查清单。</h3><textarea name="q22"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>六、表达输出</h3><p>最后两题检查你能不能讲给别人听。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="23. 如果面试官问“AI 如何产生图片和影片”，你用 4 句话怎么答？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>23. 如果面试官问“AI 如何产生图片和影片”，你用 4 句话怎么答？</h3><textarea name="q23"></textarea></div>
+          <div class="q full" data-role="homework" data-title="24. 用 6-9 句话讲清楚本讲主线。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>24. 用 6-9 句话讲清楚本讲主线。请串联 SORA、condition、pixel、frame、patch、encoder、decoder、Transformer、attention、CLIP 和流水线。</h3><div class="solve-note">先说应用，再说影像表示和生成方式，最后说影片瓶颈、评估和降成本方法。</div><textarea name="q24"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>自学记录</h2><span class="tag">记录</span></div>
+      <p class="muted">完成练习后生成记录，方便回看订正。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+
+<script src="../../../../assets/study-page.js"></script>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){
+  const max=document.documentElement.scrollHeight-innerHeight;
+  progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";
+  let current=sections[0]?.id;
+  for(const section of sections){
+    const rect=section.getBoundingClientRect();
+    if(rect.top<innerHeight*.36) current=section.id;
+    section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);
+  }
+  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));
+}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+document.querySelectorAll(".codebar").forEach(bar=>{
+  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
+  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});
+  bar.appendChild(btn);
+});
+const complexity=document.getElementById("complexity");
+function updateComplexity(){
+  const value=Number(complexity.value);
+  document.getElementById("complexityOut").textContent=value;
+  document.getElementById("complexityFill").style.width=Math.min(100,value/60*100)+"%";
+  const frames=value*24;
+  const patches=frames*64*64;
+  document.getElementById("complexityText").textContent=`${value} 秒影片约有 ${frames.toLocaleString()} 个 frame、${patches.toLocaleString()} 个 patch；时长增加会让完整 attention 成本按平方放大。`;
+}
+complexity.addEventListener("input",updateComplexity);updateComplexity();
+const checkTexts={
+  loose:"完整 3D attention 让所有空间和时间 patch 两两参考，表达力直观，但一分钟影片的计算量会高到不可承受。",
+  normal:"spatial attention 负责同一帧内一致，temporal attention 负责跨帧连贯；两者交替可近似 3D 关系并大幅降成本。",
+  strict:"流水线把任务拆成低清生成、提高 FPS、超分辨率等小步骤；每个模型只解决一个较窄的问题，最后组合成清晰影片。"
+};
+document.querySelectorAll("[data-check]").forEach(btn=>btn.addEventListener("click",()=>{
+  document.querySelectorAll("[data-check]").forEach(b=>b.classList.toggle("active",b===btn));
+  document.getElementById("checkText").textContent=checkTexts[btn.dataset.check];
+}));
+document.getElementById("checkText").textContent=checkTexts.loose;
+function valueOfQuestion(q){
+  const radio=q.querySelector("input[type=radio]:checked"); if(radio) return radio.value;
+  const text=q.querySelector("textarea,input[type=text],select"); return text?text.value.trim():"";
+}
+function questionGroup(q){return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";}
+function generateRecord(){
+  const qs=[...document.querySelectorAll('[data-role="homework"]')],groups={},warnings=[];
+  qs.forEach((q,i)=>{
+    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";
+    const hint=q.querySelector(".solve-note")?.innerText.trim()||"";
+    const answer=valueOfQuestion(q);
+    if(!answer) warnings.push("第 "+(i+1)+" 题未填写："+title);
+    if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))) warnings.push("第 "+(i+1)+" 题建议补齐“错因 / 后果 / 修法”。");
+    if(q.dataset.type==="feynman"){
+      const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
+      if(answer&&answer.length<120) warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");
+      const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):[];
+      if(lack.length) warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");
+    }
+    const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
+  });
+  let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";
+  Object.keys(groups).forEach(group=>{out+="## "+group+"\n\n";groups[group].forEach(item=>{out+="### "+item.title+"\n";if(item.hint) out+="提示摘要："+item.hint+"\n\n";out+=item.answer+"\n\n";});});
+  document.getElementById("record").textContent=out;
+  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，适合回看订正。";
+}
+function fallbackCopy(text,onOk,onFail){
+  const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";document.body.appendChild(ta);ta.focus();ta.select();
+  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
+}
+function copyText(text,onOk,onFail){
+  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
+  else fallbackCopy(text,onOk,onFail);
+}
+function copyRecord(){
+  copyText(document.getElementById("record").textContent,()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";},()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";});
+}
+</script>
+</body>
+</html>

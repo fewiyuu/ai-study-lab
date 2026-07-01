@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>06｜矩阵乘、Softmax 与 LayerNorm</title>
+  <meta name="description" content="GPU 性能工程第 06 单元：用矩阵乘、Softmax 与 LayerNorm 理解计算密集、带宽密集和归约型算子的性能画像。">
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="GPU 性能工程" data-unit="06｜矩阵乘Softmax与LayerNorm">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>GPU 性能工程</strong>
+        <span>06｜矩阵乘Softmax与LayerNorm</span>
+      </div>
+      <nav>
+<!-- learning-kit:nav:start -->
+<a href="../index.html"><span class="dot"></span>返回课程地图</a>
+<a href="#goals"><span class="dot"></span>学习目标</a>
+<a href="#terms"><span class="dot"></span>术语与误区</a>
+<a href="#profiles"><span class="dot"></span>性能画像</a>
+<a href="#matmul"><span class="dot"></span>矩阵乘</a>
+<a href="#softmax"><span class="dot"></span>Softmax</a>
+<a href="#layernorm"><span class="dot"></span>LayerNorm</a>
+<a href="#compare"><span class="dot"></span>对比与误区</a>
+<a href="#examples"><span class="dot"></span>工程例子</a>
+<a href="#practice"><span class="dot"></span>练习</a>
+<a href="#export"><span class="dot"></span>导出</a>
+<a href="#sources"><span class="dot"></span>参考资料</a>
+<!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">这一页把三个算子压成一张性能账本：矩阵乘看复用，Softmax 看归约和稳定，LayerNorm 看统计量和融合。</div>
+    </aside>
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">算子画像</div>
+          <h1>矩阵乘、Softmax 与 LayerNorm</h1>
+          <p>这一页把三个算子放进同一张性能账本：矩阵乘偏计算密集，Softmax 偏带宽密集，LayerNorm 偏归约和统计。你会沿着形状、读写、复用、数值稳定和融合这几条线，把它们读成可检查的工程判断。学完后，你应该能把这三个算子的性能压力、错误来源和第一优化方向说清楚。</p>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+            <li>区分矩阵乘、Softmax、LayerNorm 各自的依赖模式和瓶颈。</li>
+            <li>解释为什么 Softmax 和 LayerNorm 的 mask / other 不能乱填。</li>
+            <li>读懂一个块级伪代码里统计量、归约和写回的顺序。</li>
+            <li>在 profile 里先判断瓶颈类型，再决定是否融合或调块。</li>
+          </ul>
+        </div>
+      </div>
+<section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goals</span>
+  </div>
+
+      <div class="grid2">
+        <div class="box soft">
+          <h3>把三个算子放进同一张性能账本</h3>
+          <p>这一课的目标不是记住三个 API，而是学会把矩阵乘、Softmax 和 LayerNorm 读成三种不同的性能画像：一个偏计算密集，一个偏带宽密集，一个偏归约与统计量。</p>
+          <p>你需要能说清楚每个算子的读写对象、复用机会、数值风险和第一优化方向，而不是只会说“融合”“调大块”或“用 shared memory”。</p>
+        </div>
+        <div class="box">
+          <h3>本页不追的内容</h3>
+          <ul>
+  <li>不讲完整训练框架，只保留前向性能直觉。</li>
+  <li>不深入 Tensor Core 指令级细节，只抓块级复用和归约路径。</li>
+  <li>不把所有实现都写成伪代码，重点是判断链。</li>
+  <li>不默认任何算子都适合 fusion，先看资源和边界。</li>
+</ul>
+        </div>
+      </div>
+      <div class="check"><b>你现在应该能做什么：</b>拿到一个 profile 结果时，先判断它更像计算瓶颈、带宽瓶颈，还是归约/统计瓶颈。</div>
+    
+</section>
+<section id="terms">
+  <div class="head">
+    <h2>术语与误区</h2>
+    <span class="tag">terms</span>
+  </div>
+
+      <div class="table-wrap">
+  <table data-export-context="06 算子术语与误区" data-export-lang="table">
+    <thead><tr><th>术语</th><th>直觉解释</th><th>精确定义</th><th>常见误解</th></tr></thead>
+    <tbody>
+      <tr><td>算术强度</td><td>搬一次数据能顺手做多少计算。</td><td>FLOPs 与主存访问字节数的比值，常用于 Roofline 分析。</td><td>只看 FLOPs 很大就以为一定快；如果数据复用差，仍可能被带宽限制。</td></tr>
+      <tr><td>tile / block</td><td>把大张量切成小块，让一个程序实例或线程块处理。</td><td>GPU kernel 中用于映射并行任务和局部复用的数据子区域。</td><td>tile 越大越好；实际上过大可能占太多寄存器或共享内存，降低并发。</td></tr>
+      <tr><td>归约</td><td>很多元素合成一个统计量，例如 sum、max、mean、variance。</td><td>沿某个维度把多个输入聚合成更少输出的操作。</td><td>归约只是普通逐元素计算；它需要跨元素通信或局部同步。</td></tr>
+      <tr><td>mask</td><td>告诉 kernel 哪些位置有效，哪些位置越界或需要忽略。</td><td>块级 load/store 或计算中的布尔条件，常用于非整除形状。</td><td>mask 只是防越界；它也影响数值语义和错误值传播。</td></tr>
+      <tr><td>融合</td><td>把多个小步骤放进一个 kernel，少写少读中间结果。</td><td>把原本分开的算子合并执行，减少 kernel launch 与 HBM 往返。</td><td>融合永远更快；融合过度会增加寄存器压力，反而降低 occupancy。</td></tr>
+    </tbody>
+  </table>
+</div>
+      <div class="grid2">
+        <div class="box info"><h3>容易混淆：FLOPs 和吞吐</h3><p>FLOPs 是计算量，吞吐是单位时间完成多少工作。一个算子 FLOPs 多，不代表吞吐高；只有当硬件计算单元被持续喂饱，吞吐才高。</p></div>
+        <div class="box info"><h3>容易混淆：带宽和延迟</h3><p>带宽像单位时间能搬多少货，延迟像第一件货到达前要等多久。大批量连续访问更看带宽，小而散的访问更怕延迟和合并失败。</p></div>
+      </div>
+      <div class="check"><b>你现在应该能做什么：</b>把“算术强度、tile、归约、mask、融合”五个词分别放到最正确的上下文里。</div>
+    
+</section>
+<section id="profiles">
+  <div class="head">
+    <h2>三类性能画像</h2>
+    <span class="tag">profiles</span>
+  </div>
+
+      <div class="grid3">
+        <div class="card "><h3>矩阵乘：复用换吞吐</h3><p><b>形状：</b>C[M,N] = A[M,K] × B[K,N]</p><p><b>压力：</b>大量乘加，A/B tile 可复用，适合 Tensor Core 或向量化路径。</p><p><b>优化抓手：</b>BLOCK_M/N/K、数据布局、共享内存复用、warp 级调度、autotune。</p></div>
+        <div class="card "><h3>Softmax：归约加稳定性</h3><p><b>形状：</b>通常沿最后一维做 exp、sum、除法。</p><p><b>压力：</b>每个元素计算不多，但要读整行、求最大值、再求和并写回。</p><p><b>优化抓手：</b>行级并行、一次读入尽量完成多步、避免中间张量落 HBM。</p></div>
+        <div class="card "><h3>LayerNorm：统计量和仿射</h3><p><b>形状：</b>对每个 token 或样本的隐藏维 H 做均值和方差。</p><p><b>压力：</b>读 x，算 mean/var，归一化，再乘 gamma 加 beta。</p><p><b>优化抓手：</b>一行一个 program、两阶段归约、向量化 load/store、融合残差或 dropout。</p></div>
+      </div>
+      <div class="box info"><h3>判断句</h3><p>如果三个算子都很慢，先不要把它们都归因成“GPU 不够快”。先分清楚是哪种读写、哪种依赖、哪种统计量在拖慢它。</p></div>
+      <div class="check"><b>你现在应该能做什么：</b>看到算子名时，先能说出它更像计算密集、带宽密集还是归约型，并给出一个理由。</div>
+    
+</section>
+<section id="matmul">
+  <div class="head">
+    <h2>矩阵乘：把复用做实</h2>
+    <span class="tag">compute dense</span>
+  </div>
+
+      <div class="grid2">
+        <div>
+          <div class="math-block" data-export-context="06 矩阵乘公式" data-export-lang="math">$C[i,j] = \sum_{k=0}^{K-1} A[i,k] \times B[k,j]$<p>FLOPs ≈ 2 × M × N × K。矩阵乘的核心不是“乘法很多”，而是 A/B tile 会被多个输出复用。</p></div>
+          <p>在 Triton 或 CUDA 的块级实现里，一个 program 通常负责 C 的一个 tile，例如 16×16、32×64 或 128×128。它沿 K 维循环加载 A tile 和 B tile，累加到寄存器或局部 accumulator，最后写回 C。</p>
+        </div>
+        <div class="box info">
+          <h3>判断句</h3>
+          <p>如果矩阵乘很慢，先问三件事：Tensor Core 有没有被用上，A/B tile 有没有复用，M/N/K 的块大小是否让寄存器、共享内存和 occupancy 同时失衡。</p>
+        </div>
+      </div>
+      <div class="shape-tracer" data-shape-tracer>
+  <div class="trace-lines">
+    <button class="trace-line active" data-trace-step="m-step"><code>A/B tile</code><span>A/B 子块进入片上存储</span></button>
+    <button class="trace-line" data-trace-step="k-step"><code>dot</code><span>沿 K 维做累加</span></button>
+    <button class="trace-line" data-trace-step="c-step"><code>acc</code><span>寄存器累加 C tile</span></button>
+    <button class="trace-line" data-trace-step="w-step"><code>store</code><span>写回 C</span></button>
+  </div>
+  <div class="trace-canvas">
+    <div class="tensor-card active" data-trace-target="m-step"><b>A/B tile</b><span>M×K 与 K×N</span><p>同一块数据会被多个输出复用。</p></div>
+    <div class="tensor-card" data-trace-target="k-step"><b>K 维循环</b><span>块级 dot / mma 累加</span><p>循环次数和 BLOCK_K 共同决定复用深度。</p></div>
+    <div class="tensor-card" data-trace-target="c-step"><b>acc 累加器</b><span>BLOCK_M×BLOCK_N</span><p>通常留在寄存器里，避免中间结果落 HBM。</p></div>
+    <div class="tensor-card" data-trace-target="w-step"><b>最终写回</b><span>M×N 输出块</span><p>只把最终 C tile 写回主存。</p></div>
+  </div>
+</div>
+      <div class="codebar"><span>matmul tile pseudocode</span><button class="copy" data-copy="matmul-code">复制</button></div>
+<pre id="matmul-code" data-export-context="matmul tile pseudocode" data-export-lang="python"><code class="language-python">pid_m, pid_n = program_id(0), program_id(1)
+offs_m = pid_m * BLOCK_M + arange(0, BLOCK_M)
+offs_n = pid_n * BLOCK_N + arange(0, BLOCK_N)
+offs_k = arange(0, BLOCK_K)
+
+acc = zeros((BLOCK_M, BLOCK_N), fp32)
+for k0 in range(0, K, BLOCK_K):
+    a = load(A + offs_m[:, None] * stride_am + (k0 + offs_k)[None, :] * stride_ak,
+             mask=(offs_m[:, None] &lt; M) &amp; (k0 + offs_k[None, :] &lt; K), other=0.0)
+    b = load(B + (k0 + offs_k)[:, None] * stride_bk + offs_n[None, :] * stride_bn,
+             mask=(k0 + offs_k[:, None] &lt; K) &amp; (offs_n[None, :] &lt; N), other=0.0)
+    acc += dot(a, b)
+
+store(C + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn,
+      acc, mask=(offs_m[:, None] &lt; M) &amp; (offs_n[None, :] &lt; N))</code></pre>
+      <div class="check"><b>你现在应该能做什么：</b>读出一段矩阵乘伪代码里 A/B tile、K 维循环、acc 累加和最终写回各自负责什么。</div>
+    
+</section>
+<section id="softmax">
+  <div class="head">
+    <h2>Softmax：稳定归约和少搬中间结果</h2>
+    <span class="tag">bandwidth dense</span>
+  </div>
+
+      <div class="grid2">
+        <div>
+          <div class="math-block" data-export-context="06 Softmax 稳定公式" data-export-lang="math">$m = \max(x), \quad y_j = \frac{\exp(x_j - m)}{\sum_t \exp(x_t - m)}$<p>减去最大值不是小技巧，而是防止指数溢出的数值稳定条件。</p></div>
+          <p>Softmax 不是逐元素独立函数，因为每个输出都依赖同一行的最大值和指数和。GPU 上的优化重点是尽量把一行读入后完成 max、exp、sum 和除法，避免把中间 exp 结果写回 HBM 再读回来。</p>
+        </div>
+        <div class="box info"><h3>判断句</h3><p>Softmax 慢时，先看行长度和读写次数：如果每一步都是单独 kernel，性能常被 HBM 往返和 kernel launch 吃掉。</p></div>
+      </div>
+      <div class="terminal-lab" data-terminal-lab>
+  <div class="terminal-controls">
+    <button class="ghost active" data-terminal-case="case-1">case-1：稳定 max</button>
+    <button class="ghost" data-terminal-case="case-2">case-2：错误填充值</button>
+    <button class="ghost" data-terminal-case="case-3">case-3：一行处理</button>
+  </div>
+  <pre class="terminal-output" aria-live="polite">行内最大值先被减掉，再做 exp 和 sum。
+这样不会因为较大的 logits 而溢出。</pre>
+  <template data-terminal-output="case-1">行内最大值先被减掉，再做 exp 和 sum。
+这样不会因为较大的 logits 而溢出。</template>
+  <template data-terminal-output="case-2">如果无效位置填 0.0，max 可能被污染。
+对负数行，0 不是安全的哨兵。</template>
+  <template data-terminal-output="case-3">Softmax 的正确做法是：先 max，再 exp，再 sum，最后 normalize。</template>
+</div>
+      <div class="grid3">
+        <div class="box "><h3>1. 行内 max</h3><p>先找到 m。没有这一步，较大的 logits 会让 exp 溢出，较小 logits 会在概率中接近 0。</p></div>
+        <div class="box "><h3>2. exp 与 sum</h3><p>每个元素都要变成 exp(x - m)，再归约得到分母。这里仍然依赖整行。</p></div>
+        <div class="box "><h3>3. normalize</h3><p>每个元素除以同一个分母。输出是逐元素写回，但分母来自归约结果。</p></div>
+      </div>
+      <div class="codebar"><span>softmax pseudocode</span><button class="copy" data-copy="softmax-code">复制</button></div>
+<pre id="softmax-code" data-export-context="softmax pseudocode" data-export-lang="python"><code class="language-python">row = program_id(0)
+offs = arange(0, BLOCK_SIZE)
+mask = offs &lt; N
+
+x = load(X + row * stride_xm + offs, mask=mask, other=-inf)
+x = x - max(x, axis=0)
+num = exp(x)
+den = sum(num, axis=0)
+y = num / den
+
+store(Y + row * stride_ym + offs, y, mask=mask)</code></pre>
+      <div class="check"><b>你现在应该能做什么：</b>解释为什么 Softmax 不只是逐元素操作，并能说出无效位置在 max 里为什么不能填 0。</div>
+    
+</section>
+<section id="layernorm">
+  <div class="head">
+    <h2>LayerNorm：同一行上的两次统计量</h2>
+    <span class="tag">reduction + affine</span>
+  </div>
+
+      <div class="grid2">
+        <div>
+          <div class="math-block" data-export-context="06 LayerNorm 公式" data-export-lang="math">$$\mu = \operatorname{mean}(x), \quad \sigma^2 = \operatorname{mean}((x-\mu)^2), \quad y = \frac{x-\mu}{\sqrt{\sigma^2 + \epsilon}} \times \gamma + \beta$$<p>LayerNorm 沿隐藏维 H 统计均值和方差，然后做归一化、缩放和偏移。</p></div>
+          <p>LayerNorm 的计算量相对不大，但一次输出依赖 mean 和 variance 两个统计量。朴素实现可能读 x 多次、写中间结果，再读回来做仿射；融合实现会尽量在一个 kernel 内完成统计和写回。</p>
+        </div>
+        <div class="box info"><h3>判断句</h3><p>LayerNorm 慢时，先问隐藏维是否适合一行一个 program、是否重复读 x、gamma/beta 是否连续、是否能与残差加法或 dropout 融合。</p></div>
+      </div>
+      <div class="codebar"><span>layernorm pseudocode</span><button class="copy" data-copy="layernorm-code">复制</button></div>
+<pre id="layernorm-code" data-export-context="layernorm pseudocode" data-export-lang="python"><code class="language-python">row = program_id(0)
+offs = arange(0, BLOCK_SIZE)
+mask = offs &lt; H
+
+x = load(X + row * stride_x + offs, mask=mask, other=0.0)
+mean = sum(x, axis=0) / H
+centered = where(mask, x - mean, 0.0)
+var = sum(centered * centered, axis=0) / H
+rstd = rsqrt(var + eps)
+
+gamma = load(Gamma + offs, mask=mask, other=0.0)
+beta = load(Beta + offs, mask=mask, other=0.0)
+y = centered * rstd * gamma + beta
+store(Y + row * stride_y + offs, y, mask=mask)</code></pre>
+      <div class="table-wrap">
+  <table data-export-context="06 算子对比账本" data-export-lang="table">
+    <thead><tr><th>算子</th><th>依赖模式</th><th>典型瓶颈</th><th>第一优化方向</th></tr></thead>
+    <tbody>
+      <tr><td>矩阵乘</td><td>每个 C 元素依赖 K 维内积，A/B tile 可被多个输出复用。</td><td>算力、tile 复用、布局。</td><td>提高 tile 复用和 Tensor Core 利用率。</td></tr>
+      <tr><td>Softmax</td><td>每个输出依赖整行最大值和总和。</td><td>读写次数、数值稳定。</td><td>避免中间矩阵落 HBM。</td></tr>
+      <tr><td>LayerNorm</td><td>每个输出依赖同一行的均值和方差。</td><td>统计量、重复读写。</td><td>融合统计和仿射。</td></tr>
+    </tbody>
+  </table>
+</div>
+      <div class="box warn"><b>边界提醒</b><p>本页只覆盖前向性能直觉。反向传播会引入更多归约和中间量，但不会改变这三种算子的基本画像：矩阵乘偏复用，Softmax 偏带宽，LayerNorm 偏统计和融合。</p></div>
+      <div class="check"><b>你现在应该能做什么：</b>在三种算子之间建立一个可复用的性能判断框架，而不是把它们看成三个互不相关的函数。</div>
+    
+</section>
+<section id="compare">
+  <div class="head">
+    <h2>对比与常见错误</h2>
+    <span class="tag">compare</span>
+  </div>
+
+      <table data-export-context="06 对比与常见错误" data-export-lang="table">
+        <thead><tr><th>算子</th><th>依赖模式</th><th>典型瓶颈</th><th>第一优化方向</th></tr></thead>
+        <tbody>
+          <tr><td>矩阵乘</td><td>每个 C 元素依赖 K 维内积，A/B tile 可被多个输出复用。</td><td>tile 复用与计算吞吐。</td><td>提高块复用与布局匹配。</td></tr>
+          <tr><td>Softmax</td><td>每个元素依赖整行最大值和总和。</td><td>归约、稳定性、中间结果写回。</td><td>尽量一行内完成所有步骤。</td></tr>
+          <tr><td>LayerNorm</td><td>每个元素依赖同一行的均值和方差。</td><td>重复读写与统计量。</td><td>融合统计和仿射。</td></tr>
+        </tbody>
+      </table>
+      <div class="grid2">
+        <div class="box danger"><h3>错误 1：只看 FLOPs</h3><p>FLOPs 高不等于快。矩阵乘通常更像计算密集，Softmax 和 LayerNorm 更容易卡在读写和归约。</p></div>
+        <div class="box danger"><h3>错误 2：mask 只是防越界</h3><p>在 Softmax 和 LayerNorm 里，mask 还会影响填充值语义。填错 other 会把归约结果改坏。</p></div>
+        <div class="box danger"><h3>错误 3：把融合当万能答案</h3><p>融合可能节省 HBM 往返，也可能因为寄存器压力过大而变慢。</p></div>
+        <div class="box danger"><h3>错误 4：忽略布局</h3><p>stride、转置和切片会改变真实地址。只按逻辑形状写 kernel 很容易错位。</p></div>
+      </div>
+      <div class="check"><b>你现在应该能做什么：</b>把常见错误和正确的第一检查项一一对应起来，而不是只记“要融合”“要调块”。</div>
+    
+</section>
+<section id="profiles-extra">
+  <div class="head">
+    <h2>算子账本</h2>
+    <span class="tag">diagnostic chain</span>
+  </div>
+
+      <div class="grid2">
+        <div class="box soft">
+          <h3>从输入形状开始看</h3>
+          <p>矩阵乘、Softmax 和 LayerNorm 放在一起学，不是因为它们长得像，而是因为它们会把性能压力落在不同地方。矩阵乘的核心是 tile 复用，Softmax 的核心是整行依赖和稳定归约，LayerNorm 的核心是同一行的统计量和仿射变换。</p>
+          <p>当你只看“算子名字”时，很容易把三者都说成“GPU kernel”。但在性能工程里，名字不够，依赖模式才够。一个看起来简单的逐元素公式，可能因为行内归约变成带宽型；一个看起来计算很多的矩阵乘，可能因为 tile 复用极强而更接近计算密集。</p>
+        </div>
+        <div class="box info">
+          <h3>第一优化方向怎么选</h3>
+          <p>矩阵乘先看数据布局和块复用；Softmax 先看能不能把一行的 max、exp、sum、normalize 连着做完；LayerNorm 先看能不能把 mean、variance、scale、shift 关在一个 kernel 里，并减少重复读写。</p>
+          <p>这三种判断不是背答案，而是把“依赖在哪里”翻译成“数据应该在哪里停留”。只要数据停留位置不对，FLOPs 再漂亮也未必快。</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table data-export-context="06 算子诊断账本" data-export-lang="table">
+          <thead><tr><th>算子</th><th>先看什么</th><th>第一步怎么做</th><th>典型误区</th></tr></thead>
+          <tbody>
+            <tr><td>矩阵乘</td><td>A/B tile 复用和 K 维循环</td><td>对齐布局、扩大复用、控制块大小</td><td>只盯 GEMM 名字，不看数据摆放</td></tr>
+            <tr><td>Softmax</td><td>整行最大值、指数和、归一化</td><td>一行内完成稳定归约，减少中间写回</td><td>把它误看成逐元素函数</td></tr>
+            <tr><td>LayerNorm</td><td>均值、方差、gamma/beta 的读写</td><td>按 token 行组织统计和仿射，尽量融合</td><td>只看归一化，不看重复读写</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="codebar"><span>operator ledger sketch</span><button class="copy" data-copy="operator-ledger">复制</button></div>
+<pre id="operator-ledger" data-export-context="06 operator ledger sketch" data-export-lang="python"><code class="language-python"># 矩阵乘：看 tile 复用
+# Softmax：看行内 max / sum / normalize
+# LayerNorm：看 mean / variance / affine
+
+if op == "matmul":
+    focus = "layout + reuse"
+elif op == "softmax":
+    focus = "row reduction + stability"
+else:
+    focus = "statistics + fusion"</code></pre>
+      <div class="box soft">
+        <h3>一个可落地的判断顺序</h3>
+        <p>假设你现在拿到一个小型推理模型，里面有一个 4096 维 hidden size 的 LayerNorm、一个中等长度的 Softmax、和一个矩阵乘。不要先问“哪个算子最酷”，先问“哪一个在搬运不必要的数据”。</p>
+        <p>最实用的顺序通常是：先看矩阵乘有没有稳定吃满复用，再看 Softmax 有没有把中间结果写回 HBM，最后看 LayerNorm 有没有重复读 x、gamma 和 beta。如果 LayerNorm 的瓶颈只是小于你的 profile 噪声，那就不要把它当主要优化目标；如果 Softmax 的中间张量被拆成多个 kernel，才值得优先收回来。</p>
+        <div class="table-wrap">
+          <table data-export-context="06 诊断顺序账本" data-export-lang="table">
+            <thead><tr><th>先看</th><th>证据</th><th>如果错了会怎样</th></tr></thead>
+            <tbody>
+              <tr><td>矩阵乘</td><td>tile 复用、布局和 Tensor Core 是否稳定</td><td>算术强度被浪费，A/B tile 没有吃满复用。</td></tr>
+              <tr><td>Softmax</td><td>是否有中间矩阵写回、是否先减 max</td><td>HBM 流量上升，数值稳定性也会出问题。</td></tr>
+              <tr><td>LayerNorm</td><td>x、gamma、beta 是否一次性处理</td><td>重复读写把本来不重的算子拖慢。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="codebar"><span>diagnosis sketch</span><button class="copy" data-copy="diagnosis-sketch">复制</button></div>
+<pre id="diagnosis-sketch" data-export-context="06 diagnosis sketch" data-export-lang="python"><code class="language-python">if profile == "slow":
+    if op == "softmax":
+        root = "too many HBM round-trips"
+    elif op == "layernorm":
+        root = "repeated reads of x/gamma/beta"
+    else:
+        root = "tile reuse or layout mismatch"</code></pre>
+        <p>这段判断还有一个实际好处：它会逼你把“慢”拆成可归因的对象。很多时候真正需要修的不是算法本身，而是把同一个算子拆成了过多 kernel，或者把本来可以在一行里完成的统计，拆成了多次读写。只要这种拆分还在，换更大的 GPU 也只是把问题往后推。</p>
+        <p>这个顺序的价值在于，它强迫你把“慢”拆成一个具体对象，而不是一个情绪。你能指出数据在哪里停留、什么时候落回 HBM、哪一步没有单位元语义，这才算真正开始做算子性能分析。</p>
+        <p>如果你还想继续往下挖，可以把它们和前面的表格再对一遍：矩阵乘的第一问题是布局和复用，Softmax 的第一问题是稳定归约和中间写回，LayerNorm 的第一问题是重复读写和统计量的组织。这个顺序一旦固定，很多“该不该融合”“该不该换块”的争论就能转成事实讨论，而不是口号讨论。</p>
+        <p>实践里最容易犯的错，是把“哪个算子更重要”问成抽象问题。真正要问的是：如果我现在只改一件事，它会不会直接减少 HBM 往返、减少重复读、或者让归约结果更稳定。这个问法一旦落地，你就会自然地把优化目标限定在一两个可测的方向里，而不是把所有算子都一起乱动。</p>
+        <p>把这套顺序再往前推一步，你还会发现一个更实在的判断：有些“优化”其实只是把一个慢问题改成另一个慢问题。比如把 Softmax 拆成多个 kernel，只是把中间写回切成了几段；把 LayerNorm 拆成多次统计，只是把本来能共享的数据读了好几遍。只要你能在表格里指出这一点，后面的改动就会更克制。</p>
+        <p>如果只给一个模型打补丁，你也可以先问最小改动是否已经足够：矩阵乘只要把布局对齐就能明显变快，Softmax 只要把中间值留在行内就能减少读写，LayerNorm 只要把统计和仿射放在同一个 kernel 里就能少一轮往返。这个判断比“改大块”更具体，也更容易在 profile 里验证。</p>
+        <p>真正落地时，最有效的动作通常不是继续加新想法，而是把已经有的想法按顺序执行：先定位谁在重复搬运数据，再核对是不是在错误的地方做了拆分，最后才考虑融合、调块或换实现。这个顺序很朴素，但它会让你少走很多把复杂问题误判成“再试一次就好”的弯路。</p>
+        <p>你也可以把这条顺序写成一条简短的评审意见：先查数据路径，再查归约语义，最后查是否真的需要拆 kernel。只要这句话能写出来，页面里的三个算子就不只是名词，而是三种可验证的判断方式。</p>
+      </div>
+      <div class="box warn"><b>边界提醒</b><p>本页只覆盖前向性能直觉。反向传播会引入更多归约和中间量，但不会改变这三种算子的基本画像：矩阵乘偏复用，Softmax 偏带宽，LayerNorm 偏统计和融合。</p></div>
+      <div class="check"><b>你现在应该能做什么：</b>拿到一个新算子时，先把它归到“复用、归约、统计、仿射”中的一类，再决定第一优化方向。</div>
+
+</section>
+<section id="examples">
+  <div class="head">
+    <h2>工程例子</h2>
+    <span class="tag">worked example</span>
+  </div>
+
+      <div class="grid2">
+        <div>
+          <h3>场景：长序列 prefill 的注意力 kernel</h3>
+          <p>假设一个 batch 中有若干长度为 4096 的序列，每个头维度为 64。朴素路径会生成 4096×4096 的分数矩阵和概率矩阵。以 FP16 粗略估算，一个矩阵约 32 MiB；每个头如果写 S 和 P，再读回来做后续步骤，HBM 流量会迅速放大。</p>
+          <p>分块路径不保存完整 S/P，而是让每个 program 负责若干 query 行，循环读取 K/V 块，维护 <code>m</code>、<code>l</code> 和输出累计值。最后只把 O 写回 HBM。</p>
+        </div>
+        <div class="box warn">
+          <h3>注意这个例子没有给出速度承诺</h3>
+          <p>具体收益取决于 GPU 型号、精度、head_dim、mask、batch 组织、编译器版本和基准方式。这里的目的只是展示判断路径。</p>
+        </div>
+      </div>
+      <div class="codebar"><span>attention block pseudocode</span><button class="copy" data-copy="attn-code">复制</button></div>
+<pre id="attn-code" data-export-context="attention block pseudocode" data-export-lang="python"><code class="language-python"># 一个 program 处理一块 query 行
+q = load_q_block()
+m = full([BLOCK_M], -inf)
+l = zeros([BLOCK_M])
+acc = zeros([BLOCK_M, HEAD_DIM])
+
+for start_n in range(0, sequence_length, BLOCK_N):
+    k = load_k_block(start_n)
+    v = load_v_block(start_n)
+    scores = dot(q, transpose(k)) * scale
+    scores = apply_mask(scores, start_n)
+
+    m_new = maximum(m, row_max(scores))
+    alpha = exp(m - m_new)
+    p = exp(scores - m_new[:, None])
+
+    l = l * alpha + row_sum(p)
+    acc = acc * alpha[:, None] + dot(p, v)
+    m = m_new
+
+o = acc / l[:, None]
+store_o_block(o)</code></pre>
+      <div class="box info"><b>状态最重要</b><p><code>m</code> 保护数值稳定，<code>l</code> 保存分母，<code>acc</code> 保存加权 V 的未归一化累计值。每个新块到来时，旧状态必须按新的最大值重标定。</p></div>
+      <div class="check"><b>你现在应该能做什么：</b>从一段注意力伪代码里指出哪些状态必须保留，为什么不能直接拼接局部 softmax 的结果。</div>
+    
+</section>
+<section id="practice">
+  <div class="head">
+    <h2>练习</h2>
+    <span class="tag">diagnostic</span>
+  </div>
+
+      <div class="practice-intro">
+        <div class="review-card"><strong>作答目标</strong><p>练习不是背术语，而是把三个算子都写成可检查的工程判断：瓶颈在哪里、怎样保持精确、边界条件是什么。</p></div>
+        <div class="review-card"><strong>检查重点</strong><p>每个答案至少包含一个原因和一个限制条件。只写“更快”“更省显存”通常不够。</p></div>
+      </div>
+      <div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第一组：概念判断</h3>
+      <p>先把三个算子的基本性能画像分清。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提示</b>
+      <span>矩阵乘看复用和计算吞吐；Softmax 看行内归约；LayerNorm 看统计量。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+<div class="q" data-question="q1" data-group="第一组：概念判断" data-title="哪个算子通常算术强度最高？" data-answer="A" data-explain="矩阵乘的 tile 复用最高。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">performance / classification</span></div>
+  <h3>哪个算子通常算术强度最高？</h3>
+  <p>哪个算子通常算术强度最高？</p>
+  <label><input type="radio" name="q1" value="A"> A. 矩阵乘</label>
+  <label><input type="radio" name="q1" value="B"> B. Softmax</label>
+  <label><input type="radio" name="q1" value="C"> C. LayerNorm</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q" data-question="q2" data-group="第一组：概念判断" data-title="Softmax 是逐元素独立操作吗？" data-answer="错" data-explain="每个输出都依赖同一行的最大值和总和。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">dependency / reduction</span></div>
+  <h3>Softmax 是逐元素独立操作吗？</h3>
+  <p>Softmax 是逐元素独立操作吗？</p>
+  <label><input type="radio" name="q2" value="对"> 对</label>
+  <label><input type="radio" name="q2" value="错"> 错</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q" data-question="q3" data-group="第一组：概念判断" data-title="算术强度的定义">
+  <div class="q-meta"><span class="pill">填空</span><span class="pill">roofline / ratio</span></div>
+  <h3>算术强度的定义</h3>
+  <p>算术强度 = ______ / ______。</p>
+  <input type="text" name="q3" data-answer="FLOPs;HBM 字节数" data-explain="也可以写成等价表达，只要分子分母方向正确。" placeholder="例如：FLOPs / HBM 字节数">
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q" data-question="q4" data-group="第一组：概念判断" data-title="LayerNorm 的统计范围" data-answer="B" data-explain="LayerNorm 统计的是单个样本/ token 的隐藏维。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">normalization / scope</span></div>
+  <h3>LayerNorm 的统计范围</h3>
+  <p>Transformer 里常见 LayerNorm 的统计范围更接近哪一项？</p>
+  <label><input type="radio" name="q4" value="A"> A. 跨整个 batch 求均值方差</label>
+  <label><input type="radio" name="q4" value="B"> B. 沿每个 token 的隐藏维求均值方差</label>
+  <label><input type="radio" name="q4" value="C"> C. 只对每个元素独立缩放</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q full" data-question="q5" data-group="第一组：概念判断" data-title="一句话比较三个算子">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">contrast / synthesis</span></div>
+  <h3>一句话比较三个算子</h3>
+  <p>用一句话分别说明矩阵乘、Softmax、LayerNorm 的主要性能压力。</p>
+  <textarea name="q5" placeholder="矩阵乘：...；Softmax：...；LayerNorm：..."></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>按“复用 / 归约 / 统计与读写”组织答案，能区分三者压力来源。</p>
+  </details>
+</div>
+  </div>
+</div>
+      <div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第二组：代码阅读和错误诊断</h3>
+      <p>检查你是否能读懂块级伪代码中的依赖和边界条件。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提示</b>
+      <span>mask 不是装饰；归约的填充值必须不污染 max、sum、mean 或 variance。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+<div class="q full" data-question="q6" data-group="第二组：代码阅读和错误诊断" data-title="Softmax mask 错误诊断">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">mask / failure</span></div>
+  <h3>Softmax mask 错误诊断</h3>
+  <p>某个 Softmax kernel 在无效位置使用 0 作为 max 归约的填充值。它可能错在哪里？</p>
+  <textarea name="q6" placeholder="先说明无效 0 如何进入 max，再说明对概率分布的影响，最后给出修法。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>无效位置填 0 会污染 max，尤其是整行都是负数时。正确做法是用 -inf 作为 max 的哨兵值。</p>
+  </details>
+</div>
+<div class="q full" data-question="q7" data-group="第二组：代码阅读和错误诊断" data-title="矩阵乘边界 tile">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">boundary / load-store</span></div>
+  <h3>矩阵乘边界 tile</h3>
+  <p>如果 M、N、K 不能被 BLOCK_M/N/K 整除，矩阵乘 kernel 哪些 load/store 需要 mask？为什么？</p>
+  <textarea name="q7" placeholder="分别考虑 A load、B load、C store。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>A、B 的 load 和 C 的 store 都要根据边界加 mask；load 负责避免越界读，store 负责避免越界写。</p>
+  </details>
+</div>
+<div class="q" data-question="q8" data-group="第二组：代码阅读和错误诊断" data-title="LayerNorm eps 的作用" data-answer="错" data-explain="eps 也影响推理里的除法稳定。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">stability / epsilon</span></div>
+  <h3>LayerNorm eps 的作用</h3>
+  <p>LayerNorm 里的 eps 只影响训练，不影响推理。</p>
+  <label><input type="radio" name="q8" value="对"> 对</label>
+  <label><input type="radio" name="q8" value="错"> 错</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q" data-question="q9" data-group="第二组：代码阅读和错误诊断" data-title="融合的代价" data-answer="B" data-explain="融合减少中间结果，但会让单个 kernel 更重。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">fusion / resources</span></div>
+  <h3>融合的代价</h3>
+  <p>融合 kernel 可能变慢的一个常见原因是：</p>
+  <label><input type="radio" name="q9" value="A"> A. HBM 读写一定增加</label>
+  <label><input type="radio" name="q9" value="B"> B. 寄存器压力升高导致并发下降</label>
+  <label><input type="radio" name="q9" value="C"> C. GPU 不能运行融合算子</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q full" data-question="q10" data-group="第二组：代码阅读和错误诊断" data-title="读写量估算">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">bandwidth / estimate</span></div>
+  <h3>读写量估算</h3>
+  <p>对一个 4096 hidden size 的 LayerNorm 前向，粗略列出每行至少要读写哪些数组。</p>
+  <textarea name="q10" placeholder="例如：读 x、读 gamma、读 beta、写 y；如果朴素拆分还会... "></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>至少说明读 x、读 gamma、读 beta、写 y；如果拆成多步，还会出现中间统计量的重复读写。</p>
+  </details>
+</div>
+  </div>
+</div>
+      <div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第三组：迁移和综合</h3>
+      <p>把本页的判断法迁移到真实性能排查场景。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提示</b>
+      <span>优化建议必须绑定形状、硬件、读写和依赖。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+<div class="q full" data-question="q11" data-group="第三组：迁移和综合" data-title="选择优化起点">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">profiling / triage</span></div>
+  <h3>选择优化起点</h3>
+  <p>一个模型 profile 显示 LayerNorm kernel 时间占比高。你会先收集哪 5 个信息，再决定是否融合？</p>
+  <textarea name="q11" placeholder="提示：形状、精度、读写、寄存器、occupancy、相邻算子都可以考虑。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>应收集形状、精度、布局、相邻算子、寄存器/occupancy 或 profile 证据，再决定是否融合。</p>
+  </details>
+</div>
+<div class="q full" data-question="q12" data-group="第三组：迁移和综合" data-title="从 Softmax 过渡到 Attention">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">transfer / attention</span></div>
+  <h3>从 Softmax 过渡到 Attention</h3>
+  <p>为什么注意力优化会特别关心 Softmax 的中间结果是否落 HBM？</p>
+  <textarea name="q12" placeholder="从 QK^T、Softmax、乘 V 的链条解释。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>因为注意力里 Softmax 是 QK^T 和乘 V 之间的关键中间环节；如果中间结果落 HBM，会放大带宽成本。</p>
+  </details>
+</div>
+<div class="q full" data-question="q13" data-group="第三组：迁移和综合" data-title="综合解释">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">feynman / synthesis</span></div>
+  <h3>综合解释</h3>
+  <p>把本节课讲给一个会 PyTorch 但不会 GPU 优化的人：为什么这三个算子要放在一起学？</p>
+  <textarea name="q13" placeholder="用 150-250 字，串起计算密集、带宽密集、归约、融合和数值稳定。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>要串起三种性能画像：矩阵乘偏复用和计算，Softmax 偏归约和带宽，LayerNorm 偏统计量与融合。</p>
+  </details>
+</div>
+  </div>
+</div>
+      <section id="export">
+        <div class="head"><h2>导出练习记录</h2><span class="tag">markdown</span></div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions"><button class="action" onclick="generateRecord()">生成记录</button><button class="ghost" onclick="copyRecord()">复制 Markdown</button></div>
+      </section>
+      <section id="sources">
+        <div class="head"><h2>资料边界</h2><span class="tag">references</span></div>
+        <ul class="source-list">
+  <li><a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/">CUDA Programming Guide</a>。用于执行模型、线程层级、内存层次和 occupancy 的基础概念。</li>
+  <li><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/">CUDA C++ Best Practices Guide</a>。用于算术强度、带宽、访存和调参术语的基础概念。</li>
+  <li><a href="https://triton-lang.org/main/getting-started/tutorials/">Triton Tutorials</a>。用于理解 program id、block、mask、矩阵乘和 fused attention 的工程表达方式。</li>
+  <li><a href="https://arxiv.org/abs/2205.14135">FlashAttention 论文</a>。用于 IO-aware 注意力、分块和在线 softmax 的核心思想。</li>
+</ul>
+      </section>
+    
+</section>
+    </main>
+  </div>
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

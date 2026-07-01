@@ -1,0 +1,1014 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SFT 数据模板与 loss mask</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="后训练全栈" data-unit="02">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>后训练全栈</strong>
+        <span>02</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#terms"><span class="dot"></span>关键术语</a>
+        <a href="#mechanism"><span class="dot"></span>核心机制</a>
+        <a href="#example"><span class="dot"></span>例子</a>
+        <a href="#packing"><span class="dot"></span>packing</a>
+        <a href="#audit"><span class="dot"></span>现场审查</a>
+        <a href="#bridge"><span class="dot"></span>下一步</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先看样本怎么变成 token，再看哪些 token 进 loss，最后再决定 packing 要不要开。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">SFT 数据链路</div>
+          <h1>SFT 数据模板与 loss mask</h1>
+          <p>这一页只讲 SFT 里最容易出错的那一段：一条样本怎样从 <code>messages</code>、<code>prompt/completion</code> 或纯文本变成训练序列，哪些 token 进入 loss，packing 打开后边界会怎么变。先把这条数据链路看清，下一单元再去调 batch、学习率和 LoRA。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../01_后训练全景与模型角色/学习页.html">上一单元</a><a href="../03_SFT训练配置与快速实验/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完这一页，你可以先做这三件事</h3>
+          <ul>
+  <li>能看懂 <code>messages</code>、<code>prompt/completion</code> 和纯文本三种输入格式，知道谁负责补模板，谁负责划答案边界。</li>
+  <li>看到 <code>assistant_only_loss</code>、<code>completion_only_loss</code> 和 <code>packing=True</code> 时，能分清它们改的是标签、边界，还是装箱方式。</li>
+  <li>样本出问题时，先查模板、EOS、labels 和边界，再决定要不要动学习率。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">start here</span>
+  </div>
+  <div class="section-body">
+    <p class="lead">SFT 这里先不谈“模型怎么变强”，先把“样本怎么进训练器”说清楚。你只要能把一条样本的路径说清楚，后面的配置和排错就会顺很多。</p>
+    <div class="table-wrap">
+      <table data-export-context="SFT 单元的三层判断" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>对象</th>
+            <th>你要看什么</th>
+            <th>错了通常会怎样</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>apply_chat_template</code></td>
+            <td>把结构化对话渲染成模型真正看到的文本。</td>
+            <td>角色标记重复、control token 混乱，训练目标变脏。</td>
+          </tr>
+          <tr>
+            <td>loss mask</td>
+            <td>哪些 token 参与交叉熵，哪些位置应被忽略。</td>
+            <td>模型开始模仿 user/system，或者把 padding 也当答案学。</td>
+          </tr>
+          <tr>
+            <td>packing</td>
+            <td>多个短样本怎样共用一个上下文窗口。</td>
+            <td>边界泄漏、样本串味，或者你以为提速其实只是把错误放大。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">big picture</span>
+  </div>
+  <div class="section-body">
+    <p>这页的主线很直接：<code>messages</code> 或 <code>prompt/completion</code> 先经过模板和 tokenizer，变成一条连续 token 序列；接着用 mask 标出哪些位置要算 loss；最后如果开了 packing，再决定多条样本怎样拼进同一段输入里。</p>
+    <p>三层责任是分开的。<code>apply_chat_template</code> 负责格式；<code>assistant_only_loss</code> 和 <code>completion_only_loss</code> 负责训练哪些位置；<code>packing=True</code> 只负责提高 token 利用率，不负责修数据质量。你在这一页里要盯住的不是单个参数，而是每一步的读写关系。</p>
+    <div class="box info">
+      <strong>这一页先不展开</strong>
+      <p>DFT、chunked_nll、LoRA、学习率调度和分布式细节会放到后面的训练配置和实验单元里。这里先把样本、mask 和边界看稳。</p>
+    </div>
+  </div>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>状态账本</h2>
+    <span class="tag">ledger</span>
+  </div>
+  <div class="section-body">
+    <p>这张表就是这页的状态账本：每一步读什么、写什么、谁在负责、错了先坏哪一层。只要这三层不混，后面的配置和排错会清楚很多。</p>
+    <div class="table-wrap">
+      <table data-export-context="SFT 输入格式与 loss 边界" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>对象</th>
+            <th>读什么</th>
+            <th>写什么</th>
+            <th>副作用</th>
+            <th>loss 通常看哪里</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>messages</code></td>
+            <td>结构化对话，<code>system</code>、<code>user</code>、<code>assistant</code> 先分开存。</td>
+            <td><code>apply_chat_template()</code> 把角色和控制 token 变成模型输入。</td>
+            <td>如果把角色 token 先写进 <code>content</code>，模板会再写一遍。</td>
+            <td>通常只训练 assistant 回复，或至少只让 assistant 区进入 loss。</td>
+          </tr>
+          <tr>
+            <td><code>prompt/completion</code></td>
+            <td>prompt 是上下文，completion 是答案，边界直接写在字段里。</td>
+            <td>字段已经给出边界，训练器按这个边界生成 labels。</td>
+            <td>如果 prompt 也被算进 loss，模型容易复读题目。</td>
+            <td>默认只看 completion；如果改成全序列训练，要重新检查 prompt 标签。</td>
+          </tr>
+          <tr>
+            <td><code>add_generation_prompt</code></td>
+            <td>在末尾补一个 assistant 起始位置，让模型知道接下来轮到谁说话。</td>
+            <td>模板或 tokenizer 负责补，不需要把这段手写进内容里。</td>
+            <td>如果手写进内容里，再套模板，角色边界会重复。</td>
+            <td>它影响的是生成起点，训练目标仍按样本标签来定。</td>
+          </tr>
+          <tr>
+            <td><code>assistant_only_loss</code></td>
+            <td>只让 assistant 回答参与 loss。</td>
+            <td>模板要能指出 assistant 的生成区。</td>
+            <td>模板若找不到 assistant 区，mask 也无从落点。</td>
+            <td>看 assistant 对应的位置是否被标成有效标签。</td>
+          </tr>
+          <tr>
+            <td><code>completion_only_loss</code></td>
+            <td>只让 completion 部分参与 loss。</td>
+            <td>prompt/completion 的字段边界要清楚。</td>
+            <td>边界不清时，prompt 会悄悄进目标区。</td>
+            <td>看 completion 的标签是否完整，prompt 是否被忽略。</td>
+          </tr>
+          <tr>
+            <td><code>packing=True</code></td>
+            <td>把多个短样本装进同一个上下文窗口。</td>
+            <td>packing 只改装箱方式，不改样本内容。</td>
+            <td>它会把边界压得更紧，边界错了会更难查。</td>
+            <td>看 EOS、样本边界和 packed 后的 labels 是否串了。</td>
+          </tr>
+          <tr>
+            <td><code>ignore_index=-100</code></td>
+            <td>在 loss 里忽略某些位置。</td>
+            <td>标签里用这个值标出不训练的位置。</td>
+            <td>输入还在，变化的是 loss 标记，文本内容保持原样。</td>
+            <td>它本身不改文本，只改训练信号。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="box info">
+      <strong>先看边界，再看效率</strong>
+      <p>先认输入格式，再认标签边界，最后才看 packing。顺序一旦倒过来，排错会绕远路。</p>
+    </div>
+  </div>
+</section>
+
+<section id="pathchoice">
+  <div class="head">
+    <h2>入口选择</h2>
+    <span class="tag">decision tree</span>
+  </div>
+  <div class="section-body">
+    <p>同一批后训练数据，常见只有三种入口：对话、问答对、纯文本。入口选错，后面的 mask 只能跟着错。你要先确认样本属于哪一类，再决定谁来补模板、谁来划目标区。</p>
+      <p>这一步的判断很直接：如果原始数据已经有角色，先走 <code>messages</code>；如果只有任务和答案，先走 <code>prompt/completion</code>；如果是零散文本，就先整理出清楚边界，再送进训练器。边界不清时，先查 labels，模型本身通常排在后面。</p>
+
+    <div class="table-wrap">
+      <table data-export-context="SFT 三类入口的选择表" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>样本起点</th>
+            <th>最合适的入口</th>
+            <th>第一步先做什么</th>
+            <th>最容易犯的错</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>聊天记录、客服记录、角色对话</td>
+            <td><code>messages</code></td>
+            <td>保住角色边界，让模板补齐格式，再设 assistant-only 的目标区。</td>
+            <td>把 role token 先写进内容，再让模板重复写一遍。</td>
+          </tr>
+          <tr>
+            <td>题目 + 标准答案、指令 + 回答</td>
+            <td><code>prompt/completion</code></td>
+            <td>先把 prompt 和 completion 切开，再确认 completion-only 的标签范围。</td>
+            <td>把 prompt 也当目标区，模型开始复读题目。</td>
+          </tr>
+          <tr>
+            <td>散文、文档段落、代码块集合</td>
+            <td>先预处理，再转成前两类之一</td>
+            <td>先找出切点和边界，再决定是做问答对还是对话样本。</td>
+            <td>把一长串文本直接塞进训练器，边界只能靠运气。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="codebar"><span>简单决策骨架</span><button class="copy" data-copy="path-choice-code">复制</button></div>
+    <pre id="path-choice-code" data-export-context="SFT 样本入口选择骨架" data-export-lang="python"><code class="language-python">def choose_sft_path(sample):
+    if "messages" in sample:
+        return {
+            "path": "chat",
+            "format": "apply_chat_template",
+            "loss": "assistant_only_loss=True",
+            "check": "labels only on assistant tokens",
+        }
+
+    if "prompt" in sample and "completion" in sample:
+        return {
+            "path": "completion",
+            "format": "prompt/completion",
+            "loss": "completion_only_loss=True",
+            "check": "prompt labels are ignored",
+        }
+
+    return {
+        "path": "preprocess_first",
+        "format": "manual segmentation",
+        "loss": "create clear boundary before training",
+        "check": "split text before SFTTrainer sees it",
+    }</code></pre>
+
+    <div class="box info">
+      <strong>这一步的检查顺序</strong>
+      <p>先看样本属于哪类，再定模板和标签，最后才谈 packing。只要入口选对，后面很多问题会直接消失；入口选错，后面的参数只是在替错误兜底。</p>
+    </div>
+    <div class="box warn">
+      <strong>第一失败信号</strong>
+      <p>如果模型开始学会复述提问，常见原因是入口选错后，prompt 区被当成了目标区。这个时候应该回到这张表，重新看样本属于哪类。</p>
+    </div>
+  </div>
+</section>
+
+<section id="mechanism">
+  <div class="head">
+    <h2>损失流向</h2>
+    <span class="tag">loss flow</span>
+  </div>
+  <div class="section-body">
+    <div class="math-block" data-export-context="SFT 的损失写法" data-export-lang="math">
+      $$
+      L_{\text{SFT}} = -\sum_{t=1}^{T} m_t \log p_\theta(y_t \mid y_{<t})
+      $$
+      <p>这里 <code>y_t</code> 是第 <code>t</code> 个目标 token，<code>m_t</code> 是 mask。<code>m_t=1</code> 表示这个位置参与 loss，<code>m_t=0</code> 表示忽略。你在这页里真正要盯住的，是 mask 怎么从数据格式和模板一路传到 loss。</p>
+    </div>
+
+    <div class="table-wrap">
+      <table data-export-context="SFT 数据到 loss 的状态表" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>阶段</th>
+            <th>输入看起来像什么</th>
+            <th>读什么</th>
+            <th>写什么</th>
+            <th>错了会怎样</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>原始样本</td>
+            <td><code>messages</code> 或 <code>prompt/completion</code></td>
+            <td>角色、内容、顺序</td>
+            <td>结构化数据</td>
+            <td>角色边界不清，后面很难判断 mask 应该落在哪</td>
+          </tr>
+          <tr>
+            <td>模板化</td>
+            <td>带角色的消息列表</td>
+            <td><code>role</code> / <code>content</code></td>
+            <td>一段 formatted text</td>
+            <td>把 control token 塞进内容里，等于双重模板</td>
+          </tr>
+          <tr>
+            <td>tokenize + shift</td>
+            <td>formatted text</td>
+            <td>token 序列和 special token</td>
+            <td><code>input_ids</code> 与 <code>labels</code></td>
+            <td>labels 对不齐，loss 学到的内容和你预期的那段不一致</td>
+          </tr>
+          <tr>
+            <td>mask</td>
+            <td><code>labels</code></td>
+            <td>目标位置</td>
+            <td><code>-100</code> 或有效标签</td>
+            <td>user/system/padding 被一起训练，模型开始学错东西</td>
+          </tr>
+          <tr>
+            <td>loss</td>
+            <td>带 mask 的 labels</td>
+            <td>被保留的位置</td>
+            <td>token-level cross-entropy</td>
+            <td>看似 loss 在降，实际是把无关 token 也压进去了</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="labelmap">
+  <div class="head">
+    <h2>手工标一遍 labels</h2>
+    <span class="tag">trace</span>
+  </div>
+  <div class="section-body">
+    <p>把标签手工标一遍，比只记两个开关更有用。你要看的只有三件事：模型看见了什么，答案从哪里开始，哪些位置应该被忽略。</p>
+    <p>下面用同一条最小样本，分别看 <code>messages</code> 和 <code>prompt/completion</code>。先别管具体 tokenizer id，先看边界。</p>
+    <div class="table-wrap">
+      <table data-export-context="SFT 样本到 labels 的手工展开" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>场景</th>
+            <th>上下文</th>
+            <th>目标区</th>
+            <th>labels 怎么标</th>
+            <th>为什么这样放</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>messages</code></td>
+            <td><code>system</code>、<code>user</code> 和模板控制 token。</td>
+            <td><code>assistant</code> 回复。</td>
+            <td>上下文位置设成 <code>-100</code>，assistant 区保留有效标签。</td>
+            <td>上下文只提供条件，答案区才应该推动参数更新。</td>
+          </tr>
+          <tr>
+            <td><code>prompt/completion</code></td>
+            <td><code>prompt</code>。</td>
+            <td><code>completion</code>。</td>
+            <td><code>prompt</code> 设成 <code>-100</code>，<code>completion</code> 保留有效标签。</td>
+            <td>字段本身已经给了边界，训练器只要按边界算 loss。</td>
+          </tr>
+          <tr>
+            <td>packed samples</td>
+            <td>上一条样本的末尾到 <code>EOS</code> 为止。</td>
+            <td>下一条样本从自己的起点开始。</td>
+            <td>每条样本内部独立标注，不能把前一条的答案延到下一条。</td>
+            <td>packing 只改变装箱，不改变样本责任边界。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="codebar"><span>手工展开示意</span><button class="copy" data-copy="manual-label-code">复制</button></div>
+    <pre id="manual-label-code" data-export-context="手工展开 labels 的示意" data-export-lang="python"><code class="language-python"># 伪代码：只看边界关系，不依赖具体 tokenizer id
+tokens = [
+    "&lt;bos&gt;", "&lt;sys&gt;", "请用三句话解释 packing。",
+    "&lt;usr&gt;", "loss mask 是什么？",
+    "&lt;asst&gt;", "loss mask 会把不该训练的位置标成忽略。",
+    "&lt;eos&gt;"
+]
+labels = [
+    -100, -100, -100,
+    -100, -100,
+    -100, "loss mask 会把不该训练的位置标成忽略。",
+    id("&lt;eos&gt;")
+]
+
+# prompt/completion 的同类样本更直接：
+prompt_tokens = ["&lt;bos&gt;", "loss mask 是什么？"]
+completion_tokens = ["loss mask 会把不该训练的位置标成忽略。", "&lt;eos&gt;"]
+prompt_labels = [-100, -100]
+completion_labels = [id("loss mask 会把不该训练的位置标成忽略。"), id("&lt;eos&gt;")]
+</code></pre>
+    <p>如果这里的 labels 少遮了一段，上下文就会变成目标；如果目标区少放了一段，模型会学到“看见答案，但不用为答案负责”。这两种错，在训练日志里常常都只表现成一个看似正常的 loss 曲线。</p>
+    <div class="box warn">
+      <strong>这一步最有用的检查</strong>
+      <p>先把一条样本打印成可读文本，再看 labels 是否只覆盖答案区。只要这一步能看对，<code>assistant_only_loss</code> 和 <code>completion_only_loss</code> 的差别就不再抽象。</p>
+    </div>
+  </div>
+</section>
+
+<section id="inspect">
+  <div class="head">
+    <h2>代码读写与副作用</h2>
+    <span class="tag">audit</span>
+  </div>
+  <div class="section-body">
+    <p>真正出问题的时候，最省时间的做法是把一条样本完整打印出来：原始字段、模板化文本、token、labels、EOS、packed 后的边界。这里的目标是找出“哪一步把边界弄坏了”。</p>
+    <p>你可以把这件事想成四个检查点。先看输入是否已经脏了，再看模板是否重复写了控制 token，再看 labels 是否覆盖了错误位置，最后才看 packing 有没有把多个样本缝错在一起。每一步都在读前一步，也在写下一步的副作用。</p>
+
+    <div class="codebar"><span>样本审计脚本骨架</span><button class="copy" data-copy="inspect-code">复制</button></div>
+    <pre id="inspect-code" data-export-context="SFT 样本审计脚本骨架" data-export-lang="python"><code class="language-python">def inspect_sample(example, tokenizer):
+    print("=== raw example ===")
+    print(example)
+
+    print("=== formatted text ===")
+    if "messages" in example:
+        text = tokenizer.apply_chat_template(example["messages"], tokenize=False)
+    else:
+        text = example["prompt"] + example["completion"]
+    print(text)
+
+    print("=== token pieces ===")
+    ids = tokenizer(text, add_special_tokens=True)["input_ids"]
+    print(ids)
+    print(tokenizer.decode(ids))
+
+    print("=== labels view ===")
+    labels = build_labels(example, tokenizer)
+    for i, (tok, lab) in enumerate(zip(ids, labels)):
+        print(i, tok, lab)
+
+    print("=== boundary check ===")
+    print("eos seen:", ids[-1] == tokenizer.eos_token_id)
+    print("ignore count:", sum(1 for x in labels if x == -100))
+</code></pre>
+
+    <div class="table-wrap">
+      <table data-export-context="SFT 样本审计流程" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>检查点</th>
+            <th>读什么</th>
+            <th>写什么</th>
+            <th>副作用</th>
+            <th>下一步</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>raw example</td>
+            <td>原始字段是否已经混入 role token 或重复模板。</td>
+            <td>清理 source data，修正字段边界。</td>
+            <td>输入在进训练器前就脏了。</td>
+            <td>先清理 source data，再谈 labels。</td>
+          </tr>
+          <tr>
+            <td>formatted text</td>
+            <td>模板化之后，角色和控制 token 是否出现一次就够。</td>
+            <td>模板函数生成最终可读文本。</td>
+            <td>control token 被手写一次、模板又补一次。</td>
+            <td>把模板职责交给 tokenizer 或模板函数。</td>
+          </tr>
+          <tr>
+            <td>token pieces</td>
+            <td>解码后能不能看到答案区和边界。</td>
+            <td>生成 input_ids 并保留 EOS。</td>
+            <td>EOS 缺失，或者答案区和上下文缠在一起。</td>
+            <td>先关 packing，再单条样本解码。</td>
+          </tr>
+          <tr>
+            <td>labels view</td>
+            <td>哪些位置被标成 <code>-100</code>，哪些位置保留有效标签。</td>
+            <td>mask / labels 对齐。</td>
+            <td>上下文被训练，或者答案区被整段忽略。</td>
+            <td>回到边界，重新标一次。</td>
+          </tr>
+          <tr>
+            <td>boundary check</td>
+            <td>EOS 和 packed 边界有没有清晰结束。</td>
+            <td>packed 后的连续序列。</td>
+            <td>上一条样本的尾巴接到了下一条的开头。</td>
+            <td>修边界，再开 packing。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="box warn">
+      <strong>典型坏样本长什么样</strong>
+      <p>最常见的坏样本看起来很正常：loss 在降，输出也像在学，但模型把提问和回答一起背了。这个时候先看 labels 是否只覆盖答案区，再看 packed 序列里有没有把前后样本缝成一条。</p>
+    </div>
+
+    <div class="box info">
+      <strong>检查顺序</strong>
+      <p>原始字段、模板化文本、labels、packing，四步里只要有一步错了，后面都会被带偏。你要找的是“哪一步改坏了边界”。</p>
+    </div>
+  </div>
+</section>
+
+<section id="example">
+  <div class="head">
+    <h2>数据流例子</h2>
+    <span class="tag">anchor sample</span>
+  </div>
+  <div class="section-body">
+    <p>拿同一条最小样本跑完整条链路。这里的重点是看出哪一段是上下文，哪一段该计入 loss。</p>
+
+    <div class="codebar"><span>样本与模板化输出</span><button class="copy" data-copy="sample-code">复制</button></div>
+    <pre id="sample-code" data-export-context="anchor sample：从 messages 到模板文本" data-export-lang="python"><code class="language-python">messages = [
+    {"role": "system", "content": "请用三句话解释 packing。"},
+    {"role": "user", "content": "loss mask 是什么？"},
+    {"role": "assistant", "content": "loss mask 会把不该训练的位置标成忽略。"},
+]
+
+text = tokenizer.apply_chat_template(messages, tokenize=False)
+ids = tokenizer.apply_chat_template(messages, tokenize=True, return_tensors="pt")
+</code></pre>
+
+    <div class="shape-tracer" data-shape-tracer>
+      <div class="trace-lines">
+        <button class="trace-line active" data-trace-step="step-1">
+          <code>messages</code><span>结构化角色消息</span>
+        </button>
+        <button class="trace-line" data-trace-step="step-2">
+          <code>apply_chat_template</code><span>格式化后的文本</span>
+        </button>
+        <button class="trace-line" data-trace-step="step-3">
+          <code>tokenize + mask</code><span><code>input_ids</code> / <code>labels</code></span>
+        </button>
+        <button class="trace-line" data-trace-step="step-4">
+          <code>loss</code><span>只看保留下来的 token</span>
+        </button>
+      </div>
+      <div class="trace-canvas">
+        <div class="tensor-card active" data-trace-target="step-1">
+          <b>原始样本</b>
+          <span>3 条消息</span>
+          <p>角色和内容还分开存着。这里先别管 token，也别管 loss。</p>
+        </div>
+        <div class="tensor-card" data-trace-target="step-2">
+          <b>模板化</b>
+          <span>一段带角色标记的文本</span>
+          <p>这一步决定模型真正看到的串是什么，control token 应由模板负责，不应手写到内容里。</p>
+        </div>
+        <div class="tensor-card" data-trace-target="step-3">
+          <b>标签与 mask</b>
+          <span><code>labels</code> 中一部分变成 <code>-100</code></span>
+          <p>system 和 user 仍然作为上下文被看到，但它们不一定参与 loss。</p>
+        </div>
+        <div class="tensor-card" data-trace-target="step-4">
+          <b>训练信号</b>
+          <span>token-level cross-entropy</span>
+          <p>最后只有保留下来的目标 token 真正在推动参数更新。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table data-export-context="messages 和 prompt/completion 的标签边界" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>输入形状</th>
+            <th>上下文</th>
+            <th>目标区</th>
+            <th>常见检查点</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>messages</code></td>
+            <td><code>system</code> 与 <code>user</code> 先作为上下文进入模型。</td>
+            <td>通常只训练 assistant 回复，或至少只在 assistant 区算 loss。</td>
+            <td>看模板有没有重复塞 control token，看 labels 是否把非目标位置设成 <code>-100</code>。</td>
+          </tr>
+          <tr>
+            <td><code>prompt/completion</code></td>
+            <td><code>prompt</code> 负责说明任务，<code>completion</code> 负责给答案。</td>
+            <td>默认只训练 completion。</td>
+            <td>如果 prompt 也进了 loss，先查标签边界，再看学习率。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="box warn">
+      <strong>这个例子里最容易犯的错</strong>
+      <p>如果你把 <code>&lt;|user|&gt;</code>、<code>&lt;|assistant|&gt;</code> 先写进 <code>content</code>，再调用 <code>apply_chat_template</code>，你通常会得到重复的角色标记。看起来文本更“像样”，实际训练目标已经脏了。</p>
+    </div>
+  </div>
+</section>
+
+<section id="packing">
+  <div class="head">
+    <h2>packing 的副作用</h2>
+    <span class="tag">efficiency</span>
+  </div>
+  <div class="section-body">
+    <p>packing 的目标只有一个：让短样本少浪费 padding，把更多真实 token 塞进同一次前向。它只管装箱，不管样本质量或 mask 对不对。</p>
+    <p>看 packed 例子时，最好拿两条短样本一起想：A 结束处要有自己的 <code>EOS</code>，B 开始处要重新起一段。A 的 labels 只负责 A，B 的 labels 只负责 B。把中间那条边界去掉，训练器就会把两条样本当成一条长答案。</p>
+    <p>这就是为什么 packing 总是最后开。先单样本确认 labels 对齐，再看两条样本拼起来有没有边界泄漏。只要其中一个位置错了，packing 就会把错误压得更紧，排错更难。</p>
+
+    <div class="codebar"><span>最小配置开关</span><button class="copy" data-copy="packing-code">复制</button></div>
+    <pre id="packing-code" data-export-context="SFTConfig 的三个常见开关" data-export-lang="python"><code class="language-python">from trl import SFTConfig
+
+chat_cfg = SFTConfig(assistant_only_loss=True)
+prompt_completion_cfg = SFTConfig(completion_only_loss=True)
+pack_cfg = SFTConfig(packing=True)
+</code></pre>
+
+    <div class="table-wrap">
+      <table data-export-context="packing 前后的状态对照" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>检查项</th>
+            <th>不开 packing 时</th>
+            <th>开 packing 后</th>
+            <th>你要额外盯什么</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>EOS / 样本边界</td>
+            <td>一条样本一条边界</td>
+            <td>多条样本共享一个上下文</td>
+            <td>每段是否都清楚结束，边界是否会串过去</td>
+          </tr>
+          <tr>
+            <td>padding</td>
+            <td>短样本会留空位</td>
+            <td>空位少很多</td>
+            <td>别把节省下来的 padding 当成训练质量提升</td>
+          </tr>
+          <tr>
+            <td>labels</td>
+            <td>只和单条样本对齐</td>
+            <td>必须对 packed 后的连续序列重新检查</td>
+            <td>有没有跨样本误标、漏标或把上一条答案延到下一条</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="box info">
+      <strong>先把这三件事检查完，再考虑开 packing</strong>
+      <p>第一，模板已经正确；第二，EOS 和样本边界能在解码结果里看见；第三，labels 不会把 user/system 也算成目标。少做这一步，packing 只会把问题压得更密。</p>
+    </div>
+  </div>
+</section>
+
+<section id="audit">
+  <div class="head">
+    <h2>真实排错</h2>
+    <span class="tag">failure map</span>
+  </div>
+  <div class="section-body">
+    <div class="table-wrap">
+      <table data-export-context="SFT 常见失败与第一检查点" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>你看到的症状</th>
+            <th>最可能的原因</th>
+            <th>第一检查点</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>输出里反复出现角色标记</td>
+            <td>内容里已经手写 control token，又套了一次 chat template。</td>
+            <td>先看原始 <code>content</code>，把模板职责交回 tokenizer。</td>
+          </tr>
+          <tr>
+            <td>模型开始模仿 user/system</td>
+            <td>你在全序列上算 loss，或者 assistant-only mask 没生效。</td>
+            <td>打印 labels，确认非目标位置有没有被标成 <code>-100</code>。</td>
+          </tr>
+          <tr>
+            <td>prompt 也被学进去了，回答里开始复读题目。</td>
+            <td>prompt/completion 的边界没有标清，completion_only_loss 没有按预期生效。</td>
+            <td>先看 prompt 对应的位置有没有被忽略，再看 completion 的标签是否完整。</td>
+          </tr>
+          <tr>
+            <td>packed 后前后样本串味</td>
+            <td>EOS 或边界不清，labels 跟着跨过去了。</td>
+            <td>先关 packing，单样本解码，再逐段检查边界。</td>
+          </tr>
+          <tr>
+            <td>loss 看起来在降，但结果怪</td>
+            <td>padding、模板或错误标签一起把损失“洗”平了。</td>
+            <td>别只看平均 loss，拆开看样本和位置。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="box warn">
+      <strong>这一页暂不展开</strong>
+      <p>DFT、chunked_nll、tokenizer 词表扩展、FlashAttention 和分布式吞吐会在后面的实验单元里出现。现在先保证模板、mask 和边界是对的。</p>
+    </div>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>下一步</h2>
+    <span class="tag">operation bridge</span>
+  </div>
+  <div class="section-body">
+    <p>学完这一页，下一步最值得打开的是 <code>03_SFT训练配置与快速实验</code>。那里会把这里的三个开关接到真实训练参数上：batch、checkpoint、logging、LoRA 和学习率。</p>
+
+    <div class="codebar"><span>下一单元会接上的配置骨架</span><button class="copy" data-copy="bridge-code">复制</button></div>
+    <pre id="bridge-code" data-export-context="从样本到训练配置的桥接" data-export-lang="python"><code class="language-python">from trl import SFTConfig
+
+config = SFTConfig(
+    output_dir="sft-run",
+    assistant_only_loss=True,
+    packing=True,
+    learning_rate=2e-5,
+    logging_steps=10,
+)
+</code></pre>
+
+    <div class="table-wrap">
+      <table data-export-context="本页到下一单元的衔接" data-export-lang="table">
+        <thead>
+          <tr>
+            <th>本页已经解决</th>
+            <th>下一单元会继续什么</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>样本格式、模板边界、loss mask、packing 风险</td>
+            <td>把这些判断放进训练脚本和 SFTConfig</td>
+          </tr>
+          <tr>
+            <td>什么时候该看 labels、EOS 和边界</td>
+            <td>什么时候该看 batch size、梯度累积和日志</td>
+          </tr>
+          <tr>
+            <td>什么时候先不开 packing</td>
+            <td>什么时候可以把 packing 当成稳定的效率优化</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>边界说明</h2>
+    <span class="tag">pitfalls</span>
+  </div>
+  <div class="section-body">
+    <ul>
+      <li>把 <code>messages</code> 当最终训练文本，结果自己先写了一遍 role token，再让模板写一遍。</li>
+      <li>把 <code>assistant_only_loss</code> 理解成“只看 assistant，用户内容完全不进输入”，其实它只是把非目标位置从 loss 里拿掉。</li>
+      <li>把 <code>packing=True</code> 理解成提分开关，忽略了它只解决 token 利用率，不解决数据质量。</li>
+      <li>把 <code>-100</code> 当成“这段不存在”，其实它只是不参与损失，输入和上下文通常还在。</li>
+    </ul>
+    <div class="box info">
+      <strong>一个够用的判断顺序</strong>
+      <p>先看样本、模板、mask，再决定 packing。顺序一旦倒过来，排错会绕远路。</p>
+    </div>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>作答目标</strong>
+    <p>把一条样本拆开：谁是上下文，谁要进 loss，谁只是效率开关。</p>
+  </div>
+  <div class="review-card">
+    <strong>检查重点</strong>
+    <p>如果你能指出模板、mask、packing 三者各自改的是哪一层，并解释一个常见失败样本，这页就算真正学进去了。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、角色与模板</h3>
+      <p>先确认你能把结构化消息、模板和生成提示分开看。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速提醒</b>
+      <span><code>messages</code> 先给结构，<code>apply_chat_template</code> 再负责格式，<code>add_generation_prompt</code> 只是告诉模型接下来该轮到 assistant 说话。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、角色与模板" data-title="Q1. apply_chat_template 最直接做什么？" data-answer="B" data-explain="它把带 role/content 的消息列表，渲染成模型真正看到的文本。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">模板</span></div>
+      <h3>Q1. <code>apply_chat_template</code> 最直接做什么？</h3>
+      <p>下面哪一项最接近它的职责？</p>
+      <label><input type="radio" name="q1" value="A">A. 直接修改模型参数</label>
+      <label><input type="radio" name="q1" value="B">B. 把结构化消息渲染成文本序列</label>
+      <label><input type="radio" name="q1" value="C">C. 自动把学习率调到合适值</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、角色与模板" data-title="Q2. messages 的基本结构是否固定为 role/content？" data-answer="对" data-explain="常见角色是 user、assistant、system；内容仍然是结构化输入，尚未变成最终文本。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">messages</span></div>
+      <h3>Q2. <code>messages</code> 的基本结构是否固定为 <code>role/content</code>？</h3>
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q3" data-group="一、角色与模板" data-title="Q3. add_generation_prompt 的作用" data-answer="A" data-explain="它是在结尾加上 assistant 起始提示，让模型知道接下来该生成 assistant 回复。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">生成提示</span></div>
+      <h3>Q3. <code>add_generation_prompt</code> 的作用是什么？</h3>
+      <label><input type="radio" name="q3" value="A">A. 在结尾加上 assistant 起始提示</label>
+      <label><input type="radio" name="q3" value="B">B. 删除系统消息</label>
+      <label><input type="radio" name="q3" value="C">C. 让所有 token 都参与 loss</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q4" data-group="一、角色与模板" data-title="Q4. assistant-only loss 的正确前提" data-answer="C" data-explain="它需要 conversational dataset，并且模板要能标出 assistant 生成区。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">assistant-only</span></div>
+      <h3>Q4. 想只在 assistant 回答上算 loss，最稳妥的组合是什么？</h3>
+      <label><input type="radio" name="q4" value="A">A. 纯文本数据 + packing=True</label>
+      <label><input type="radio" name="q4" value="B">B. prompt-completion 数据 + completion_only_loss=False</label>
+      <label><input type="radio" name="q4" value="C">C. conversational 数据 + assistant_only_loss=True</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、样本和 mask</h3>
+      <p>把样本真正拆开，看看哪些位置该学，哪些位置只是上下文。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速提醒</b>
+      <span>system/user 可能会被模型“看到”，但不一定该被模型“模仿”。这就是 mask 的位置。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q5" data-group="二、样本和 mask" data-title="Q5. 代码阅读：这条样本里哪些部分应参与 loss？">
+      <div class="q-meta"><span class="pill">code reading</span><span class="pill">mask</span></div>
+      <h3>Q5. 代码阅读：这条样本里哪些部分应参与 loss？</h3>
+      <div class="codebar"><span>sample</span><button class="copy" data-copy="practice-sample">复制</button></div>
+      <pre id="practice-sample" data-export-context="练习样本：messages 结构与 mask 位置" data-export-lang="python"><code class="language-python">messages = [
+    {"role": "system", "content": "用三句话解释 packing。"},
+    {"role": "user", "content": "loss mask 是什么？"},
+    {"role": "assistant", "content": "loss mask 会把不该训练的位置标成忽略。"},
+]</code></pre>
+      <textarea name="q5" placeholder="请写出：哪些角色是上下文，哪些位置参与 loss，为什么。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>要点有三条：1）system 和 user 仍然进入输入上下文；2）真正作为目标的通常是 assistant 回答；3）如果是 assistant-only loss，非 assistant 位置应被忽略，常见做法是把这些位置的标签设成 <code>-100</code>。答到“上下文可见”和“参与 loss”是两件事，就算抓住了核心。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q6" data-group="二、样本和 mask" data-title="Q6. padding 位置通常怎样处理？" data-answer="A" data-explain="padding 会出现在输入里，但不该参与损失。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">padding</span></div>
+      <h3>Q6. padding 位置通常怎样处理？</h3>
+      <label><input type="radio" name="q6" value="A">A. 设为 ignore，不参与 loss</label>
+      <label><input type="radio" name="q6" value="B">B. 变成新的 assistant 目标</label>
+      <label><input type="radio" name="q6" value="C">C. 自动变成更高学习率</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q7" data-group="二、样本和 mask" data-title="Q7. assistant-only loss 依赖模板中的什么标记？" data-answer="对" data-explain="TRL 文档说明它依赖 chat template 中的 generation 标记；有些模型会自动补，但模板未必天然具备。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">generation markers</span></div>
+      <h3>Q7. <code>assistant_only_loss=True</code> 依赖模板中的 generation 标记。</h3>
+      <label><input type="radio" name="q7" value="对">对</label>
+      <label><input type="radio" name="q7" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q8" data-group="二、样本和 mask" data-title="Q8. completion-only loss 的切换" data-answer="B" data-explain="prompt-completion 数据默认就只算 completion；如果想训练全序列，可以设 completion_only_loss=False。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">completion-only</span></div>
+      <h3>Q8. 想让 prompt-completion 数据改成训练全序列，应该怎么做？</h3>
+      <label><input type="radio" name="q8" value="A">A. 把 completion_only_loss=True</label>
+      <label><input type="radio" name="q8" value="B">B. 把 completion_only_loss=False</label>
+      <label><input type="radio" name="q8" value="C">C. 把 packing=True</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、packing 和故障排查</h3>
+      <p>把效率开关和故障信号分开，别让 packing 背锅。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速提醒</b>
+      <span>packing 只负责减少 padding 浪费；边界、EOS 和 labels 还得你自己先看。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q9" data-group="三、packing 和故障排查" data-title="Q9. packing 最直接改善什么？" data-answer="A" data-explain="它提高 token 利用率，减少短样本 padding 浪费。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">efficiency</span></div>
+      <h3>Q9. <code>packing</code> 最直接改善什么？</h3>
+      <label><input type="radio" name="q9" value="A">A. token 利用率</label>
+      <label><input type="radio" name="q9" value="B">B. 事实正确率</label>
+      <label><input type="radio" name="q9" value="C">C. 角色标记数量</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q10" data-group="三、packing 和故障排查" data-title="Q10. packing 能修复错误模板吗？" data-answer="错" data-explain="packing 不负责修数据，只负责把数据更紧凑地装进上下文。">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">packing</span></div>
+      <h3>Q10. <code>packing</code> 能修复错误模板吗？</h3>
+      <label><input type="radio" name="q10" value="对">对</label>
+      <label><input type="radio" name="q10" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q11" data-group="三、packing 和故障排查" data-title="Q11. 诊断：packed 后答案串味了，先查什么？">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">debug</span></div>
+      <h3>Q11. 诊断：启用 packing 后，两个样本的答案像串在一起了。先查什么？</h3>
+      <textarea name="q11" placeholder="按“现象 → 可能原因 → 第一检查点”的顺序写。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>至少说到三点：1）先关掉 packing，确认单样本是否正常；2）检查 EOS 和样本边界是否保留；3）打印 packed 后的 decoded 文本和 labels，看有没有跨样本误标。只要能把“边界”和“标签”两件事说出来，方向就对了。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q12" data-group="三、packing 和故障排查" data-title="Q12. 开 packing 前先检查什么？" data-answer="B" data-explain="先看边界、EOS 和 labels，再看效率开关。">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">checklist</span></div>
+      <h3>Q12. 打开 <code>packing</code> 前，先检查什么最稳妥？</h3>
+      <label><input type="radio" name="q12" value="A">A. 先把学习率调大</label>
+      <label><input type="radio" name="q12" value="B">B. 先确认边界、EOS 和 labels</label>
+      <label><input type="radio" name="q12" value="C">C. 先把评测集删掉</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q13" data-group="三、packing 和故障排查" data-title="Q13. 解释 assistant_only_loss 和 completion_only_loss 的区别">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">contrast</span></div>
+      <h3>Q13. 用 80-120 字解释 <code>assistant_only_loss</code> 和 <code>completion_only_loss</code> 的区别。</h3>
+      <p class="solve-note">答案里最好同时说出：适用的数据格式、训练目标位置、以及一个容易错的地方。</p>
+      <textarea name="q13" placeholder="先写适用数据，再写 loss 落点，最后写一个容易搞混的地方。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p><code>assistant_only_loss</code> 针对 conversational 数据，只在 assistant 回复上算 loss；<code>completion_only_loss</code> 针对 prompt-completion 数据，只在 completion 部分算 loss，默认还会根据数据格式自动决定是否只训 completion。好答案还会指出：不要把 prompt 里本来只是上下文的部分也一起算进目标。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><a href="https://huggingface.co/docs/trl/sft_trainer">Hugging Face TRL: SFT Trainer</a>。访问于 2026-06-20，用来确认 <code>SFTTrainer</code> 的数据格式、<code>packing=True</code>、<code>assistant_only_loss=True</code> 和 <code>completion_only_loss=False</code> 的当前文档表述。</li>
+  <li><a href="https://huggingface.co/docs/transformers/chat_templating">Hugging Face Transformers: Chat templates</a>。访问于 2026-06-20，用来确认 <code>apply_chat_template</code> 的输入结构、<code>role/content</code> 约定、<code>add_generation_prompt</code> 的作用，以及为什么不要重复塞 control token。</li>
+  <li><a href="https://github.com/huggingface/alignment-handbook">Hugging Face Alignment Handbook</a>。访问于 2026-06-20，这一仓库用来说明 SFT 在后训练里的位置，也用来提醒这条路线通常把数据准备、模板和训练配方一起看。</li>
+  <li><a href="../index.html">本课程地图</a>。课程总线把本单元放在“模型角色”之后、“SFT 训练配置”之前，说明这里先看样本、mask 和 packing，再进入训练实验。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

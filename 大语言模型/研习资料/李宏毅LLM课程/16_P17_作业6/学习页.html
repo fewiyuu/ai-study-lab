@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>16_P17｜作业6：CNN 图像分类</title>
+  <link rel="stylesheet" href="../../../../assets/study-page.css">
+</head>
+<body data-study-kind="homework" data-feynman-keywords="image classification,CNN,convolution,kernel size,stride,padding,pooling,ReLU,CrossEntropyLoss,accuracy,data augmentation,train validation test,model size,MLP,feature map,prediction file,Judge Boy">
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <strong>16_P17</strong>
+      <span>作业6：Image Classification<br>CNN · PyTorch</span>
+    </div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>学习目标</a>
+      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
+      <a href="#terms"><span class="dot"></span>术语表</a>
+      <a href="#lecture"><span class="dot"></span>讲义主线</a>
+      <a href="#source"><span class="dot"></span>作业流程</a>
+      <a href="#example"><span class="dot"></span>最小例子</a>
+      <a href="#viz"><span class="dot"></span>交互观察</a>
+      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>练习记录</a>
+    </nav>
+    <div class="side-note">这节要用 CNN 做十分类图片识别：看懂卷积、池化、增强、模型大小和 prediction file。</div>
+  </aside>
+  <main>
+    <section class="hero" id="goal">
+      <div>
+        <div class="kicker">LEE HUNG-YI LLM 2026 · P17</div>
+        <h1>作业6：用 CNN 做 MyGO / Ave Mujica 角色分类</h1>
+        <p>这次作业是 deep learning for image classification。输入是一张角色图片，输出是十个角色类别之一。资料集来自 26 集动画截图，共 2378 张，已经切成 training set 1578 张、validation set 300 张、testing set 500 张。</p>
+        <p>这页会把 CNN 作业拆成五步：图片 preprocessing 与 data augmentation，设计 CNN model，定义 CrossEntropyLoss，用 optimizer 训练并看 accuracy/loss curve，最后对 testing set 做 inference，生成 prediction file 上传 Judge Boy。</p>
+        <div class="map"><span class="node">image preprocessing</span><span class="arrow">→</span><span class="node">CNN</span><span class="arrow">→</span><span class="node">cross entropy</span><span class="arrow">→</span><span class="node">accuracy</span><span class="arrow">→</span><span class="node">prediction file</span></div>
+        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=17">https://www.bilibili.com/video/BV1JKoeBiEt4?p=17</a></p>
+      </div>
+      <div class="route">
+        <h3>学完后要能做四件事</h3>
+        <ol><li>解释 image classification 与 regression 的差别，以及为什么本作业用 CrossEntropyLoss。</li><li>说清 convolution layer 的 input channel、output channel、kernel size、stride、padding。</li><li>判断 data augmentation、pooling、model size、overfitting 对训练的影响。</li><li>知道 baseline 推进方向：跑 sample、调 hyperparameter、改 CNN、用 augmentation / pretrained / ensemble 等技巧。</li></ol>
+      </div>
+    </section>
+
+    <section id="skeleton">
+      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
+      <div class="grid3">
+        <div class="box soft"><h3>任务：十分类图片识别</h3><p>模型看到一张角色图片，要输出十个角色之一。training set 和 validation set 有 label，testing set 没有 label。最终 prediction file 应该有 500 笔 id 与预测类别，对应 testing set 的 500 张图片。</p><p>判断句：这是 classification，不是预测连续分数，所以评估看 accuracy 而不是 RMSE。</p></div>
+        <div class="box"><h3>CNN 为什么适合图片</h3><p>图片有 spatial locality：邻近像素关系更强；也有 translation invariance：同一个局部形状移动位置后仍然代表类似特征。CNN 用小 kernel 在局部区域扫过图片，既能抓局部特征，又比把整张图摊平成 MLP 少很多参数。</p><p>判断句：CNN 的优势来自参数共享和局部感受野，不只是“层数更多”。</p></div>
+        <div class="box warn"><h3>训练与提交</h3><p>训练时用 data augmentation 增加变化，用 convolution / ReLU / pooling / linear layers 做分类，用 CrossEntropyLoss 和 optimizer 更新参数。validation 用来保存表现最好的 model weights，inference 时对 test set 生成 prediction file 上传 Judge Boy。</p><p>判断句：validation 不更新参数，testing 没有 label，只能生成提交。</p></div>
+      </div>
+      <div class="mini-graph">
+        <div class="box"><h3>train</h3><p>1578 张，用来更新 CNN 参数。</p></div>
+        <div class="box"><h3>validation</h3><p>300 张，用来选 best weights。</p></div>
+        <div class="box"><h3>test</h3><p>500 张，无 label，只做 inference。</p></div>
+        <div class="box"><h3>prediction</h3><p>id + class，上传 Judge Boy。</p></div>
+      </div>
+    </section>
+
+    <section id="terms">
+      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
+      <table class="metric-table">
+        <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
+        <tr><td>image classification</td><td>给图片选类别。</td><td>本作业把角色图分到 10 个角色 label 之一。</td><td>把它当成回归任务，用连续分数衡量。</td></tr>
+        <tr><td>data augmentation</td><td>对现有图片做合理变化。</td><td>例如 resize、crop、水平翻转、颜色扰动、blur；前提是不改变角色类别。</td><td>随便做会改变目标的增强，例如把方向当标签时仍乱翻转。</td></tr>
+        <tr><td>convolution</td><td>用小滤镜扫图片抓局部特征。</td><td>kernel 在局部窗口做 element-wise 乘加，输出 feature map。</td><td>以为卷积层像全连接层一样每个像素都独立连到所有输出。</td></tr>
+        <tr><td>kernel / stride / padding</td><td>滤镜大小、移动步长、边缘补零。</td><td>kernel size 决定看多大局部；stride 决定扫多快；padding 可控制输出空间大小。</td><td>只改 kernel，不检查输出尺寸能不能接下一层。</td></tr>
+        <tr><td>feature map</td><td>卷积后得到的一张特征图。</td><td>output channel 数决定输出多少张 feature map，每张学习不同局部模式。</td><td>把 channel 只理解成 RGB；中间层 channel 已是学习出来的特征。</td></tr>
+        <tr><td>pooling</td><td>保留局部重要信息并缩小尺寸。</td><td>Max pooling 取窗口最大值，average pooling 取平均值，减少计算量并增加位置鲁棒性。</td><td>以为 pooling 会学习参数；常见 pooling 本身不训练参数。</td></tr>
+        <tr><td>CrossEntropyLoss</td><td>分类任务常用损失。</td><td>比较模型 logits 与真实类别 label，正确类别概率越低 loss 越大。</td><td>先手动 softmax 再喂给 PyTorch CrossEntropyLoss，导致使用方式错误。</td></tr>
+        <tr><td>model size</td><td>模型权重占用空间。</td><td>参数个数 × 每个参数字节数；CNN 因参数共享通常远小于把图片摊平的 MLP。</td><td>以为模型越大一定越好，忽略 overfitting 和显存限制。</td></tr>
+      </table>
+      <p class="checkpoint">读完这一段，你应该能把术语放进 CNN 训练流程里：图片怎么变 tensor，卷积怎么抓特征，分类 loss 怎么训练，prediction file 怎么提交。</p>
+    </section>
+
+    <section id="lecture">
+      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+      <div class="grid2">
+        <div class="box">
+          <h3>1. 图像分类：把图片映射到类别</h3>
+          <p>这次作业的目标很直接：给模型一张 MyGO 或 Ave Mujica 角色图片，让它预测十个主要角色中的哪一个。输入是 RGB 图片 tensor，输出是 10 维 logits，每一维对应一个角色。最后选 logits 最大的类别作为 prediction file 里的预测结果。</p>
+          <p>和上一节回归不同，这里不预测连续分数，而是做 classification。训练时 label 不是 0-100 分，而是角色编号。loss 也从 MSE/RMSE 换成 CrossEntropyLoss，评估重点变成 accuracy：预测类别和真实类别是否一致。</p>
+          <p>你现在应该能做的是：把一张图片进入模型后的路径说清楚：resize/augmentation → tensor → CNN feature extractor → linear classifier → class prediction。</p>
+        </div>
+        <div class="box">
+          <h3>2. 为什么不用巨大 MLP 直接摊平图片</h3>
+          <p>如果把 128×128×3 的图片摊平成向量，再接一个很大的 linear layer，参数量会爆炸。字幕里的例子中，一个 MLP 第一层就可能有 2 亿多个可训练参数，模型大小接近 776 MB，而且效果还不一定好。</p>
+          <p>CNN 的核心是局部连接和参数共享。一个 3×3 kernel 会在整张图片上滑动，使用同一组参数提取不同位置的局部特征。这样参数量和图片大小不再一对一爆炸。例子里的 CNN 只有两万多个参数，模型大小约 0.11 MB，却能比巨大 MLP 更适合图片分类。</p>
+          <p>你现在应该能做的是：解释 CNN 为什么“更小但更适合图片”，而不是只说它是图像任务常用架构。</p>
+        </div>
+      </div>
+      <div class="grid3" style="margin-top:12px">
+        <div class="box soft"><h3>3. Data augmentation</h3><p>资料只有 1578 张训练图，容易不够。augmentation 用现有图片制造合理变化，例如 crop、水平翻转、颜色扰动、模糊。选择增强时要问：它会不会改变角色类别？如果不会，就可能帮助模型学到更稳的特征。</p><p>判断句：增强是扩大训练变化，不是凭空增加新角色。</p></div>
+        <div class="box warn"><h3>4. Convolution 参数</h3><p><code>nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)</code> 是本节核心。RGB 图片第一层通常 in_channels=3；out_channels 决定输出多少张 feature map；kernel size 决定局部窗口大小；stride 决定滑动步长；padding 决定边缘补多少。</p><p>判断句：改 convolution 后，必须检查输出 shape 能不能接下一层。</p></div>
+        <div class="box"><h3>5. Padding 与 stride 的取舍</h3><p>不加 padding 时，卷积会让空间尺寸变小；加一圈零 padding 可以让某些 kernel/stride 下输出尺寸更容易控制。stride 大会减少计算量，但可能略过细节；stride 小保留更多信息，但计算更重。</p><p>判断句：空间尺寸变化不是小事，它会影响 flatten 后的 linear input dimension。</p></div>
+        <div class="box soft"><h3>6. Pooling 与 ReLU</h3><p>ReLU 把负值压成 0，引入非线性；pooling 在局部窗口里保留最大值或平均值，降低空间尺寸和计算量。max pooling 常用于保留最强特征，average pooling 更像平滑汇总。</p><p>判断句：pooling 通常不学习参数，但会改变 feature map 尺寸。</p></div>
+        <div class="box warn"><h3>7. CrossEntropyLoss 与 accuracy</h3><p>分类模型输出 10 维 logits，不需要先手动 softmax 再给 CrossEntropyLoss。训练时 loss 用于更新参数；validation 时 accuracy 用于看真实分类表现。训练 loop 和回归类似，但指标和 label 形式不同。</p><p>判断句：loss 下降不一定等于 accuracy 一定同步提高，两个都要看。</p></div>
+        <div class="box"><h3>8. Baseline 与技巧</h3><p>sample code 直接跑可拿基本分；微调 hyperparameter 或换模型可过更高 baseline。可尝试 data augmentation、调整 CNN layer、使用 pretrained weights、ensemble、dropout、test-time augmentation，但不一定需要全部用上。</p><p>判断句：技巧越多不等于越稳，先根据 validation curve 判断瓶颈。</p></div>
+      </div>
+      <div class="box greenbox" style="margin-top:12px">
+        <h3>完整知识链路</h3>
+        <p>把本节串起来，可以这样讲：作业6 用 CNN 做十分类图像识别。先把图片 resize 成固定大小，并在训练时做不改变角色身份的 augmentation；再用卷积层抓局部特征，用 ReLU 和 pooling 形成更稳定、更小的 feature map；随后 flatten 接 linear classifier 输出十个角色的 logits；训练时用 CrossEntropyLoss 和 optimizer 更新参数，validation 时看 loss 和 accuracy 并保存 best weights；最后对 testing set inference，生成 500 笔 id/prediction 的文件上传 Judge Boy。想提高 baseline，要在模型大小、augmentation、CNN 深度、hyperparameter 和泛化之间取平衡。</p>
+      </div>
+    </section>
+
+    <section id="source">
+      <div class="head"><h2>作业流程</h2><span class="tag">WORKFLOW</span></div>
+      <p class="muted">下面把字幕里的 Colab 与评分说明压成操作地图。</p>
+      <div class="source-lines">
+        <div class="box"><h3>1. 资料与任务</h3><p>资料来自动画截图：train 1578、validation 300、test 500。任务是识别 MyGO / Ave Mujica 十个主要角色，test set 没有 label，最后要提交 prediction file。</p><p class="checkpoint">你现在应该能判断：训练、验证、测试各自负责什么。</p></div>
+        <div class="box"><h3>2. Preprocessing</h3><p>默认只把图片 resize 到 128×128×3。可加入随机裁切、水平/垂直翻转、颜色扰动、灰阶、Gaussian blur 等 augmentation，但要确认不会改变角色类别。</p><p class="checkpoint">增强要服务泛化，不是把图片弄得越乱越好。</p></div>
+        <div class="box"><h3>3. 模型架构</h3><p>sample code 提供 MLP 和 CNN。MLP 把图片摊平后参数量巨大；CNN 用 Conv2d、BatchNorm、ReLU、MaxPool，再接 linear classifier，参数更少也更适合图片。</p><p class="checkpoint">改模型时同步检查 forward 函数，否则层写了也不会被用到。</p></div>
+        <div class="box"><h3>4. 训练与保存</h3><p>训练使用 CrossEntropyLoss、Adam 等 optimizer。每轮计算 train loss/accuracy 和 validation loss/accuracy；如果 validation accuracy 更好，就保存 weights，供后续 inference 使用。</p><p class="checkpoint">validation 只评估，不做 optimizer.step。</p></div>
+        <div class="box"><h3>5. Baseline 技巧</h3><p>可调 epoch、learning rate、batch size、optimizer、weight decay、model size。baseline 提示中，100 epoch 内应有机会达到 boss；model size 合理范围约 5-150 MB，不需要盲目做很大。</p><p class="checkpoint">模型过大可能训练慢、占空间，还可能 overfitting。</p></div>
+        <div class="box"><h3>6. 提交规范</h3><p>prediction file 应有 500 笔 id 和 prediction。每天最多 5 次提交。不能抄袭、不能手动修改 prediction file、不能分享代码或预测文件、不能用额外方法提高提交次数。</p><p class="checkpoint">别忘记上传文件，Colab 跑完不等于作业提交。</p></div>
+      </div>
+      <div class="grid2" style="margin-top:14px">
+        <div class="box greenbox"><h3>CNN 作业排查模板</h3><ol><li>先查数据：图片是否 resize 到统一尺寸，label 是否对应 0-9 类别，train/valid/test 是否分开。</li><li>再查 shape：每层 Conv2d 的 in_channels 是否接上前一层 out_channels，pooling 后 flatten 维度是否匹配 linear。</li><li>再查训练：train loop 有 zero_grad、backward、step，valid loop 没有 step。</li><li>最后查提交：500 个 id 顺序不乱，prediction 是类别编号，文件不是手动改出来的。</li></ol><p class="checkpoint">你现在应该能做什么：CNN 报错或分数异常时，按数据、shape、训练、提交四层定位。</p></div>
+        <div class="box"><h3>worked example：validation 低于 training</h3><p>如果训练准确率 95%，validation 只有 55%，先不要继续加深模型。更合理的排查是：augmentation 是否破坏角色身份、模型是否过大、epoch 是否过多、validation set 是否分布不同。修法可能是减小模型、加 dropout/weight decay、调弱增强或回到 best validation weights。</p></div>
+      </div>
+    </section>
+
+    <section id="example">
+      <div class="head"><h2>最小例子</h2><span class="tag">EXAMPLE</span></div>
+      <p>这一节的最小例子不追求把作业代码完整重写，而是把最容易出错的三件事摆清楚：卷积层的输入输出 shape、参数量为什么比 MLP 小、训练循环里每一步到底在更新什么。</p>
+      <div class="codebar"><span class="label">参数例子：Conv2d 的尺寸与参数量</span><span class="kind">python</span></div>
+      <pre><code># 输入是一批 RGB 图片：batch_size x channel x height x width
+x = torch.randn(32, 3, 128, 128)
+
+# 3 个输入通道，9 个输出通道，2x2 kernel，stride=1，padding=1
+conv = nn.Conv2d(in_channels=3, out_channels=9, kernel_size=2, stride=1, padding=1)
+y = conv(x)
+
+print(y.shape)  # torch.Size([32, 9, 129, 129])
+
+# 不含 bias 的参数量：3 * 9 * 2 * 2 = 108
+# 若有 bias，再加 out_channels = 9</code></pre>
+      <div class="box soft">
+        <h3>逐行理解</h3>
+        <p><code>Conv2d</code> 的输入顺序是 <code>NCHW</code>：N 是 batch，C 是 channel，H/W 是图片高宽。RGB 图片的 C 是 3；如果前一层已经输出 32 张 feature map，下一层的 <code>in_channels</code> 就必须是 32。很多 CNN 作业跑不起来，不是公式不会，而是前后层通道数没有接上。</p>
+        <p>输出尺寸按公式计算：<code>out = floor((in + 2 * padding - kernel_size) / stride) + 1</code>。上面输入宽高是 128，padding 是 1，kernel 是 2，所以输出宽高是 <code>floor((128 + 2 - 2) / 1) + 1 = 129</code>。这提醒你：padding 不一定只是“保持尺寸”，要和 kernel size 一起算。</p>
+        <p>你现在应该能做的事：看到一层 <code>Conv2d</code>，先算输出通道、空间尺寸和参数量，再判断下一层能不能接上。</p>
+      </div>
+      <div class="codebar"><span class="label">最小模型：两段卷积 + 分类头</span><span class="kind">python</span></div>
+      <pre><code>class CNN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+        )
+        self.classifier = nn.Linear(64 * 32 * 32, 10)
+
+    def forward(self, x):
+        x = self.features(x)
+        x = torch.flatten(x, 1)
+        return self.classifier(x)</code></pre>
+      <div class="box">
+        <h3>为什么这个结构能用于作业</h3>
+        <p>输入图片被 resize 到 128 x 128。第一段 <code>MaxPool2d(2)</code> 把宽高降到 64 x 64，第二段再降到 32 x 32；最后有 64 个通道，所以 flatten 后长度是 <code>64 * 32 * 32</code>。分类头输出 10 个 logits，对应 MyGO / Ave Mujica 的 10 个角色类别。</p>
+        <p><code>BatchNorm2d</code> 用来稳定每层特征的数值分布，<code>ReLU</code> 加入非线性，<code>MaxPool2d</code> 降低空间尺寸并保留局部强响应。这里的重点不是背固定结构，而是能解释：卷积负责抽局部特征，池化负责压缩位置细节，线性层负责把特征投到类别分数。</p>
+        <p>如果你把第二层卷积改成 <code>nn.Conv2d(16, 64, 3)</code>，模型会报错，因为前一层输出通道是 32，不是 16。如果你删除一次 pooling，最后的 flatten 长度会变成 <code>64 * 64 * 64</code>，分类头的输入维度也必须跟着改。</p>
+      </div>
+      <div class="codebar"><span class="label">训练 step：分类任务的 loss 和 accuracy</span><span class="kind">python</span></div>
+      <pre><code>criterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+model.train()
+for images, labels in train_loader:
+    images, labels = images.to(device), labels.to(device)
+    logits = model(images)              # shape: [batch, 10]
+    loss = criterion(logits, labels)    # labels 是类别编号，不是 one-hot
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+model.eval()
+correct, total = 0, 0
+with torch.no_grad():
+    for images, labels in valid_loader:
+        logits = model(images.to(device))
+        pred = logits.argmax(dim=1)
+        correct += (pred.cpu() == labels).sum().item()
+        total += labels.size(0)
+accuracy = correct / total</code></pre>
+      <div class="box soft">
+        <h3>训练循环的检查点</h3>
+        <p><code>CrossEntropyLoss</code> 直接吃 logits，不需要你先手动 softmax；它内部会处理 log-softmax 和负对数似然。如果你先 softmax 再喂进去，数值稳定性和梯度都会变差。<code>labels</code> 应该是 <code>0-9</code> 的类别编号，而不是十维 one-hot 向量。</p>
+        <p><code>zero_grad -> backward -> step</code> 是一次参数更新的顺序：先清空旧梯度，再根据当前 batch 反向传播，最后让优化器更新参数。validation 只评估泛化表现，所以要用 <code>model.eval()</code> 和 <code>torch.no_grad()</code>，不能在 validation loop 里调用 <code>optimizer.step()</code>。</p>
+        <p>你现在应该能做的事：读懂一个基础 CNN 作业的 model、loss、optimizer、train loop、valid loop，并指出 shape、loss 用法和参数更新位置的常见错误。</p>
+      </div>
+    </section>
+
+    <section id="viz">
+      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
+      <div class="viz-panel">
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <h3>卷积输出尺寸</h3>
+            <div class="slider-row"><span>kernel size</span><input id="kernelSize" type="range" min="1" max="7" step="2" value="3"><b id="kernelOut">3</b></div>
+            <div class="slider-row"><span>stride</span><input id="strideSize" type="range" min="1" max="4" value="1"><b id="strideOut">1</b></div>
+            <div class="slider-row"><span>padding</span><input id="paddingSize" type="range" min="0" max="4" value="1"><b id="paddingOut">1</b></div>
+            <table class="metric-table">
+              <tr><th>输入尺寸</th><td>128 x 128 x 3</td></tr>
+              <tr><th>输出尺寸</th><td id="convShape">128 x 128 x 32</td></tr>
+              <tr><th>参数量</th><td id="convParams">896</td></tr>
+            </table>
+            <p id="convText" class="checkpoint"></p>
+          </div>
+          <div class="viz-cell">
+            <h3>作业策略判断</h3>
+            <div class="seg">
+              <button data-check="augment" class="active">资料增强</button>
+              <button data-check="capacity">模型大小</button>
+              <button data-check="submit">提交文件</button>
+            </div>
+            <p id="checkText" class="checkpoint"></p>
+          </div>
+        </div>
+      </div>
+      <p>观察重点：卷积层不是“随便叠就好”。kernel、stride、padding 会同时影响输出尺寸、计算量和下一层能否接上；资料增强、模型容量和提交格式则决定你能不能把 validation accuracy 稳定转成最终分数。</p>
+    </section>
+
+    <section id="diagnosis">
+      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
+      <div class="grid2">
+        <div class="box redsoft">
+          <h3>常见坑</h3>
+          <ol>
+            <li>把 data augmentation 当作越多越好。错因：没有检查增强是否改变标签语义；后果：模型学到错误样本，例如过度裁切导致角色关键特征消失；修法：只保留不改变类别身份的 crop、flip、color jitter、blur 等操作，并用 validation 比较。</li>
+            <li>改了 <code>Conv2d</code> 后不检查 shape。错因：只看层数，不看通道和宽高；后果：下一层 <code>in_channels</code> 或 <code>Linear</code> 输入维度不匹配；修法：每改一段就打印 tensor shape 或手算输出尺寸。</li>
+            <li>手动 softmax 后再喂 <code>CrossEntropyLoss</code>。错因：误以为 loss 需要概率；后果：梯度和数值稳定性变差；修法：让模型输出 logits，直接传给 <code>CrossEntropyLoss</code>。</li>
+            <li>validation loop 里还在更新参数。错因：没有区分 train 和 eval；后果：验证分数不再是干净评估，还可能浪费显存；修法：validation 使用 <code>model.eval()</code>、<code>torch.no_grad()</code>，不调用 <code>backward</code> 和 <code>step</code>。</li>
+            <li>认为模型越大一定越好。错因：忽略数据量只有 1578 张 train 图；后果：训练集准确率升高但 validation/test 变差；修法：用 validation accuracy、dropout、weight decay、early stopping、pretrained weights 共同判断。</li>
+            <li>最后手动改 prediction file。错因：把提交文件当成随手可调的表格；后果：id 顺序、类别编号或行数出错，500 张 test 图无法正确评分；修法：由推理脚本稳定导出 id/prediction 两列，再检查行数和类别范围。</li>
+          </ol>
+        </div>
+        <div class="box">
+          <h3>易混概念</h3>
+          <table class="metric-table">
+            <tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr>
+            <tr><td>image classification</td><td>regression</td><td>分类输出离散类别，P17 是 10 个角色；回归输出连续数值，常用 MSE 等损失。</td></tr>
+            <tr><td>logits</td><td>probability</td><td>logits 是未归一化分数；probability 是 softmax 后的概率。<code>CrossEntropyLoss</code> 需要 logits。</td></tr>
+            <tr><td>train accuracy</td><td>validation accuracy</td><td>train accuracy 说明训练资料拟合程度；validation accuracy 更接近未知资料表现。</td></tr>
+            <tr><td>kernel size</td><td>output channel</td><td>kernel size 决定每次看多大局部区域；output channel 决定学多少组特征图。</td></tr>
+            <tr><td>data augmentation</td><td>test-time augmentation</td><td>前者训练时扩充样本变化；后者推理时对同一测试图做多种变换再综合预测。</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
+      <div class="practice-intro">
+        <div class="review-card"><strong>作答前先抓主线</strong><p>先写输入是什么、标签是什么、模型输出是什么，再写 CNN 如何抽特征、训练如何更新参数、validation 和 submission 怎么验收。</p></div>
+        <div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起 image classification、data augmentation、convolution、pooling、CrossEntropyLoss、accuracy 和 prediction file。</p></div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>这一组先检查任务定义、数据切分和 CNN 基本术语。</p></div><div class="quick-review"><b>REMIND</b>答案要能落到输入、输出、shape 或评分方式上。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-role="homework" data-title="1. P17 的 image classification 任务输出的是连续分数，而不是类别。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. P17 的 image classification 任务输出的是连续分数，而不是类别。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
+          <div class="q" data-role="homework" data-title="2. P17 中训练、验证、测试集分别大约是多少张图片？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. P17 中训练、验证、测试集分别大约是多少张图片？</h3><div class="choices"><label><input type="radio" name="q2" value="1578 / 300 / 500">1578 / 300 / 500</label><label><input type="radio" name="q2" value="500 / 300 / 1578">500 / 300 / 1578</label><label><input type="radio" name="q2" value="300 / 500 / 1578">300 / 500 / 1578</label></div></div>
+          <div class="q short" data-role="homework" data-title="3. 请写出 CNN 做图像分类时最关键的两个优势：______ 和 ______。"><div class="q-meta"><span class="pill">填空</span></div><h3>3. 请写出 CNN 做图像分类时最关键的两个优势：______ 和 ______。</h3><input type="text" name="q3"></div>
+          <div class="q short" data-role="homework" data-title="4. 用 1-2 句话解释 feature map。"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 用 1-2 句话解释 feature map。</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、主线理解</h3><p>这一组要求你把作业流程连成一条可执行链路。</p></div><div class="quick-review"><b>REMIND</b>不要只写名词，写清楚每一步输入输出。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="5. 把 P17 作业流程排成顺序：读图、transform、CNN forward、loss、backward、validation、prediction file。"><div class="q-meta"><span class="pill">排序</span></div><h3>5. 把 P17 作业流程排成顺序：读图、transform、CNN forward、loss、backward、validation、prediction file。</h3><textarea name="q5"></textarea></div>
+          <div class="q short" data-role="homework" data-title="6. 区分 data augmentation 和 preprocessing。"><div class="q-meta"><span class="pill">对照</span></div><h3>6. 区分 data augmentation 和 preprocessing。</h3><textarea name="q6"></textarea></div>
+          <div class="q short" data-role="homework" data-title="7. 为什么 CNN 比直接把 128x128x3 图片 flatten 后接 MLP 更适合这个作业？"><div class="q-meta"><span class="pill">解释</span></div><h3>7. 为什么 CNN 比直接把 128x128x3 图片 flatten 后接 MLP 更适合这个作业？</h3><textarea name="q7"></textarea></div>
+          <div class="q short" data-role="homework" data-title="8. 如果 validation accuracy 远低于 train accuracy，优先检查 ______、______ 和模型容量。"><div class="q-meta"><span class="pill">填空</span></div><h3>8. 如果 validation accuracy 远低于 train accuracy，优先检查 ______、______ 和模型容量。</h3><input type="text" name="q8"></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、代码阅读</h3><p>这一组把讲义里的最小模型转成 shape、loss 和训练循环问题。</p></div><div class="quick-review"><b>REMIND</b>看到代码先看 tensor shape，再看有没有更新参数。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="9. 输入是 [32, 3, 128, 128]，经过 Conv2d(3, 32, 3, padding=1) 后 shape 是什么？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>9. 输入是 [32, 3, 128, 128]，经过 <code>Conv2d(3, 32, 3, padding=1)</code> 后 shape 是什么？</h3><textarea name="q9"></textarea></div>
+          <div class="q short" data-role="homework" data-title="10. 两次 MaxPool2d(2) 后，128x128 的宽高会变成多少？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>10. 两次 <code>MaxPool2d(2)</code> 后，128x128 的宽高会变成多少？</h3><textarea name="q10"></textarea></div>
+          <div class="q short" data-role="homework" data-title="11. CrossEntropyLoss 为什么不需要先手动 softmax？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>11. <code>CrossEntropyLoss</code> 为什么不需要先手动 softmax？</h3><textarea name="q11"></textarea></div>
+          <div class="q" data-role="homework" data-title="12. validation loop 里可以调用 optimizer.step()，因为这样分数会更高。"><div class="q-meta"><span class="pill">判断</span></div><h3>12. validation loop 里可以调用 <code>optimizer.step()</code>，因为这样分数会更高。</h3><div class="choices"><label><input type="radio" name="q12" value="对">对</label><label><input type="radio" name="q12" value="错">错</label></div></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、错误诊断</h3><p>这一组按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b>诊断题不要只说“会报错”，要说为什么错和如何改。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="13. 有人把 Conv2d(16, 64, 3) 接在输出 32 channel 的层后面。错因是什么、后果是什么、怎么改？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 有人把 <code>Conv2d(16, 64, 3)</code> 接在输出 32 channel 的层后面。错因是什么、后果是什么、怎么改？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q13"></textarea></div>
+          <div class="q short" data-role="homework" data-title="14. 有人对角色图片做会改变身份线索的强裁切，然后训练分数不稳。这个增强哪里有问题？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. 有人对角色图片做会改变身份线索的强裁切，然后训练分数不稳。这个增强哪里有问题？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q14"></textarea></div>
+          <div class="q short" data-role="homework" data-title="15. 有人发现训练准确率很高，validation accuracy 很低，却继续加大模型。应该如何处理？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 有人发现训练准确率很高，validation accuracy 很低，却继续加大模型。应该如何处理？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q15"></textarea></div>
+          <div class="q short" data-role="homework" data-title="16. 有人把 test prediction file 的 id 顺序手动排序后再上传。可能造成什么后果？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 有人把 test prediction file 的 id 顺序手动排序后再上传。可能造成什么后果？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q16"></textarea></div>
+          <div class="q short" data-role="homework" data-title="17. 有人说“只要用了 pretrained weights，就不用看 validation”。这句话的问题在哪里？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>17. 有人说“只要用了 pretrained weights，就不用看 validation”。这句话的问题在哪里？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q17"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>五、调参与提交</h3><p>这一组检查你能不能把模型改动和最终提交连起来。</p></div><div class="quick-review"><b>REMIND</b>每个改动都要能被 validation 或 submission 格式检查。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="18. 如果你想改进 baseline，你会优先尝试哪三类方法？"><div class="q-meta"><span class="pill">应用</span></div><h3>18. 如果你想改进 baseline，你会优先尝试哪三类方法？</h3><textarea name="q18"></textarea></div>
+          <div class="q short" data-role="homework" data-title="19. 如何判断一组 data augmentation 是有帮助而不是引入噪声？"><div class="q-meta"><span class="pill">应用</span></div><h3>19. 如何判断一组 data augmentation 是有帮助而不是引入噪声？</h3><textarea name="q19"></textarea></div>
+          <div class="q short" data-role="homework" data-title="20. 写出 5 条上传 prediction file 前的检查清单。"><div class="q-meta"><span class="pill">清单</span></div><h3>20. 写出 5 条上传 prediction file 前的检查清单。</h3><textarea name="q20"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>六、表达输出</h3><p>最后两题检查你能不能讲给别人听。</p></div><div class="quick-review"><b>REMIND</b>先讲任务，再讲 CNN，最后讲训练、评估和提交。</div></div>
+        <div class="drill-grid">
+          <div class="q short" data-role="homework" data-title="21. 如果面试官问“P17 作业6 的核心是什么”，你会怎么答？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>21. 如果面试官问“P17 作业6 的核心是什么”，你会怎么答？</h3><textarea name="q21"></textarea></div>
+          <div class="q full" data-role="homework" data-title="22. 用 6-9 句话讲清楚 P17 作业6：从 128x128x3 图片到 10 类 prediction file。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>22. 用 6-9 句话讲清楚 P17 作业6：从 128x128x3 图片到 10 类 prediction file。</h3><div class="solve-note">请串联 image classification、data augmentation、convolution、pooling、CrossEntropyLoss、accuracy、model size 和 prediction file。</div><textarea name="q22"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>导出练习记录</h2><span class="tag">EXPORT</span></div>
+      <p class="muted">完成练习后生成记录，方便后续回看订正。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+
+<script src="../../../../assets/study-page.js"></script>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){
+  const max=document.documentElement.scrollHeight-innerHeight;
+  progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";
+  let current=sections[0]?.id;
+  for(const section of sections){
+    const rect=section.getBoundingClientRect();
+    if(rect.top<innerHeight*.36) current=section.id;
+    section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);
+  }
+  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));
+}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+document.querySelectorAll(".codebar").forEach(bar=>{
+  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
+  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});
+  bar.appendChild(btn);
+});
+const kernelSize=document.getElementById("kernelSize");
+const strideSize=document.getElementById("strideSize");
+const paddingSize=document.getElementById("paddingSize");
+function updateConvDemo(){
+  const kernel=Number(kernelSize.value);
+  const stride=Number(strideSize.value);
+  const padding=Number(paddingSize.value);
+  const input=128,inChannels=3,outChannels=32;
+  const out=Math.floor((input+2*padding-kernel)/stride)+1;
+  const params=inChannels*outChannels*kernel*kernel+outChannels;
+  document.getElementById("kernelOut").textContent=kernel;
+  document.getElementById("strideOut").textContent=stride;
+  document.getElementById("paddingOut").textContent=padding;
+  document.getElementById("convShape").textContent=out+" x "+out+" x "+outChannels;
+  document.getElementById("convParams").textContent=params.toLocaleString()+"（含 bias）";
+  const same=out===input;
+  document.getElementById("convText").textContent=same?"这组参数刚好保持 128x128 的空间尺寸，后面接同尺寸假设的层会比较省心。":out<input?"输出尺寸变小，计算量下降，但后续 Linear 的输入长度也会变。":"输出尺寸变大，通常是 padding 相对 kernel 偏大，先确认这是不是你想要的结构。";
+}
+[kernelSize,strideSize,paddingSize].forEach(input=>input.addEventListener("input",updateConvDemo));updateConvDemo();
+const checkTexts={
+  augment:"资料增强要服务泛化：轻微裁切、翻转、颜色扰动可以模拟拍摄变化，但不能把角色身份线索裁掉或改掉。",
+  capacity:"模型大小要和数据量匹配：层数、channel、dropout、weight decay、pretrained weights 都要用 validation accuracy 判断。",
+  submit:"提交前检查 prediction file：500 行 test id、两列字段、类别编号 0-9、id 顺序不乱、不要手动改预测。"
+};
+document.querySelectorAll("[data-check]").forEach(btn=>btn.addEventListener("click",()=>{
+  document.querySelectorAll("[data-check]").forEach(b=>b.classList.toggle("active",b===btn));
+  document.getElementById("checkText").textContent=checkTexts[btn.dataset.check];
+}));
+document.getElementById("checkText").textContent=checkTexts.loose;
+function valueOfQuestion(q){
+  const radio=q.querySelector("input[type=radio]:checked"); if(radio) return radio.value;
+  const text=q.querySelector("textarea,input[type=text],select"); return text?text.value.trim():"";
+}
+function questionGroup(q){return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";}
+function generateRecord(){
+  const qs=[...document.querySelectorAll('[data-role="homework"]')],groups={},warnings=[];
+  qs.forEach((q,i)=>{
+    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";
+    const hint=q.querySelector(".solve-note")?.innerText.trim()||"";
+    const answer=valueOfQuestion(q);
+    if(!answer) warnings.push("第 "+(i+1)+" 题未填写："+title);
+    if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))) warnings.push("第 "+(i+1)+" 题建议补齐“错因 / 后果 / 修法”。");
+    if(q.dataset.type==="feynman"){
+      const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
+      if(answer&&answer.length<120) warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");
+      const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):[];
+      if(lack.length) warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");
+    }
+    const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
+  });
+  let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";
+  Object.keys(groups).forEach(group=>{out+="## "+group+"\n\n";groups[group].forEach(item=>{out+="### "+item.title+"\n";if(item.hint) out+="提示摘要："+item.hint+"\n\n";out+=item.answer+"\n\n";});});
+  document.getElementById("record").textContent=out;
+  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，适合回看订正。";
+}
+function fallbackCopy(text,onOk,onFail){
+  const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";document.body.appendChild(ta);ta.focus();ta.select();
+  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
+}
+function copyText(text,onOk,onFail){
+  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
+  else fallbackCopy(text,onOk,onFail);
+}
+function copyRecord(){
+  copyText(document.getElementById("record").textContent,()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";},()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";});
+}
+</script>
+</body>
+</html>

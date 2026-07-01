@@ -1,0 +1,1093 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ToolBench / API-Bank 与任务评测</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="Agentic 后训练与工具使用 RL" data-unit="05">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>Agentic 后训练与工具使用 RL</strong>
+        <span>05</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#terms"><span class="dot"></span>术语与边界</a>
+        <a href="#benchmark-map"><span class="dot"></span>评测地图</a>
+        <a href="#eval-pipeline"><span class="dot"></span>评测流程</a>
+        <a href="#trace-workshop"><span class="dot"></span>轨迹工作坊</a>
+        <a href="#stability-lab"><span class="dot"></span>稳定性隔离</a>
+        <a href="#metrics"><span class="dot"></span>指标怎么读</a>
+        <a href="#cases"><span class="dot"></span>例子</a>
+        <a href="#failure-lab"><span class="dot"></span>故障台</a>
+        <a href="#operation-bridge"><span class="dot"></span>任务桥接</a>
+        <a href="#boundary-note"><span class="dot"></span>先知道，先别追</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把单步工具调用和多步任务评测分开。ToolBench、API-Bank 和 StableToolBench 都是在回答：任务有没有真的完成，工具有没有真的被用对。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">课程单元</div>
+          <h1>ToolBench / API-Bank 与任务评测</h1>
+          <p>这一页把 ToolBench、API-Bank 和 StableToolBench 放在同一条线上看：先分清它们各自要测什么，再看多步工具任务的评测器到底读什么、写什么、漏掉什么。读完这一页，你应该能把“最终答案对了”与“工具路径真的对了”分开判断。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../04_Toolformer与自监督工具学习/学习页.html">上一单元</a><a href="../06_从SFT到环境强化学习/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+  <li>能说清 ToolBench、API-Bank、StableToolBench 各自主要解决的评测问题。</li>
+  <li>能按任务规格、工具路径、参数、稳定性和最终结果五层读一条评测记录。</li>
+  <li>能给一个多步工具任务写出最小评测规约，知道先固定什么、先检查什么。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">multi-step evaluation</span>
+  </div>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>分清三类基准</h3>
+      <p>ToolBench、API-Bank、StableToolBench 分别对应不同层面的工作：一个偏大规模工具学习框架，一个偏可运行任务评测，一个偏稳定性修复。</p>
+    </div>
+    <div class="box info">
+      <h3>读懂评测链路</h3>
+      <p>能把任务规格、计划、调用、观察、复核这几层按顺序读出来，知道评测器在哪一层开始发力。</p>
+    </div>
+    <div class="box warn">
+      <h3>写出最小规约</h3>
+      <p>能给一个多步工具任务写出最小成功条件、允许工具、稳定环境和复核方式，不把一个分数当成全部。</p>
+    </div>
+  </div>
+  <p class="muted">这页先讲评测，不讲环境强化学习本身。环境、奖励和沙盒边界放到后面的单元再追。</p>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">source boundary</span>
+  </div>
+  <p>想判断一个模型会不会用工具，不能只看最终答案。比如“把明天 15:00 的会议改到 16:00”这类任务，模型可能给出一个看起来正确的结果，但中间没有查空闲、没有更新参会者、甚至改错了会议对象。对这种任务，评测要看的是路径：计划有没有读对，调用有没有对准，参数有没有填对，结果有没有真的落到最后一步。</p>
+  <div class="grid2">
+    <div class="box info">
+      <h3>为什么要把路径算进去</h3>
+      <p>如果只看最终文本，模型很容易学会绕开工具；如果把调用路径、参数和执行结果一起看，模型才会被迫学会真正完成任务。</p>
+    </div>
+    <div class="box warn">
+      <h3>这页和前后单元的关系</h3>
+      <p>04 讲的是 Toolformer 怎么造工具调用数据；这一页讲的是多步任务怎么评测；06 才进入状态、奖励和环境训练。</p>
+    </div>
+  </div>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语与边界</h2>
+    <span class="tag">terms</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="ToolBench / API-Bank 术语与边界表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>术语</th>
+          <th>直觉解释</th>
+          <th>这里要怎么用</th>
+          <th>常见误读</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>ToolBench</td>
+          <td>大规模工具学习和评测框架。</td>
+          <td>用来把真实 API、数据构造、训练和评测放到同一条线上看。</td>
+          <td>把它只当成一个 leaderboard 名称，忽略了数据和训练部分。</td>
+        </tr>
+        <tr>
+          <td>API-Bank</td>
+          <td>可运行的工具增强 LLM 基准。</td>
+          <td>重点看 planning、retrieval、calling 三类步骤怎样一起被评测。</td>
+          <td>只盯最终答案，漏掉中间工具步骤。</td>
+        </tr>
+        <tr>
+          <td>StableToolBench</td>
+          <td>让评测更稳定的后续基准。</td>
+          <td>用虚拟 API server、缓存和 API 模拟器降低线上漂移。</td>
+          <td>把线上 API 的临时变化误当成模型能力。</td>
+        </tr>
+        <tr>
+          <td>Runnable evaluation</td>
+          <td>评测器能真实跑任务，同时检查路径和结果。</td>
+          <td>适合看调用路径、参数和结果是否真的完成任务。</td>
+          <td>以为只要文本像答案，就等于任务成功。</td>
+        </tr>
+        <tr>
+          <td>Task completion</td>
+          <td>任务是否真的按要求完成。</td>
+          <td>作为最终层判断，但不能替代路径和参数检查。</td>
+          <td>把完成度和可读性混成一回事。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="benchmark-map">
+  <div class="head">
+    <h2>评测地图</h2>
+    <span class="tag">benchmarks</span>
+  </div>
+  <p>这三条公开线索的区别，不在于名字多长，而在于它们分别把注意力放在不同层面。ToolBench 更像把工具学习的“数据、训练、评测”放在一张图里；API-Bank 更像把一个任务拆成可运行步骤；StableToolBench 则告诉你，评测如果不稳定，分数本身会漂。</p>
+  <div class="table-wrap">
+    <table data-export-context="基准对照表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>基准</th>
+          <th>主要解决什么</th>
+          <th>评测形态</th>
+          <th>最该盯住什么</th>
+          <th>容易漂的地方</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>ToolBench / ToolLLM</td>
+          <td>把大规模真实 API 的工具学习和评测放进同一框架。</td>
+          <td>看任务、调用和训练数据怎么连起来。</td>
+          <td>工具库够不够大，调用链是否能覆盖真实场景。</td>
+          <td>如果只看最终分数，会忽略数据构造和调用路径。</td>
+        </tr>
+        <tr>
+          <td>API-Bank</td>
+          <td>把工具增强 LLM 的能力拆成可运行的任务。</td>
+          <td>看 planning、retrieval、calling 三层是否都对。</td>
+          <td>每一步是否真的执行，还是只是写得像执行。</td>
+          <td>如果任务环境不固定，结果会掺进外部波动。</td>
+        </tr>
+        <tr>
+          <td>StableToolBench</td>
+          <td>把线上 API 不稳定的问题从评测里隔离出去。</td>
+          <td>用虚拟 API server、缓存和模拟器做更稳定的比较。</td>
+          <td>同一条输入在多次运行里能不能得到一致、可比的结果。</td>
+          <td>如果不用稳定环境，模型分数可能只是当天 API 的状态。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box info">
+      <h3>一条实用判断</h3>
+      <p>当你看到一个工具基准，先问它是在测“会不会写答案”，还是在测“会不会完成多步任务”，还是在测“同一任务能不能稳定比较”。</p>
+    </div>
+    <div class="box warn">
+      <h3>别把分数看成同一种分数</h3>
+      <p>同样叫 pass rate，有的在测最终结果，有的在测路径，有的在测稳定性。口径不同，分数就不能直接互换。</p>
+    </div>
+  </div>
+</section>
+
+<section id="eval-pipeline">
+  <div class="head">
+    <h2>评测流程</h2>
+    <span class="tag">state ledger</span>
+  </div>
+  <p>拿“会议改期”当例子：用户要把明天 15:00 的会议改到 16:00，模型需要先看日历，再找空闲，再改会议，再发通知。评测器如果只看最后一句“已改到 16:00”，就会漏掉改错会议、漏通知、参数填错这些问题。真正有用的评测，是把任务规格、计划、调用、观察和评分连起来看。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="eval-1">
+        <code>Task spec</code><span>任务目标</span>
+      </button>
+      <button class="trace-line" data-trace-step="eval-2">
+        <code>Plan</code><span>计划草图</span>
+      </button>
+      <button class="trace-line" data-trace-step="eval-3">
+        <code>Tool call</code><span>API 调用</span>
+      </button>
+      <button class="trace-line" data-trace-step="eval-4">
+        <code>Observation</code><span>工具结果</span>
+      </button>
+      <button class="trace-line" data-trace-step="eval-5">
+        <code>Score</code><span>复核</span>
+      </button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="eval-1">
+        <b>先锁任务</b>
+        <span>before: 用户需求 + 目标状态</span>
+        <p>这一层要先确认任务到底要完成什么。任务边界没锁好，后面所有指标都会跟着漂。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="eval-2">
+        <b>再看计划</b>
+        <span>after: 计划序列</span>
+        <p>模型需要把任务拆成可执行步骤。评测器如果不看计划，只看最终句子，就会把绕路和直达混成一类。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="eval-3">
+        <b>检查调用</b>
+        <span>after: API 名称 + 参数</span>
+        <p>这一步关心的是工具选对没有、参数对没对、对象有没有指错。调用能跑，不代表任务做对。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="eval-4">
+        <b>读观察</b>
+        <span>after: 工具返回值进入上下文</span>
+        <p>返回值要真的被后文使用，才算进入评测链路。只出现在日志里、不进入后续动作的结果，不能算完成。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="eval-5">
+        <b>最后复核</b>
+        <span>after: 成功 / 失败 / 稳定性</span>
+        <p>评分时要区分最终结果、路径是否正确、稳定性是否足够。只给一个总分，常常会把失败藏起来。</p>
+      </div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="多步评测状态账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>环节</th>
+          <th>读什么</th>
+          <th>写什么 / 改什么</th>
+          <th>出错症状</th>
+          <th>下一步检查</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>任务规格</td>
+          <td>目标、约束、允许工具</td>
+          <td>评测边界</td>
+          <td>模型学到的目标和任务真实目标不一致</td>
+          <td>先核对 success condition</td>
+        </tr>
+        <tr>
+          <td>计划</td>
+          <td>任务规格和工具清单</td>
+          <td>步骤序列</td>
+          <td>最终答案碰巧对了，但路径不对</td>
+          <td>看 planning 是否拆对</td>
+        </tr>
+        <tr>
+          <td>调用</td>
+          <td>API schema 和当前上下文</td>
+          <td>工具名、参数、对象</td>
+          <td>格式能跑，语义不对</td>
+          <td>检查参数是否指向正确对象</td>
+        </tr>
+        <tr>
+          <td>观察</td>
+          <td>工具返回值</td>
+          <td>新的上下文证据</td>
+          <td>结果出现了，但后文没有用</td>
+          <td>看回写与后续动作是否一致</td>
+        </tr>
+        <tr>
+          <td>评分</td>
+          <td>完整轨迹和成功条件</td>
+          <td>分数和失败标签</td>
+          <td>一个分数盖住了路径错误</td>
+          <td>拆成完成度、路径和稳定性三层</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar">
+    <span>评测器伪代码</span>
+    <button class="copy" data-copy="benchmark-evaluator-pseudo">复制</button>
+  </div>
+  <pre id="benchmark-evaluator-pseudo" data-export-context="评测器伪代码" data-export-lang="python"><code class="language-python">def score_trace(task_ok, plan_ok, call_ok, args_ok, stable_ok):
+    if not task_ok:
+        return "fail: wrong task"
+    if not plan_ok:
+        return "fail: wrong plan"
+    if not call_ok or not args_ok:
+        return "fail: tool path mismatch"
+    if not stable_ok:
+        return "fail: unstable result"
+    return "pass"</code></pre>
+</section>
+
+<section id="trace-workshop">
+  <div class="head">
+    <h2>轨迹工作坊</h2>
+    <span class="tag">trace table</span>
+  </div>
+  <p>把一条多步工具任务真正看清，最稳的方法是把轨迹拆成表：每一步读什么、写什么、有没有推进任务、有没有把后文带偏。下面仍然用“会议改期”做锚点，但这次同时看最终结果和中间步骤，把每一步都落到可复核的状态上。你会发现，多步评测真正贵的地方，在于判断中间每一步是否都在往目标状态走。</p>
+  <div class="table-wrap">
+    <table data-export-context="会议改期轨迹表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>输入 / 读取</th>
+          <th>输出 / 写入</th>
+          <th>评测器看什么</th>
+          <th>失败会落在哪里</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>确认任务</td>
+          <td>“明天 15:00 改到 16:00”</td>
+          <td>任务边界、目标时间、对象范围</td>
+          <td>是否把目标状态锁对</td>
+          <td>任务定义漂移，后面所有调用都在错目标上跑</td>
+        </tr>
+        <tr>
+          <td>查空闲</td>
+          <td>日历里的候选时间段</td>
+          <td>可用时间列表</td>
+          <td>有没有真的查，还是直接猜一个时间</td>
+          <td>模型跳过检索，直接给出自以为正确的时间</td>
+        </tr>
+        <tr>
+          <td>选时间</td>
+          <td>可用时间列表 + 会议约束</td>
+          <td>16:00 这一条候选</td>
+          <td>是否选到了符合约束的 slot</td>
+          <td>参数对不上对象，或者把冲突时间也选进来</td>
+        </tr>
+        <tr>
+          <td>更新会议</td>
+          <td>会议 id、目标时间、参会者</td>
+          <td>新的会议状态</td>
+          <td>状态有没有真的被写入</td>
+          <td>只改了文本，没有改到真实对象</td>
+        </tr>
+        <tr>
+          <td>通知参会者</td>
+          <td>更新后的会议状态</td>
+          <td>通知记录</td>
+          <td>任务要求有没有包含这一步</td>
+          <td>前面做对了，最后漏通知</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box info">
+      <h3>这一张表真正教什么</h3>
+      <p>它把“调用路径”从一个抽象词变成了可见对象。你现在可以逐行问：这一步读了什么、写了什么、有没有推进最终状态。如果某一步既没写入，也没推进任务，它就是多余动作，评测器不该给它加分。</p>
+    </div>
+    <div class="box warn">
+      <h3>最容易漏的点</h3>
+      <p>很多轨迹看上去已经成功，但其实只做了状态的一半。改期任务里最常见的是：会议改了，通知没发；或者通知发了，会议对象改错了。路径层的评测就是专门抓这个。</p>
+    </div>
+  </div>
+  <div class="codebar">
+    <span>轨迹复核清单</span>
+    <button class="copy" data-copy="trace-checklist">复制</button>
+  </div>
+  <pre id="trace-checklist" data-export-context="轨迹复核清单" data-export-lang="text"><code class="language-text">1. 目标对象是否唯一
+2. 每一步是否读到了当前状态
+3. 调用参数是否指向同一个对象
+4. 结果是否进入下一步
+5. 最终状态是否满足全部约束</code></pre>
+  <p>这条清单可以直接拿去做人工复核。只看最后一句话的判分，通常会把第 2 到第 4 步的错误都藏起来。真正有价值的评测器，应该能把错误定位到具体一步，而不是只给一个总分。</p>
+</section>
+
+<section id="stability-lab">
+  <div class="head">
+    <h2>稳定性隔离</h2>
+    <span class="tag">stability lab</span>
+  </div>
+  <p>StableToolBench 最重要的提醒是：工具任务的分数不只来自模型，也可能来自外部 API。一个真实线上接口如果今天返回空闲、明天返回满位，模型分数就会随着环境一起跳。评测要把会变化的部分隔离掉，让比较尽量只反映模型差异。</p>
+  <div class="grid2">
+    <div class="box info">
+      <h3>稳定环境要隔离什么</h3>
+      <p>最先隔离的是 API 状态和缓存，其次是请求顺序和返回格式。把这几层冻住以后，评测器才知道自己在比模型，也知道哪些波动来自当天线上服务。</p>
+    </div>
+    <div class="box warn">
+      <h3>不稳定时会发生什么</h3>
+      <p>同一条输入今天 pass、明天 fail，模型好像忽然变笨。其实往往是接口状态变了，或者缓存命中了不同结果。没有稳定层，这种噪声会直接污染基准分数。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="稳定性隔离表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>层</th>
+          <th>冻结前是什么</th>
+          <th>冻结后是什么</th>
+          <th>读什么</th>
+          <th>写什么 / 改什么</th>
+          <th>失败信号</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>API 状态</td>
+          <td>真实线上服务，随时变化</td>
+          <td>虚拟 API server 或固定快照</td>
+          <td>同一请求的历史响应</td>
+          <td>把不确定性关进可控环境</td>
+          <td>同题多跑结果抖动</td>
+        </tr>
+        <tr>
+          <td>缓存</td>
+          <td>可能命中不同路径</td>
+          <td>固定缓存策略</td>
+          <td>请求是否重复、返回是否一致</td>
+          <td>避免前一次调用影响后一次</td>
+          <td>前后两次跑出不同答案</td>
+        </tr>
+        <tr>
+          <td>返回格式</td>
+          <td>线上服务可能临时改字段</td>
+          <td>模拟器返回固定 schema</td>
+          <td>字段名、顺序、类型</td>
+          <td>统一解析入口</td>
+          <td>评测器能跑，但解析结果变形</td>
+        </tr>
+        <tr>
+          <td>请求顺序</td>
+          <td>并发或先后顺序不受控</td>
+          <td>固定顺序重放</td>
+          <td>上一条请求是否影响下一条</td>
+          <td>减少偶然命中</td>
+          <td>同一任务的轨迹不稳定</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar">
+    <span>稳定评测配置样例</span>
+    <button class="copy" data-copy="stable-config-sample">复制</button>
+  </div>
+  <pre id="stable-config-sample" data-export-context="稳定评测配置样例" data-export-lang="text"><code class="language-text">benchmark:
+  use_virtual_api_server: true
+  freeze_api_state: true
+  cache_responses: true
+  deterministic_order: true
+  compare_runs: 3</code></pre>
+  <p>这段配置的意思很直接：先让环境稳定，再谈模型好坏。否则你看到的可能只是线上接口的波动，不是模型的实际能力。对工具任务来说，稳定性本身就是评测的一部分。</p>
+</section>
+
+<section id="selection-workshop">
+  <div class="head">
+    <h2>工具选择工作坊</h2>
+    <span class="tag">case -> trace -> failure</span>
+  </div>
+  <p>多步工具评测里，最常见的误判是“模型会用工具，但工具选偏了”。比如用户说“看看我明天有没有空，然后把两点的会改到三点”，这里至少包含两种动作：先读状态，再写状态。若评测器只看最终有没有出现“已改到三点”，模型就可能先乱改，再回头补一个看起来合理的结论。下面这张小表就是用来抓这种偏差的。</p>
+  <div class="table-wrap">
+    <table data-export-context="工具选择判定表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>任务片段</th>
+          <th>更像哪类工具</th>
+          <th>先读什么</th>
+          <th>会写什么</th>
+          <th>错在哪一步最容易被遮住</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>“看看我明天有没有空”</td>
+          <td>read / retrieve</td>
+          <td>日历状态、空闲段</td>
+          <td>只输出观察结果</td>
+          <td>如果把查询当更新，后文会把空闲当成已修改</td>
+        </tr>
+        <tr>
+          <td>“把两点的会改到三点”</td>
+          <td>write / update</td>
+          <td>原会议对象、目标时间、冲突约束</td>
+          <td>新的会议状态</td>
+          <td>如果对象没对齐，模型最后一句再像样也没用</td>
+        </tr>
+        <tr>
+          <td>“先查证据，再决定是否退款”</td>
+          <td>retrieve + decide</td>
+          <td>订单、条件、规则</td>
+          <td>判定动作</td>
+          <td>如果跳过检索，后续决策会变成猜测</td>
+        </tr>
+        <tr>
+          <td>“把说明翻译成中文再继续写”</td>
+          <td>transform / read-then-write</td>
+          <td>原文与术语</td>
+          <td>可回写的短结果</td>
+          <td>如果结果太长，后文接不住，路径就断了</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box info">
+      <h3>这张表怎么用</h3>
+      <p>先把任务短语圈出来，再判断它更像读、写，还是先读后写。这样做的好处是，你能在写 benchmark 规约时先分任务，再决定哪些步骤必须进总分。</p>
+    </div>
+    <div class="box warn">
+      <h3>最容易遮住的错误</h3>
+      <p>如果模型先读错，再把最终结果写对，纯结果分数会放过它；如果模型先写对，再把中间观察丢掉，路径分数才能把它抓出来。多步评测最怕把“结论像对的”当成“过程真的对”。</p>
+    </div>
+  </div>
+  <div class="codebar">
+    <span>选择规则草图</span>
+    <button class="copy" data-copy="tool-choice-rule">复制</button>
+  </div>
+  <pre id="tool-choice-rule" data-export-context="选择规则草图" data-export-lang="python"><code class="language-python">def choose_tool(goal_text):
+    if any(word in goal_text for word in ["看看", "查询", "检查", "有没有空"]):
+        return "read_only_tool"
+    if any(word in goal_text for word in ["改", "更新", "取消", "预订"]):
+        return "mutating_tool"
+    if any(word in goal_text for word in ["证据", "条件", "理由"]):
+        return "retrieve_then_decide"
+    return "ask_for_disambiguation"</code></pre>
+  <p>这段草图提醒你写评测时先定义动作类型。只要读写不分，模型就可能把查询当修改，把修改当确认，最后分数看起来还行，实际任务却没完成。</p>
+  <p>下次你读任何一个多步工具 benchmark，先把题面里的动作标出来，再问自己：这题是在测读、测写，还是测读后写。这个问题一旦想清楚，成功条件和失败标签就好写很多。</p>
+</section>
+
+<section id="metrics">
+  <div class="head">
+    <h2>指标怎么读</h2>
+    <span class="tag">metrics</span>
+  </div>
+  <p>一个分数不够。多步工具任务至少要分开看四件事：任务有没有完成，工具选没选对，参数填没填对，结果在重复运行里稳不稳。只看 pass rate，最容易把“路径错但结果碰巧对了”的样本放过去，也最容易把“工具正确但环境抖动”误算成模型变差。</p>
+  <div class="table-wrap">
+    <table data-export-context="指标读法表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>指标</th>
+          <th>读什么</th>
+          <th>最能抓到的失败</th>
+          <th>最容易漏掉什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>任务完成率</td>
+          <td>最终状态是否符合要求</td>
+          <td>任务根本没做完</td>
+          <td>路径错误但结果碰巧正确</td>
+        </tr>
+        <tr>
+          <td>工具选择准确率</td>
+          <td>有没有选对 API</td>
+          <td>调用错工具</td>
+          <td>选对工具但参数还错</td>
+        </tr>
+        <tr>
+          <td>参数正确率</td>
+          <td>参数、对象、时间点是否对齐</td>
+          <td>把会议改错对象，或者时间填错</td>
+          <td>返回值没有被后文使用</td>
+        </tr>
+        <tr>
+          <td>步骤覆盖率</td>
+          <td>计划里的关键步骤是否真的执行</td>
+          <td>漏掉查询、确认或通知步骤</td>
+          <td>步骤看起来很多，但都没真正推进任务</td>
+        </tr>
+        <tr>
+          <td>稳定性</td>
+          <td>同一任务多次运行是否一致</td>
+          <td>API 漂移、缓存差异、环境噪声</td>
+          <td>模型本身的路径问题</td>
+        </tr>
+        <tr>
+          <td>成本 / 延迟</td>
+          <td>调用是否过多、过慢、过贵</td>
+          <td>空转、反复调用、慢路径</td>
+          <td>任务本身有没有完成</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="box info">
+      <h3>怎么读这些指标</h3>
+      <p>先看完成度，再看路径，再看稳定性。顺序反过来，模型很容易被一个漂亮分数骗过去。</p>
+    </div>
+    <div class="box warn">
+      <h3>为什么要分层</h3>
+      <p>如果工具选择、参数正确和稳定性都混在一个总分里，你很难知道问题是模型不会用工具，还是环境本身在波动。</p>
+    </div>
+  </div>
+</section>
+
+<section id="cases">
+  <div class="head">
+    <h2>例子</h2>
+    <span class="tag">worked cases</span>
+  </div>
+  <p>下面三个例子都围着同一件事转：看起来像完成，不等于真的完成。你可以把它们当成三种典型评测偏差。</p>
+  <div class="table-wrap">
+    <table data-export-context="案例拆解表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>任务</th>
+          <th>表面表现</th>
+          <th>评测器真正要看什么</th>
+          <th>典型失败标签</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>客服退款</td>
+          <td>最后一句说“已经退款成功”。</td>
+          <td>是否查过订单、是否满足退款条件、是否走对退款工具。</td>
+          <td>final answer right, path wrong</td>
+        </tr>
+        <tr>
+          <td>会议改期</td>
+          <td>说“已改到 16:00”。</td>
+          <td>是否先查冲突、是否改到正确会议、是否通知参会者。</td>
+          <td>tool path incomplete</td>
+        </tr>
+        <tr>
+          <td>同名 API</td>
+          <td>工具名字看起来很像，输出也像。</td>
+          <td>是否选对接口、参数有没有对齐、返回值有没有进入后文。</td>
+          <td>schema valid, semantics wrong</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="case-1"><code>退款</code><span>订单核对</span></button>
+      <button class="trace-line" data-trace-step="case-2"><code>改期</code><span>冲突检查</span></button>
+      <button class="trace-line" data-trace-step="case-3"><code>同名 API</code><span>工具消歧</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="case-1">
+        <b>退款样本</b>
+        <span>target: 订单状态 + 退款条件</span>
+        <p>如果最终文本看起来对，但中间没查订单、没判条件、没走退款接口，这条样本在任务层就是失败。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="case-2">
+        <b>改期样本</b>
+        <span>target: 冲突检查 + 更新会议 + 通知</span>
+        <p>这类任务最容易漏步骤。只改日历不发通知，或者发通知却没更新会议，都不能算完整成功。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="case-3">
+        <b>消歧样本</b>
+        <span>target: 选对 API + 填对参数</span>
+        <p>工具名相近时，模型常常会把“长得像”当成“就是它”。评测器要盯的是对象和参数，同时保留工具名消歧步骤。</p>
+      </div>
+    </div>
+  </div>
+  <div class="codebar">
+    <span>会议改期轨迹样例</span>
+    <button class="copy" data-copy="meeting-trace-sample">复制</button>
+  </div>
+  <pre id="meeting-trace-sample" data-export-context="会议改期轨迹样例" data-export-lang="text"><code class="language-text">Task: move tomorrow 15:00 meeting to 16:00
+1. check calendar for conflicts
+2. choose a free slot
+3. update meeting time
+4. notify attendees
+5. verify the new state stays consistent</code></pre>
+</section>
+
+<section id="failure-lab">
+  <div class="head">
+    <h2>故障台</h2>
+    <span class="tag">terminal lab</span>
+  </div>
+  <p>下面这几个故障，最容易把评测分数看偏。你切换不同 case 时，要先判断问题在任务、路径、参数，还是稳定性。不要一上来就把所有错误都算成模型不会用工具。</p>
+  <div class="terminal-lab" data-terminal-lab data-export-context="多步评测故障台" data-export-lang="text">
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1">答案对，路径错</button>
+      <button class="ghost" data-terminal-case="case-2">参数对不齐</button>
+      <button class="ghost" data-terminal-case="case-3">同题不同跑</button>
+      <button class="ghost" data-terminal-case="case-4">结果没回写</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">score: pass on answer, fail on tool path
+next check: verify which API was called and whether it matches the task spec</pre>
+    <template data-terminal-output="case-1">score: pass on answer, fail on tool path
+next check: verify which API was called and whether it matches the task spec</template>
+    <template data-terminal-output="case-2">score: tool call executed, but arguments point to the wrong meeting / wrong order / wrong date
+next check: object identity, date alignment, parameter schema</template>
+    <template data-terminal-output="case-3">score: run A passes, run B fails
+next check: API drift, cache, fixture, unstable result source</template>
+    <template data-terminal-output="case-4">score: observation exists, but later steps ignore it
+next check: trace whether the result entered the next action</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="故障分层表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>更可能的原因</th>
+          <th>先查什么</th>
+          <th>别先做什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>最终答案对，但轨迹错</td>
+          <td>模型走了绕路或碰巧答对</td>
+          <td>工具路径和参数</td>
+          <td>先把分数当成成功</td>
+        </tr>
+        <tr>
+          <td>同一 prompt 多次结果不同</td>
+          <td>API 漂移、缓存、环境噪声</td>
+          <td>稳定 fixture 和 API 状态</td>
+          <td>先认定模型能力变差</td>
+        </tr>
+        <tr>
+          <td>工具调用正确，后文还是错</td>
+          <td>返回值没回写或没被后续使用</td>
+          <td>观察是否进入下一步</td>
+          <td>继续加工具数量</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="operation-bridge">
+  <div class="head">
+    <h2>任务桥接</h2>
+    <span class="tag">operation bridge</span>
+  </div>
+  <p>如果你要复现一个公开 benchmark，或者给自己的工具任务做评测，先别写分数公式。先把任务分布、允许工具、成功条件、稳定环境和复核方式固定下来。只要这五样不固定，后面的分数很容易只是当时环境的截屏。</p>
+  <div class="table-wrap">
+    <table data-export-context="评测规约最小清单" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>要固定什么</th>
+          <th>通过时长什么样</th>
+          <th>不过时长什么样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>任务分布</td>
+          <td>任务类型、难度、工具覆盖面</td>
+          <td>不同任务之间可比</td>
+          <td>样本偏到某一类任务</td>
+        </tr>
+        <tr>
+          <td>工具白名单</td>
+          <td>允许调用哪些 API</td>
+          <td>模型知道边界，不会乱试</td>
+          <td>评测集和训练集工具混在一起</td>
+        </tr>
+        <tr>
+          <td>成功条件</td>
+          <td>最终状态、必要步骤、不能漏掉的动作</td>
+          <td>路径错误能被抓出来</td>
+          <td>只看最终一句话</td>
+        </tr>
+        <tr>
+          <td>稳定环境</td>
+          <td>fixture、缓存、API 状态</td>
+          <td>同题多次运行可比</td>
+          <td>今天的分数和明天不是一回事</td>
+        </tr>
+        <tr>
+          <td>复核方式</td>
+          <td>自动判分还是人工复核</td>
+          <td>知道哪里需要人看</td>
+          <td>把所有判断都压成一个数字</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar">
+    <span>最小 benchmark 规约</span>
+    <button class="copy" data-copy="benchmark-spec-template">复制</button>
+  </div>
+  <pre id="benchmark-spec-template" data-export-context="最小 benchmark 规约模板" data-export-lang="text"><code class="language-text">task: meeting_reschedule
+allowed_tools:
+  - calendar.lookup
+  - calendar.update
+  - notification.send
+success:
+  - target slot is free
+  - meeting moved to the target slot
+  - attendees are notified
+stability:
+  - use a frozen fixture
+  - rerun the same prompt three times
+review:
+  - automatic check for task completion
+  - manual check for path mismatch and leakage</code></pre>
+  <div class="box info">
+    <h3>最短下一步</h3>
+    <p>读一个公开 benchmark 时，先把任务规格、允许工具、成功条件和稳定性四项圈出来。能做这一步，后面的指标才有意义。</p>
+  </div>
+</section>
+
+<section id="boundary-note">
+  <div class="head">
+    <h2>先知道，先别追</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="box info">
+    <p>这页先不追四件事：环境强化学习怎么做、沙盒权限怎么收、浏览器智能体怎么调、排行榜怎么解释。它们都会回到后面的单元，尤其是 06 和 08。现在先把“评测看什么、怎么稳定地看”记牢。</p>
+    <p>如果你已经开始想训练算法，先停一下，回到这一页把 success condition、tool path 和 stability 这三层重新看一遍。多步工具任务里，很多问题先出在评测口径。</p>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>作答目标</strong>
+    <p>先分清“路径对不对”和“最终答案对不对”，再去谈分数。每题都尽量落到任务、工具、参数、稳定性或复核方式其中一层。</p>
+  </div>
+  <div class="review-card">
+    <strong>检查重点</strong>
+    <p>重点看你能否把一个多步工具任务拆成可评测对象，同时说清它测的层次。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>基准辨认</h3>
+      <p>先把三种公开线索分开。</p>
+    </div>
+    <div class="quick-review">
+      <b>快速复盘</b>
+      <span>先问它测什么，再问它怎么测。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="基准辨认" data-title="ToolBench 更像下面哪一种东西？" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">benchmark</span></div>
+      <h3>ToolBench 更像下面哪一种东西？</h3>
+      <label><input type="radio" name="q1" value="A"> A. 只看最终答案准确率的单轮问答集</label>
+      <label><input type="radio" name="q1" value="B"> B. 把数据构造、训练和评测放在一起的工具学习框架</label>
+      <label><input type="radio" name="q1" value="C"> C. 只负责展示排行榜的静态页面</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q2" data-group="基准辨认" data-title="判断：API-Bank 只关心最终答案对不对。" data-answer="false">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">path</span></div>
+      <h3>判断：API-Bank 只关心最终答案对不对。</h3>
+      <label><input type="radio" name="q2" value="true"> 对</label>
+      <label><input type="radio" name="q2" value="false"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q3" data-group="基准辨认" data-title="填空：StableToolBench 通过虚拟 API server、缓存和 API ________ 来减少漂移。">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">stability</span></div>
+      <h3>填空：StableToolBench 通过虚拟 API server、缓存和 API ________ 来减少漂移。</h3>
+      <input type="text" name="q3" placeholder="填一个词" data-answer="simulators;模拟器" data-explain="这里填 simulators 或“模拟器”。">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">这里要抓住的是稳定环境，别把问题继续推到更复杂的分数上。</p>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>指标拆解</h3>
+      <p>练习把总分拆回可解释的层。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题顺序</b>
+      <span>先看任务完成，再看路径，再看稳定性。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q4" data-group="指标拆解" data-title="这段评测伪代码最先要求什么？">
+      <div class="q-meta"><span class="pill">code reading</span><span class="pill">score</span></div>
+      <h3>这段评测伪代码最先要求什么？</h3>
+      <div class="codebar">
+        <span>评测器片段</span>
+        <button class="copy" data-copy="practice-evaluator-snippet">复制</button>
+      </div>
+      <pre id="practice-evaluator-snippet" data-export-context="评测器伪代码片段" data-export-lang="python"><code class="language-python">if not task_ok:
+    return "fail"
+if not path_ok or not args_ok:
+    return "tool path mismatch"
+if not stable_ok:
+    return "unstable"
+return "pass"</code></pre>
+      <label><input type="radio" name="q4" value="A"> A. 先看最终答案有没有出现</label>
+      <label><input type="radio" name="q4" value="B"> B. 先看任务有没有对齐，再看路径、参数和稳定性</label>
+      <label><input type="radio" name="q4" value="C"> C. 先看模型输出是否更长</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q5" data-group="指标拆解" data-title="哪个指标最容易暴露“结果对了，但路径错了”？" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">diagnosis</span></div>
+      <h3>哪个指标最容易暴露“结果对了，但路径错了”？</h3>
+      <label><input type="radio" name="q5" value="A"> A. 只看最终答案</label>
+      <label><input type="radio" name="q5" value="B"> B. 工具选择准确率或步骤覆盖率</label>
+      <label><input type="radio" name="q5" value="C"> C. 文本长度</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q6" data-group="指标拆解" data-title="用三句话解释为什么只看 pass rate 不够。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">metric reading</span></div>
+      <h3>用三句话解释为什么只看 pass rate 不够。</h3>
+      <p class="solve-note">答题时至少要覆盖三层：最终结果、调用路径、稳定性。不要只写“会误导”三个字。</p>
+      <textarea name="q6" placeholder="先说 pass rate 能看见什么，再说它看不见什么，最后补一个容易漏掉的失败。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案至少要说出：pass rate 只能看到任务有没有做完，看不到中间有没有选对工具、填对参数、走对步骤。它也看不出同一任务在多次运行里是否稳定，所以会把 API 漂移、缓存差异和路径错误藏起来。若答案只说“会误导”，但没有举出路径或稳定性问题，说明还没读到评测层。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>错误诊断</h3>
+      <p>把常见失败拆成能排查的标签。</p>
+    </div>
+    <div class="quick-review">
+      <b>排查顺序</b>
+      <span>先查任务边界，再查工具路径，再查稳定性。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q7" data-group="错误诊断" data-title="会议改期任务里，模型最后说“已改好”，但调用了错误会议对象。先怀疑什么？" data-answer="B">
+      <div class="q-meta"><span class="pill">scenario</span><span class="pill">debug</span></div>
+      <h3>会议改期任务里，模型最后说“已改好”，但调用了错误会议对象。先怀疑什么？</h3>
+      <label><input type="radio" name="q7" value="A"> A. 最终答案太短</label>
+      <label><input type="radio" name="q7" value="B"> B. 参数和对象没对齐</label>
+      <label><input type="radio" name="q7" value="C"> C. 文本里少了一个感叹号</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q8" data-group="错误诊断" data-title="判断：同一 prompt 多次结果不同，说明模型一定更差了。" data-answer="false">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">stability</span></div>
+      <h3>判断：同一 prompt 多次结果不同，说明模型一定更差了。</h3>
+      <label><input type="radio" name="q8" value="true"> 对</label>
+      <label><input type="radio" name="q8" value="false"> 错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q short" data-question="q9" data-group="错误诊断" data-title="填空：API-Bank 常拆解的三类能力是 planning / retrieval / ________。">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">api steps</span></div>
+      <h3>填空：API-Bank 常拆解的三类能力是 planning / retrieval / ________。</h3>
+      <input type="text" name="q9" placeholder="填一个词" data-answer="calling;调用" data-explain="这里填 calling 或“调用”。">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>设计规约</h3>
+      <p>把评测从“看一个分数”改成“能复核的规约”。</p>
+    </div>
+    <div class="quick-review">
+      <b>核心连接</b>
+      <span>先固定任务，再固定工具，再谈分数。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q10" data-group="设计规约" data-title="为会议改期任务写最小成功条件。">
+      <div class="q-meta"><span class="pill">open</span><span class="pill">rubric</span></div>
+      <h3>为会议改期任务写最小成功条件。</h3>
+      <p class="solve-note">至少要写出三项：目标时间、对象是否正确、通知是否到位。只写“改好了”不够。</p>
+      <textarea name="q10" placeholder="按‘目标状态 / 必要步骤 / 不能漏掉的动作’来写。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案应该同时覆盖最终状态和关键动作。例如：会议必须改到指定时间；改动必须作用在正确的会议对象上；如果任务要求通知参会者，还必须把通知发出去。若只写最终时间，没写对象和通知，说明成功条件还不完整。</p>
+      </details>
+    </div>
+
+    <div class="q" data-question="q11" data-group="设计规约" data-title="设计自己的 benchmark 时，最先冻结哪一层更有用？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">fixture</span></div>
+      <h3>设计自己的 benchmark 时，最先冻结哪一层更有用？</h3>
+      <label><input type="radio" name="q11" value="A"> A. 任务分布和稳定环境</label>
+      <label><input type="radio" name="q11" value="B"> B. 页面配色</label>
+      <label><input type="radio" name="q11" value="C"> C. 最终答案的长度</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="设计规约" data-title="给一个最小 benchmark 规约写四项。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">checklist</span></div>
+      <h3>给一个最小 benchmark 规约写四项。</h3>
+      <p class="solve-note">请尽量覆盖：任务分布、允许工具、成功条件、稳定环境、复核方式。写四项就够，写得准比写得多重要。</p>
+      <textarea name="q12" placeholder="写出四项清单，并说明每项为什么要先固定。"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>一个合格的最小规约，至少要有：任务分布、允许工具、成功条件和稳定环境。更好的答案还会补上复核方式和泄漏边界。只要这些要素固定了，评测才不会把任务完成、路径错误和环境漂移混成一团。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <p class="muted">以下公开资料按 2026-06-21 可访问版本整理。</p>
+<ul class="source-list">
+  <li><a href="https://arxiv.org/abs/2307.16789">ToolLLM: Facilitating Large Language Models to Master 16000+ Real-world APIs</a>。用于本页的 ToolBench 线索、规模背景和工具学习框架。</li>
+  <li><a href="https://arxiv.org/abs/2304.08244">API-Bank: A Comprehensive Benchmark for Tool-Augmented LLMs</a>。用于本页的 runnable evaluation、planning / retrieval / calling 拆解和任务评测方法。</li>
+  <li><a href="https://arxiv.org/abs/2403.07714">StableToolBench: Towards Stable Large-Scale Benchmarking on Tool Learning of Large Language Models</a>。用于本页的稳定环境、虚拟 API server、缓存和 API 模拟器。</li>
+  <li><a href="../04_Toolformer与自监督工具学习/学习页.html">04 Toolformer 与自监督工具学习</a>。用于本页的前置衔接，帮助区分“造调用数据”和“评多步任务”。</li>
+  <li><a href="../06_从SFT到环境强化学习/学习页.html">06 从 SFT 到环境强化学习</a>。用于本页的后续衔接，帮助把评测问题接到状态、奖励和环境训练。</li>
+</ul>
+<p>本页只写公开论文和公开课程页层面的评测方法，不绑定私有仓库、内部 leaderboard 截图或未公开的评测脚本。遇到会变化的线上 API、命令或评分口径，未来编辑要按访问日期重新核对。</p>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

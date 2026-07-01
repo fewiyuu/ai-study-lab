@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>评测、追踪与安全：把行为纳入验收</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="Agent 基础与工程" data-unit="04">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>Agent 基础与工程</strong>
+        <span>04</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先看主线</a>
+        <a href="#harness"><span class="dot"></span>评测结构</a>
+        <a href="#trace"><span class="dot"></span>Trace</a>
+        <a href="#monitoring"><span class="dot"></span>监控与抽查</a>
+        <a href="#safety"><span class="dot"></span>安全边界</a>
+        <a href="#case-study"><span class="dot"></span>案例</a>
+        <a href="#pitfalls"><span class="dot"></span>误区</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先看结果是否能验收，再看过程能不能追踪，最后看动作有没有越界。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">Evaluation / Trace / Safety</div>
+          <h1>评测、追踪与安全：把行为纳入验收</h1>
+          <p>上一单元把工作流模式选清楚了，这一页继续往下收口：先把 task、trial、grader、transcript 和 outcome 拆开，再看 Trace 怎么保住过程证据，最后把安全边界落到 shell、文件、消息和 computer use 这些会产生外部动作的地方。你读到最后，应该能为一个 Agent 任务写出最小评测方案、最小 Trace 字段和最小护栏，而不是只盯着最终回答。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../03_Agent设计模式/学习页.html">上一单元：Agent 设计模式</a><a href="../05_MultiAgent系统设计/学习页.html">下一单元：MultiAgent 系统设计</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页后你能做什么</h3>
+          <ul>
+  <li>能把一个 Agent 任务拆成 task、trial、grader、transcript 和 outcome，并说明每个词在评测里负责什么。</li>
+  <li>能读一条结构化 Trace，找出工具失败、成本上升、状态误写和安全拦截各自该看哪几个字段。</li>
+  <li>能给 shell、写文件、发消息或 computer use 这类动作写出最小安全护栏，知道哪里必须由程序硬拦。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goals</span>
+  </div>
+  <div class="grid3">
+    <div class="box">
+      <h3>先把结果说清楚</h3>
+      <p>你要能区分 task、trial、grader、transcript 和 outcome，知道谁负责定义目标，谁负责记录运行，谁负责评分，谁负责保存最终状态。</p>
+    </div>
+    <div class="box soft">
+      <h3>再把过程留下来</h3>
+      <p>你要能读一条结构化 Trace，找出工具失败、状态误写、成本上升和安全拦截分别落在哪些字段上。</p>
+    </div>
+    <div class="box warn">
+      <h3>最后把边界卡住</h3>
+      <p>你要能给 shell、文件写入、消息发送或 computer use 这类动作写出最小安全护栏，而不是只在提示词里写一句“请谨慎”。</p>
+    </div>
+  </div>
+  <p class="checkpoint">本页边界：这里只讲把行为纳入验收的最小工程闭环，不展开完整评测平台，也不讲多 Agent 协作。</p>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先看主线：从结果到过程，再到边界</h2>
+    <span class="tag">overview</span>
+  </div>
+  <p>这页按一个固定顺序往下走：先看结果是否可验收，再看过程是否可追踪，最后看动作是否越界。这个顺序比“先把工具接上，再补评测，最后再想安全”更稳，因为一旦系统开始自动运行，后补的内容往往只是在补记录，而不是补控制。</p>
+  <div class="table-wrap">
+    <table data-export-context="验收主线表" data-export-lang="table">
+      <thead>
+        <tr><th>要回答的问题</th><th>看什么</th><th>典型证据</th><th>漏掉会怎样</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>它完成了吗？</td><td>outcome</td><td>测试通过、文件改对、数据库状态正确</td><td>只看文本，可能把“说完成”误当完成。</td></tr>
+        <tr><td>它为什么这么做？</td><td>transcript / trace</td><td>模型消息、工具调用、状态变化、错误</td><td>只能看结果，无法复盘偏差从哪一步开始。</td></tr>
+        <tr><td>它有没有越界？</td><td>permission / safety decision</td><td>路径检查、确认弹窗、审计日志、拦截事件</td><td>模型一旦失误，越界动作会直接落地。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="table-wrap" style="margin-top:14px">
+    <table data-export-context="评测闭环与控制点对照表" data-export-lang="table">
+      <thead>
+        <tr><th>层级</th><th>核心对象</th><th>写入什么</th><th>读什么</th><th>常见症状</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>评测</td><td>task / trial / grader</td><td>任务定义、运行配置、评分规则</td><td>任务结果和回归趋势</td><td>改了 prompt 以后，没人知道变好还是变坏。</td></tr>
+        <tr><td>追踪</td><td>trace / transcript</td><td>工具输入、输出摘要、状态变化、错误</td><td>每一步发生了什么</td><td>只留一句最终答复，排错时找不到分叉点。</td></tr>
+        <tr><td>安全</td><td>permission / sandbox</td><td>允许范围、确认规则、拦截事件</td><td>当前动作是否能执行</td><td>模型一句话说错，shell、文件或消息已经执行了。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="checkpoint">读完这一节，你应该能用一句话区分“结果能验收”“过程能追踪”“动作能拦住”三件事。</p>
+</section>
+
+<section id="harness">
+  <div class="head">
+    <h2>评测结构：task、trial、grader、outcome</h2>
+    <span class="tag">harness</span>
+  </div>
+  <p>最小评测单位可以拆成四层。task 是你要测什么，trial 是一次运行，grader 是怎么判定，outcome 是环境最后变成了什么。这个拆法的价值在于：你可以重复同一个 task，多次 trial，再看 grading 是否稳定，而不是被一次偶然的好结果骗过去。</p>
+  <p>对代码 Agent 来说，outcome 往往比回答文本更重要。它不是说“我修好了”，而是测试是否通过、文件改得对不对、有没有碰到不该动的路径。对写作或研究 Agent 来说，outcome 可能是摘要质量、引文覆盖率、结构是否完整，但也一样需要明确的判定点。</p>
+  <div class="codebar"><span class="label">最小评测样例</span><span>YAML</span><button class="copy-code" type="button" data-copy="eval-example">复制</button></div>
+  <pre id="eval-example" data-export-context="最小评测样例" data-export-lang="yaml"><code class="language-yaml">task:
+  id: fix-login-timeout
+  goal: 修复登录超时后没有重试的问题
+  success:
+    - npm test passes
+    - only auth module changed
+trial:
+  agent: coding-agent-v2
+  model: claude-opus
+grader:
+  checks:
+    - run tests
+    - inspect changed files
+    - compare behavior with expected scenario</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="任务-运行-评分器对照表" data-export-lang="table">
+      <thead>
+        <tr><th>对象</th><th>它负责什么</th><th>读者该检查什么</th><th>坏结果长什么样</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>task</td><td>定义目标和成功条件</td><td>目标是否可验证，边界是否写清</td><td>任务描述很长，但没有可判定标准。</td></tr>
+        <tr><td>trial</td><td>记录一次运行</td><td>模型、工具版本、预算、时间</td><td>只知道结果，不知道这次怎么跑的。</td></tr>
+        <tr><td>grader</td><td>把结果变成分数或判定</td><td>检查项是否能执行，是否覆盖真实风险</td><td>只会给“看起来不错”这样的空判断。</td></tr>
+        <tr><td>outcome</td><td>环境最终状态</td><td>测试、diff、状态变更是否对齐目标</td><td>回答听起来对，但环境其实没对齐。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="checkpoint">读完这一节，你应该能写出一个 task，并说清楚它的 grader 到底检查什么。</p>
+</section>
+
+<section id="trace">
+  <div class="head">
+    <h2>Trace：记录过程，不只记录结果</h2>
+    <span class="tag">trace</span>
+  </div>
+  <p>Trace 要解决的是复盘问题。你不仅想知道它最后对不对，还想知道它是哪一步开始错的、哪次工具返回改变了方向、哪一步把状态写坏了。只存一大段聊天文本不够，后续很难按工具、错误或成本做查询。</p>
+  <p>结构化 Trace 至少要记录 step id、event type、tool name、tool input、tool output summary、state delta、latency、cost、error 和 safety decision。对流程复杂的任务，这些字段比长对话更有用，因为它们能直接暴露“读了什么、写了什么、在哪里停住、谁拦住了它”。</p>
+  <div class="codebar"><span class="label">Trace 事件示例</span><span>JSON</span><button class="copy-code" type="button" data-copy="trace-example">复制</button></div>
+  <pre id="trace-example" data-export-context="Trace 事件示例" data-export-lang="json"><code class="language-json">{
+  "runId": "trial-042",
+  "step": 3,
+  "event": "tool_call",
+  "tool": "shell",
+  "inputSummary": "npm test",
+  "outputSummary": "2 tests failed in auth retry",
+  "stateDelta": {"phase": "diagnosing_failure"},
+  "latencyMs": 4280,
+  "costUsd": 0.014,
+  "safety": "allowed"
+}</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="Trace 字段阅读表" data-export-lang="table">
+      <thead>
+        <tr><th>字段</th><th>它告诉你什么</th><th>常见误读</th><th>下一步该看什么</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>tool / inputSummary</td><td>它调用了哪个工具、传了什么意图</td><td>只看最终答案，忘了工具路径</td><td>检查工具参数和调用顺序。</td></tr>
+        <tr><td>outputSummary / error</td><td>工具返回了什么、是成功还是失败</td><td>把失败当成模型胡说</td><td>看失败是工具报错还是参数不对。</td></tr>
+        <tr><td>stateDelta</td><td>状态被写成了什么</td><td>状态变化被藏在长文本里</td><td>检查状态是否在正确阶段更新。</td></tr>
+        <tr><td>latency / cost</td><td>这一步花了多少时间和预算</td><td>只在出错后才看成本</td><td>比较不同步骤的耗时和预算。</td></tr>
+        <tr><td>safety</td><td>动作有没有被允许</td><td>把安全边界当成提示词</td><td>看是谁拦住了动作、有没有审计记录。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="checkpoint">读完这一节，你应该能拿一条 Trace，指出工具失败点、状态写入点和安全拦截点。</p>
+</section>
+
+<section id="failure-lab">
+  <div class="head">
+    <h2>失败实验室：同一条 bug，在三层里怎么坏</h2>
+    <span class="tag">failure-lab</span>
+  </div>
+  <p>最容易学会这页内容的方式，不是再背一遍术语，而是看同一个 bug 在评测、追踪和安全里分别怎么坏。下面用“登录超时后没有重试”这个任务做一个小实验：如果任务定义太宽，grader 可能根本不知道该看什么；如果 Trace 太粗，你只能看到“失败了”，看不到失败从哪一步开始；如果安全边界缺失，Agent 可能为了修复 bug 直接动到仓库外的文件。</p>
+  <div class="terminal-lab" data-terminal-lab>
+    <div class="terminal-controls">
+      <button class="ghost active" type="button" data-terminal-case="eval">评测层</button>
+      <button class="ghost" type="button" data-terminal-case="trace">追踪层</button>
+      <button class="ghost" type="button" data-terminal-case="safe">安全层</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">case: eval
+symptom: task 只写“修复登录失败”，grader 无法判断到底是超时重试、鉴权错误还是 UI 失败。
+trace: 任务描述过宽，trial 一次通过也不能说明稳定。
+diagnosis: 评测定义太松，成功条件不够可验证。
+repair: 把 task 收紧成“登录超时后重试一次，测试必须通过，auth 模块之外不允许改动”。</pre>
+    <template data-terminal-output="eval">case: eval
+symptom: task 只写“修复登录失败”，grader 无法判断到底是超时重试、鉴权错误还是 UI 失败。
+trace: 任务描述过宽，trial 一次通过也不能说明稳定。
+diagnosis: 评测定义太松，成功条件不够可验证。
+repair: 把 task 收紧成“登录超时后重试一次，测试必须通过，auth 模块之外不允许改动”。</template>
+    <template data-terminal-output="trace">case: trace
+symptom: 只保留最终回答，无法知道它先跑了测试还是先改了文件。
+trace: 没有 event、tool_result、state_delta，排错时找不到分叉点。
+diagnosis: Trace 过粗，无法复盘执行路径。
+repair: 记录 tool_call、tool_result、state_delta、error、latency 和 safety decision。</template>
+    <template data-terminal-output="safe">case: safety
+symptom: Agent 试图直接写仓库外路径，或把删除命令发给 shell。
+trace: 提示词写了“谨慎”，但程序没有路径检查和确认。
+diagnosis: 安全边界没有落到程序层。
+repair: 在执行层加 workspace 检查、危险命令拦截和二次确认。</template>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="失败实验室对照表" data-export-lang="table">
+      <thead>
+        <tr><th>层</th><th>症状</th><th>故障原因</th><th>修法</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>评测</td><td>任务看上去都像过了</td><td>成功条件太宽，grader 没有硬边界</td><td>收紧 task，固定 outcome 和改动范围。</td></tr>
+        <tr><td>追踪</td><td>失败后说不出是哪里坏的</td><td>Trace 只存聊天文本，没有结构化事件</td><td>加 tool_call、tool_result、state_delta 和 error。</td></tr>
+        <tr><td>安全</td><td>模型一失误就越权写入</td><td>程序没有工作区和确认拦截</td><td>把 permission 和 sandbox 变成硬约束。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="checkpoint">读完这个实验，你应该能把一个坏结果拆成三类故障，而不是把所有问题都怪给模型。</p>
+</section>
+
+<section id="shape">
+  <div class="head">
+    <h2>事件形状追踪：从一条运行看到四个层级</h2>
+    <span class="tag">shape</span>
+  </div>
+  <p>这个小追踪器把同一个任务的四个层级摆在一起：评测对象、追踪事件、安全状态和最终结果。你可以把它当成一个结构地图：当 task 写得太宽时，失败首先出现在评测层；当工具返回误导时，失败先出现在追踪层；当程序没拦住动作时，失败先出现在安全层。它的价值在于把“看起来都差不多”的问题分开。</p>
+  <div class="shape-tracer" data-shape-tracer>
+    <div class="trace-lines">
+      <button class="trace-line active" type="button" data-trace-step="eval"><code>eval</code><span>任务定义</span></button>
+      <button class="trace-line" type="button" data-trace-step="trace"><code>trace</code><span>事件链</span></button>
+      <button class="trace-line" type="button" data-trace-step="safe"><code>safe</code><span>权限边界</span></button>
+      <button class="trace-line" type="button" data-trace-step="outcome"><code>outcome</code><span>最终状态</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="eval">
+        <b>task / trial / grader</b><span>先定义怎么测</span>
+        <p>如果 task 没有边界，grader 就无法判断结果；trial 再多也只是在重复模糊目标。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="trace">
+        <b>tool_call / tool_result / state_delta</b><span>再记录怎么跑</span>
+        <p>只留最终回答，排错时找不到分叉点；结构化事件能把偏差定位到某一步。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="safe">
+        <b>permission / sandbox / confirm</b><span>最后看能不能做</span>
+        <p>如果程序没有硬拦，模型一句话说错，越界动作就会直接执行。</p>
+      </div>
+      <div class="tensor-card" data-trace-target="outcome">
+        <b>outcome</b><span>看环境最后变成什么</span>
+        <p>测试、文件、数据库和用户状态都要对齐成功条件，否则“说修好”不算数。</p>
+      </div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="事件层级追踪表" data-export-lang="table">
+      <thead>
+        <tr><th>层级</th><th>要看什么</th><th>该读什么</th><th>坏结果怎么暴露</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>评测层</td><td>定义是否够清楚</td><td>task、trial、grader</td><td>目标模糊，分数就没意义。</td></tr>
+        <tr><td>追踪层</td><td>执行路径是否完整</td><td>tool_call、tool_result、state_delta</td><td>只有最终回答，没有过程证据。</td></tr>
+        <tr><td>安全层</td><td>动作是否被允许</td><td>permission、sandbox、confirm</td><td>越界动作直接发生，没有拦截记录。</td></tr>
+        <tr><td>结果层</td><td>环境最后变成什么</td><td>outcome、tests、diff</td><td>答复听起来对，状态其实不对。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="checkpoint">读完这一节，你应该能从“评测、追踪、安全、结果”四个层级里认出问题落点。</p>
+</section>
+
+<section id="monitoring">
+  <div class="head">
+    <h2>监控与抽查：离线评测之外的第二层眼睛</h2>
+    <span class="tag">monitoring</span>
+  </div>
+  <p>离线评测能防回归，但真实输入会更乱。线上监控的作用，是从真实运行里抽样，看成功率、失败类型、工具误用、成本、用户接管和安全拦截。它能抓到离线集合没覆盖的边界，但前提是你把抽样、脱敏和权限一起设计好。</p>
+  <p>这里最重要的习惯是：评测、监控和告警共用同一条事件流。不要让每个模块各记各的，否则你最后会得到三份对不上账的日志。事件流里至少要有 tool_call、tool_result、state_update、stop_reason 和 safety_block 这些事件。</p>
+  <div class="table-wrap">
+    <table data-export-context="线上抽查事件表" data-export-lang="table">
+      <thead>
+        <tr><th>事件</th><th>谁写</th><th>谁读</th><th>为什么要单独记</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>tool_call</td><td>执行层</td><td>评测、监控、审计</td><td>能看出调用了什么、何时调用、是否越权。</td></tr>
+        <tr><td>tool_result</td><td>执行层</td><td>评测、监控、调试</td><td>能看出返回值是否误导了后续步骤。</td></tr>
+        <tr><td>state_update</td><td>业务层</td><td>复盘、恢复、审计</td><td>能看出任务状态有没有被写坏。</td></tr>
+        <tr><td>stop_reason</td><td>控制层</td><td>监控、告警、人审</td><td>能看出是完成、失败、超预算还是被拦截。</td></tr>
+        <tr><td>safety_block</td><td>安全层</td><td>安全、审计、复盘</td><td>能看出谁拦住了高风险动作。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="checkpoint">读完这一节，你应该能设计一个最小抽查方案，说清抽什么、谁能看、怎么脱敏。</p>
+</section>
+
+<section id="feedback-loop">
+  <div class="head">
+    <h2>回流闭环：线上问题怎样变成下一轮评测</h2>
+    <span class="tag">feedback-loop</span>
+  </div>
+  <p>线上监控抓到一条异常后，下一步不是先改模型，而是把这条异常整理成一条可复现的评测样例。你要先保留最小上下文：原始输入、关键工具调用、失败输出、风险状态和用户最后看到的结果。这样做的目的很直接，后面的回归测试才能真正锁住同一类问题。</p>
+  <p>这个回流动作有一个常见误区：把事故摘要直接放进工单就结束了。工单适合协作，回归集才适合防复发。前者回答“发生了什么”，后者回答“下次还会不会再来”。</p>
+  <div class="table-wrap">
+    <table data-export-context="问题回流卡片" data-export-lang="table">
+      <thead>
+        <tr><th>从线上抓到什么</th><th>整理成什么</th><th>回归时检查什么</th><th>常见漏项</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>一次失败请求</td><td>最小复现 task</td><td>同类输入是否还会失败</td><td>只记结论，不记上下文。</td></tr>
+        <tr><td>关键工具事件</td><td>结构化 trace</td><td>失败从哪一步开始</td><td>只保留聊天文本。</td></tr>
+        <tr><td>越权或高风险动作</td><td>safety_block / confirm 记录</td><td>程序是否真的拦住了</td><td>把拦截写成提示语。</td></tr>
+        <tr><td>最终用户结果</td><td>outcome 摘要</td><td>结果是否和成功条件一致</td><td>只看模型自述，不看环境状态。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span class="label">回流样例</span><span>JSON</span><button class="copy-code" type="button" data-copy="feedback-loop-example">复制</button></div>
+  <pre id="feedback-loop-example" data-export-context="回流样例" data-export-lang="json"><code class="language-json">{
+  "task": "login timeout retry",
+  "input": "timeout after 3s",
+  "trace": ["tool_call: open file", "tool_result: timeout", "state_delta: retry_count=0"],
+  "outcome": "test failed",
+  "risk": "needs_confirm",
+  "regression_check": "retry once and keep changes inside auth module"
+}</code></pre>
+  <p>这条样例进入回归集之后，下一轮评测就能直接问三个问题：它还会不会失败、Trace 能不能定位、护栏有没有拦住越界动作。只要这三问里有一问答不上来，这条线上问题就还没有真正关掉。</p>
+  <p class="checkpoint">读完这一节，你应该能把线上事故整理成一条可回归的样例，而不是只留一条工单摘要。</p>
+</section>
+
+<section id="safety">
+  <div class="head">
+    <h2>安全边界：先于功能，不是上线后补</h2>
+    <span class="tag">safety</span>
+  </div>
+  <p>一旦 Agent 能调用 shell、写文件、发消息、提交代码或控制界面，它就会产生外部动作。安全边界的任务很简单：谁能用，能在哪用，能做什么，做了什么如何追踪，哪些动作必须再确认。真正起作用的是程序侧的硬约束，prompt 只负责提醒，不负责兜底。</p>
+  <p>最常见的护栏包括白名单、工作区隔离、路径检查、危险命令拦截、dry-run、人工确认、预算限制、速率限制和审计日志。对 shell 工具来说，`../`、符号链接、绝对路径和破坏性命令都要特别小心；对发消息或退款这类动作，确认级别往往更高。</p>
+  <div class="codebar"><span class="label">路径检查示例</span><span>TypeScript-like</span><button class="copy-code" type="button">复制</button></div>
+  <pre data-export-context="路径检查示例" data-export-lang="text"><code class="language-text">const WORKSPACE = path.resolve("/workspace/project");
+
+async function assertInsideWorkspace(cwd) {
+  const real = await fs.realpath(path.resolve(cwd ?? WORKSPACE));
+  const rel = path.relative(WORKSPACE, real);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error("outside workspace");
+  }
+  return real;
+}</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="安全护栏与症状表" data-export-lang="table">
+      <thead>
+        <tr><th>护栏</th><th>读什么</th><th>写什么</th><th>症状</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>工作区隔离</td><td>真实路径、符号链接解析结果</td><td>允许访问的根目录</td><td>一旦路径越界，文件就可能被改到仓库外。</td></tr>
+        <tr><td>人工确认</td><td>高风险动作的摘要</td><td>确认记录、拒绝记录</td><td>退款、提交、删除类动作直接落地。</td></tr>
+        <tr><td>预算限制</td><td>token、时间、步骤数</td><td>停止原因</td><td>Agent 在错误方向上一直跑，不知道停。</td></tr>
+        <tr><td>审计日志</td><td>谁发起、谁批准、谁执行</td><td>可追溯记录</td><td>出了问题找不到责任链。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="checkpoint">读完这一节，你应该能给一个 shell 权限的 Agent 画出最小护栏，而不是只写一句“请谨慎操作”。</p>
+</section>
+
+<section id="case-study">
+  <div class="head">
+    <h2>案例：代码修复 Agent 的验收链</h2>
+    <span class="tag">case-study</span>
+  </div>
+  <p>把前面几层合起来看，最容易懂的是代码修复任务。一个合理的 task 会写清楚 bug、fixture 和成功条件；trial 负责记录这次运行用的模型、工具和预算；grader 先跑测试，再检查改动范围，最后确认没有引入新的高风险副作用。Trace 则告诉你它是先定位错误、先跑测试还是先改文件。</p>
+  <p>这里最关键的不是“修好了没有”这一句，而是“怎么证明修好了”。如果测试通过，但它顺手删了不该删的文件，或者为了过测试绕开了权限边界，那 outcome 也不能算真正通过。所以在代码 Agent 里，结果检查、过程追踪和安全护栏必须一起看。</p>
+  <div class="codebar"><span class="label">代码修复验收链</span><span>Workflow</span><button class="copy-code" type="button">复制</button></div>
+  <pre data-export-context="代码修复验收链" data-export-lang="python"><code class="language-python">task = {
+    "goal": "fix login timeout retry",
+    "success": ["npm test passes", "only auth module changed"]
+}
+
+trial = run_agent(task, model="claude-opus", budget="small")
+trace = trial.trace
+outcome = trial.outcome
+grader = {
+    "tests": outcome.tests_passed,
+    "files": outcome.changed_files,
+    "risk": outcome.safety_state,
+}</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="代码修复验收链对照表" data-export-lang="table">
+      <thead>
+        <tr><th>层</th><th>检查点</th><th>如果错了会怎样</th><th>下一步看什么</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>task</td><td>目标和成功条件是否可验证</td><td>任务写得很热闹，但没法判定对错</td><td>补测试、补文件范围、补风险边界。</td></tr>
+        <tr><td>trace</td><td>先做了什么、为什么转向</td><td>失败之后不知道偏差是从哪一步开始的</td><td>看工具调用顺序和状态写入。</td></tr>
+        <tr><td>outcome</td><td>测试、diff、风险状态</td><td>回答看起来对，环境其实没对齐</td><td>检查自动测试和文件修改范围。</td></tr>
+        <tr><td>grader</td><td>是否把硬结果和风险一起看</td><td>评分器只会给印象分</td><td>把规则、阈值和人工确认写进检查项。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="checkpoint">读完这个例子，你应该能说清一个代码 Agent 的验收链需要哪些证据，缺哪一层会出什么问题。</p>
+</section>
+
+<section id="pitfalls">
+  <div class="head">
+    <h2>误区：看起来自动，实际上不可控</h2>
+    <span class="tag">pitfalls</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="常见误区与修法表" data-export-lang="table">
+      <thead>
+        <tr><th>误区</th><th>为什么错</th><th>修法</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>只看最终回答</td><td>过程越权或工具没跑也看不出来。</td><td>保存 transcript 和 outcome。</td></tr>
+        <tr><td>没有评测先改 prompt</td><td>你不知道是变好还是变坏。</td><td>先建小任务集和回归记录。</td></tr>
+        <tr><td>安全只写在 prompt</td><td>模型一旦失误，边界就失效。</td><td>程序侧做权限、路径和确认。</td></tr>
+        <tr><td>Trace 只存聊天文本</td><td>后续无法按工具、错误或成本查询。</td><td>改成结构化事件流。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="table-wrap" style="margin-top:14px">
+    <table data-export-context="失败症状到修法表" data-export-lang="table">
+      <thead>
+        <tr><th>症状</th><th>可能原因</th><th>先看哪里</th><th>修法方向</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>分数忽高忽低</td><td>任务定义不稳定或 trial 太少</td><td>task / trial / budget</td><td>固定任务边界，增加重复运行。</td></tr>
+        <tr><td>很难复盘为什么失败</td><td>Trace 太粗</td><td>tool_call / state_delta / error</td><td>把过程变成结构化事件。</td></tr>
+        <tr><td>高风险动作误执行</td><td>安全边界只写在 prompt 里</td><td>permission / sandbox / confirm</td><td>程序侧加硬拦截和审计。</td></tr>
+        <tr><td>监控看起来都挺好，但用户还是抱怨</td><td>只看离线集，不看线上抽查</td><td>事件流和抽样策略</td><td>把在线抽查接进同一套记录。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="checkpoint">读完这一节，你应该能见到一个坏结果时先判断是评测、追踪还是安全出了问题。</p>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>这里先不追：下一单元再接什么</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <p>这页只收最小闭环：评测、追踪、安全。更细的监控策略、完整的线上告警、跨任务的归因分析，以及多 Agent 级别的分工协作，都不在这一页展开。你现在先把“能验收、能复盘、能拦住”这三件事做实，后面的系统设计才有底。</p>
+  <div class="table-wrap">
+    <table data-export-context="本页边界表" data-export-lang="table">
+      <thead>
+        <tr><th>现在先学</th><th>先别追</th><th>后面会回来</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>task / trial / grader</td><td>完整 benchmark 平台</td><td>更大规模的课程和评测工作流</td></tr>
+        <tr><td>trace / transcript / outcome</td><td>复杂归因和统计建模</td><td>后续监控与可靠性单元</td></tr>
+        <tr><td>permission / sandbox / confirm</td><td>完整安全政策</td><td>后续工具调用和多 Agent 设计</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>答题目标</strong>
+    <p>这组题检查你能不能把评测、追踪和安全分开。好的答案会同时说清楚对象、证据和下一步，不会只抛术语。</p>
+  </div>
+  <div class="review-card">
+    <strong>作答提醒</strong>
+    <p>先做能本地检查的题，再做开放题。开放题优先写“错因、后果、修法”或“task、trace、safety”三段式。</p>
+  </div>
+</div>
+
+<div class="practice-check">
+  <div class="check-item"><b>概念</b><span>知道 task、trial、grader、outcome 的分工。</span></div>
+  <div class="check-item"><b>追踪</b><span>知道 Trace 该记录什么。</span></div>
+  <div class="check-item"><b>边界</b><span>知道安全护栏放在哪一层。</span></div>
+  <div class="check-item"><b>迁移</b><span>能把这套方法搬到真实任务。</span></div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、先把评测对象分清</h3>
+      <p>这一组先确认你能不能把 task、trial、grader 和 outcome 说对。</p>
+    </div>
+    <div class="quick-review"><b>复盘提示</b>先问“测什么”，再问“怎么跑”，最后问“怎么判”。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q01" data-group="一、先把评测对象分清" data-title="测什么对应什么" data-answer="task">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">evaluation</span></div>
+      <h3>“测什么”在 Agent 评测里对应哪个对象？</h3>
+      <label><input type="radio" name="q01" value="task">task</label>
+      <label><input type="radio" name="q01" value="trial">trial</label>
+      <label><input type="radio" name="q01" value="trace">trace</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q02" data-group="一、先把评测对象分清" data-title="最终回答是否足够" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">outcome</span></div>
+      <h3>判断：只要最终回答正确，就不必看 outcome。</h3>
+      <label><input type="radio" name="q02" value="对">对</label>
+      <label><input type="radio" name="q02" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q03" data-group="一、先把评测对象分清" data-title="Trial 的含义" data-answer="一次运行">
+      <div class="q-meta"><span class="pill">short fill</span><span class="pill">trial</span></div>
+      <h3>同一个 task 的 ____ 叫 trial。</h3>
+      <input type="text" name="q03" data-answer="一次运行" placeholder="写四个字">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q04" data-group="一、先把评测对象分清" data-title="评测顺序">
+      <div class="q-meta"><span class="pill">ordering</span><span class="pill">harness</span></div>
+      <h3>按顺序排列：A 定义 task；B 跑 trial；C grader 检查；D 汇总 outcome。</h3>
+      <textarea name="q04" placeholder="写出顺序，并说明哪一步最容易被忽略"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>典型顺序是 A → B → C → D。评分时重点看你有没有说清楚 grader 依赖 outcome，而不是依赖一段好看的最终回答；也要提到 repeated trial 才能看稳定性。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、读 Trace 和监控事件</h3>
+      <p>这一组检查你能不能从结构化记录里找出失败点。</p>
+    </div>
+    <div class="quick-review"><b>复盘提示</b>先看工具，再看状态，再看成本和安全。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q05" data-group="二、读 Trace 和监控事件" data-title="哪类字段最先看" data-answer="tool / error / stateDelta">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">trace</span></div>
+      <h3>读一条失败 Trace 时，最先该看哪三类字段？</h3>
+      <label><input type="radio" name="q05" value="tool / error / stateDelta">tool / error / stateDelta</label>
+      <label><input type="radio" name="q05" value="title / author / date">title / author / date</label>
+      <label><input type="radio" name="q05" value="emoji / tone / layout">emoji / tone / layout</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q06" data-group="二、读 Trace 和监控事件" data-title="Trace 记录什么" data-answer="错">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">trace</span></div>
+      <h3>判断：一大段聊天文本就足够当 Trace。</h3>
+      <label><input type="radio" name="q06" value="对">对</label>
+      <label><input type="radio" name="q06" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q full" data-question="q07" data-group="二、读 Trace 和监控事件" data-title="Trace 阅读题">
+      <div class="q-meta"><span class="pill">code reading</span><span class="pill">diagnosis</span></div>
+      <h3>看这条事件：`tool=input_search`、`outputSummary=404`、`stateDelta.phase=diagnosing_failure`。你能判断出什么？还缺什么证据？</h3>
+      <textarea name="q07" placeholder="先写判断，再写缺失证据"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>应能判断它调用了搜索工具、返回失败、状态已经进入排错阶段。还缺的证据通常是：输入到底查了什么、后续有没有改路线、失败是不是来自权限或参数而不是目标本身。好的答案会把 tool、output、state 三者串起来。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、把安全护栏落到动作上</h3>
+      <p>这一组检查你能不能把“谨慎”翻译成具体的程序侧边界。</p>
+    </div>
+    <div class="quick-review"><b>复盘提示</b>安全不是一句口号，而是一组可执行的拦截点。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q08" data-group="三、把安全护栏落到动作上" data-title="程序侧边界" data-answer="对">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">safety</span></div>
+      <h3>判断：高风险动作的边界应该主要由程序执行，而不是只靠 prompt 提醒。</h3>
+      <label><input type="radio" name="q08" value="对">对</label>
+      <label><input type="radio" name="q08" value="错">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q09" data-group="三、把安全护栏落到动作上" data-title="路径检查目的" data-answer="防止越出工作区">
+      <div class="q-meta"><span class="pill">short fill</span><span class="pill">workspace</span></div>
+      <h3>`path.relative` 和 `realpath` 这一类检查，主要是为了 ____。</h3>
+      <input type="text" name="q09" data-answer="防止越出工作区" placeholder="写一句话">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q full" data-question="q10" data-group="三、把安全护栏落到动作上" data-title="安全设计题">
+      <div class="q-meta"><span class="pill">scenario</span><span class="pill">safety</span></div>
+      <h3>给一个能发消息和改文件的 Agent，写出 3 条最小护栏。每条都要说清楚“拦什么、为什么拦、看什么证据”。</h3>
+      <textarea name="q10" placeholder="护栏 1 / 2 / 3"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>合格答案通常会包含：工作区隔离或路径白名单，防止越界写文件；高风险动作二次确认，防止误发消息或误提交；审计日志或拦截事件，便于追责和复盘。要点是每条都要有对象、动作和证据，而不是只写“请小心”。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、迁移到真实任务</h3>
+      <p>最后把这页的方法搬到一个真实场景里。</p>
+    </div>
+    <div class="quick-review"><b>复盘提示</b>先写证据链，再写动作链。</div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q11" data-group="四、迁移到真实任务" data-title="代码修复 Agent 的评测方案">
+      <div class="q-meta"><span class="pill">scenario</span><span class="pill">evaluation</span></div>
+      <h3>为“自动修复 bug”的 Agent 设计一个最小 evaluation suite：写 2 个 task 和对应 grader。</h3>
+      <textarea name="q11" placeholder="task 1 / grader 1&#10;task 2 / grader 2"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好的答案会给出可验证任务，比如“修复登录超时重试”和“修复文件导入失败”，并给出 grader：测试是否通过、改动范围是否正确、是否引入额外风险。不要只写“看修好了没有”，要写清楚检查项。</p>
+      </details>
+    </div>
+    <div class="q" data-question="q12" data-group="四、迁移到真实任务" data-title="线上抽查对象" data-answer="tool_call / tool_result / safety_block">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">monitoring</span></div>
+      <h3>做线上抽查时，最值得保留的事件组合是哪一组？</h3>
+      <label><input type="radio" name="q12" value="tool_call / tool_result / safety_block">tool_call / tool_result / safety_block</label>
+      <label><input type="radio" name="q12" value="title / author / summary">title / author / summary</label>
+      <label><input type="radio" name="q12" value="tone / font / color">tone / font / color</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-question="q13" data-group="四、迁移到真实任务" data-title="费曼题">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">feynman</span></div>
+      <h3>用 4-6 句话解释：为什么 Agent 评测不能只看最终回答？</h3>
+      <textarea name="q13" placeholder="写成讲给同事听的版本"></textarea>
+      <button class="reveal" type="button">展开反馈</button>
+      <details>
+        <summary>参考答案 / 评分要点</summary>
+        <p>好的答案要同时提到工具、环境结果和安全边界。核心意思是：最终回答只能说明模型说了什么，不能说明它有没有真的执行、执行得对不对、有没有越权、有没有把状态写坏。最好再补一句：评测要看 task / trial / grader，追踪要看 trace，安全要看 permission 和 confirm。</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li><a href="https://www.anthropic.com/research/building-effective-agents">Anthropic: Building Effective AI Agents</a>。本页关于 workflow、agent 和常见工作流模式的讲法，主要参考这篇文章。访问日期：2026-06-21。</li>
+  <li><a href="https://openai.com/index/new-tools-for-building-agents/">OpenAI: New tools for building agents</a>。本页把 tracing 和 evaluations 放在同一条工作流里理解，参考了这篇文章。访问日期：2026-06-21。</li>
+  <li><a href="https://openai.com/index/introducing-agentkit/">OpenAI: Introducing AgentKit</a>。本页关于 datasets、trace grading、自动 prompt 优化和评测能力的讲法，参考了这篇公开说明。访问日期：2026-06-21。</li>
+  <li><a href="https://openai.com/index/a-shared-playbook-for-trustworthy-third-party-evaluations/">OpenAI: A shared playbook for trustworthy third party evaluations</a>。本页关于 evaluation harness、validity checks、resource budgets 和 retry behavior 的讲法，参考了这篇材料。访问日期：2026-06-21。</li>
+  <li><a href="https://openai.com/index/how-we-monitor-internal-coding-agents-for-misalignment/">OpenAI: How we monitor internal coding agents for misalignment</a>。本页关于 actions、internal reasoning、tool calls 和人审抽查的讲法，参考了这篇公开文章。访问日期：2026-06-21。</li>
+  <li><a href="https://openai.com/index/evaluating-chain-of-thought-monitorability/">OpenAI: Evaluating chain-of-thought monitorability</a>。本页关于监控可见性和只看最终输出不够的讲法，参考了这篇研究。访问日期：2026-06-21。</li>
+  <li><a href="https://docs.anthropic.com/en/docs/build-with-claude/tool-use/overview">Anthropic: Tool use with Claude</a>。本页关于工具输入输出、错误语义和执行边界的讲法，参考了这个文档。访问日期：2026-06-21。</li>
+  <li><a href="https://docs.anthropic.com/en/docs/build-with-claude/computer-use">Anthropic: Computer use</a>。本页关于 sandbox、截图、鼠标键盘控制和 prompt injection 风险的讲法，参考了这个文档。访问日期：2026-06-21。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

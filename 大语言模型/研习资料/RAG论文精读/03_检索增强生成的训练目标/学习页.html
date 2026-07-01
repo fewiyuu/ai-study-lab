@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>检索增强生成的训练目标</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="RAG 论文精读" data-unit="03｜检索增强生成的训练目标">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>RAG 论文精读</strong>
+        <span>03｜检索增强生成的训练目标</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>训练主线</a>
+        <a href="#terms"><span class="dot"></span>术语边界</a>
+        <a href="#objective"><span class="dot"></span>目标函数</a>
+        <a href="#signal"><span class="dot"></span>信号怎么回传</a>
+        <a href="#fixed-index"><span class="dot"></span>固定索引</a>
+        <a href="#ablation"><span class="dot"></span>消融证据</a>
+        <a href="#setup"><span class="dot"></span>工程设置</a>
+        <a href="#boundary"><span class="dot"></span>数据边界</a>
+        <a href="#debug-case"><span class="dot"></span>训练排查案例</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#bridge"><span class="dot"></span>下一节怎么接</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">这页只讲训练目标和训练信号。DPR、BART、FAISS 的完整组件细节留到后续组件页或工程页。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">RAG 论文精读 · 03</div>
+          <h1>检索增强生成的训练目标</h1>
+          <p>这一页接住上一节的概率模型，专门看 RAG 怎么训练：训练数据只有输入输出对 <code>(x_j, y_j)</code>，没有告诉模型哪篇 Wikipedia 文档才是“正确证据”。论文用 negative marginal log-likelihood 把多条文档路径合起来，再让任务损失同时推动 query encoder 和 BART generator。</p>
+          <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../02_概率模型_RAG-Sequence与RAG-Token/学习页.html">上一节：概率模型</a>
+            <a href="../04_解码与任务适配_从QA到分类/学习页.html">下一节：解码与任务适配</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>这一页结束时，你先能</h3>
+          <ul>
+            <li>用一句话解释为什么 RAG 可以在没有 gold document 标签时训练 retriever。</li>
+            <li>写出训练损失的主形状：<code>-log p(y_j|x_j)</code>。</li>
+            <li>区分哪些参数更新，哪些对象固定。</li>
+            <li>用 learned retrieval、fixed retriever、BM25 的消融结果判断训练目标有没有真的影响检索。</li>
+          </ul>
+        </div>
+      </div>
+
+      <section id="goals">
+        <div class="head"><h2>学习目标</h2><span class="tag">goal</span></div>
+        <div class="grid3">
+          <div class="box soft">
+            <h3>把目标函数说准</h3>
+            <p>你要能看懂论文 2.4 Training 的核心句子：给定训练对 <code>(x_j, y_j)</code>，最小化目标答案的 negative marginal log-likelihood。这里的 marginal 指文档变量被合并掉了，不需要手工标注“答案来自哪篇文档”。</p>
+          </div>
+          <div class="box info">
+            <h3>把训练信号追清</h3>
+            <p>你要能说出为什么一个答案级损失可以改变检索器。直觉上，能让正确答案概率更高的文档路径会被奖励；经常把模型带偏的路径会被压低。这个信号通过 <code>p_η(z|x)</code> 回到 query encoder。</p>
+          </div>
+          <div class="box warn">
+            <h3>把工程边界立住</h3>
+            <p>你要知道论文没有重训整套 DPR 文档编码器。它固定 <code>BERT_d</code> 和预建索引，只 fine-tune <code>BERT_q</code> 与 BART generator。这样牺牲了一部分自由度，换来可运行的训练流程。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="overview">
+        <div class="head"><h2>训练主线</h2><span class="tag">overview</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>从“会生成”到“会用证据生成”</h3>
+            <p>上一节讲到 RAG-Sequence 和 RAG-Token 都把文档 z 当成潜变量。到了训练环节，论文要解决的问题很实际：数据集通常只给问题和答案，不给证据文档标签。如果直接要求 retriever 学“正确文档 id”，训练数据不够；如果只训练 generator，检索器又不能适应任务。</p>
+            <p>RAG 的做法是把文档选择放在概率路径里。对每个训练样本，retriever 先给出 top-K 文档和概率，generator 再在每篇文档条件下给目标答案概率，最后把这些路径贡献加起来。损失只看目标答案的边际概率：答案概率越高，损失越低；能解释答案的文档路径自然得到更强信号。</p>
+            <p>这个设计让 RAG 的训练目标和普通 sequence-to-sequence 模型保持相似：仍然优化答案的 log-likelihood。但它比普通生成模型多了一层可学习检索分布，所以训练时不仅让生成器更会写答案，也让 query encoder 更会把输入拉向有用证据。</p>
+          </div>
+          <div class="box soft" data-shape-tracer>
+            <h3>一条训练样本怎么走</h3>
+            <div class="flow">
+              <button class="trace-line" type="button" data-trace-step="pair"><div>读入训练对</div><span>(xj,yj)</span></button>
+              <button class="trace-line" type="button" data-trace-step="retrieve"><div>检索 top-K</div><span>BERTq</span></button>
+              <button class="trace-line" type="button" data-trace-step="score"><div>逐文档打分</div><span>BART</span></button>
+              <button class="trace-line" type="button" data-trace-step="marginal"><div>路径相加</div><span>Σz</span></button>
+              <button class="trace-line" type="button" data-trace-step="update"><div>反向更新</div><span>η,θ</span></button>
+            </div>
+            <div class="trace-canvas">
+              <div class="tensor-card" data-trace-target="pair"><b>input</b><span>只有问题和目标答案。</span><p>例如 question = “谁创立了 X？”，target = “某人”。没有给证据文档 id。</p></div>
+              <div class="tensor-card" data-trace-target="retrieve"><b>retrieve</b><span>query encoder 生成检索向量。</span><p>固定的文档索引返回 top-K 文档及相似度，形成 <code>p_η(z|x)</code> 的近似范围。</p></div>
+              <div class="tensor-card" data-trace-target="score"><b>generate</b><span>每篇文档都试着解释答案。</span><p>BART 计算 <code>p_θ(y|x,z)</code>，文档好不好要通过答案概率体现。</p></div>
+              <div class="tensor-card" data-trace-target="marginal"><b>loss</b><span>把文档路径贡献相加。</span><p>边际概率高，<code>-log</code> 损失低；边际概率低，训练会推高更有用的路径。</p></div>
+              <div class="tensor-card" data-trace-target="update"><b>update</b><span>只更新 query encoder 和 generator。</span><p><code>BERT_d</code> 与文档 index 固定，避免每步训练都重建巨大的向量库。</p></div>
+            </div>
+          </div>
+        </div>
+        <table data-export-context="RAG 训练主线：一个样本的读写链路" data-export-lang="table">
+          <thead><tr><th>阶段</th><th>读什么</th><th>写什么</th><th>如果读错会怎样</th></tr></thead>
+          <tbody>
+            <tr><td>训练对</td><td><code>x_j</code>、<code>y_j</code></td><td>本轮监督目标</td><td>把答案标签当文档标签，会误解整套训练目标。</td></tr>
+            <tr><td>检索</td><td>输入、query encoder、固定索引</td><td>top-K 文档和 <code>p_η(z|x)</code></td><td>把 top-K 当答案集合，会漏掉生成器条件概率。</td></tr>
+            <tr><td>生成</td><td>输入、候选文档、目标答案前缀</td><td><code>p_θ(y|x,z)</code></td><td>只看检索分数，无法知道文档是否真的支持目标答案。</td></tr>
+            <tr><td>边际化</td><td>每条文档路径的检索概率和生成概率</td><td><code>p(y|x)</code></td><td>只取 top-1 会把潜变量近似读得过窄。</td></tr>
+            <tr><td>反向传播</td><td>negative marginal log-likelihood</td><td>更新 <code>BERT_q</code> 和 BART</td><td>以为 retriever 完全冻结，会看不懂 learned retrieval 的消融提升。</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="terms">
+        <div class="head"><h2>术语边界</h2><span class="tag">terms</span></div>
+        <div class="table-wrap">
+          <table data-export-context="训练目标相关术语表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>术语</th>
+                <th>先给直觉</th>
+                <th>在论文里的位置</th>
+                <th>不要误读成</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>training pair <code>(x_j, y_j)</code></td>
+                <td>训练样本只给输入和目标输出。</td>
+                <td>2.4 Training 开头用它定义监督信号。</td>
+                <td>带有 gold passage 的三元组。</td>
+              </tr>
+              <tr>
+                <td>negative marginal log-likelihood</td>
+                <td>目标答案越可能，损失越小；文档选择被求和隐藏掉。</td>
+                <td>论文明确说 minimize <code>-log p(y_j|x_j)</code>。</td>
+                <td>对检索文档 id 做交叉熵。</td>
+              </tr>
+              <tr>
+                <td><code>BERT_q</code></td>
+                <td>把问题编码成 query 向量。</td>
+                <td>DPR retriever 的 query encoder，训练时 fine-tune。</td>
+                <td>固定不动的检索器整体。</td>
+              </tr>
+              <tr>
+                <td><code>BERT_d</code></td>
+                <td>把 Wikipedia chunk 编成文档向量。</td>
+                <td>文档 encoder，论文训练 RAG 时保持固定。</td>
+                <td>每轮都跟着任务损失更新的文档塔。</td>
+              </tr>
+              <tr>
+                <td>document index</td>
+                <td>预先建好的文档向量库。</td>
+                <td>MIPS/FAISS 检索用的索引。</td>
+                <td>可以低成本随梯度每步更新的普通参数矩阵。</td>
+              </tr>
+              <tr>
+                <td>learned retrieval</td>
+                <td>检索分布被任务损失调过。</td>
+                <td>Retrieval Ablations 对比 frozen retriever 和 BM25。</td>
+                <td>单纯换一个更大的向量库。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="inline-note">
+          <b>读论文时的抓手</b>
+          这一节的关键在于分清三层对象：监督信号来自答案，隐变量是文档，真实更新落在 query encoder 和 generator。只要这三层清楚，后面看消融表就不会把“检索器有效”误读成“检索器有直接文档标签”。
+        </div>
+      </section>
+
+      <section id="objective">
+        <div class="head"><h2>目标函数</h2><span class="tag">formula</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>一句话版</h3>
+            <p>RAG 训练时最小化的是目标输出的 negative marginal log-likelihood。写成训练样本 <code>j</code> 的形式，就是：</p>
+            <div class="math-block" data-export-context="RAG 训练损失主公式" data-export-lang="text">
+              \[
+                \mathcal{L}_j = -\log p(y_j \mid x_j)
+              \]
+              <p>这里的 <code>p(y_j|x_j)</code> 已经把候选文档 z 的贡献合并进去。损失不要求“第几篇文档是标准证据”。</p>
+            </div>
+            <p>如果用 RAG-Sequence 的直觉写出内部结构，可以先看成：</p>
+            <div class="math-block" data-export-context="RAG-Sequence 的文档边际化近似" data-export-lang="text">
+              \[
+                p(y \mid x) \approx \sum_{z \in \mathrm{top}\text{-}K(x)}
+                p_{\eta}(z \mid x)\, p_{\theta}(y \mid x,z)
+              \]
+              <p>top-K 是近似范围，<code>p_η</code> 是检索器，<code>p_θ</code> 是生成器。训练信号来自整条路径乘积，不能只看检索分数。</p>
+            </div>
+          </div>
+          <div class="box soft">
+            <h3>一个两文档手算例子</h3>
+            <p>假设同一个问题检索到两篇文档。第一篇看起来更相关，但生成器在它条件下不太能写出目标答案；第二篇检索分数低一些，却更能支持答案。边际化会把两条路径都算进来。</p>
+            <table data-export-context="两文档边际化手算" data-export-lang="table">
+              <thead><tr><th>文档</th><th><code>p_η(z|x)</code></th><th><code>p_θ(y|x,z)</code></th><th>路径贡献</th></tr></thead>
+              <tbody>
+                <tr><td>d1</td><td>0.60</td><td>0.10</td><td>0.060</td></tr>
+                <tr><td>d2</td><td>0.40</td><td>0.70</td><td>0.280</td></tr>
+                <tr><td>合计</td><td>-</td><td>-</td><td><code>p(y|x)=0.340</code></td></tr>
+              </tbody>
+            </table>
+            <p>这一轮损失约为 <code>-log(0.34) ≈ 1.08</code>。更重要的是路径贡献暴露了一个训练方向：d2 虽然初始检索概率低，但它对目标答案更有帮助，训练会倾向于让类似 d2 的路径更容易被检索到。</p>
+          </div>
+        </div>
+        <div class="shift-demo" data-shift-demo>
+          <label>把目标答案换成一句话，观察“只给答案监督”的形状
+            <input value="Paris is the capital of France.">
+          </label>
+          <div class="shift-rows"></div>
+          <p class="hint">这个小演示只是把目标输出拆成 token 级监督。它提醒你：训练数据给的是目标文本，不包含文档标签；文档贡献要通过目标文本概率间接体现。</p>
+        </div>
+      </section>
+
+      <section id="signal">
+        <div class="head"><h2>信号怎么回传</h2><span class="tag">gradient</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>没有文档标签，也能训练 retriever</h3>
+            <p>这个点非常容易卡住：如果没有标准文档标签，retriever 怎么知道该调向哪里？答案是，retriever 不直接学习“这篇文档是 gold”。它学习的是：哪些文档路径让目标答案的边际概率变高。只要 <code>p_η(z|x)</code> 参与了 <code>p(y|x)</code> 的计算，答案级损失就能给它方向。</p>
+            <p>直觉上，某篇文档被检索出来后，如果 generator 在它条件下能稳定写出正确答案，那这条路径的乘积贡献会大。训练会提高这种路径在相似输入上的权重。相反，检索概率高但生成目标答案概率低的路径，会在损失里显得“不划算”。</p>
+            <p>这里并非把 generator 当裁判强行给文档打标签，更像是联合模型在同一个目标下分配责任：retriever 负责把有用证据带进来，generator 负责把证据转成目标输出。两个部分通过边际似然绑在一起。</p>
+          </div>
+          <div class="box warn">
+            <h3>三种读法的差别</h3>
+            <table data-export-context="训练信号的三种读法" data-export-lang="table">
+              <thead><tr><th>读法</th><th>会怎么训练</th><th>问题</th></tr></thead>
+              <tbody>
+                <tr><td>把文档当已知标签</td><td>对文档 id 做分类</td><td>多数知识密集任务没有这样的监督。</td></tr>
+                <tr><td>只训练 generator</td><td>retriever 固定，答案损失只改写作能力</td><td>检索不能适应任务，消融中通常吃亏。</td></tr>
+                <tr><td>RAG 的边际似然</td><td>答案损失同时影响检索分布和生成分布</td><td>需要 top-K 近似与稳定的索引设计。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="terminal-lab" data-terminal-lab>
+          <div class="terminal-controls">
+            <button class="ghost" type="button" data-terminal-case="good">有用文档被低估</button>
+            <button class="ghost" type="button" data-terminal-case="bad">高分文档生成差</button>
+            <button class="ghost" type="button" data-terminal-case="frozen">检索器冻结</button>
+          </div>
+          <pre class="terminal-output"></pre>
+          <template data-terminal-output="good"><code>case: d2 retrieval=0.22, generator_target=0.81
+path contribution = 0.1782
+effect: 这条路径虽然检索概率低，但能解释答案。训练倾向于提高相似证据的 query 匹配。</code></template>
+          <template data-terminal-output="bad"><code>case: d1 retrieval=0.70, generator_target=0.05
+path contribution = 0.0350
+effect: 检索高不等于有用。目标答案概率低时，这条路径不会成为主要解释。</code></template>
+          <template data-terminal-output="frozen"><code>case: retriever is frozen
+effect: generator 还能学习怎样用拿到的文档写答案，但 query encoder 不会被任务损失重新塑形。
+symptom: learned retrieval 的消融优势会消失或变弱。</code></template>
+        </div>
+      </section>
+
+      <section id="fixed-index">
+        <div class="head"><h2>固定索引</h2><span class="tag">implementation</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>论文到底更新了什么</h3>
+            <p>论文说 jointly train retriever and generator，但要读完整句。RAG 训练时更新的是 query encoder <code>BERT_q</code> 和 BART generator；document encoder <code>BERT_d</code> 与预先构建的文档索引保持固定。这样 retriever 仍然被训练，因为 query tower 会变；只是文档 tower 不跟着变。</p>
+            <p>为什么这样做？如果 <code>BERT_d</code> 也更新，Wikipedia 每个 chunk 的向量都可能变化，索引就需要周期性重建。论文的检索库规模是约 2100 万个 100-word disjoint passages。这种规模下，重建文档向量和 MIPS 索引成本很高。</p>
+            <p>所以这里有一个很工程的折中：固定文档空间，让 query encoder 学会在这个空间里移动；同时让 generator 学会利用检索到的文本。模型没有获得“全量重排文档空间”的自由，但训练流程变得可负担。</p>
+          </div>
+          <div class="box soft">
+            <h3>训练伪代码</h3>
+            <div class="codebar"><span>fixed document index, trainable query encoder + generator</span><button class="copy" data-copy="rag-train-code">复制</button></div>
+            <pre class="line-numbers" data-export-context="RAG 训练对象伪代码" data-export-lang="python"><code id="rag-train-code" class="language-python"># document_encoder = BERT_d, fixed after building the index
+# query_encoder = BERT_q, trainable
+# generator = BART, trainable
+
+doc_vectors = load_precomputed_wikipedia_vectors()
+index = load_mips_index(doc_vectors)
+
+for x, y in training_pairs:
+    q = query_encoder(x)                   # trainable BERT_q
+    docs = index.search(q, top_k=K)         # fixed document vectors
+    path_probs = []
+
+    for z in docs:
+        retrieve_prob = retriever_score(q, z)
+        target_prob = generator.prob(y, x, z)
+        path_probs.append(retrieve_prob * target_prob)
+
+    marginal_prob = sum(path_probs)
+    loss = -log(marginal_prob)
+    loss.backward()
+    optimizer.step()                       # updates BERT_q and BART only</code></pre>
+          </div>
+        </div>
+        <table data-export-context="哪些对象更新，哪些对象固定" data-export-lang="table">
+          <thead><tr><th>对象</th><th>训练中状态</th><th>这样设计的原因</th><th>如果误读会怎样</th></tr></thead>
+          <tbody>
+            <tr><td><code>BERT_q</code></td><td>更新</td><td>让输入 query 更贴合任务需要的证据。</td><td>会误以为 retriever 没有 learned retrieval。</td></tr>
+            <tr><td>BART generator</td><td>更新</td><td>让生成器学会在检索文本条件下输出目标。</td><td>会把训练效果全部归给检索器。</td></tr>
+            <tr><td><code>BERT_d</code></td><td>固定</td><td>避免训练中反复更新全库文档向量。</td><td>会低估重建 index 的工程成本。</td></tr>
+            <tr><td>Wikipedia vector index</td><td>固定</td><td>MIPS 检索需要稳定向量空间。</td><td>会想象每个 batch 后都能免费刷新向量库。</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="ablation">
+        <div class="head"><h2>消融证据</h2><span class="tag">ablation</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>为什么消融能验证训练目标</h3>
+            <p>如果训练目标真的能给检索器信号，那么 learned retrieval 应该比 frozen retriever 更好。论文的 Retrieval Ablations 正是这样做的：冻结 retriever 再训练模型，对比正常可学习检索；再用 BM25 替换神经检索，看不同任务的表现。</p>
+            <p>结果的解读要细一点。论文报告 learned retrieval improves results on all tasks，说明任务损失确实帮助检索器适应下游任务。BM25 在 FEVER 上表现强，论文解释与 FEVER claim 的实体中心特征有关；在 open-domain QA 上，differentiable retrieval 的优势更明显。</p>
+            <p>这给本页一个很好的闭环：训练目标已经落到可检验行为上。只要把 retriever 固定，性能就会掉；把检索换成 BM25，任务差异也会出现。训练目标、参数更新范围和消融结果三者能互相印证。</p>
+          </div>
+          <div class="box info">
+            <h3>三组设置怎么读</h3>
+            <table data-export-context="retrieval ablation 解读表" data-export-lang="table">
+              <thead><tr><th>设置</th><th>检索器是否被任务训练</th><th>读表时看什么</th><th>本页结论</th></tr></thead>
+              <tbody>
+                <tr><td>learned retriever</td><td>是，至少 <code>BERT_q</code> 更新</td><td>整体任务表现</td><td>边际似然能给检索分布任务信号。</td></tr>
+                <tr><td>frozen retriever</td><td>否</td><td>相比 learned retrieval 的下降</td><td>只训练 generator 不够。</td></tr>
+                <tr><td>BM25</td><td>否，非神经稀疏检索</td><td>按任务看强弱</td><td>实体匹配型任务可能强，但开放问答更依赖可学习检索。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="inline-note">
+          <b>自审问题</b>
+          如果你能用一句话解释“FEVER 上 BM25 强”为什么不推翻 learned retrieval 的价值，就说明你已经开始按任务边界读消融了。更准确的说法是：BM25 在特定实体匹配场景里有优势，但 RAG 的可微检索在更需要语义匹配和答案生成的开放问答里更重要。
+        </div>
+      </section>
+
+      <section id="setup">
+        <div class="head"><h2>工程设置</h2><span class="tag">setup</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>Appendix C 给了哪些背景</h3>
+            <p>论文附录 C 的训练设置不需要背，但能帮助你理解为什么固定索引是合理选择。作者使用 Fairseq 训练，采用 mixed precision，主要在 8 张 32GB V100 GPU 上训练。论文也说明一个 GPU 可以训练和推理，只是速度和规模会受限。</p>
+            <p>检索部分使用 FAISS 做 MIPS。论文说 CPU 上的 MIPS 足够快，不一定要把索引放在 GPU 上；但文档 index vectors 放在 CPU 上大约需要 100GB 内存，后续可以压缩到 36GB。这个数字足以说明：如果每次更新文档编码器都要重算全库向量，训练成本会被索引维护拖住。</p>
+          </div>
+          <div class="box warn">
+            <h3>把数字换成设计判断</h3>
+            <table data-export-context="Appendix C 工程数字和设计含义" data-export-lang="table">
+              <thead><tr><th>论文信息</th><th>设计含义</th><th>学习时重点</th></tr></thead>
+              <tbody>
+                <tr><td>8 张 32GB V100 + mixed precision</td><td>端到端训练本身已经不轻。</td><td>训练目标要考虑可运行性。</td></tr>
+                <tr><td>FAISS MIPS 可在 CPU 上跑</td><td>检索不一定抢 GPU 资源。</td><td>瓶颈不只在生成器前向。</td></tr>
+                <tr><td>index vectors 约 100GB，可压缩到 36GB</td><td>文档向量库是重量级状态。</td><td>固定索引是规模约束下的选择。</td></tr>
+                <tr><td>代码后续迁移到 HuggingFace Transformers</td><td>实现生态变化，但论文目标不变。</td><td>不要把库 API 和论文机制混成一件事。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="boundary">
+        <div class="head"><h2>数据边界</h2><span class="tag">data</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>多答案和候选过滤只是边界处理</h3>
+            <p>附录 D 里有一些数据处理细节，容易被误读成训练目标的一部分。NQ 和 WebQuestions 可能有多个 answer annotations，论文把它们作为多个 <code>(q, a)</code> 训练对处理。TriviaQA 会过滤掉不出现在 top 1000 检索文档中的候选答案。CuratedTrec 会用 top 1000 文档里的 regex 匹配数量选择 target。</p>
+            <p>这些处理说明训练样本的 <code>y_j</code> 有来源约束，数据集需要适配成输入输出对。但它们没有改变本页的主结论：RAG 的训练监督仍然落在答案文本上，文档选择仍然通过边际似然隐式学习。</p>
+          </div>
+          <div class="box soft">
+            <h3>边界表</h3>
+            <table data-export-context="Appendix D 数据处理边界" data-export-lang="table">
+              <thead><tr><th>数据集/场景</th><th>论文处理</th><th>和训练目标的关系</th></tr></thead>
+              <tbody>
+                <tr><td>NQ / WebQuestions</td><td>多个答案标注作为多个 <code>(q,a)</code> pair。</td><td>增加目标答案样本，不提供 gold document。</td></tr>
+                <tr><td>TriviaQA</td><td>过滤不在 top 1000 文档中的候选答案。</td><td>提高候选目标与检索语料的一致性。</td></tr>
+                <tr><td>CuratedTrec</td><td>用 regex 在 top 1000 文档中匹配 target。</td><td>让答案目标更可验证，但仍按答案似然训练。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="debug-case">
+        <div class="head"><h2>训练排查案例</h2><span class="tag">case</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>把论文机制换成一条真实训练日志</h3>
+            <p>假设你在训练一个企业制度问答 RAG。输入 <code>x</code> 是“试用期员工能申请年假吗？”，目标答案 <code>y</code> 是“满足连续工作时间要求后可以按规定申请”。训练数据没有标注哪份制度文件支持答案，只给了问题和目标回复。初始检索时，top-1 是“试用期考核办法”，top-2 是“员工休假管理规定”。前者和问题词面更像，后者才真正支持目标答案。</p>
+            <p>如果只看检索分数，你会以为 top-1 应该被强化；如果只看最终答案，你又不知道是哪篇文档发挥了作用。RAG 的边际似然把两件事放在同一张表里：每篇文档既有检索概率，也有在该文档条件下生成目标答案的概率。路径贡献最高的文档，才是这轮样本里最能解释目标答案的证据路径。</p>
+            <table data-export-context="企业制度问答训练样本排查表" data-export-lang="table">
+              <thead><tr><th>候选文档</th><th>检索概率</th><th>目标答案概率</th><th>路径贡献</th><th>排查结论</th></tr></thead>
+              <tbody>
+                <tr><td>试用期考核办法</td><td>0.55</td><td>0.08</td><td>0.044</td><td>词面相关，但证据不足。</td></tr>
+                <tr><td>员工休假管理规定</td><td>0.30</td><td>0.62</td><td>0.186</td><td>更能支持目标答案，应该获得更强任务信号。</td></tr>
+                <tr><td>薪酬福利总则</td><td>0.15</td><td>0.12</td><td>0.018</td><td>主题邻近，但不构成核心证据。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="box soft">
+            <h3>建议保留的最小日志</h3>
+            <p>训练 RAG 时，最好不要只记录最终 loss。你至少要能回放每个样本的 top-K 文档、检索概率、生成目标答案概率和路径贡献。这样 loss 下降时，你才知道是 generator 单独变强，还是 query encoder 真的开始把问题推向更好的证据。</p>
+            <div class="codebar"><span>one training example audit log</span><button class="copy" data-copy="audit-log">复制</button></div>
+            <pre data-export-context="RAG 训练排查日志示例" data-export-lang="json"><code id="audit-log" class="language-json">{
+  "question": "试用期员工能申请年假吗？",
+  "target": "满足连续工作时间要求后可以按规定申请",
+  "top_k": [
+    {"doc": "试用期考核办法", "retrieve_prob": 0.55, "target_prob": 0.08, "path": 0.044},
+    {"doc": "员工休假管理规定", "retrieve_prob": 0.30, "target_prob": 0.62, "path": 0.186},
+    {"doc": "薪酬福利总则", "retrieve_prob": 0.15, "target_prob": 0.12, "path": 0.018}
+  ],
+  "marginal_prob": 0.248,
+  "loss": 1.394
+}</code></pre>
+            <p>这条日志还能直接服务练习题 11：如果检索结果长期不变，就查 optimizer 是否包含 query encoder，检索分数是否进入边际概率，top-K 是否被缓存成不可更新的固定结果。排查的目标在于确认训练目标真的能改变检索分布，而不只是在最终答案上看到 loss 下降。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="mistakes">
+        <div class="head"><h2>常见误区</h2><span class="tag">debug</span></div>
+        <div class="grid3">
+          <div class="box warn">
+            <h3>误区 1：把训练目标看成检索分类</h3>
+            <p>如果你说“RAG 训练时让模型预测正确文档”，就偏了。论文这里没有文档监督。更稳的表达是：训练目标最大化目标答案边际概率，文档变量在 top-K 候选上被边际化。</p>
+          </div>
+          <div class="box warn">
+            <h3>误区 2：以为 retriever 完全固定</h3>
+            <p>论文固定的是 document encoder 和 index，并非整个 retriever。query encoder 会跟着任务损失更新，所以 learned retrieval 的效果仍然成立。</p>
+          </div>
+          <div class="box warn">
+            <h3>误区 3：把 BM25 强解释成神经检索无用</h3>
+            <p>BM25 在 FEVER 这类实体中心 claim 上强，不代表开放问答里也同样合适。消融要按任务读，不能拿一个任务的优势覆盖全部结论。</p>
+          </div>
+          <div class="box info">
+            <h3>误区 4：忽略固定索引的代价来源</h3>
+            <p>固定索引源自工程成本：更新文档 encoder 会导致全库文档向量和索引维护变重。读 Appendix C 的内存数字时，要把它和训练设计连起来。</p>
+          </div>
+          <div class="box info">
+            <h3>误区 5：只记住 <code>-log</code></h3>
+            <p>普通生成模型也会用负对数似然。RAG 的特别之处在 marginal：文档路径被加总，检索概率和生成概率共同决定目标答案概率。</p>
+          </div>
+          <div class="box info">
+            <h3>误区 6：把数据预处理当模型机制</h3>
+            <p>多答案展开、top 1000 过滤、regex 选择 target 都是数据边界处理。它们帮助构造训练样本，但不改变 RAG 通过答案似然训练检索和生成的主结构。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="bridge">
+        <div class="head"><h2>下一节怎么接</h2><span class="tag">bridge</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>从训练目标接到解码</h3>
+            <p>训练时我们用目标答案 <code>y_j</code> 计算边际概率。推理时没有目标答案，模型要自己生成。于是问题会变成：给定同样的检索候选，RAG-Sequence 和 RAG-Token 怎么做 decoding？它们的文档路径是整段共享，还是每个 token 都重新混合？这会影响 beam search 和任务适配。</p>
+          </div>
+          <div class="box soft">
+            <h3>复习时的最短链路</h3>
+            <ol>
+              <li>第 02 节：文档 z 是潜变量，Sequence 和 Token 的求和位置不同。</li>
+              <li>第 03 节：训练目标是 <code>-log p(y_j|x_j)</code>，文档标签缺失时仍能训练 query encoder。</li>
+              <li>第 04 节：推理时没有 <code>y_j</code>，需要看解码和任务输出格式。</li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <section id="practice">
+        <div class="head"><h2>练习</h2><span class="tag">practice</span></div>
+        <div class="practice-intro">
+          <div class="box">
+            <h3>做题顺序</h3>
+            <p>先做概念判断，再做流程和手算，最后做诊断迁移。你不需要背论文原句，但要能把“答案监督、文档潜变量、固定索引、可学习检索”四个点连成一段完整解释。</p>
+          </div>
+          <div class="quick-review">
+            <strong>自检线：</strong>如果你能解释“为什么没有 gold document 也能让 retriever 变好”，并且能指出“固定的是 <code>BERT_d</code> 和 index，并非整个 retriever”，这一页的核心就过关了。
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div><h3>一、概念辨认</h3><p>确认你没有把答案监督、文档监督和检索器冻结混在一起。</p></div>
+            <div class="quick-review">建议先独立做，再展开反馈。错题优先回看“术语边界”和“固定索引”。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q1" data-group="一、概念辨认" data-title="训练目标" data-answer="A">
+              <div class="q-meta"><span class="pill" data-type="choice">choice</span></div>
+              <h3>1. RAG 在 2.4 Training 中最核心的训练目标是哪一个？</h3>
+              <label><input type="radio" name="q1" value="A">A. 最小化目标答案的 negative marginal log-likelihood。</label>
+              <label><input type="radio" name="q1" value="B">B. 直接预测 gold document 的 id。</label>
+              <label><input type="radio" name="q1" value="C">C. 只训练 BM25 的词项权重。</label>
+              <div class="feedback"></div>
+              <button class="check" type="button">检查</button>
+            </div>
+            <div class="q" data-question="q2" data-group="一、概念辨认" data-title="文档标签" data-answer="false">
+              <div class="q-meta"><span class="pill" data-type="true-false">true/false</span></div>
+              <h3>2. RAG 训练必须拿到每个答案对应的标准证据文档标签。</h3>
+              <label><input type="radio" name="q2" value="true">对</label>
+              <label><input type="radio" name="q2" value="false">错</label>
+              <div class="feedback"></div>
+              <button class="check" type="button">检查</button>
+            </div>
+            <div class="q" data-question="q3" data-group="一、概念辨认" data-title="更新对象" data-answer="B">
+              <div class="q-meta"><span class="pill" data-type="choice">choice</span></div>
+              <h3>3. 论文中 RAG 训练主要更新哪两个对象？</h3>
+              <label><input type="radio" name="q3" value="A">A. <code>BERT_d</code> 和 Wikipedia index。</label>
+              <label><input type="radio" name="q3" value="B">B. <code>BERT_q</code> 和 BART generator。</label>
+              <label><input type="radio" name="q3" value="C">C. BM25 和 regex target selector。</label>
+              <div class="feedback"></div>
+              <button class="check" type="button">检查</button>
+            </div>
+            <div class="q full" data-question="q4" data-group="一、概念辨认" data-title="一句话解释">
+              <div class="q-meta"><span class="pill" data-type="open">open</span></div>
+              <h3>4. 用一句话解释“没有文档标签，也能训练 retriever”。</h3>
+              <textarea name="q4"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details><summary>参考答案 / 评分要点</summary><p>合格答案要包含：训练损失来自目标答案的边际概率；文档 z 是潜变量；有用文档路径通过 <code>p_η(z|x)p_θ(y|x,z)</code> 获得更高贡献；信号会回到 query encoder。</p></details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div><h3>二、流程与公式</h3><p>把一个训练样本从输入输出对追到损失和参数更新。</p></div>
+            <div class="quick-review">这组题错了，通常是把 top-K、边际化和参数更新顺序混了。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q5" data-group="二、流程与公式" data-title="流程顺序" data-answer="C">
+              <div class="q-meta"><span class="pill" data-type="order">order</span></div>
+              <h3>5. 哪个顺序最接近一轮 RAG 训练？</h3>
+              <label><input type="radio" name="q5" value="A">A. 重建文档索引 → 标注 gold document → 训练 BM25。</label>
+              <label><input type="radio" name="q5" value="B">B. 生成答案 → 再检索文档 → 删除低分答案。</label>
+              <label><input type="radio" name="q5" value="C">C. 读入 <code>(x,y)</code> → 检索 top-K → 计算各文档下目标答案概率 → 求和 → 反向更新。</label>
+              <div class="feedback"></div>
+              <button class="check" type="button">检查</button>
+            </div>
+            <div class="q" data-question="q6" data-group="二、流程与公式" data-title="手算路径" data-answer="B">
+              <div class="q-meta"><span class="pill" data-type="calculation">calculation</span></div>
+              <h3>6. d1 的路径贡献是 0.60×0.10，d2 是 0.40×0.70。哪个文档对本轮目标答案贡献更大？</h3>
+              <label><input type="radio" name="q6" value="A">A. d1，因为检索概率更高。</label>
+              <label><input type="radio" name="q6" value="B">B. d2，因为路径贡献 0.28 大于 0.06。</label>
+              <label><input type="radio" name="q6" value="C">C. 两者一样，因为都在 top-K 里。</label>
+              <div class="feedback"></div>
+              <button class="check" type="button">检查</button>
+            </div>
+            <div class="q" data-question="q7" data-group="二、流程与公式" data-title="固定对象" data-answer="false">
+              <div class="q-meta"><span class="pill" data-type="true-false">true/false</span></div>
+              <h3>7. 固定 <code>BERT_d</code> 和 index 的意思是 retriever 完全不会被训练信号影响。</h3>
+              <label><input type="radio" name="q7" value="true">对</label>
+              <label><input type="radio" name="q7" value="false">错</label>
+              <div class="feedback"></div>
+              <button class="check" type="button">检查</button>
+            </div>
+            <div class="q full" data-question="q8" data-group="二、流程与公式" data-title="公式复述">
+              <div class="q-meta"><span class="pill" data-type="open">open</span></div>
+              <h3>8. 用自己的话复述 <code>p(y|x)=Σ_z p_η(z|x)p_θ(y|x,z)</code> 在训练里的含义。</h3>
+              <textarea name="q8"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details><summary>参考答案 / 评分要点</summary><p>要点：对 top-K 文档路径求和；每条路径由检索概率和生成目标答案概率共同决定；损失看的是合并后的目标答案概率；这让文档选择成为可学习但不需要直接标注的潜变量。</p></details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div><h3>三、诊断与迁移</h3><p>把消融、工程限制和真实 RAG 训练排查连起来。</p></div>
+            <div class="quick-review">这组题重点在练“看到症状能定位是哪一层读错”。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q9" data-group="三、诊断与迁移" data-title="消融判断" data-answer="A">
+              <div class="q-meta"><span class="pill" data-type="diagnosis">diagnosis</span></div>
+              <h3>9. learned retriever 比 frozen retriever 好，最直接支持哪个判断？</h3>
+              <label><input type="radio" name="q9" value="A">A. 答案级边际似然能给 query encoder 有用训练信号。</label>
+              <label><input type="radio" name="q9" value="B">B. 文档索引每一步都被重新构建。</label>
+              <label><input type="radio" name="q9" value="C">C. BM25 在所有任务上都失败。</label>
+              <div class="feedback"></div>
+              <button class="check" type="button">检查</button>
+            </div>
+            <div class="q" data-question="q10" data-group="三、诊断与迁移" data-title="BM25 边界" data-answer="C">
+              <div class="q-meta"><span class="pill" data-type="choice">choice</span></div>
+              <h3>10. BM25 在 FEVER 上强，比较稳的解释是哪一个？</h3>
+              <label><input type="radio" name="q10" value="A">A. 神经检索没有训练价值。</label>
+              <label><input type="radio" name="q10" value="B">B. FEVER 不需要任何文档。</label>
+              <label><input type="radio" name="q10" value="C">C. FEVER claim 更偏实体中心，词项匹配可能更占优势；这不覆盖开放问答任务。</label>
+              <div class="feedback"></div>
+              <button class="check" type="button">检查</button>
+            </div>
+            <div class="q full" data-question="q11" data-group="三、诊断与迁移" data-title="工程排查">
+              <div class="q-meta"><span class="pill" data-type="scenario">scenario transfer</span></div>
+              <h3>11. 你训练一个 RAG 系统时发现答案损失下降，但检索结果几乎不变。你会先查哪三件事？</h3>
+              <textarea name="q11"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details><summary>参考答案 / 评分要点</summary><p>建议检查：query encoder 是否真的进入 optimizer；retrieval score 是否参与可微的边际概率计算；top-K/索引调用是否把梯度路径切断成纯缓存结果。还可以查看 retriever 参数梯度范数和训练前后相似问题的 top-K 变化。</p></details>
+            </div>
+            <div class="q full" data-question="q12" data-group="三、诊断与迁移" data-title="综合表达">
+              <div class="q-meta"><span class="pill" data-type="synthesis">synthesis</span></div>
+              <h3>12. 用 2-3 句话概括本页在 RAG 论文里的作用。</h3>
+              <textarea name="q12"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details><summary>参考答案 / 评分要点</summary><p>合格答案要说出：这一页解释 RAG 如何用答案级负边际对数似然训练；文档没有直接标签，作为潜变量在 top-K 中被求和；训练更新 query encoder 和 generator，固定 document encoder/index，并通过消融证明 learned retrieval 有价值。</p></details>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+          <li><strong>论文：</strong><a href="https://arxiv.org/abs/2005.11401">Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks</a>。本页主要使用 2.4 Training、Retrieval Ablations、Appendix C 和 Appendix D。</li>
+          <li><strong>本地 PDF：</strong><a href="../../../../../50_资源/论文/2005.11401v4.pdf">2005.11401v4.pdf</a>。用于核对训练目标、固定索引说明和附录训练设置。</li>
+          <li><strong>本地抽取文本：</strong><a href="../../../../../50_资源/论文/2005.11401v4.txt">2005.11401v4.txt</a>。用于定位 training、retrieval ablation、appendix setup 与数据处理段落。</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

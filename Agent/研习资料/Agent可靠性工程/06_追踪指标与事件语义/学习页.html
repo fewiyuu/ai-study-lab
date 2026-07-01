@@ -1,0 +1,938 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>06 追踪、指标与事件语义｜智能体可靠性工程</title>
+  <meta name="description" content="把追踪、指标、事件语义和 Temporal Event History 接起来，学会用可观测性回答一次失败、一个趋势和一次 replay。">
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="智能体可靠性工程" data-unit="06 追踪、指标与事件语义">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>智能体可靠性工程</strong>
+        <span>06 追踪、指标与事件语义</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>先抓主线</a>
+        <a href="#fields"><span class="dot"></span>字段矩阵</a>
+        <a href="#semantics"><span class="dot"></span>事件与 span</a>
+        <a href="#metrics"><span class="dot"></span>指标与基数</a>
+        <a href="#temporal"><span class="dot"></span>Temporal 对齐</a>
+        <a href="#boundary"><span class="dot"></span>保留期与访问边界</a>
+        <a href="#incident"><span class="dot"></span>事故链</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">
+        这一页只管三件事：一次失败怎么查、一类问题怎么量、一次恢复怎么对齐。先别把所有内容都塞进日志。
+      </div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">观测语义</div>
+          <h1>追踪、指标与事件语义</h1>
+          <p>从 05 的结构化输出往前走一步，问题就不再是“模型有没有给出一个像样的结果”，而是“这次失败能不能被定位、这一类问题能不能被统计、replay 和真实副作用能不能区分开”。这一页把 trace、span、event、metric 和 Temporal Event History 放到同一张图里看。</p>
+          <div class="chips">
+            <a class="chip strong" href="#fields">Trace</a>
+            <a class="chip" href="#semantics">Span / Event</a>
+            <a class="chip" href="#metrics">Metrics</a>
+            <a class="chip" href="#temporal">Temporal</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完这一页，你能直接做什么</h3>
+          <ul>
+            <li>把一次事故拆成 trace、span、event、metric 和 history 五层证据。</li>
+            <li>分清哪些字段能进 span，哪些应该只在事件里短期保留，哪些绝对不该进 metric label。</li>
+            <li>看见 `workflow_id`、`run_id`、`attempt` 和 `replay` 时，知道它们是在解释恢复，不是在重复执行副作用。</li>
+          </ul>
+        </div>
+      </div>
+
+      <section id="goals">
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">goal</span>
+        </div>
+        <div class="grid3">
+          <div class="box">
+            <b>先看单次</b>
+            <p>trace 和 span 先回答“这一次到底在哪一步坏掉了”，适合看路径、耗时、尝试次数和父子关系。</p>
+          </div>
+          <div class="box soft">
+            <b>再看趋势</b>
+            <p>metric 先回答“一类问题是不是在变糟”，适合看分布、计数和比例，不适合承载原始输入文本。</p>
+          </div>
+          <div class="box warn">
+            <b>最后看恢复</b>
+            <p>Temporal Event History 先回答“恢复过没有、重放发生过没有、真实副作用有没有被重复做”。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="map">
+        <div class="head">
+          <h2>先抓主线</h2>
+          <span class="tag">map</span>
+        </div>
+        <p>如果你只记一条线，就记这一条：请求先进入 span，span 里可以带 event，event 可以记录短期细节，metric 负责归类，Temporal history 负责长期恢复事实。它们不是同一回事，也不能互相替代。</p>
+        <div class="map">
+          <div class="map-node">
+            <div class="num">01</div>
+            <strong>输入</strong>
+            <span>用户请求、工具参数、模型输出、外部返回</span>
+          </div>
+          <div class="map-node">
+            <div class="num">02</div>
+            <strong>Span</strong>
+            <span>记录一次步骤的耗时、父子关系、尝试和版本</span>
+          </div>
+          <div class="map-node">
+            <div class="num">03</div>
+            <strong>Event</strong>
+            <span>记录短期细节、局部证据、红线字段的脱敏结果</span>
+          </div>
+          <div class="map-node">
+            <div class="num">04</div>
+            <strong>Metric</strong>
+            <span>把次数、时长、比例压成低基数趋势</span>
+          </div>
+          <div class="map-node">
+            <div class="num">05</div>
+            <strong>History</strong>
+            <span>把 workflow / activity / replay 的事实固定下来</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="fields">
+        <div class="head">
+          <h2>字段矩阵</h2>
+          <span class="tag">table</span>
+        </div>
+        <p>最容易出错的地方，不是“有没有记录”，而是“放在哪一层记录”。下面这张表先把职责分清，再看哪些字段只能进局部事件，哪些字段可以长期保留。</p>
+        <div class="shape-tracer" data-shape-tracer>
+          <div class="trace-lines">
+            <button class="trace-line active" data-trace-step="s1"><code>request → span</code><span>把一次请求变成可排查的步骤</span></button>
+            <button class="trace-line" data-trace-step="s2"><code>span → event</code><span>把局部细节拆成短期证据</span></button>
+            <button class="trace-line" data-trace-step="s3"><code>event → metric</code><span>把大量重复信息压成计数或分布</span></button>
+            <button class="trace-line" data-trace-step="s4"><code>metric → history</code><span>把趋势和恢复事实分开保存</span></button>
+          </div>
+          <div class="trace-canvas">
+            <div class="tensor-card active" data-trace-target="s1">
+              <b>Span</b>
+              <span>一次步骤</span>
+              <p>读上下文、写耗时、版本、父子关系和尝试次数。适合回答“哪一步慢了、哪一步坏了”。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="s2">
+              <b>Event</b>
+              <span>局部证据</span>
+              <p>写短期细节，比如一次工具调用的红线字段、脱敏后的输入摘要或澄清原因。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="s3">
+              <b>Metric</b>
+              <span>趋势聚合</span>
+              <p>把计数、时长、比例压成可聚合的低基数数据，不承载原始文本。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="s4">
+              <b>History</b>
+              <span>恢复事实</span>
+              <p>记录 workflow / activity / replay 的事实，回答“这次是不是重放，不是再次执行”。</p>
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="06 字段矩阵" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>对象</th>
+                <th>读什么</th>
+                <th>写什么</th>
+                <th>最怕放错到哪里</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Trace / Span</td>
+                <td>路径、耗时、版本、尝试、父子关系</td>
+                <td>可排查的步骤链</td>
+                <td>把高基数字段塞进 metric</td>
+              </tr>
+              <tr>
+                <td>Event</td>
+                <td>局部细节、短期证据、脱敏结果</td>
+                <td>短期可读的事实片段</td>
+                <td>把原文输入输出长期公开保存</td>
+              </tr>
+              <tr>
+                <td>Metric</td>
+                <td>计数、分布、比例、窗口趋势</td>
+                <td>低基数趋势</td>
+                <td>把 trace_id、用户输入、完整路径放进 label</td>
+              </tr>
+              <tr>
+                <td>Temporal History</td>
+                <td>workflow_id、run_id、activity、attempt、replay</td>
+                <td>恢复事实和事件顺序</td>
+                <td>把 replay 当成新副作用</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="semantics">
+        <div class="head">
+          <h2>事件与 span</h2>
+          <span class="tag">code</span>
+        </div>
+        <p>span 适合记录一次步骤本身，event 适合记录这一步里短期但很关键的细节。两者都能写字段，但写法不同：span 里的东西应该稳定、可聚合，event 里的东西可以更细，但保留期通常更短。</p>
+        <div class="codebar"><span>06 事件与 span 样例</span><button class="copy" data-copy="code-event-span">复制</button></div>
+        <pre id="code-event-span" data-export-context="06 事件与 span 样例" data-export-lang="json"><code class="language-json">{
+  "trace_id": "trace_case_20260621_001",
+  "span": "CallModel",
+  "gen_ai.operation.name": "chat",
+  "gen_ai.request.model": "gpt-4.1",
+  "event": "tool.arguments.redacted",
+  "tool.name": "send_invoice",
+  "attempt": 2,
+  "workflow_id": "claim-84",
+  "run_id": "temporal-run-a7",
+  "replay": false
+}</code></pre>
+        <div class="grid2">
+          <div class="box info">
+            <b>span 里放什么</b>
+            <p>模型名、工具名、步骤名、版本、尝试次数、耗时、父子关系。它们是长期有用的排查字段，不靠原文内容才能看懂。</p>
+          </div>
+          <div class="box soft">
+            <b>event 里放什么</b>
+            <p>一次工具调用的局部证据、脱敏后的参数、澄清原因、拒答原因、短期采样结果。它们帮助你回看“当时为什么这么做”。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="metrics">
+        <div class="head">
+          <h2>指标与基数</h2>
+          <span class="tag">math</span>
+        </div>
+        <p>指标回答趋势，不回答个案。为了让趋势真的能查，标签必须低基数。直觉上可以把它看成“标签空间一乘，数据量就爆了”。</p>
+        <div class="math-block" data-export-context="06 指标标签与基数公式" data-export-lang="math">
+          $$
+          \text{series\_count} \approx \prod_{i=1}^{n} \left| \text{label}_i \right|
+          $$
+          <p>符号意思很简单：每个 label 的可取值越多，最终时序条目就越多。`tool.name` 和 `agent.version` 往往还能控制，`trace_id`、用户原文、完整路径通常会把序列数撑爆。</p>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="06 指标最小集" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>指标</th>
+                <th>用途</th>
+                <th>建议标签</th>
+                <th>不要放进标签的东西</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>tool_timeout_total</code></td>
+                <td>看工具超时是不是在上升</td>
+                <td><code>tool.name</code>、<code>error.type</code>、<code>agent.version</code></td>
+                <td>trace_id、用户输入、完整路径</td>
+              </tr>
+              <tr>
+                <td><code>gen_ai.client.operation.duration</code></td>
+                <td>看模型调用和外部操作是否变慢</td>
+                <td><code>operation</code>、<code>model</code>、<code>agent.version</code></td>
+                <td>完整 prompt、工具返回全文</td>
+              </tr>
+              <tr>
+                <td><code>replay_count_total</code></td>
+                <td>看恢复和重放是不是变多</td>
+                <td><code>workflow_id</code>、<code>run_state</code></td>
+                <td>原始消息文本、完整事件 payload</td>
+              </tr>
+              <tr>
+                <td><code>manual_handoff_total</code></td>
+                <td>看人工接管是否在扩大</td>
+                <td><code>agent_version</code>、<code>tool.name</code></td>
+                <td>用户隐私、订单原文、模型思维链</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>指标的作用不是“记得越多越好”，而是让你在趋势图里看见变化。要是 label 选错了，后面所有告警和仪表盘都会跟着歪。</p>
+      </section>
+
+      <section id="temporal">
+        <div class="head">
+          <h2>Temporal 对齐</h2>
+          <span class="tag">workflow</span>
+        </div>
+        <p>Temporal 的 Event History 不是普通日志。普通日志只能告诉你“发生过什么”，Event History 还告诉你“发生的顺序、恢复的位置、哪一步是 replay 复用的结果”。这对智能体尤其重要，因为副作用必须被关在 Activity 边界里。</p>
+        <div class="codebar"><span>06 追踪字段和 replay 对齐</span><button class="copy" data-copy="code-temporal-bridge">复制</button></div>
+        <pre id="code-temporal-bridge" data-export-context="06 Temporal 追踪桥接" data-export-lang="json"><code class="language-json">{
+  "trace_id": "trace_case_20260621_001",
+  "workflow_id": "claim-84",
+  "run_id": "temporal-run-a7",
+  "activity_type": "CallModel",
+  "attempt": 2,
+  "replay": false,
+  "search_attributes": ["claim-84", "invoice", "escalation"],
+  "event_history": "ActivityTaskStarted -> ActivityTaskCompleted"
+}</code></pre>
+        <div class="grid2">
+          <div class="box warn">
+            <b>哪些字段用来对齐</b>
+            <p><code>workflow_id</code> 说明是哪条长期流程，<code>run_id</code> 说明是哪一次运行，<code>attempt</code> 说明这是第几次尝试，<code>replay</code> 说明是不是重放。</p>
+          </div>
+          <div class="box">
+            <b>哪些字段只该做搜索</b>
+            <p>搜索属性适合放业务筛选条件，比如单号、流程类型、任务阶段。它们帮助你找回这次运行，但不承担诊断全部细节的责任。</p>
+          </div>
+        </div>
+        <div class="terminal-lab" data-terminal-lab>
+          <div class="terminal-controls">
+            <button class="ghost active" data-terminal-case="case-1">正常执行</button>
+            <button class="ghost" data-terminal-case="case-2">工具超时</button>
+            <button class="ghost" data-terminal-case="case-3">replay 复用</button>
+          </div>
+          <pre class="terminal-output" aria-live="polite">[trace] workflow_id=claim-84 run_id=temporal-run-a7
+[span]  CallModel attempt=1 replay=false
+[event] tool.arguments.redacted=true
+[metric] tool_timeout_total{tool.name="send_invoice"} += 0</pre>
+          <template data-terminal-output="case-1">[trace] workflow_id=claim-84 run_id=temporal-run-a7
+[span]  CallModel attempt=1 replay=false
+[event] tool.arguments.redacted=true
+[metric] tool_timeout_total{tool.name="send_invoice"} += 0</template>
+          <template data-terminal-output="case-2">[trace] workflow_id=claim-84 run_id=temporal-run-a7
+[span]  CallModel attempt=2 replay=false
+[event] tool.arguments.redacted=true
+[metric] tool_timeout_total{tool.name="send_invoice"} += 1
+[decision] backoff=30s, next=retry</template>
+          <template data-terminal-output="case-3">[trace] workflow_id=claim-84 run_id=temporal-run-a7
+[span]  CallModel attempt=2 replay=true
+[event] side_effect_not_executed
+[decision] reused_activity_result=true</template>
+        </div>
+      </section>
+
+      <section id="incident">
+        <div class="head">
+          <h2>读一条事故链</h2>
+          <span class="tag">trace table</span>
+        </div>
+        <p>把一条追踪链读顺，最实用的方法不是先背字段，而是先问四个问题：这次是谁触发的、哪一步最慢、哪一步真的失败了、哪里出现了重复执行。只要这四个问题能答出来，trace 就不是一堆彩色方块，而是能顺着走的证据链。</p>
+        <p>下面用一个补发发票的例子串起来。用户说“把发票发到新邮箱”，系统先查供应商，再补写邮箱。如果 <code>search_vendor</code> 返回空结果，正确的系统行为不是继续猜，而是澄清身份；如果 <code>update_invoice_email</code> 被调用了两次，重点就不是“邮件发了几封”，而是“哪一层失守了，模型重复决策、工具重试还是 replay 误触发”。</p>
+        <div class="table-wrap">
+          <table data-export-context="06 事故链阅读表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>观察点</th>
+                <th>该读什么</th>
+                <th>该忽略什么</th>
+                <th>错了会怎样</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>入口 span</td>
+                <td>用户目标、模型版本、当前步骤</td>
+                <td>和当前步骤无关的历史碎片</td>
+                <td>会把这次事故误看成老问题</td>
+              </tr>
+              <tr>
+                <td>工具 span</td>
+                <td>参数、attempt、error.type、耗时</td>
+                <td>原文的无关修辞</td>
+                <td>看不出是重试还是新决策</td>
+              </tr>
+              <tr>
+                <td>event</td>
+                <td>脱敏后的局部证据、拒绝原因、澄清原因</td>
+                <td>长期会爆量的原始全文</td>
+                <td>既不安全，也不好检索</td>
+              </tr>
+              <tr>
+                <td>history</td>
+                <td>workflow / run / replay / activity</td>
+                <td>把 replay 当成再次执行的错觉</td>
+                <td>会把恢复行为误判成新副作用</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="codebar"><span>06 事故链小样本</span><button class="copy" data-copy="code-incident-chain">复制</button></div>
+        <pre id="code-incident-chain" data-export-context="06 事故链小样本" data-export-lang="json"><code class="language-json">{
+  "complaint": "发票重复发送",
+  "trace": [
+    "entry: user asked for resend",
+    "span: search_vendor returned empty_result",
+    "event: redact vendor lookup payload",
+    "span: update_invoice_email attempt=2 replay=false",
+    "history: ActivityTaskCompleted"
+  ],
+  "next_check": [
+    "Was the empty result handled with clarification?",
+    "Did retry reuse the same idempotency key?",
+    "Did replay run a real side effect?"
+  ]
+}</code></pre>
+        <p>如果你在 trace 里只能看见“失败了”，还不够。你需要知道失败在哪一步被放大，哪一步本来可以拦住，哪一步因为 replay 或重试把一次错误变成了两次。这个判断会直接影响 07 的回归样本写法，也会影响 08 的接管和回滚策略。</p>
+      </section>
+
+      <section id="operating">
+        <div class="head">
+          <h2>默认采什么，默认不采什么</h2>
+          <span class="tag">policy</span>
+        </div>
+        <p>最稳妥的做法是先给出一个最小默认集，再给出一个按需开放集。默认集只保留排障和趋势足够的字段，按需开放集只在明确需要时打开，而且要有时间限制和访问控制。这样做不是保守，而是把“能查”和“能看”分开。</p>
+        <p>对智能体来说，最容易误开的内容有四类：输入全文、输出全文、工具参数全文和系统指令全文。它们都可能包含用户隐私、业务机密或安全边界信息。真正能长期保留的，往往是脱敏后的摘要、错误类型、步骤名、版本和少量业务键。你越早把这条线画清楚，后面的审计、合规和排障就越不打架。</p>
+        <div class="grid2">
+          <div class="box soft">
+            <b>默认集</b>
+            <p>trace_id、workflow_id、run_id、step name、attempt、error.type、duration、agent.version、tool.name。它们够你定位个案，也够你看趋势。</p>
+          </div>
+          <div class="box warn">
+            <b>按需开放集</b>
+            <p>原文输入输出、工具参数全文、系统指令全文、RAG 片段全文。它们不是不能看，而是不能默认长期开、默认多人可见。</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="06 默认采集与按需开放" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>字段族</th>
+                <th>默认策略</th>
+                <th>需要时怎么开</th>
+                <th>回头看要注意什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>输入输出</td>
+                <td>摘要或脱敏摘要</td>
+                <td>限时、限人、按工单</td>
+                <td>查看后要回收权限</td>
+              </tr>
+              <tr>
+                <td>工具参数</td>
+                <td>保留关键字段和版本</td>
+                <td>必要时打开完整 payload</td>
+                <td>注意是否含密钥或隐私</td>
+              </tr>
+              <tr>
+                <td>系统指令</td>
+                <td>只保留引用或摘要</td>
+                <td>对故障样本按需查看</td>
+                <td>不要把它当普通日志</td>
+              </tr>
+              <tr>
+                <td>审计事实</td>
+                <td>单独保存</td>
+                <td>按审计角色访问</td>
+                <td>别和调试细节混在一起</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>这一层的目标很简单：让系统默认足够可查，但不默认过度暴露。等你把这条线立住，07 的回放和 08 的验收才不会在同一个问题上互相打架。</p>
+      </section>
+
+      <section id="diagnosis">
+        <div class="head">
+          <h2>排障顺序</h2>
+          <span class="tag">runbook</span>
+        </div>
+        <p>当一条事故已经进入排障阶段，最重要的不是继续加字段，而是按顺序读证据。先看 trace 里发生了什么，再看 metric 是否只是趋势抖动，最后去 event 和 retention 里确认哪些内容该保留、哪些内容该收缩。顺序一旦乱掉，你就会把“这次为什么失败”错看成“系统所有地方都坏了”。</p>
+        <p>一个实用的原则是：个案靠 trace，趋势靠 metric，恢复靠 history，风险说明靠 event。只要你记得这四层分工，很多争论就会自动收束到一个问题上，就是“这条信号现在应该落在哪一层解决”。</p>
+        <div class="table-wrap">
+          <table data-export-context="06 排障顺序表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>证据层</th>
+                <th>优先看什么</th>
+                <th>误读后果</th>
+                <th>建议动作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>trace</td>
+                <td>step、attempt、replay、error.type</td>
+                <td>把个案误判成大范围退化</td>
+                <td>先确认是哪一次任务出了问题</td>
+              </tr>
+              <tr>
+                <td>metric</td>
+                <td>失败率、p95、重试率、人工接管率</td>
+                <td>看不见长期趋势</td>
+                <td>判断是否需要限流、降级或回滚</td>
+              </tr>
+              <tr>
+                <td>event</td>
+                <td>局部证据、拒绝原因、澄清动作</td>
+                <td>把原文全文当作默认保留对象</td>
+                <td>改成摘要或脱敏摘要</td>
+              </tr>
+              <tr>
+                <td>history</td>
+                <td>workflow / activity / replay 关系</td>
+                <td>把恢复行为误当成新副作用</td>
+                <td>重新核对边界和幂等策略</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="codebar"><span>06 最小排障记录</span><button class="copy" data-copy="code-diagnosis-record">复制</button></div>
+        <pre id="code-diagnosis-record" data-export-context="06 最小排障记录" data-export-lang="json"><code class="language-json">{
+  "signal": "duplicate invoice resend",
+  "trace": ["entry", "tool attempt=2", "replay=false"],
+  "decision": "check retry policy before changing business logic",
+  "action": ["pause write path", "review boundary", "keep retention minimal"]
+}</code></pre>
+        <p>把排障顺序写成这样，后面的监控、合规和回归都会更顺：先定位一次事故，再看它是不是一类问题，最后再决定这个字段该不该长期可见。这个顺序正好会接到下一步的样本设计和上线验收上。</p>
+      </section>
+
+      <section id="boundary">
+        <div class="head">
+          <h2>保留期与访问边界</h2>
+          <span class="tag">policy</span>
+        </div>
+        <p>追踪越细，排障越快，但风险也越高。默认策略应该从最小必要信息开始，再决定哪些内容短期保留、哪些只留摘要、哪些进入专门的审计记录。</p>
+        <div class="grid2">
+          <div class="box soft">
+            <b>短期保留</b>
+            <p>原文输入输出、工具参数全文、系统提示词全文、敏感事件 payload。只在需要排查时开放，过期后删除或只留脱敏摘要。</p>
+          </div>
+          <div class="box info">
+            <b>中期保留</b>
+            <p>脱敏后的 span 属性、错误类型、耗时、版本、attempt、replay。它们够用来排查，但不会把原始内容长期摊开。</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="06 保留期与访问边界" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>数据类型</th>
+                <th>默认保留</th>
+                <th>访问范围</th>
+                <th>判断标准</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>指标</td>
+                <td>较长</td>
+                <td>平台、SRE、开发负责人</td>
+                <td>只含趋势，不含原文</td>
+              </tr>
+              <tr>
+                <td>脱敏 span 属性</td>
+                <td>中等</td>
+                <td>排障相关角色</td>
+                <td>能定位问题，但不暴露原文</td>
+              </tr>
+              <tr>
+                <td>原文输入输出</td>
+                <td>短期或按需</td>
+                <td>显式授权、限时访问</td>
+                <td>属于敏感内容，不能默认全开</td>
+              </tr>
+              <tr>
+                <td>审计事实</td>
+                <td>按合规要求</td>
+                <td>审计和安全角色</td>
+                <td>和调试内容分开保存</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="case">
+        <div class="head">
+          <h2>案例</h2>
+          <span class="tag">worked case</span>
+        </div>
+        <p>场景：理赔智能体要发送补充材料清单。用户投诉说收到了两封几乎一样的邮件。要判断是模型再次决定发信，工具重试发信，还是 worker 重启后 replay 误触发了副作用。</p>
+        <div class="grid2">
+          <div class="card">
+            <b>看 trace</b>
+            <p>如果第二次出现新的 tool call id，先怀疑 planner 又做了一次决定；如果 call id 相同但 attempt 变了，先看幂等键；如果 replay=true 但还真的发了邮件，就要查副作用是否越过 Activity 边界。</p>
+          </div>
+          <div class="card">
+            <b>看 metric</b>
+            <p>如果 <code>tool_timeout_total</code>、<code>replay_count_total</code>、<code>manual_handoff_total</code> 一起抬头，就说明这不是单点 bug，而是恢复、重试和人工接管同时在变坏。</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="06 案例排查顺序" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>信号</th>
+                <th>先怀疑什么</th>
+                <th>下一步看什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>新 tool call id</td>
+                <td>模型再次决策</td>
+                <td>prompt、planner、工具提示词</td>
+              </tr>
+              <tr>
+                <td>同 call id 不同 attempt</td>
+                <td>重试策略或幂等键</td>
+                <td>timeout、retry policy、request id</td>
+              </tr>
+              <tr>
+                <td>replay=true 还真的执行副作用</td>
+                <td>Activity 边界失守</td>
+                <td>workflow / activity 拆分、历史记录</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>这类问题的排查顺序最好固定成一条短链：先看有没有真实的写操作，再看是不是同一条调用在重试，最后看 replay 是否只是在恢复历史而不是再次触发副作用。只要这三个顺序搞反，你就会在“邮件发了几封”的表面现象里绕很久，却抓不到真正应该修的边界。</p>
+        <div class="table-wrap">
+          <table data-export-context="06 事故判断顺序" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>先看什么</th>
+                <th>接着看什么</th>
+                <th>最后确认什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>外部写入有没有发生</td>
+                <td>同一 tool call 是否发生了 retry</td>
+                <td>replay 期间是否只读历史</td>
+              </tr>
+              <tr>
+                <td>错误类型是什么</td>
+                <td>attempt 和 idempotency key 是否一致</td>
+                <td>Activity 边界是否隔离了副作用</td>
+              </tr>
+              <tr>
+                <td>哪个字段在暴涨</td>
+                <td>是 trace、metric 还是 event</td>
+                <td>是否需要把这个字段降级为摘要</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="codebar"><span>06 事故排查最小顺序</span><button class="copy" data-copy="code-incident-sequence">复制</button></div>
+        <pre id="code-incident-sequence" data-export-context="06 事故排查最小顺序" data-export-lang="json"><code class="language-json">{
+  "first_check": "Was there a real side effect?",
+  "second_check": "Did the same call retry with the same idempotency key?",
+  "third_check": "Was replay read-only?",
+  "if_unknown": [
+    "pause the write path",
+    "inspect workflow/activity boundary",
+    "compare trace, event, and metric separately"
+  ]
+}</code></pre>
+        <p>真正能落地的监控，不是把所有字段都放出来，而是把每一类问题放进对应的观测层：趋势看 metric，个案看 trace，恢复顺序看 history，风险说明看 event。你在设计指标时越早把这四层分开，后面越容易做权限、保留期和排障手册。</p>
+        <div class="shape-tracer" data-shape-tracer>
+          <div class="trace-lines">
+            <button class="trace-line active" data-trace-step="step-1">
+              <code>trace_id / workflow_id</code><span>定位一次事故</span>
+            </button>
+            <button class="trace-line" data-trace-step="step-2">
+              <code>error.type / attempt</code><span>判断失败类型</span>
+            </button>
+            <button class="trace-line" data-trace-step="step-3">
+              <code>replay / side effect</code><span>确认是否重复执行</span>
+            </button>
+          </div>
+          <div class="trace-canvas">
+            <div class="tensor-card active" data-trace-target="step-1">
+              <b>定位层</b>
+              <span>一条事故只需要少量稳定 ID</span>
+              <p>这一层回答“是哪一次”，而不是“所有细节是什么”。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="step-2">
+              <b>诊断层</b>
+              <span>错误类型、attempt、持续时间</span>
+              <p>这一层回答“为什么慢、为什么失败、为什么重试”。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="step-3">
+              <b>恢复层</b>
+              <span>replay、history、Activity 边界</span>
+              <p>这一层回答“这是恢复还是新的副作用”。</p>
+            </div>
+          </div>
+        </div>
+        <p>如果把这三个层次记住，你就会更自然地把事件语义写成“发生了什么、为什么发生、该不该长期保留”。这也是为什么指标设计不是统计题，而是边界题：它决定了你以后能不能用同一套数据，同时支持趋势分析、事故定位和合规访问。</p>
+      </section>
+
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区</h2>
+          <span class="tag">traps</span>
+        </div>
+        <div class="grid2">
+          <div class="mistake">
+            <b>只存聊天记录</b>
+            <p>聊天记录缺少 step、attempt、parent-child、replay 和版本信息，排查时你只会知道“说过话”，不知道“做过什么”。</p>
+          </div>
+          <div class="mistake">
+            <b>把 trace_id 当 metric 标签</b>
+            <p>这会把时序数据撑爆。trace_id 应该留在追踪里，不应该成为趋势图的标签。</p>
+          </div>
+          <div class="mistake">
+            <b>把原文输入输出默认长期保存</b>
+            <p>很多排障场景确实需要原文，但“需要排障”不等于“默认永久在线”。保留期和访问范围要先写清楚。</p>
+          </div>
+          <div class="mistake">
+            <b>把 Event History 当日志备份</b>
+            <p>Event History 的价值在恢复顺序和 replay 对齐。它不是为了替代所有日志，也不是用来堆原始大文本的。</p>
+          </div>
+          <div class="mistake">
+            <b>只看平均时延</b>
+            <p>平均值会把尾部问题藏起来。p95 / p99、失败率、重试率和人工接管率通常更能反映真实风险。</p>
+          </div>
+          <div class="mistake">
+            <b>敏感字段默认全开</b>
+            <p>输入、输出、工具参数和系统提示词可能含隐私或业务机密。默认最小采集，再按需开放。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <p>先别急着写长答案。先把观测对象分对，再决定是查个案、看趋势，还是追 replay。</p>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>一、辨认语义</h3>
+              <p>这组题先看你会不会把 trace、metric、event 和 history 分开。</p>
+            </div>
+            <div class="quick-review">快速回顾：trace 看一次，metric 看一类，history 看恢复。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q1_trace_vs_metric" data-group="一、辨认语义" data-title="哪一个更适合回答“这次为什么失败”？"
+              data-answer="A" data-explain="trace 和 span 先回答个案，metric 先回答趋势。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">trace / metric</span></div>
+              <h3>哪一个更适合回答“这次为什么失败”？</h3>
+              <p>要看的是单次路径、步骤、尝试和错误链。</p>
+              <label><input type="radio" name="q1_trace_vs_metric" value="A">Trace / span</label>
+              <label><input type="radio" name="q1_trace_vs_metric" value="B">Metric</label>
+              <label><input type="radio" name="q1_trace_vs_metric" value="C">Search attribute</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q" data-question="q2_lowcard" data-group="一、辨认语义" data-title="哪一个最不该进 metric label？"
+              data-answer="A" data-explain="trace_id 和用户原文这类高基数字段会把时序数据撑爆。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">low cardinality</span></div>
+              <h3>哪一个最不该进 metric label？</h3>
+              <label><input type="radio" name="q2_lowcard" value="A">trace_id</label>
+              <label><input type="radio" name="q2_lowcard" value="B">agent.version</label>
+              <label><input type="radio" name="q2_lowcard" value="C">tool.name</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q" data-question="q3_replay" data-group="一、辨认语义" data-title="replay 会不会重新执行真实副作用？"
+              data-answer="B" data-explain="replay 应该复用已记录结果，真实副作用要关在 Activity 边界里。">
+              <div class="q-meta"><span class="pill">true/false</span><span class="pill">Temporal</span></div>
+              <h3>replay 会不会重新执行真实副作用？</h3>
+              <label><input type="radio" name="q3_replay" value="A">会</label>
+              <label><input type="radio" name="q3_replay" value="B">不会</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q" data-question="q4_event_payload" data-group="一、辨认语义" data-title="哪一类内容更适合放 event，而不是长期 metric label？"
+              data-answer="C" data-explain="event 可以短期承载局部细节，metric label 不适合放原文或高基数内容。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">event</span></div>
+              <h3>哪一类内容更适合放 event，而不是长期 metric label？</h3>
+              <label><input type="radio" name="q4_event_payload" value="A">agent.version</label>
+              <label><input type="radio" name="q4_event_payload" value="B">tool.name</label>
+              <label><input type="radio" name="q4_event_payload" value="C">脱敏后的局部参数摘要</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>二、字段放对层</h3>
+              <p>这组题看你会不会把字段放进正确的层。</p>
+            </div>
+            <div class="quick-review">快速回顾：低基数给 metric，短期细节给 event，恢复事实给 history。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q full" data-question="q5_label_check" data-group="二、字段放对层" data-title="勾出不应该作为 metric label 的字段">
+              <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">labels</span></div>
+              <h3>勾出不应该作为 metric label 的字段</h3>
+              <p>把下面字段分清。选完后展开反馈，核对你是不是把高基数字段留在了 trace / event 里。</p>
+              <label><input type="checkbox" name="q5_label_check" value="trace_id"> trace_id</label>
+              <label><input type="checkbox" name="q5_label_check" value="agent.version"> agent.version</label>
+              <label><input type="checkbox" name="q5_label_check" value="tool.name"> tool.name</label>
+              <label><input type="checkbox" name="q5_label_check" value="user_input"> user_input</label>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>应勾选 <code>trace_id</code> 和 <code>user_input</code>。<code>agent.version</code> 与 <code>tool.name</code> 往往是低基数，适合做指标标签。判断标准不是“能不能看见”，而是“值的种类会不会多到让时序爆炸”。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q6_trace_tree" data-group="二、字段放对层" data-title="画一条最小 trace 树"
+              >
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">trace tree</span></div>
+              <h3>画一条最小 trace 树</h3>
+              <p>请用“入口 trace → agent span → model span → tool span → event/metric”这种方式，给一个客服智能体画出最小可排查结构。</p>
+              <p class="solve-note">答题目标：先标对象，再标读写关系，再标谁负责恢复事实。不要只写“加日志”。</p>
+              <textarea name="q6_trace_tree" placeholder="写出一条最小 trace 树，并说明每一层读什么、写什么、为什么放在这一层。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>合格答案至少要包含：入口 trace、agent span、model span、tool span、一个 event 或 metric、以及一个和恢复有关的字段（例如 <code>workflow_id</code> / <code>run_id</code> / <code>attempt</code>）。说明里要说清楚：span 负责路径，event 负责局部事实，metric 负责趋势，history 负责 replay 事实。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q7_retention" data-group="二、字段放对层" data-title="把数据分到正确的保留期">
+              <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">retention</span></div>
+              <h3>把数据分到正确的保留期</h3>
+              <p>勾出应该短期保留的内容，再展开反馈核对。这里没有“越多越好”，只有“该放哪一层、该留多久”。</p>
+              <label><input type="checkbox" name="q7_retention" value="原文输入输出"> 原文输入输出</label>
+              <label><input type="checkbox" name="q7_retention" value="脱敏 span 属性"> 脱敏 span 属性</label>
+              <label><input type="checkbox" name="q7_retention" value="计数型指标"> 计数型指标</label>
+              <label><input type="checkbox" name="q7_retention" value="审计事实"> 审计事实</label>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>原文输入输出通常应短期保留或按需开放；脱敏 span 属性和计数型指标可以保留更久；审计事实按合规要求单独保存。关键不是“留不留”，而是“默认谁能看、看多久、出事时怎么追责”。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>三、Temporal 对齐</h3>
+              <p>这组题把 workflow、run、attempt 和 replay 放回同一条链里看。</p>
+            </div>
+            <div class="quick-review">快速回顾：replay 不是新副作用，history 记录的是恢复事实。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q8_temporal_ids" data-group="三、Temporal 对齐" data-title="哪组字段最能把 trace 和 Temporal 对齐？"
+              data-answer="B" data-explain="workflow_id、run_id、attempt 和 replay 一起，才够把恢复事实对齐。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">Temporal</span></div>
+              <h3>哪组字段最能把 trace 和 Temporal 对齐？</h3>
+              <label><input type="radio" name="q8_temporal_ids" value="A">trace_id + agent.version</label>
+              <label><input type="radio" name="q8_temporal_ids" value="B">workflow_id + run_id + attempt + replay</label>
+              <label><input type="radio" name="q8_temporal_ids" value="C">user_input + tool.name</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q full" data-question="q9_history" data-group="三、Temporal 对齐" data-title="为什么 Event History 不是普通日志？">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">history</span></div>
+              <h3>为什么 Event History 不是普通日志？</h3>
+              <p>请先说出一个直觉，再说出两条可验证的差别：顺序、恢复、replay、Activity 结果复用。</p>
+              <p class="solve-note">答题目标：别只说“它能回放”。要写清楚它和普通日志在语义上的差别。</p>
+              <textarea name="q9_history" placeholder="用三到五句话说明 Temporal Event History 的作用，以及它和普通日志的区别。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>好答案会说明：Event History 记录的是 workflow 的事件顺序和恢复事实；replay 时会复用已记录的 Activity 结果，而不是重新执行外部副作用；普通日志只是顺序文本，不天然保证恢复语义。只写“能追踪”不够，要把“重放”和“复用”说出来。</p>
+              </details>
+            </div>
+
+            <div class="q" data-question="q10_replay_flag" data-group="三、Temporal 对齐" data-title="哪一条最像 replay，不像新执行？"
+              data-answer="C" data-explain="replay=true 且 side_effect_not_executed，说明复用了记录结果。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">replay</span></div>
+              <h3>哪一条最像 replay，不像新执行？</h3>
+              <label><input type="radio" name="q10_replay_flag" value="A">attempt=1, replay=false, side effect executed</label>
+              <label><input type="radio" name="q10_replay_flag" value="B">attempt=2, replay=false, side effect executed again</label>
+              <label><input type="radio" name="q10_replay_flag" value="C">attempt=2, replay=true, side effect not executed</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q full" data-question="q11_policy" data-group="三、Temporal 对齐" data-title="写一条最小可执行的观测保留策略">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">policy</span></div>
+              <h3>写一条最小可执行的观测保留策略</h3>
+              <p>把“谁能看、看多久、什么能默认保留、什么必须短期保留”写完整。答案要能直接拿去跟团队对齐。</p>
+              <p class="solve-note">答题目标：四件事都要写：默认策略、短期策略、审计策略、访问控制。</p>
+              <textarea name="q11_policy" placeholder="写出一条可执行的保留策略，覆盖默认采集、按需开放、脱敏、访问控制和审计边界。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>合格答案至少要有三层：默认只保留低风险字段和趋势指标；短期保留原文输入输出、工具参数和局部 event；审计事实单独保存、权限单独管理。还要写清楚一个具体动作：谁能申请访问、访问多久、到期怎么回收。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <p>这个导出只会收集你在本页填写的答案、题目标题和上面的核心复盘上下文。它不是评分器，只是为了把练习结果带走。</p>
+        <div class="actions">
+          <button class="action" type="button" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" type="button" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">sources</span>
+        </div>
+        <p>以下链接按 2026-06-21 访问。字段名和语义以后可能继续变动，复核时先看版本说明，再看你在页内学到的语义边界。</p>
+        <ul class="source-list">
+          <li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">OpenTelemetry Semantic conventions for generative AI systems</a>：用于 trace、span、event 和 metric 的 GenAI 语义边界。</li>
+          <li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/">OpenTelemetry GenAI spans</a>：用于模型调用、检索和工具执行 span 的字段示例。</li>
+          <li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-events/">OpenTelemetry GenAI events</a>：用于输入输出细节、系统指令和工具定义的事件语义。</li>
+          <li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/">OpenTelemetry GenAI metrics</a>：用于 token usage、operation duration 和 streaming latency 指标。</li>
+          <li><a href="https://openai.github.io/openai-agents-python/tracing/">OpenAI Agents SDK Tracing</a>：用于 trace/span 层次、敏感数据配置和 trace processor。</li>
+          <li><a href="https://docs.temporal.io/workflows">Temporal Workflows</a> 与 <a href="https://docs.temporal.io/workflow-execution/event">Temporal Events and Event History</a>：用于恢复、回放、Activity 和 Event History 语义。</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

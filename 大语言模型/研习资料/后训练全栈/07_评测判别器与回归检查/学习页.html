@@ -1,0 +1,1139 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>评测、判别器与回归检查｜后训练全栈</title>
+  <link rel="stylesheet" href="../assets/study-page.css">
+  <script src="../assets/study-page.js" defer></script>
+  <meta name="description" content="学习如何为后训练模型设计 judge、自动评测、能力折损检查和发布前回归测试。">
+  </head>
+
+<body data-course="后训练全栈" data-unit="评测判别器与回归检查">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>评测、判别器与回归检查</strong>
+        <span>后训练全栈｜单元 07</span>
+      </div>
+      <nav>
+        <a href="../index.html"><span>00</span>课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>概念骨架</a>
+        <a href="#terms"><span class="dot"></span>术语与误区</a>
+        <a href="#lesson"><span class="dot"></span>核心讲解</a>
+        <a href="#judge"><span class="dot"></span>Judge 设计</a>
+        <a href="#auto-eval"><span class="dot"></span>自动评测</a>
+        <a href="#regression"><span class="dot"></span>回归检查</a>
+        <a href="#examples"><span class="dot"></span>例题</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#failure-lab"><span class="dot"></span>失败排查</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+      </nav>
+      <div class="side-note">
+        本页对应课程地图中的第 07 单元：后训练很容易提升某项能力同时伤害其他能力，所以要把自动评测、judge、人工抽检和发布门禁接成一个闭环。<br>
+        <a href="../index.html">返回课程地图</a>
+      </div>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <div>
+          <div class="kicker">后训练全栈 / Evaluation Gate</div>
+          <h1>评测、判别器与回归检查</h1>
+          <p>后训练不是训练完再看一眼分数。它需要一套能长期运行的评测系统：用确定性指标抓硬错误，用 judge 处理开放答案，用回归测试保护已有能力，用人工抽检校准自动结论。</p>
+        </div>
+        <div class="box soft">
+          <h3>本页完成后</h3>
+          <ul>
+            <li>能区分 benchmark、自动评测、judge、判别器、回归测试各自解决的问题。</li>
+            <li>能写出一个可复用的 judge 规格：任务、rubric、输出格式、校准样本和失败检查。</li>
+            <li>能为一次 SFT/DPO/RL 实验设计发布前能力折损检查。</li>
+          </ul>
+        </div>
+      </header>
+
+      <section id="goals">
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">60-90 分钟</span>
+        </div>
+        <div class="grid3">
+          <div class="box">
+            <h3>把评测从“分数”改成“合同”</h3>
+            <p>评测不是排行榜数字，而是发布前必须满足的行为约束：哪些能力必须涨，哪些能力不能跌，哪些安全边界不能破。</p>
+          </div>
+          <div class="box">
+            <h3>理解 judge 的可靠性边界</h3>
+            <p>judge 可以是 LLM、分类器、reward model 或 verifier。它能降低人工成本，但需要 rubric、校准集、一致性检查和人工抽检。</p>
+          </div>
+          <div class="box">
+            <h3>建立回归测试思维</h3>
+            <p>每次后训练都要和基线模型比较，特别关注能力折损：格式变好了，数学是否跌了？拒答更安全了，正常求助是否被误拒？</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="map">
+        <div class="head">
+          <h2>概念骨架</h2>
+          <span class="tag">从样本到发布门禁</span>
+        </div>
+        <div class="map">
+          <span class="node">任务与风险</span>
+          <span class="arrow">→</span>
+          <span class="node">评测集</span>
+          <span class="arrow">→</span>
+          <span class="node">打分器 / Judge</span>
+          <span class="arrow">→</span>
+          <span class="node">聚合与阈值</span>
+          <span class="arrow">→</span>
+          <span class="node">回归门禁</span>
+        </div>
+        <p>直觉上，评测系统像发布前的仪表盘和刹车。仪表盘告诉你不同能力的变化，刹车在关键指标跌穿时阻止上线。术语上，它是一组固定输入、固定采样规则、固定评分函数和固定发布阈值。</p>
+        <div class="formula">
+          对每个能力 m，记录差值：Δ<sub>m</sub> = score(model_new, eval_m) - score(model_base, eval_m)。<br>
+          发布门禁不是只看平均分，而是检查：关键能力 Δ<sub>m</sub> ≥ 最小允许变化，风险能力 violation_rate ≤ 上限。
+        </div>
+        <div class="box info">
+          <h3>你现在应该能做什么</h3>
+          <p>看到一个后训练实验时，先问：它声称提升了什么？可能牺牲什么？用什么固定样本和评分器证明？和哪个基线比？</p>
+        </div>
+      </section>
+
+      <section id="terms">
+        <div class="head">
+          <h2>术语与误区</h2>
+          <span class="tag">容易混淆的词</span>
+        </div>
+        <table class="metric-table">
+          <thead>
+            <tr>
+              <th>术语</th>
+              <th>直觉解释</th>
+              <th>精确定义</th>
+              <th>常见误解</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Benchmark</td>
+              <td>一套公开或内部题库。</td>
+              <td>固定任务集合、样本、评分规则和报告口径，用于比较模型能力。</td>
+              <td>把 benchmark 分数当成产品质量。公开榜单常覆盖不了你的真实用户分布。</td>
+            </tr>
+            <tr>
+              <td>自动评测</td>
+              <td>让机器批量跑题、打分、汇总。</td>
+              <td>从输入集、模型输出、评分器、统计聚合到报告生成的可复现流程。</td>
+              <td>以为自动评测不需要人工。评分器本身也需要校准和抽检。</td>
+            </tr>
+            <tr>
+              <td>Judge</td>
+              <td>替你判断“这个回答好不好”的裁判。</td>
+              <td>基于 rubric 对输出进行 pointwise、pairwise 或 ranking 评价的模型或规则系统。</td>
+              <td>把 judge 当真理。它会受位置、长度、措辞、模型同源性和提示泄漏影响。</td>
+            </tr>
+            <tr>
+              <td>判别器</td>
+              <td>回答“属于哪类 / 是否合格”的检查器。</td>
+              <td>把输入和输出映射到类别、风险标签、合格/不合格或连续分数的模型。</td>
+              <td>把所有 judge 都叫 reward model。判别器可以只做安全分类、格式检查或事实核验。</td>
+            </tr>
+            <tr>
+              <td>能力折损</td>
+              <td>某项训练让模型在别的地方变差。</td>
+              <td>新模型相对基线在特定能力、任务、人群或交互约束上的显著下降。</td>
+              <td>只看目标任务上涨。SFT、DPO、RL 都可能引入遗忘、过拒、风格固化或推理下降。</td>
+            </tr>
+            <tr>
+              <td>回归测试</td>
+              <td>每次改模型都跑的老题。</td>
+              <td>用于检测已知能力、边界行为和历史 bug 是否被新训练破坏的固定测试套件。</td>
+              <td>只在代码里做回归。模型也需要回归，因为权重更新会改变行为分布。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="lesson">
+        <div class="head">
+          <h2>核心讲解</h2>
+          <span class="tag">评测是发布合同</span>
+        </div>
+        <div class="grid2">
+          <div>
+            <h3>1. 后训练评测的真正问题</h3>
+            <p>后训练会把模型从“会续写”推向“会遵循指令、会拒绝、会按偏好回答”。问题是：模型能力不是单轴变化。一次 SFT 可能提高格式遵循，却让模型更啰嗦；一次 DPO 可能提高偏好胜率，却让模型过度迎合；一次 RL 可能提高推理任务分数，却引入奖励投机。</p>
+            <p>所以评测不能只问“新模型是否更好”。它要拆成三个问题：目标能力是否提升，关键旧能力是否保持，风险行为是否仍在边界内。</p>
+            <div class="formula">
+              一次后训练发布至少要回答：<br>
+              Gain：目标指标是否上升？<br>
+              Regression：非目标指标是否下跌？<br>
+              Risk：安全、合规、隐私、拒答和工具调用边界是否稳定？
+            </div>
+          </div>
+          <div class="box info">
+            <h3>判断句</h3>
+            <p>如果一个实验报告只展示目标 benchmark 的涨幅，不展示基线对比、非目标能力和失败样本，它还不能支撑发布决策。</p>
+          </div>
+        </div>
+
+        <h3>2. 评测集先按“能力面”组织</h3>
+        <p>能力面是你想保护或提升的一类行为，例如指令遵循、数学推理、代码生成、多轮记忆、中文写作、拒答边界、事实一致性、工具调用、结构化输出。一个评测集不要只按题源命名，更要说明它覆盖哪个能力面。</p>
+        <p>每个能力面至少需要四类样本：正常正例、边界样本、历史失败样本、对抗样本。正常正例看日常质量，边界样本看规则是否稳定，历史失败样本看修复是否回退，对抗样本看模型是否会被诱导偏离。</p>
+
+        <div class="viz-panel">
+          <h3>评测系统的四层结构</h3>
+          <div class="viz-grid">
+            <div class="viz-cell"><strong>输入层</strong><p>任务、样本、采样参数、上下文模板。没有固定输入，就没有可比较结果。</p></div>
+            <div class="viz-cell"><strong>评分层</strong><p>精确匹配、规则、测试执行、分类器、LLM judge、人工标注。评分器要和任务类型匹配。</p></div>
+            <div class="viz-cell"><strong>决策层</strong><p>聚合、置信、阈值、失败样本查看和发布门禁。决策层负责说“能不能上线”。</p></div>
+          </div>
+          <p class="hint">你现在应该能做什么：为任何一个能力面列出“输入样本、评分方式、通过阈值、失败后动作”。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <section id="judge">
+        <div class="head">
+          <h2>Judge 与判别器</h2>
+          <span class="tag">不是把问题丢给另一个模型</span>
+        </div>
+        <div class="compare">
+          <div class="box soft">
+            <h3>Judge 适合什么</h3>
+            <p>开放式回答、写作质量、多轮任务完成度、偏好胜负、帮助性、解释清晰度、格式是否满足复杂约束。这些任务很难用单个字符串匹配。</p>
+          </div>
+          <div class="box warn">
+            <h3>Judge 不适合什么</h3>
+            <p>有明确答案的数学计算、代码是否能运行、JSON 是否可解析、链接是否存在、隐私字段是否泄露。这些应优先用确定性检查。</p>
+          </div>
+        </div>
+
+        <h3>1. Pointwise、Pairwise、Ranking</h3>
+        <table class="metric-table">
+          <thead>
+            <tr>
+              <th>方式</th>
+              <th>输入</th>
+              <th>输出</th>
+              <th>适用场景</th>
+              <th>风险</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Pointwise</td>
+              <td>一个问题 + 一个回答</td>
+              <td>分数或标签</td>
+              <td>质量分、是否合格、是否违规</td>
+              <td>不同题目间分数不一定可比，rubric 写弱会漂移。</td>
+            </tr>
+            <tr>
+              <td>Pairwise</td>
+              <td>同一问题 + 两个回答</td>
+              <td>A 胜 / B 胜 / 平</td>
+              <td>DPO 前后的偏好胜率、模型版本比较</td>
+              <td>位置偏置明显，需要交换 A/B 顺序复判。</td>
+            </tr>
+            <tr>
+              <td>Ranking</td>
+              <td>同一问题 + 多个回答</td>
+              <td>排序</td>
+              <td>多候选生成、rerank、采样策略比较</td>
+              <td>长列表会降低一致性，成本也更高。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>2. 一个可用 judge 规格包含什么</h3>
+        <div class="grid4">
+          <div class="box"><h3>任务定义</h3><p>明确输入是什么、要判断什么、哪些信息不能使用。例如只能根据给定证据判断事实一致性。</p></div>
+          <div class="box"><h3>Rubric</h3><p>把“好”拆成可观察标准：正确性、完整性、约束遵循、拒答边界、语气、引用证据。</p></div>
+          <div class="box"><h3>输出格式</h3><p>强制 JSON 或固定字段，包含 verdict、score、reason、failure_tags，便于后续聚合。</p></div>
+          <div class="box"><h3>校准样本</h3><p>准备人工已判的样本，看 judge 与人类是否一致，并定期抽检漂移。</p></div>
+        </div>
+
+        <div class="box danger">
+          <h3>常见 judge 偏差</h3>
+          <ul>
+            <li><strong>长度偏差：</strong>更长的回答看起来更认真，但未必更正确。</li>
+            <li><strong>位置偏差：</strong>pairwise judge 可能偏爱 A 或 B，所以要交换顺序复判。</li>
+            <li><strong>风格偏差：</strong>judge 偏好礼貌、套话或结构化，但目标任务可能更需要简洁准确。</li>
+            <li><strong>同源偏差：</strong>用同一家族模型做 judge 时，可能偏好相似表达模式。</li>
+            <li><strong>提示泄漏：</strong>待评回答如果包含“评分指令”，可能影响 judge。</li>
+            <li><strong>证据越界：</strong>事实核验 judge 如果使用自身世界知识，可能绕过给定证据。</li>
+          </ul>
+        </div>
+
+        <div class="box info">
+          <h3>你现在应该能做什么</h3>
+          <p>设计 judge 时，不只写“请打分”。你应该能同时写出 rubric、输出字段、校准样本、偏差控制和人工抽检规则。</p>
+        </div>
+      </section>
+
+      <section id="auto-eval">
+        <div class="head">
+          <h2>自动评测流水线</h2>
+          <span class="tag">Eval Harness</span>
+        </div>
+        <p>自动评测的价值不是“无人参与”，而是“同一套流程可以重复运行”。在后训练中，每个候选 checkpoint 都应该用同样的输入、采样参数、评分器和报告口径评估，否则版本之间不可比。</p>
+
+        <div class="flow">
+          <div class="flow-row">
+            <div class="flow-label">1. 固定输入</div>
+            <div class="flow-detail">保存 prompt、system message、few-shot 示例、工具说明、上下文长度、采样参数。采样温度变化会改变输出分布，不能随手改。</div>
+          </div>
+          <div class="flow-row">
+            <div class="flow-label">2. 候选回答生成</div>
+            <div class="flow-detail">对基线模型和新模型跑同一批样本。开放生成任务最好保存原始输出，方便之后重新评分和人工复盘。</div>
+          </div>
+          <div class="flow-row">
+            <div class="flow-label">3. 多类评分</div>
+            <div class="flow-detail">能用确定性评分就先用确定性评分；不能确定性评分时，再用 judge 或人工。评分器要记录版本。</div>
+          </div>
+          <div class="flow-row">
+            <div class="flow-label">4. 聚合报告</div>
+            <div class="flow-detail">按能力面、难度、语言、风险类别拆分分数，展示均值之外的失败样本和长尾下降。</div>
+          </div>
+          <div class="flow-row">
+            <div class="flow-label">5. 发布门禁</div>
+            <div class="flow-detail">把“目标涨幅”“最大可接受回退”“风险违规率”“人工抽检结论”写成规则，而不是临时拍脑袋。</div>
+          </div>
+        </div>
+
+        <h3>评分器选择原则</h3>
+        <table class="metric-table">
+          <thead>
+            <tr>
+              <th>任务类型</th>
+              <th>优先评分方式</th>
+              <th>为什么</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>JSON、SQL、工具参数</td>
+              <td>解析器 + schema + 单元测试</td>
+              <td>格式和执行结果可验证，judge 不应替代解析。</td>
+            </tr>
+            <tr>
+              <td>数学、代码、可执行题</td>
+              <td>答案检查、测试用例、执行沙箱、pass@k</td>
+              <td>结果能被程序验证，模型评价容易受解释文字干扰。</td>
+            </tr>
+            <tr>
+              <td>摘要、写作、客服回复</td>
+              <td>Rubric judge + 人工抽检</td>
+              <td>质量依赖语境和偏好，单一字符串指标太弱。</td>
+            </tr>
+            <tr>
+              <td>安全拒答、隐私、政策</td>
+              <td>规则过滤 + 分类器 + 人工复核</td>
+              <td>误放和误拒都重要，需要按风险等级拆分。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="box info">
+          <h3>你现在应该能做什么</h3>
+          <p>面对一个新任务，你应该先判断能否用确定性评分；如果不能，再决定是否用 judge，并写清楚人工如何校准 judge。</p>
+        </div>
+      </section>
+
+      <section id="regression">
+        <div class="head">
+          <h2>能力折损与回归检查</h2>
+          <span class="tag">Regression Gate</span>
+        </div>
+        <div class="grid2">
+          <div>
+            <h3>1. 为什么后训练会伤害旧能力</h3>
+            <p>SFT 会把模型推向训练样本的回答风格，如果样本过窄，模型会变得模板化。DPO 会放大偏好数据里的选择标准，如果偏好数据奖励“更自信、更长、更讨好”，模型就可能过度迎合。RL 会让模型追逐奖励函数，如果奖励不覆盖真实任务，模型可能学会钻评分器的空子。</p>
+            <p>能力折损不是异常，而是权重更新后的常见副作用。后训练实验越接近发布，越要把回归检查当作默认步骤。</p>
+          </div>
+          <div class="box warn">
+            <h3>典型折损信号</h3>
+            <ul>
+              <li>正常问题被错误拒答，安全性看似提高但有用性下降。</li>
+              <li>模型更会写结构化回答，但事实错误更多。</li>
+              <li>中文、长上下文或小语种能力下降。</li>
+              <li>代码和数学推理下降，但聊天偏好分上涨。</li>
+              <li>回答变长、延迟和成本上升，产品体验变差。</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>2. 回归测试集怎么维护</h3>
+        <div class="grid3">
+          <div class="box soft"><h3>固定核心集</h3><p>每次发布必跑，覆盖产品主路径、关键能力和高风险边界。不要频繁替换，否则趋势不可比。</p></div>
+          <div class="box info"><h3>历史失败集</h3><p>把线上事故、人工复盘和红队样本加入回归，防止修过的问题再次出现。</p></div>
+          <div class="box violet"><h3>刷新探索集</h3><p>定期加入新场景，发现固定核心集没覆盖的问题。刷新集可探索，核心集负责趋势。</p></div>
+        </div>
+
+        <h3>3. 小型发布门禁模拟</h3>
+        <p>拖动下面的分数，观察“平均提升”为什么不能替代回归检查。默认门禁：目标能力至少 +2，数学和安全回退不能低于 -1。</p>
+        <div class="mini-sim">
+          <div class="box">
+            <div class="slider-row">
+              <label for="targetGain">目标能力 Δ</label>
+              <input id="targetGain" type="range" min="-5" max="8" step="1" value="4">
+              <output id="targetGainOut">+4</output>
+            </div>
+            <div class="slider-row">
+              <label for="mathDelta">数学推理 Δ</label>
+              <input id="mathDelta" type="range" min="-5" max="5" step="1" value="-2">
+              <output id="mathDeltaOut">-2</output>
+            </div>
+            <div class="slider-row">
+              <label for="safetyDelta">安全边界 Δ</label>
+              <input id="safetyDelta" type="range" min="-5" max="5" step="1" value="0">
+              <output id="safetyDeltaOut">0</output>
+            </div>
+            <div class="slider-row">
+              <label for="latencyDelta">延迟成本 Δ</label>
+              <input id="latencyDelta" type="range" min="-5" max="5" step="1" value="1">
+              <output id="latencyDeltaOut">+1</output>
+            </div>
+          </div>
+          <div class="box" id="gateResult">
+            <h3>门禁结果</h3>
+            <p>等待计算。</p>
+          </div>
+        </div>
+
+        <div class="box info">
+          <h3>你现在应该能做什么</h3>
+          <p>给一个新 checkpoint 做发布判断时，你应该能列出必须提升的目标指标、禁止明显回退的保护指标，以及失败后应该回到数据、奖励还是采样策略排查。</p>
+        </div>
+      </section>
+
+      <section id="examples">
+        <div class="head">
+          <h2>例题与工作样板</h2>
+          <span class="tag">Worked Examples</span>
+        </div>
+
+        <div class="box">
+          <h3>例 1：一个 pairwise judge 的规格</h3>
+          <p>场景：你训练了一个客服助手，希望比较新旧模型在“准确、可执行、不过度承诺”上的偏好胜率。不要只写“哪个回答更好”，要把标准拆开。</p>
+          <div class="codebar">
+            <span class="label">judge-spec.json</span>
+            <span class="kind">结构化规格</span>
+          </div>
+          <pre><code>{
+  "task": "比较两个客服回复哪个更适合发送给用户",
+  "judge_type": "pairwise",
+  "input_fields": ["user_question", "policy_context", "answer_a", "answer_b"],
+  "rubric": [
+    "答案必须解决用户的问题，不能只表达歉意",
+    "答案只能使用 policy_context 中给出的政策",
+    "如果信息不足，应说明需要补充什么，而不是编造",
+    "优先选择准确、简洁、下一步明确的回答",
+    "不要因为回答更长就判胜"
+  ],
+  "bias_controls": [
+    "对每个样本交换 answer_a 和 answer_b 再评一次",
+    "输出 tie 时不强行判胜",
+    "每 100 个样本抽检 20 个与人工标签对比"
+  ],
+  "output_schema": {
+    "winner": "A | B | tie",
+    "confidence": "low | medium | high",
+    "failure_tags": ["fabrication", "missing_next_step", "policy_misuse"],
+    "reason": "不超过 80 字"
+  }
+}</code></pre>
+          <p>这个规格能被自动化系统调用，也能被人工复盘。关键点是：judge 的输入、判断标准、偏差控制和输出结构都被固定了。</p>
+        </div>
+
+        <div class="box">
+          <h3>例 2：回归测试的能力矩阵</h3>
+          <p>场景：DPO 后模型在偏好胜率上提高，但你担心它变得更讨好、更爱拒答。能力矩阵要把目标项和保护项分开。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>能力面</th>
+                <th>样本来源</th>
+                <th>评分器</th>
+                <th>发布阈值</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>客服偏好胜率</td>
+                <td>近期真实问题脱敏 + 人工 pairwise 标签</td>
+                <td>pairwise judge + 抽检</td>
+                <td>相对基线胜率 ≥ 55%，人工抽检一致率 ≥ 80%</td>
+              </tr>
+              <tr>
+                <td>事实一致性</td>
+                <td>带证据的政策问答</td>
+                <td>证据约束 judge + 引用检查</td>
+                <td>不低于基线 1 分；严重编造率 ≤ 1%</td>
+              </tr>
+              <tr>
+                <td>正常求助误拒</td>
+                <td>无风险的日常任务请求</td>
+                <td>拒答分类器 + 人工复核</td>
+                <td>误拒率不能高于基线 0.5 个百分点</td>
+              </tr>
+              <tr>
+                <td>结构化输出</td>
+                <td>JSON / 表格 / 工具参数任务</td>
+                <td>schema 解析 + 单元测试</td>
+                <td>可解析率 ≥ 98%，关键字段缺失率 ≤ 1%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="box">
+          <h3>例 3：发布门禁伪代码</h3>
+          <p>这段伪代码强调“保护指标不能被平均分盖住”。即使目标能力上涨，如果关键保护项下跌，也应该阻止发布。</p>
+          <div class="codebar">
+            <span class="label">regression-gate.py</span>
+            <span class="kind">伪代码</span>
+          </div>
+          <pre><code>def release_gate(report):
+    checks = []
+
+    checks.append(report.delta("target_preference") >= 2.0)
+    checks.append(report.delta("math_reasoning") >= -1.0)
+    checks.append(report.delta("normal_helpfulness") >= -0.5)
+    checks.append(report.rate("unsafe_allow") <= 0.01)
+    checks.append(report.rate("wrong_refusal") <= report.baseline_rate("wrong_refusal") + 0.005)
+    checks.append(report.human_audit("critical_failures") == 0)
+
+    if all(checks):
+        return "pass"
+    return "block_and_review_failures"</code></pre>
+          <p>真实系统还要记录样本版本、模型版本、judge 版本、采样参数和失败样本链接。否则分数无法复现。</p>
+        </div>
+
+        <div class="box danger">
+          <h3>常见错误：让 judge 直接读“模型 A 是新模型”</h3>
+          <p>如果 judge 知道哪个是新模型，它可能被实验预期影响。pairwise 评测应隐藏版本身份，并交换顺序再评一次。</p>
+          <p><strong>修法：</strong>只给 judge 看任务输入和两个匿名回答；输出 A/B/tie；对冲突样本进入人工复核。</p>
+        </div>
+      </section>
+
+      <section id="mechanism">
+        <div class="head">
+          <h2>机制演示：judge / 回归 / 门禁</h2>
+          <span class="tag">evaluation</span>
+        </div>
+        <div class="math-block">
+          <p><strong>门禁信号：</strong>Gate = 目标能力收益 - 回归损失 - 风险惩罚</p>
+          <p>judge 输出的是局部判断，回归集输出的是稳定趋势，发布门槛把两者合成可执行决定。</p>
+        </div>
+        <div class="codebar"><span>judge / regression</span></div>
+        <pre><code class="language-python">score = judge(candidate, rubric)
+regression = compare_with_baseline(current, fixed_set)
+release = score - regression</code></pre>
+        <div class="terminal-lab" data-terminal-lab>
+          <div class="terminal-controls">
+            <button class="ghost" type="button" data-terminal-case="bias">位置偏差</button>
+            <button class="ghost" type="button" data-terminal-case="conflict">证据冲突</button>
+            <button class="ghost" type="button" data-terminal-case="pass">门禁通过</button>
+          </div>
+          <pre class="terminal-output"></pre>
+          <template data-terminal-output="bias"><p class="err">同一答案放在 A 位和 B 位，结论开始变，这说明 judge 先被位置偏差污染了。</p></template>
+          <template data-terminal-output="conflict"><p class="err">证据不够时，judge 不该自己补常识。先回到证据，再判断是否进入人工复核。</p></template>
+          <template data-terminal-output="pass"><p class="ok">目标能力上涨，但回归集和安全抽检都在阈值内，先进入人工抽检，再决定是否发布。</p></template>
+        </div>
+        <div class="grid2">
+          <div data-export-context="judge 读什么" data-export-lang="text">
+            judge 先读任务目标、rubric 和输出格式，不读这些，后面的分数没有可解释性。
+          </div>
+          <table data-export-context="判定矩阵" data-export-lang="table">
+            <tr><th>对象</th><th>读取</th><th>风险</th></tr>
+            <tr><td>pairwise judge</td><td>A/B 顺序</td><td>位置偏差</td></tr>
+            <tr><td>回归集</td><td>固定样本</td><td>趋势失真</td></tr>
+            <tr><td>人工抽检</td><td>失败样本</td><td>自动分数误导</td></tr>
+          </table>
+          <div data-export-context="发布门槛" data-export-lang="text">
+            门槛不是平均分。某个硬回退项被触发时，门禁就应该停下，而不是继续把分数相加。
+          </div>
+          <div data-export-context="下一步" data-export-lang="text">
+            先把 judge 写稳，再把回归集固定，最后再谈发布。顺序错了，结论会看起来很完整但其实不可靠。
+          </div>
+        </div>
+        <div class="box info">
+          <h3>失败排查：分数上升，但投诉也上升</h3>
+          <p>假设一次 DPO 后，客服助手的 pairwise 胜率从 51% 提到 57%，但用户投诉也同步上升。不要先下结论说“模型更强了”或者“数据坏了”，先拆成三条线：样本是否固定、judge 是否稳定、发布后是否出现新的高风险模式。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>线索</th>
+                <th>你在看什么</th>
+                <th>错了会出现什么假象</th>
+                <th>下一步</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>回归集版本</td>
+                <td>是否还是同一批固定样本</td>
+                <td>分数涨了，其实只是题库更简单</td>
+                <td>核对样本 hash 和样本说明</td>
+              </tr>
+              <tr>
+                <td>judge 稳定性</td>
+                <td>A/B 交换后结论是否变化</td>
+                <td>胜率被位置偏差推高或压低</td>
+                <td>对冲突样本做顺序复判</td>
+              </tr>
+              <tr>
+                <td>投诉样本</td>
+                <td>线上抱怨具体对应哪类输出</td>
+                <td>你只看总分，看不到损害类型</td>
+                <td>把样本回流到失败集</td>
+              </tr>
+              <tr>
+                <td>人工复核</td>
+                <td>高风险样本是否单独抽检</td>
+                <td>平均分过线，但硬错误没挡住</td>
+                <td>对关键错误单独设门禁</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>把这四条线索放在一起看，才能知道问题是在评测、judge、回归集，还是发布门禁。只看单一分数，最容易把“题库变化”误当成“模型进步”。</p>
+        </div>
+        <div class="box warn">
+          <h3>你现在应该能做什么</h3>
+          <p>拿一个实际后训练实验，写出 4 行门禁表：目标能力、一个必须保护的能力、一个安全边界、一个回归样本来源。每行再补一个阈值和一个失败后的动作。写完后先问自己：如果胜率上升，但投诉也上升，哪一行会先把发布挡住？</p>
+        </div>
+        <div class="box info">
+          <h3>把流程写成复盘口径</h3>
+          <p>复盘时最容易发生的事，是大家都在讲不同层面的“好”。有人讲实验分数，有人讲样本感觉，有人讲用户投诉，最后谁都没法回答“到底该不该发”。把流程写成统一口径后，争论就会少很多：先固定样本，再看 judge，再看回归，再看人工抽检，最后才讨论发布。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>复盘口径</th>
+                <th>看什么</th>
+                <th>输出什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>实验分数</td>
+                <td>目标任务是否提升</td>
+                <td>是否值得继续试</td>
+              </tr>
+              <tr>
+                <td>回归分数</td>
+                <td>旧能力是否保持</td>
+                <td>哪类保护项被打破</td>
+              </tr>
+              <tr>
+                <td>风险样本</td>
+                <td>错误是否可接受</td>
+                <td>是否必须阻止发布</td>
+              </tr>
+              <tr>
+                <td>人工抽检</td>
+                <td>自动结论有没有偏</td>
+                <td>是否需要改 judge 或改数据</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>只要这四个口径都清楚，你就不会把“评分器变了”误当成“模型变好了”。这也是回归测试真正值钱的地方。</p>
+        </div>
+        <div class="box">
+          <h3>单样本复盘：从一条回答到一条门禁</h3>
+          <p>再把视角缩小到一条样本。用户问“这个方案能不能直接退款”，模型回了一个看起来很合理的回答，但实际上这超出权限。这个样本一开始会在自动评分里拿到不错的分数，因为语言流畅、语气稳定；可只要把它放进回归和权限边界里看，问题就暴露了。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>你看到的</th>
+                <th>背后要补的检查</th>
+                <th>发布时会怎么处理</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>回答很顺</td>
+                <td>有没有编造承诺</td>
+                <td>仍然要过事实与权限检查</td>
+              </tr>
+              <tr>
+                <td>judge 选了胜者</td>
+                <td>judge 有没有被提示诱导</td>
+                <td>必要时交换顺序再评</td>
+              </tr>
+              <tr>
+                <td>回归集没掉分</td>
+                <td>这个样本是不是本该进安全集</td>
+                <td>把它加入失败集再看</td>
+              </tr>
+              <tr>
+                <td>人工觉得可接受</td>
+                <td>是否只是“语气好”而不是“动作对”</td>
+                <td>权限项没过就不能发布</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>这一层是很多人最容易漏掉的：模型回答本身看起来没问题，不代表系统层面的动作没问题。后训练评测的责任，就是把这种“看起来对”的答案拆开，让错误无法继续伪装。</p>
+        </div>
+        <div class="box">
+          <h3>案例串联：从分数到动作</h3>
+          <p>你可以把一次发布看成四层：第一层是“这次实验有没有真的更好”，第二层是“有没有把旧能力打坏”，第三层是“哪类错误最危险”，第四层才是“能不能上线”。很多团队把这四层混成一张平均分表，于是看起来有结论，实际上没有动作。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>层级</th>
+                <th>代表问题</th>
+                <th>典型产物</th>
+                <th>如果缺失会怎样</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>实验层</td>
+                <td>新模型是不是更好</td>
+                <td>judge 胜率、自动评分</td>
+                <td>只知道分数，不知道来源</td>
+              </tr>
+              <tr>
+                <td>回归层</td>
+                <td>旧能力有没有掉</td>
+                <td>固定回归集、趋势图</td>
+                <td>新模型把老问题又带回来</td>
+              </tr>
+              <tr>
+                <td>风险层</td>
+                <td>哪些错误最伤</td>
+                <td>失败样本、危险标签</td>
+                <td>低频高损害错误被平均分盖住</td>
+              </tr>
+              <tr>
+                <td>动作层</td>
+                <td>现在到底能不能放量</td>
+                <td>门禁、回滚、人工抽检</td>
+                <td>明明该停，却还在继续推</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>这张表的用处不是记住概念，而是让你看到证据链。你先知道测到的是什么，再知道它能不能变成发布决定。</p>
+        </div>
+        <div class="box info">
+          <h3>可复用门禁模板</h3>
+          <p>如果你要给一个新实验写门禁，最省事的方式不是从头发明规则，而是复用一个固定骨架：能力项、保护项、安全项、运行项。然后给每项补“样本从哪来”“评分器是什么”“失败后怎么处理”。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>门禁项</th>
+                <th>样本来源</th>
+                <th>评分器</th>
+                <th>失败动作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>目标能力</td>
+                <td>近期真实任务</td>
+                <td>自动评分 + judge</td>
+                <td>回看是否真有提升</td>
+              </tr>
+              <tr>
+                <td>保护能力</td>
+                <td>固定回归集</td>
+                <td>单元规则 / 人工抽检</td>
+                <td>阻止发布并回退</td>
+              </tr>
+              <tr>
+                <td>安全项</td>
+                <td>高风险样本</td>
+                <td>拒答分类器 + 规则</td>
+                <td>转人工或关闭入口</td>
+              </tr>
+              <tr>
+                <td>运行项</td>
+                <td>线上监控</td>
+                <td>阈值告警</td>
+                <td>限流、熔断、回滚</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>这个模板的好处是，它把“要不要发”变成“哪一项先失败”。这样写出来的门禁才会真的能执行，而不是停在口号。</p>
+        </div>
+        <div class="box">
+          <h3>判分工作流：从一个样本到一次决策</h3>
+          <p>场景可以再具体一点。假设客服助手在一个样本上被 judge 判成 A 更好，但投诉里说 A 其实承诺了不存在的补偿。此时不要争论“到底谁对”，而要把样本沿着固定工作流走完：先锁定输入，再匿名化回答，再交换顺序复判，最后把结果和回归集、投诉样本一起比对。</p>
+          <table class="metric-table">
+            <thead>
+              <tr>
+                <th>步骤</th>
+                <th>读取什么</th>
+                <th>写回什么</th>
+                <th>错了会怎样</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>固定样本</td>
+                <td>原始用户输入与任务说明</td>
+                <td>样本 hash、版本号</td>
+                <td>题库变化会伪装成模型进步</td>
+              </tr>
+              <tr>
+                <td>匿名回答</td>
+                <td>两个候选答案</td>
+                <td>A/B 标识隐藏</td>
+                <td>judge 受版本预期影响</td>
+              </tr>
+              <tr>
+                <td>交换顺序</td>
+                <td>同一对回答再评一次</td>
+                <td>位置偏差结果</td>
+                <td>先后顺序决定胜负</td>
+              </tr>
+              <tr>
+                <td>对照回归集</td>
+                <td>固定保护样本</td>
+                <td>回归差值</td>
+                <td>旧能力悄悄掉了还不知道</td>
+              </tr>
+              <tr>
+                <td>人工抽检</td>
+                <td>冲突样本和高风险样本</td>
+                <td>复核结论</td>
+                <td>高损害错误被平均分盖过去</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="codebar"><span>review-flow</span></div>
+          <pre><code>1. 固定样本与版本
+2. 记录 judge 输入
+3. 交换 A/B 顺序复判
+4. 对照回归集和失败集
+5. 对高风险样本做人工复核
+6. 再决定是否能进门禁</code></pre>
+          <p>这六步的核心不是形式，而是顺序。只要某一步没有证据，你就不能把它硬拼成“可以发布”。评测系统的价值就在这里：它把模糊争论变成可以回看的证据链。</p>
+        </div>
+        <div class="box warn">
+          <h3>你现在应该能做什么</h3>
+          <p>从自己的实验里挑一个失败样本，按这六步写出判断链。写的时候别只写结论，要把“样本有没有变、judge 有没有偏、回归集有没有固定、人工复核有没有介入”都写出来。写完后你就能更快发现，是模型真的变了，还是评测流程自己变了。</p>
+        </div>
+      </section>
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">20 题混合练习</span>
+        </div>
+        <div class="practice-intro">
+          <div class="review-card">
+            <strong>作答目标</strong>
+            <p>练习不是背术语，而是能为一次后训练实验写出评测计划：该测什么、怎么测、怎么防 judge 偏差、怎么判断能否发布。</p>
+          </div>
+          <div class="review-card">
+            <strong>检查重点</strong>
+            <p>每个开放题尽量按“对象 → 风险 → 检查方法 → 失败后动作”回答。</p>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>一、概念辨析</h3>
+              <p>确认你能分清评测系统里的对象。</p>
+            </div>
+            <div class="quick-review">
+              <b>答题提醒</b>
+              <span>先判断任务是否有确定答案，再决定是否需要 judge。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q1" data-group="一、概念辨析" data-title="哪个任务最适合优先使用确定性评分？" data-answer="B" data-explain="有明确机器可验规则时，先用确定性评分，judge 留给开放答案。">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">评分器选择</span></div>
+              <h3>哪个任务最适合优先使用确定性评分？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q1" value="A">A. 判断一篇文章是否“有感染力”</label>
+                <label><input type="radio" name="q1" value="B">B. 判断模型输出的 JSON 是否符合 schema</label>
+                <label><input type="radio" name="q1" value="C">C. 判断两个客服回复哪个更自然</label>
+              </div>
+              <p class="hint">有明确机器可验规则时，不要先请 judge。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q" data-question="q2" data-group="一、概念辨析" data-title="Benchmark 分数可以直接代表产品质量。" data-answer="false" data-explain="基准分数只是固定题库上的表现，不能直接替代真实产品质量。">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">边界</span></div>
+              <h3>Benchmark 分数可以直接代表产品质量。</h3>
+              <label><input type="radio" name="q2" value="true">对</label>
+              <label><input type="radio" name="q2" value="false">错</label>
+              <p class="hint">想想真实用户分布、产品边界和风险样本。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q short" data-question="q3" data-group="一、概念辨析" data-title="填空：回归测试主要保护的是模型的什么？" data-answer="已知能力|历史修复|安全边界" data-answer-mode="any" data-explain="回归测试保护的是已经修好的能力、历史失败点和关键安全边界。">
+              <div class="q-meta"><span class="pill">填空</span><span class="pill">回归</span></div>
+              <h3>填空：回归测试主要保护的是模型的什么？</h3>
+              <input type="text" name="q3" data-answer="已知能力,历史修复,安全边界" placeholder="例如：已知能力 / 历史修复 / 安全边界">
+              <p class="hint">不是只证明新能力上涨。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q" data-question="q4" data-group="一、概念辨析" data-title="下列哪个更像判别器而不是生成模型？" data-answer="B" data-explain="判别器输出类别、标签或分数，不负责生成下一轮内容。">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">判别器</span></div>
+              <h3>下列哪个更像判别器而不是生成模型？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q4" value="A">A. 根据对话生成下一轮回复</label>
+                <label><input type="radio" name="q4" value="B">B. 判断输出是否包含隐私泄露风险标签</label>
+                <label><input type="radio" name="q4" value="C">C. 把短文扩写成长文</label>
+              </div>
+              <p class="hint">判别器输出类别、标签或分数。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q" data-question="q5" data-group="一、概念辨析" data-title="能力折损只会发生在强化学习阶段。" data-answer="false" data-explain="能力折损在 SFT、DPO 和 RL 中都可能出现，因为任何后训练都会改变输出分布。">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">能力折损</span></div>
+              <h3>能力折损只会发生在强化学习阶段。</h3>
+              <label><input type="radio" name="q5" value="true">对</label>
+              <label><input type="radio" name="q5" value="false">错</label>
+              <p class="hint">SFT 和 DPO 也会改变输出分布。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q full" data-question="q6" data-group="一、概念辨析" data-title="用 3 句话区分自动评测、judge 和人工抽检。">
+              <div class="q-meta"><span class="pill">解释</span><span class="pill">术语</span></div>
+              <h3>用 3 句话区分自动评测、judge 和人工抽检。</h3>
+              <textarea name="q6" placeholder="分别说明它们在评测系统中的作用。"></textarea>
+              <p class="solve-note">脚手架：自动评测是流程；judge 是评分器之一；人工抽检用于校准和复核。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>二、Judge 设计</h3>
+              <p>把“让模型打分”改写成可复用的 judge 规格。</p>
+            </div>
+            <div class="quick-review">
+              <b>答题提醒</b>
+              <span>好的 judge 设计要包含 rubric、输出格式、偏差控制和校准样本。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q7" data-group="二、Judge 设计" data-title="Pairwise judge 最需要控制哪类偏差？" data-answer="A" data-explain="pairwise 先后顺序变化会影响 judge 结论，所以必须控制位置偏差。">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">偏差控制</span></div>
+              <h3>Pairwise judge 最需要控制哪类偏差？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q7" value="A">A. 位置偏差</label>
+                <label><input type="radio" name="q7" value="B">B. 文件扩展名偏差</label>
+                <label><input type="radio" name="q7" value="C">C. GPU 显存偏差</label>
+              </div>
+              <p class="hint">如果 A/B 交换后结论变了，就说明有问题。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q" data-question="q8" data-group="二、Judge 设计" data-title="Judge 的 reason 字段越长越好。" data-answer="false" data-explain="reason 字段要足以复盘，但不能把解释写成噪声。">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">输出格式</span></div>
+              <h3>Judge 的 reason 字段越长越好。</h3>
+              <label><input type="radio" name="q8" value="true">对</label>
+              <label><input type="radio" name="q8" value="false">错</label>
+              <p class="hint">评测输出要服务聚合和复盘，不能让解释本身变成噪声。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q short" data-question="q9" data-group="二、Judge 设计" data-title="填空：为避免 pairwise 位置偏差，应对 A/B 做什么？" data-answer="交换顺序|对调顺序|顺序复判" data-answer-mode="any" data-explain="pairwise 题目要交换 A/B 顺序复判，才能看出位置偏差。">
+              <div class="q-meta"><span class="pill">填空</span><span class="pill">偏差控制</span></div>
+              <h3>填空：为避免 pairwise 位置偏差，应对 A/B 做什么？</h3>
+              <input type="text" name="q9" data-answer="交换顺序,对调顺序,顺序复判" placeholder="例如：交换顺序复判">
+              <p class="hint">不是只随机一次。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q" data-question="q10" data-group="二、Judge 设计" data-title="事实核验 judge 应尽量只使用给定证据。" data-answer="true" data-explain="事实核验 judge 不能自由补世界知识，否则会把外部常识混进证据判断。">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">证据约束</span></div>
+              <h3>事实核验 judge 应尽量只使用给定证据。</h3>
+              <label><input type="radio" name="q10" value="true">对</label>
+              <label><input type="radio" name="q10" value="false">错</label>
+              <p class="hint">否则 judge 可能用自身世界知识替模型补洞。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q full" data-question="q11" data-group="二、Judge 设计" data-title="为摘要任务写一个三条 rubric。">
+              <div class="q-meta"><span class="pill">设计</span><span class="pill">Rubric</span></div>
+              <h3>为摘要任务写一个三条 rubric。</h3>
+              <textarea name="q11" placeholder="例如：覆盖要点、不能编造、长度约束……"></textarea>
+              <p class="solve-note">脚手架：每条 rubric 都应该能在输出里被观察，而不是抽象地说“质量高”。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q12" data-group="二、Judge 设计" data-title="诊断这个 judge 提示的问题。">
+              <div class="q-meta"><span class="pill">错误诊断</span><span class="pill">Judge</span></div>
+              <h3>诊断这个 judge 提示的问题。</h3>
+              <p><code>请判断新模型回答是否比旧模型好。新模型是 A，旧模型是 B。请尽量支持新模型。</code></p>
+              <textarea name="q12" placeholder="指出至少 3 个问题，并给出修法。"></textarea>
+              <p class="solve-note">脚手架：关注版本泄露、期望诱导、缺少 rubric、缺少 tie 和输出格式。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q13" data-group="二、Judge 设计" data-title="什么时候 judge 结果必须进入人工复核？">
+              <div class="q-meta"><span class="pill">解释</span><span class="pill">人工抽检</span></div>
+              <h3>什么时候 judge 结果必须进入人工复核？</h3>
+              <textarea name="q13" placeholder="列出 3-5 种场景。"></textarea>
+              <p class="solve-note">脚手架：低置信、A/B 交换冲突、关键风险、线上事故样本、校准集不一致。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>三、回归检查与发布决策</h3>
+              <p>练习把分数转成发布门禁。</p>
+            </div>
+            <div class="quick-review">
+              <b>答题提醒</b>
+              <span>平均分提升不等于可以发布，关键保护指标不能被平均掉。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q14" data-group="三、回归检查与发布决策" data-title="目标能力 +4，数学 -3，安全 0。按本页默认门禁应发布吗？" data-answer="B" data-explain="目标能力上涨不能抵消数学回退超过阈值这一硬门禁。">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">门禁</span></div>
+              <h3>目标能力 +4，数学 -3，安全 0。按本页默认门禁应发布吗？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q14" value="A">A. 可以，因为平均看起来上涨</label>
+                <label><input type="radio" name="q14" value="B">B. 不可以，因为数学回退超过阈值</label>
+                <label><input type="radio" name="q14" value="C">C. 必须发布，因为目标能力达标</label>
+              </div>
+              <p class="hint">保护指标是硬门禁。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q" data-question="q15" data-group="三、回归检查与发布决策" data-title="回归集可以每次发布前全部换新，以保持新鲜。" data-answer="false" data-explain="回归集要保留固定核心样本，否则趋势比较会失真。">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">测试集维护</span></div>
+              <h3>回归集可以每次发布前全部换新，以保持新鲜。</h3>
+              <label><input type="radio" name="q15" value="true">对</label>
+              <label><input type="radio" name="q15" value="false">错</label>
+              <p class="hint">趋势比较需要固定核心集。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q short" data-question="q16" data-group="三、回归检查与发布决策" data-title="填空：线上事故样本应加入哪类测试集？" data-answer="历史失败集|回归集" data-answer-mode="any" data-explain="线上事故样本应该回流到历史失败集或回归集，防止同类 bug 再出现。">
+              <div class="q-meta"><span class="pill">填空</span><span class="pill">历史失败</span></div>
+              <h3>填空：线上事故样本应加入哪类测试集？</h3>
+              <input type="text" name="q16" data-answer="历史失败集,回归集" placeholder="例如：历史失败集 / 回归集">
+              <p class="hint">目的不是惩罚模型，而是防止同类问题再次出现。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q" data-question="q17" data-group="三、回归检查与发布决策" data-title="DPO 后拒答率上升一定是好事。" data-answer="false" data-explain="要区分危险请求拒答和正常请求误拒，拒答率上升不必然是好事。">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">过拒</span></div>
+              <h3>DPO 后拒答率上升一定是好事。</h3>
+              <label><input type="radio" name="q17" value="true">对</label>
+              <label><input type="radio" name="q17" value="false">错</label>
+              <p class="hint">要区分危险请求拒答和正常请求误拒。</p>
+              <button class="check" type="button">检查</button>
+              <div class="feedback" aria-live="polite"></div>
+            </div>
+
+            <div class="q full" data-question="q18" data-group="三、回归检查与发布决策" data-title="设计一个 SFT 后的回归测试矩阵。">
+              <div class="q-meta"><span class="pill">设计</span><span class="pill">能力面</span></div>
+              <h3>设计一个 SFT 后的回归测试矩阵。</h3>
+              <textarea name="q18" placeholder="选择一个场景，如客服、代码助手、学习助手。列出 4 个能力面、样本来源、评分器和阈值。"></textarea>
+              <p class="solve-note">脚手架：至少包含目标能力、一个非目标核心能力、一个安全边界、一个格式/执行检查。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q19" data-group="三、回归检查与发布决策" data-title="给一次 RL 后奖励投机现象设计排查路径。">
+              <div class="q-meta"><span class="pill">迁移</span><span class="pill">Reward Hacking</span></div>
+              <h3>给一次 RL 后奖励投机现象设计排查路径。</h3>
+              <textarea name="q19" placeholder="例如：模型学会输出更长解释骗过 judge，但真实正确率下降。"></textarea>
+              <p class="solve-note">脚手架：从失败样本、奖励函数、judge 偏差、采样策略、人工复核和训练回退说起。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q20" data-group="三、回归检查与发布决策" data-title="综合解释：把本单元讲成一个闭环。">
+              <div class="q-meta"><span class="pill">综合解释</span><span class="pill">Feynman</span></div>
+              <h3>综合解释：把本单元讲成一个闭环。</h3>
+              <textarea name="q20" placeholder="用 150-250 字解释：为什么后训练需要 judge、自动评测和回归测试一起工作？"></textarea>
+              <p class="solve-note">脚手架：按“后训练会改变行为 → 评测集固定输入 → judge/规则评分 → 聚合报告 → 回归门禁 → 人工抽检校准”组织。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考</summary>
+                <p>对照本节内容检查答案。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">Practice Record</span>
+        </div>
+        <p>完成练习后生成记录。记录会保留题目、分组和你的回答，便于之后复盘。</p>
+        <div class="quality" id="quality"></div>
+        <div class="answer" id="record">尚未生成练习记录。</div>
+        <div class="actions">
+          <button class="ghost" type="button" onclick="generateRecord()">生成练习记录</button>
+          <button type="button" onclick="copyRecord()">复制</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+          <li><a href="https://huggingface.co/docs/trl/index">Hugging Face TRL 文档</a>。访问于 2026-06-22，用来确认后训练语境里的评测、judge 和模型输出的常见说法。</li>
+          <li><a href="https://github.com/huggingface/alignment-handbook">Hugging Face Alignment Handbook</a>。访问于 2026-06-22，用来确认评测不是后处理，而是配方的一部分。</li>
+          <li><a href="https://www.nist.gov/itl/ai-risk-management-framework">NIST AI Risk Management Framework</a>。访问于 2026-06-22，用来整理风险、治理、测量和监控的关系。</li>
+          <li><a href="https://owasp.org/www-project-top-10-for-large-language-model-applications/">OWASP Top 10 for LLM Applications</a>。访问于 2026-06-22，用来组织幻觉、越权、注入和泄露等风险类别。</li>
+          <li><a href="../index.html">本课程地图</a>。这页在课程里负责把后训练后的评测和回归门禁立住，再把发布边界接上。</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+
+  </body>
+</html>

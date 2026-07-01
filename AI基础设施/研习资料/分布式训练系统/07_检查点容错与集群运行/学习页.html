@@ -1,0 +1,929 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>检查点、容错与集群运行</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="分布式训练系统" data-unit="07｜检查点、容错与集群运行">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>分布式训练系统</strong>
+        <span>07｜检查点、容错与集群运行</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#checkpoint-ledger"><span class="dot"></span>状态账本</a>
+        <a href="#save-flow"><span class="dot"></span>保存链路</a>
+        <a href="#reshard"><span class="dot"></span>重新分片</a>
+        <a href="#async-publish"><span class="dot"></span>异步保存</a>
+        <a href="#bridge"><span class="dot"></span>代码桥接</a>
+        <a href="#failure-lab"><span class="dot"></span>故障实验</a>
+        <a href="#boundary"><span class="dot"></span>这里先不追</a>
+        <a href="#mistakes"><span class="dot"></span>常见错误</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先看状态账本，再看发布顺序。checkpoint 真正要交付的是可恢复的训练状态，不是一个看起来写完的目录。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">checkpoint / resume / 容错</div>
+          <h1>检查点、容错与集群运行</h1>
+          <p>这一页接着 06 往下走，把“训练状态很大”变成“checkpoint 怎么保存、怎么恢复、怎么证明恢复正确”。重点不在单次 <code>torch.save</code>，而在临时目录、分片状态、原子发布和恢复验证这一整条链。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../06_激活检查点混合精度与优化器状态/学习页.html">上一单元</a><a href="../08_训练系统选型与实验阅读/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页，你能做这三件事</h3>
+          <ul>
+  <li>能列出 checkpoint 至少要保存哪些状态，并说明为什么只存权重不够。</li>
+  <li>能看懂 DCP / FSDP2 / Megatron Core 的分片保存、load-time resharding 和恢复边界。</li>
+  <li>能按“临时目录 -> 完成标记 -> 原子发布 -> 恢复冒烟测试”排查半成品 checkpoint 和恢复失败。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goal</span>
+  </div>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>把 checkpoint 当成训练状态</h3>
+      <p>这一页先把“保存模型文件”改成“保存一轮训练继续所需的状态”。模型、优化器、scheduler、step、随机数、数据游标和并行元数据都要放进同一张账本里看。</p>
+    </div>
+    <div class="box info">
+      <h3>把恢复当成新拓扑输入</h3>
+      <p>World size 变了、rank 编排变了、分片形状变了，都不自动等于失败。DCP 和 FSDP2 允许按新的执行环境重新分片，但前提是状态语义没有丢。</p>
+    </div>
+    <div class="box warn">
+      <h3>把发布当成一笔事务</h3>
+      <p>checkpoint 不该在一半写完时就被当成最新版本。先写临时目录，再提交完成标记，最后原子更新可见入口，这条顺序要比 API 名字更重要。</p>
+    </div>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">route</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <p>06 单元已经把激活检查点、混合精度和优化器状态讲清了。这一页继续往前走，不再停在“显存怎么省”，而是看省下来的训练状态怎么安全落盘、怎么恢复、怎么迁移到新拓扑。</p>
+      <p>PyTorch Distributed Checkpoint 适合说明分布式 <code>state_dict</code> 的保存和加载；FSDP2 说明参数、梯度和优化器状态本来就是分片的；Megatron Core 进一步把分片 checkpoint、distributed optimizer 和对象存储策略放进同一套运行方式里。</p>
+    </div>
+    <div class="box info">
+      <h3>这一页要回答的四个问题</h3>
+      <ul>
+        <li>恢复训练时，到底哪些状态不能丢。</li>
+        <li>分片 checkpoint 为什么能换 world size 继续读。</li>
+        <li>异步保存为什么能降停顿，却不能替代原子发布。</li>
+        <li>恢复成功后，应该怎么做最小冒烟验证。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="checkpoint-ledger">
+  <div class="head">
+    <h2>状态账本</h2>
+    <span class="tag">ledger</span>
+  </div>
+  <p>这张账本比“checkpoint 里要存什么”更有用。它直接告诉你每个对象在保存前是什么、保存后变成什么、读了谁、写了谁、错位时先出现什么症状。</p>
+  <div class="table-wrap">
+    <table data-export-context="checkpoint 状态账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>保存前状态</th>
+          <th>保存后状态</th>
+          <th>读取</th>
+          <th>写入 / 变更</th>
+          <th>错位症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>模型参数</td>
+          <td>分布在 rank 上，可能是 sharded state_dict</td>
+          <td>进入 checkpoint 分片或全量布局</td>
+          <td>模型结构、参数名、分片映射</td>
+          <td>权重值、tensor shard、布局元数据</td>
+          <td>能载入文件，但层名或形状不对</td>
+        </tr>
+        <tr>
+          <td>优化器状态</td>
+          <td>和参数对应，可能还分散在 DP rank 上</td>
+          <td>成为可恢复的 optimizer shard</td>
+          <td>参数分片、参数组、动量历史</td>
+          <td><code>exp_avg</code>、<code>exp_avg_sq</code>、主参数 shard</td>
+          <td>权重能恢复，继续训练时曲线像重新开始</td>
+        </tr>
+        <tr>
+          <td>scheduler / step</td>
+          <td>记录在训练循环里，常被忽略</td>
+          <td>和 checkpoint 一起发布</td>
+          <td>当前 step、warmup、decay 进度</td>
+          <td>学习率轨迹、全局步数</td>
+          <td>恢复后学习率突然跳回初始段</td>
+        </tr>
+        <tr>
+          <td>随机数与采样游标</td>
+          <td>分散在 dataloader、sampler、CUDA RNG、dropout</td>
+          <td>恢复后可重放同一段训练轨迹</td>
+          <td>RNG 状态、样本游标、epoch</td>
+          <td>游标位置、随机数种子</td>
+          <td>样本重复、样本跳过、dropout 轨迹变化</td>
+        </tr>
+        <tr>
+          <td>并行元数据</td>
+          <td>TP / PP / DP / CP / EP 拓扑已存在</td>
+          <td>保存成能描述布局的元数据</td>
+          <td>world size、mesh、分片策略</td>
+          <td>恢复时的重新分片规则</td>
+          <td>文件能开，恢复到新拓扑时语义错位</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="save-flow">
+  <div class="head">
+    <h2>保存链路</h2>
+    <span class="tag">flow</span>
+  </div>
+  <p>真正可靠的 checkpoint 不是“写完目录”这么简单，而是一个小事务：先把状态写进临时位置，再确认它完整，最后才把它变成对外可见的最新版本。这个顺序比文件名更重要。</p>
+  <div class="shape-tracer" data-shape-tracer data-export-context="checkpoint 保存生命周期" data-export-lang="text">
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1" type="button"><code>live_state</code><span>训练中状态</span></button>
+      <button class="trace-line" data-trace-step="step-2" type="button"><code>tmp_dir</code><span>临时 checkpoint</span></button>
+      <button class="trace-line" data-trace-step="step-3" type="button"><code>commit</code><span>完成标记与 latest</span></button>
+      <button class="trace-line" data-trace-step="step-4" type="button"><code>resume</code><span>恢复后的状态</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1"><b>训练中状态</b><span>读写都在进行</span><p>参数、优化器、RNG 和数据游标都还在不断变。此时的状态不能直接拿来做发布，因为它还没有被整理成一个完整的恢复点。</p></div>
+      <div class="tensor-card" data-trace-target="step-2"><b>临时目录</b><span>先写后看</span><p>保存动作先落到一个不会被外部当成最新版本的目录里。这样即使任务中途被杀掉，外部也不会误把半成品当真。</p></div>
+      <div class="tensor-card" data-trace-target="step-3"><b>完成标记</b><span>再公开</span><p>确认分片文件、元数据和策略文件都齐了，再更新 <code>latest</code> 或等价入口。这个动作应该尽量原子化。</p></div>
+      <div class="tensor-card" data-trace-target="step-4"><b>恢复后的状态</b><span>回到训练</span><p>加载端拿着新的 world size、并行组和 state_dict 重新装配训练状态。能回到这一步，才算 checkpoint 真正可用。</p></div>
+    </div>
+  </div>
+  <div class="codebar"><span>checkpoint 事务骨架</span></div>
+  <pre data-export-context="checkpoint 事务骨架" data-export-lang="python"><code class="language-python">tmp_dir = save_dir + ".tmp"
+save_dcp(state_dict=model_and_optim, storage=tmp_dir)
+write_manifest(tmp_dir, step=current_step, rng=rng_state)
+verify_checkpoint(tmp_dir)
+publish_latest_atomically(tmp_dir, save_dir)</code></pre>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>这段骨架读什么</h3>
+      <p>先读训练状态，再读临时目录，再读 manifest，最后才发布。只要“验证”和“发布”之间被打断，恢复端就可能把半成品看成正式版本。</p>
+    </div>
+    <div class="box info">
+      <h3>这段骨架写什么</h3>
+      <p>写进去的不只是 tensor，还包括恢复需要的步数、随机状态和布局信息。最常见的错误是只写权重，把其他状态留在进程里。</p>
+    </div>
+  </div>
+</section>
+
+<section id="reshard">
+  <div class="head">
+    <h2>重新分片</h2>
+    <span class="tag">reshard</span>
+  </div>
+  <p>PyTorch DCP 和 FSDP2 最有用的一点，是它们允许恢复时使用和保存时不同的执行拓扑。前提是你保存的是分布式语义，而不是某个 rank 的私有布局。</p>
+  <div class="table-wrap">
+    <table data-export-context="DCP 与 FSDP2 重新分片矩阵" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>场景</th>
+          <th>保存时</th>
+          <th>恢复时</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>先验判断</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>同 world size 恢复</td>
+          <td>分片 state_dict</td>
+          <td>同一拓扑</td>
+          <td>模型名、参数名、分片切法</td>
+          <td>原样恢复参数和优化器状态</td>
+          <td>最容易验证，但不能证明迁移能力</td>
+        </tr>
+        <tr>
+          <td>不同 world size 恢复</td>
+          <td>分片 state_dict</td>
+          <td>新的 rank 数</td>
+          <td>逻辑参数、加载策略、reshard 规则</td>
+          <td>按新拓扑重切 shard</td>
+          <td>如果语义保存对了，就能继续训练</td>
+        </tr>
+        <tr>
+          <td>FSDP2 fully_shard</td>
+          <td>模型在 forward/backward 外 fully sharded</td>
+          <td>重新装配可执行模型</td>
+          <td>FQNs、state_dict 结构、模块层级</td>
+          <td>参数、梯度和优化器状态的恢复布局</td>
+          <td>要先确认不是把全量权重当成分片权重</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>DCP / FSDP2 读写顺序</span></div>
+  <pre data-export-context="DCP 与 FSDP2 读写顺序" data-export-lang="python"><code class="language-python"># 概念骨架：先拿到分布式 state_dict，再交给 DCP 处理。
+state = {"model": model, "optim": optimizer, "step": step}
+save(state, checkpoint_id)
+
+# 恢复时不是直接替换对象，而是把状态写回已有对象。
+loaded = load(checkpoint_id)
+load_state_dict(model, loaded["model"])
+load_state_dict(optimizer, loaded["optim"])</code></pre>
+  <div class="box warn">
+    <h3>这里的关键句</h3>
+    <p><code>state_dict()</code> 的名字没有变，但背后的布局已经不是单卡时代那套了。FSDP2 里，分片是默认语义的一部分；DCP 做的是把这套语义保存得能被新拓扑读回来。</p>
+  </div>
+</section>
+
+<section id="async-publish">
+  <div class="head">
+    <h2>异步保存与发布</h2>
+    <span class="tag">async</span>
+  </div>
+  <p>异步保存只解决一件事：让前台训练少等一会儿。它不自动解决“这个 checkpoint 什么时候算正式可用”。所以异步保存要和完成标记、版本发布、失败回收一起看。</p>
+  <div class="table-wrap">
+    <table data-export-context="异步保存与发布策略" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>阶段</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>是否可恢复</th>
+          <th>坏了之后的症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>启动 async_save</td>
+          <td>当前训练状态</td>
+          <td>后台保存任务、写桶计划</td>
+          <td>还不能对外发布</td>
+          <td>训练没被卡住，但目录还没完成</td>
+        </tr>
+        <tr>
+          <td>后台落盘</td>
+          <td>分片张量、common state</td>
+          <td>checkpoint 文件与元数据</td>
+          <td>等验证通过才算</td>
+          <td>如果被中断，最新入口可能指向半成品</td>
+        </tr>
+        <tr>
+          <td>完成发布</td>
+          <td>完整性检查结果</td>
+          <td><code>latest</code> 或等价指针</td>
+          <td>对外可恢复</td>
+          <td>指针比内容先更新时，恢复会读到坏目录</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>发布前检查清单</span></div>
+  <pre data-export-context="checkpoint 发布检查清单" data-export-lang="text"><code class="language-text">1. 分片文件都写完了吗
+2. common state / 元数据都齐了吗
+3. 保存的 step、RNG、调度器状态是否和训练步对齐
+4. 恢复时是否还支持当前 world size
+5. latest 是否只在验证后更新</code></pre>
+  <div class="box info">
+    <h3>Megatron Core 的对应点</h3>
+    <p>Megatron Core 的 <code>filesystem_async</code> 策略把“怎样得到保存函数”和“怎样异步执行保存”拆开。你真正要检查的是：写桶、验证、发布三个阶段有没有被放进正确的顺序。</p>
+  </div>
+</section>
+
+<section id="recovery-drill">
+  <div class="head">
+    <h2>恢复演练</h2>
+    <span class="tag">case</span>
+  </div>
+  <p>把 checkpoint 的逻辑放到一个具体场景里，最容易看出哪里真的会错。下面这个例子故意选得不算极端：保存时 64 张卡，恢复时只能用 32 张卡；保存端用了分片状态，恢复端要按新的拓扑重新装配。这不是异常情况，而是训练集群里很常见的迁移。</p>
+  <p>这个场景里，最先不能丢的是模型参数和优化器状态，最先不能乱的是 step 和学习率。要是你只盯着权重文件，恢复后可能照样能前向，但训练轨迹已经变了。真正该检查的，是保存端有没有把“谁持有什么 shard”以及“当前训练走到哪一步”同时写进去。</p>
+  <div class="table-wrap">
+    <table data-export-context="checkpoint 恢复演练表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>恢复动作</th>
+          <th>保存时看到什么</th>
+          <th>恢复时得到什么</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>如果省掉这步会怎样</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>读 manifest</td>
+          <td>step、world size、分片策略、RNG 快照</td>
+          <td>知道这份 checkpoint 属于哪一轮训练</td>
+          <td>版本、入口、元数据路径</td>
+          <td>恢复计划和校验策略</td>
+          <td>目录能打开，但不知道该按什么语义恢复</td>
+        </tr>
+        <tr>
+          <td>加载分片 state_dict</td>
+          <td>参数和优化器都以 shard 形式存在</td>
+          <td>新 world size 下的可执行对象</td>
+          <td>模型结构、参数名、分片切法</td>
+          <td>新布局下的模型和 optimizer 状态</td>
+          <td>文件能读，训练却和旧拓扑绑死</td>
+        </tr>
+        <tr>
+          <td>恢复 scheduler / step</td>
+          <td>学习率曲线和全局步数一起保存</td>
+          <td>恢复后从正确的学习率位置继续</td>
+          <td>global step、warmup、decay 位置</td>
+          <td>下一步的 LR 和日志起点</td>
+          <td>看起来恢复了，其实像重新启动</td>
+        </tr>
+        <tr>
+          <td>最小冒烟测试</td>
+          <td>checkpoint 已经存在且完整</td>
+          <td>确认能继续训练而不是只会加载</td>
+          <td>首个 batch 的 loss、step、LR、样本位置</td>
+          <td>验证结果和告警状态</td>
+          <td>文件没坏，但训练语义可能已经漂了</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>恢复时的检查顺序</span></div>
+  <pre data-export-context="checkpoint 恢复检查顺序" data-export-lang="text"><code class="language-text">1. 先读 manifest 和完成标记，确认这是完整版本
+2. 再加载分片 state_dict，确认模型和 optimizer 都能写回
+3. 接着恢复 scheduler、step 和 RNG
+4. 最后跑一个 batch 的冒烟测试，看 loss 和 LR 是否对齐</code></pre>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>这条链怎么和前面接上</h3>
+      <p>前面的“保存链路”解决的是怎么把状态安全写出去；这里的“恢复演练”解决的是怎么把状态安全读回来。两边的关键字不一样，但顺序是对称的：先确认语义，再确认布局，最后确认训练行为。</p>
+    </div>
+    <div class="box info">
+      <h3>为什么这个例子够用</h3>
+      <p>它同时暴露了三类问题：保存格式问题、拓扑迁移问题和训练语义问题。只看其中一类，都会让你误以为 checkpoint 已经“差不多能用”。</p>
+    </div>
+  </div>
+</section>
+
+<section id="post-check">
+  <div class="head">
+    <h2>发布后复查</h2>
+    <span class="tag">verify</span>
+  </div>
+  <p>checkpoint 真正上线以后，还要过一遍复查。复查的对象不是“文件还在不在”，而是“这份目录是不是我们想要的那一版”。最常见的错误，是目录已经完整了，但 step、world size、分片数或者 manifest 版本跟当前训练不一致。</p>
+  <p>这一步的目标很简单：把“能打开”升级成“能继续训练，而且知道自己在继续哪一轮”。如果你已经恢复出了模型，却还没确认样本游标和学习率曲线，那只能说这份 checkpoint 读进来了，还不能说它可运营。</p>
+  <div class="table-wrap">
+    <table data-export-context="checkpoint 发布后复查表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>复查动作</th>
+          <th>读取对象</th>
+          <th>写回对象</th>
+          <th>如果对不上会看到什么</th>
+          <th>下一步怎么做</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>核对 manifest</td>
+          <td>step、world size、分片策略、版本号</td>
+          <td>复查结果和告警状态</td>
+          <td>目录看着完整，但不知道是不是正确版本</td>
+          <td>先把这份 checkpoint 标成待确认，不要继续覆盖它</td>
+        </tr>
+        <tr>
+          <td>核对首个 batch</td>
+          <td>loss、LR、RNG、样本游标</td>
+          <td>冒烟测试结果</td>
+          <td>模型能跑，但 loss 或 LR 不在预期位置</td>
+          <td>回到 scheduler 和数据游标查恢复链路</td>
+        </tr>
+        <tr>
+          <td>核对分片数</td>
+          <td>当前 world size 与保存时 shard 布局</td>
+          <td>重新分片后的布局</td>
+          <td>加载不报错，但某些 rank 的 shard 分布不均</td>
+          <td>回到 DCP / FSDP2 的 reshard 规则复核</td>
+        </tr>
+        <tr>
+          <td>核对回滚点</td>
+          <td>上一个完整 checkpoint 的路径</td>
+          <td>恢复入口</td>
+          <td>坏目录被误当作最新版本</td>
+          <td>把 latest 指回上一个确认完成的版本</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>复查脚本骨架</span></div>
+  <pre data-export-context="checkpoint 发布后复查骨架" data-export-lang="python"><code class="language-python">def verify_checkpoint_dir(path, expected_step, expected_world_size):
+    manifest = read_manifest(path)
+    assert manifest["step"] == expected_step
+    assert manifest["world_size"] == expected_world_size
+    assert manifest["status"] == "complete"
+    step, lr, loss = run_one_batch_smoke_test(path)
+    return {
+        "step_ok": step == expected_step + 1,
+        "lr_ok": lr_matches_schedule(lr),
+        "loss_ok": loss_is_reasonable(loss),
+    }</code></pre>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>这段复查链的作用</h3>
+      <p>它把“看目录”变成“看语义”。如果只看文件存在与否，你会漏掉版本漂移、分片漂移和学习率漂移；如果连一个 batch 都不跑，你也发现不了恢复后轨迹已经变了。</p>
+    </div>
+    <div class="box info">
+      <h3>复查和下一次保存的关系</h3>
+      <p>复查不是收尾动作，而是下一次保存的前置条件。只有这次 checkpoint 被确认完整，下一轮才有资格把它作为 rollback 点或 latest 基线。</p>
+    </div>
+  </div>
+</section>
+
+<section id="storage-contract">
+  <div class="head">
+    <h2>存储契约</h2>
+    <span class="tag">storage</span>
+  </div>
+  <p>checkpoint 的最后一层，不是某个 API，而是存储契约。你要知道保存端把东西写到哪里，恢复端从哪里找，失败时哪些目录可以删，哪些目录必须保留。对象存储、本地盘、共享文件系统的行为不一样，回滚策略也不能混着写。</p>
+  <p>这也是为什么异步保存不能只看“后台线程在跑”。如果存储契约没有定义清楚，后台跑得再快也只是把错误更快地写出去。对于大模型训练，最值钱的不是一次保存速度，而是你能不能在任务被抢占、节点重启或者版本回退时，快速找到上一版完整状态。</p>
+  <div class="table-wrap">
+    <table data-export-context="checkpoint 存储契约表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>存储后端</th>
+          <th>保存动作</th>
+          <th>恢复动作</th>
+          <th>失败时保留什么</th>
+          <th>失败时清理什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>本地盘</td>
+          <td>先写临时目录，再换 latest</td>
+          <td>从最新完整目录读取</td>
+          <td>上一个完整 checkpoint 和 manifest</td>
+          <td>写到一半的 tmp 目录</td>
+        </tr>
+        <tr>
+          <td>共享文件系统</td>
+          <td>各 rank 协作写分片</td>
+          <td>按 shard 和策略重建布局</td>
+          <td>manifest、common state、分片文件</td>
+          <td>校验失败的半成品 shard</td>
+        </tr>
+        <tr>
+          <td>对象存储</td>
+          <td>写桶、提交元数据、再发布指针</td>
+          <td>从发布点或索引读取</td>
+          <td>完整版本和索引文件</td>
+          <td>未提交的临时对象前缀</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>回滚规则</span></div>
+  <pre data-export-context="checkpoint 回滚规则" data-export-lang="text"><code class="language-text">1. 只回滚到 manifest 标记为 complete 的目录
+2. tmp 目录和写到一半的 shard 可以删
+3. latest 只能在新版本验完后更新
+4. 恢复失败先切回旧版本，再查新的保存链路</code></pre>
+  <div class="box warn">
+    <h3>把契约写清楚，排错才快</h3>
+    <p>一旦你把“哪些目录算正式版本”“哪些目录可以回收”“出错时指针回到哪里”写清楚，后面无论是 DCP、FSDP2 还是 Megatron Core，排错思路都会统一成同一套。</p>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>代码桥接</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <p>这一页最直接的下一步，不是继续背概念，而是去读公开入口：<code>examples/run_simple_mcore_train_loop.py</code> 适合做最小烟测，<code>pretrain_gpt.py</code> 适合看完整训练入口。先用 <code>--help</code> 看保存和恢复参数，再回头对照这页的状态账本。</p>
+  <div class="codebar"><span>先读 help，再看命令</span></div>
+  <pre data-export-context="公开入口桥接命令" data-export-lang="bash"><code class="language-bash">python examples/run_simple_mcore_train_loop.py --help
+python pretrain_gpt.py --help</code></pre>
+  <div class="table-wrap">
+    <table data-export-context="公开入口与排查顺序" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>入口</th>
+          <th>你先看什么</th>
+          <th>它帮你确认什么</th>
+          <th>如果这里不对，后面会坏在哪</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>examples/run_simple_mcore_train_loop.py</code></td>
+          <td>最小训练循环、保存和加载参数</td>
+          <td>checkpoint 事务能不能跑通</td>
+          <td>如果最小例子都不能恢复，别先怪大模型配置</td>
+        </tr>
+        <tr>
+          <td><code>pretrain_gpt.py</code></td>
+          <td>并行度、batch、save/load、调度器</td>
+          <td>完整训练入口是否把 checkpoint 接到主路径</td>
+          <td>参数没接通时，恢复和发布会跟训练主线脱节</td>
+        </tr>
+        <tr>
+          <td><code>dist_checkpointing</code></td>
+          <td>分片格式、common state、策略层</td>
+          <td>保存和加载是不是同一套语义</td>
+          <td>权重能读，不代表优化器状态和布局也能读</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="failure-lab">
+  <div class="head">
+    <h2>故障实验</h2>
+    <span class="tag">lab</span>
+  </div>
+  <p>下面这几个症状最能区分“文件没写完”“状态没保存全”“恢复后拓扑变了”三种情况。先看症状，再看第一检查点，不要一上来就改训练代码。</p>
+  <div class="terminal-lab" data-terminal-lab data-export-context="checkpoint 故障实验" data-export-lang="text">
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1" type="button">latest 指向半成品</button>
+      <button class="ghost" data-terminal-case="case-2" type="button">恢复后 step 跳回去</button>
+      <button class="ghost" data-terminal-case="case-3" type="button">world size 变了</button>
+      <button class="ghost" data-terminal-case="case-4" type="button">rank 0 OOM</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">症状：恢复脚本偶尔读到坏目录。先确认发布是不是先改了 latest，再回头看临时目录和完成标记。</pre>
+    <template data-terminal-output="case-1">症状：恢复脚本偶尔读到坏目录。先确认发布是不是先改了 latest，再回头看临时目录和完成标记。第一检查点：目录里有没有只写了一半的分片文件，manifest 是否已经提交。</template>
+    <template data-terminal-output="case-2">症状：权重能恢复，继续训练时学习率像重新开始。第一检查点：scheduler、global step、warmup / decay 轨迹有没有一起存；如果没存，模型本身没坏，坏的是训练轨迹。</template>
+    <template data-terminal-output="case-3">症状：同一个 checkpoint 在新拓扑下打不开，或者 load 后语义错位。第一检查点：保存的是分布式语义还是某个旧 rank 的私有布局；DCP / FSDP2 的 reshard 规则有没有保留。</template>
+    <template data-terminal-output="case-4">症状：rank 0 保存时先爆显存，其他 rank 还没来得及帮忙。第一检查点：是不是把所有状态都聚到单卡了；改成分布式 checkpoint 或分片保存，先让每个 rank 负责自己的那一段。</template>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>这里先不追</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="grid2">
+    <div class="box info">
+      <h3>先放一边的概念</h3>
+      <p>对象存储的生命周期、调度器的抢占细节、跨版本 checkpoint 迁移、故障注入平台和更细的存储后端都先不追。它们会在更运营化的场景里回来。</p>
+    </div>
+    <div class="box warn">
+      <h3>这一页先追到什么程度</h3>
+      <p>你只要能把“要存什么、怎么存、怎么发布、怎么恢复、恢复后怎么证实”讲成一条链，就算这一页学到了。更细的训练系统选型和实验阅读，留给 08 单元。</p>
+    </div>
+  </div>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见错误</h2>
+    <span class="tag">fixes</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="checkpoint 常见错误与修法" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>错误</th>
+          <th>为什么危险</th>
+          <th>修法</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>只保存模型，不保存优化器 / scheduler / step</td>
+          <td>恢复后动量、二阶矩和学习率轨迹断掉，训练看起来像重新开始。</td>
+          <td>把恢复状态列成清单，保存和加载都按同一份 schema 检查。</td>
+        </tr>
+        <tr>
+          <td>让 rank 0 聚合全量状态再保存</td>
+          <td>大模型下会把内存峰值、通信开销和单点失败一起放大。</td>
+          <td>用 DCP 或 Megatron Core 的分布式 checkpoint，让各 rank 保存自己的 shard。</td>
+        </tr>
+        <tr>
+          <td>异步保存后立刻更新 latest</td>
+          <td>后台还没写完，恢复端就会先撞上半成品。</td>
+          <td>先写临时目录、再做完整性校验、最后原子发布。</td>
+        </tr>
+        <tr>
+          <td>只看文件能不能打开</td>
+          <td>文件能读不代表训练语义正确，step、LR、RNG、数据游标都可能错。</td>
+          <td>恢复后立刻做最小冒烟测试：step 对齐、LR 对齐、样本游标对齐。</td>
+        </tr>
+        <tr>
+          <td>把 load-time resharding 当成自动万灵药</td>
+          <td>它只能在保存语义正确时工作，不能修复模型命名、布局或 optimizer 状态错误。</td>
+          <td>先核对 FSDP2 / DCP 的分布式 state_dict，再谈新的 world size。</td>
+        </tr>
+        <tr>
+          <td>把 Megatron Core checkpoint 当成普通 <code>torch.save</code></td>
+          <td>会漏掉 common state、分片策略和 distributed optimizer 相关布局。</td>
+          <td>按 <code>dist_checkpointing</code> 的语义检查 common / sharded / strategy 三部分。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>作答目标</strong>
+    <p>不要只会背 checkpoint 名字。每题都尽量回答：这一步读什么、写什么、谁和谁通信、错了以后先看哪里。</p>
+  </div>
+  <div class="review-card">
+    <strong>检查重点</strong>
+    <p>检查自己是否能把 checkpoint、恢复、分片、发布和冒烟验证连成一条完整的运行路径。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、概念归位</h3>
+      <p>先确认你不会把 checkpoint、恢复和普通文件保存混成一类。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提醒</b>
+      <span>先分清“要存什么”，再分清“谁负责恢复”。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、概念归位" data-title="最接近完整训练恢复的 checkpoint 是哪一个？" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">state ledger</span></div>
+      <h3>最接近完整训练恢复的 checkpoint 是哪一个？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q1" value="A">A. 只保存模型权重，因为 optimizer 会自动重建。</label>
+        <label><input type="radio" name="q1" value="B">B. 保存模型、优化器、scheduler、step、RNG、数据游标和并行元数据。</label>
+        <label><input type="radio" name="q1" value="C">C. 只保存 loss 最低时的权重，恢复后再从 dataloader 开头重跑。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">想想恢复后的下一次参数更新依赖哪些历史状态。</p>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、概念归位" data-title="判断：异步保存本身就等于 checkpoint 已经可恢复。" data-answer="false">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">publish</span></div>
+      <h3>判断：异步保存本身就等于 checkpoint 已经可恢复。</h3>
+      <label><input type="radio" name="q2" value="true">对</label>
+      <label><input type="radio" name="q2" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">后台保存只是减少阻塞，是否可恢复还要看完整性和发布。</p>
+    </div>
+
+    <div class="q" data-question="q3" data-group="一、概念归位" data-title="保存时 64 卡，加载时 32 卡，加载器按新拓扑读取分片，这更接近哪种说法？" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">reshard</span></div>
+      <h3>保存时 64 卡，加载时 32 卡，加载器按新拓扑读取分片，这更接近哪种说法？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q3" value="A">A. 普通单文件复制。</label>
+        <label><input type="radio" name="q3" value="B">B. load-time resharding / 加载时重新分片。</label>
+        <label><input type="radio" name="q3" value="C">C. 只要改名字就能恢复。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">关键不是文件名字，而是恢复时按新拓扑重新切 shard。</p>
+    </div>
+
+    <div class="q full" data-question="q4" data-group="一、概念归位" data-title="解释为什么 rank 0 聚合全量状态不是大模型 checkpoint 的好方案。">
+      <div class="q-meta"><span class="pill">open</span><span class="pill">memory / io</span></div>
+      <h3>解释为什么 rank 0 聚合全量状态不是大模型 checkpoint 的好方案。</h3>
+      <textarea name="q4" placeholder="从内存、通信、I/O 和单点失败里选 3 点说明。"></textarea>
+      <p class="solve-note">建议结构：先说 rank 0 会承担什么，再说为什么在 FSDP2 / Megatron Core 里会放大，最后给替代方案。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>好的答案会说清楚：rank 0 如果要聚合全量状态，就会背上所有参数、优化器状态和元数据的峰值内存；通信上会把别的 rank 的 shard 都集中到一处，I/O 也会被单点拖慢；一旦 rank 0 出问题，整个 checkpoint 也可能失效。替代方案应该指向分布式 checkpoint、分片保存或由多个 rank 共同完成写出。</p></details>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、流程追踪</h3>
+      <p>把保存和恢复拆成能检查的步骤。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提醒</b>
+      <span>按“输入、动作、输出、后果”组织答案。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q5" data-group="二、流程追踪" data-title="哪个动作最适合防止半成品 checkpoint 被当成最新版本？" data-answer="C">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">atomic publish</span></div>
+      <h3>哪个动作最适合防止半成品 checkpoint 被当成最新版本？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q5" value="A">A. 先把 latest 指向目标目录，再开始写文件。</label>
+        <label><input type="radio" name="q5" value="B">B. 先把训练日志打印完，再决定保存是否成功。</label>
+        <label><input type="radio" name="q5" value="C">C. 先写临时目录，确认完整后再原子更新 latest。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">顺序比文件名更重要。</p>
+    </div>
+
+    <div class="q" data-question="q6" data-group="二、流程追踪" data-title="`load_state_dict` 在这一页里更接近做什么？" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">write-back</span></div>
+      <h3><code>load_state_dict</code> 在这一页里更接近做什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q6" value="A">A. 把新对象替换成旧对象。</label>
+        <label><input type="radio" name="q6" value="B">B. 把恢复出来的状态写回已有的模型或优化器对象。</label>
+        <label><input type="radio" name="q6" value="C">C. 只负责打印 checkpoint 路径。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">重点是写回，而不是新建一套对象。</p>
+    </div>
+
+    <div class="q full" data-question="q7" data-group="二、流程追踪" data-title="解释为什么恢复成功之后还要做一次最小冒烟测试。">
+      <div class="q-meta"><span class="pill">open</span><span class="pill">verification</span></div>
+      <h3>解释为什么恢复成功之后还要做一次最小冒烟测试。</h3>
+      <textarea name="q7" placeholder="至少说到 step、LR、RNG、样本游标里有哪几项需要对齐。"></textarea>
+      <p class="solve-note">不要只说“防止报错”。要说清楚：文件能读只是第一层，训练语义对不对要靠冒烟测试确认。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>合格答案会说明：checkpoint 能打开只代表文件层面没坏，不代表 step、学习率、RNG、数据游标和并行布局已经恢复正确。最小冒烟测试的作用，是在正式继续训练之前，先确认这些训练语义确实对齐。比如恢复后第一步的 loss、LR 和样本位置都应该和预期一致，否则“能载入”只是表面成功。</p></details>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q8" data-group="二、流程追踪" data-title="DCP 适合解决哪一类问题？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">distributed state_dict</span></div>
+      <h3>DCP 适合解决哪一类问题？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q8" value="A">A. 分布式状态的保存、加载和不同 world size 下的恢复。</label>
+        <label><input type="radio" name="q8" value="B">B. 只负责把日志写漂亮。</label>
+        <label><input type="radio" name="q8" value="C">C. 只适用于单卡推理。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">它解决的是分布式语义，不是普通文件整理。</p>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、配置诊断</h3>
+      <p>给你一个拓扑或症状，先判断应该从哪一层查起。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提醒</b>
+      <span>先找最可能出问题的层，再往下拆。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q9" data-group="三、配置诊断" data-title="checkpoint 恢复后学习率跳回开头，第一怀疑对象是谁？" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">scheduler</span></div>
+      <h3>checkpoint 恢复后学习率跳回开头，第一怀疑对象是谁？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q9" value="A">A. 模型结构一定坏了。</label>
+        <label><input type="radio" name="q9" value="B">B. scheduler / global step 没有一起恢复。</label>
+        <label><input type="radio" name="q9" value="C">C. 数据集文件名变了。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">学习率轨迹和 step 绑得很紧。</p>
+    </div>
+
+    <div class="q" data-question="q10" data-group="三、配置诊断" data-title="为什么 TP+EP 的 checkpoint 更要盯住分片元数据？" data-answer="C">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">metadata</span></div>
+      <h3>为什么 TP+EP 的 checkpoint 更要盯住分片元数据？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q10" value="A">A. 因为元数据越多，loss 越低。</label>
+        <label><input type="radio" name="q10" value="B">B. 因为元数据只影响日志显示。</label>
+        <label><input type="radio" name="q10" value="C">C. 因为恢复时要靠它重建布局和路由，不然文件能读也可能语义错位。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">TP 和 EP 的恢复都离不开布局信息。</p>
+    </div>
+
+    <div class="q full" data-question="q11" data-group="三、配置诊断" data-title="你看到 latest 指向一个刚写完一半的目录，会先怎么处理？">
+      <div class="q-meta"><span class="pill">open</span><span class="pill">failure policy</span></div>
+      <h3>你看到 <code>latest</code> 指向一个刚写完一半的目录，会先怎么处理？</h3>
+      <textarea name="q11" placeholder="写出你的处理顺序：先停、再查、再回滚到哪个版本。"></textarea>
+      <p class="solve-note">脚手架：先把坏指针隔离，再找上一个完整 checkpoint，再查临时目录和完成标记。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>好的答案会先说：不要继续把这个目录当最新版本用，先让恢复入口回到上一个已确认完整的 checkpoint；随后检查临时目录、完成标记和 manifest，确认是发布中断、后台写入失败，还是验证步骤没过。答案里如果有“先回滚到上一个完整版本，再排查写入链路”，就已经抓到主线了。</p></details>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、桥接与复述</h3>
+      <p>把这页讲回给别人听，顺手检查你有没有把对象说清。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提醒</b>
+      <span>先讲直觉，再讲术语，最后讲一个坑。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q12" data-group="四、桥接与复述" data-title="你最先会去读哪一个公开入口？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">code bridge</span></div>
+      <h3>你最先会去读哪一个公开入口？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q12" value="A">A. <code>pretrain_gpt.py</code> 或 <code>examples/run_simple_mcore_train_loop.py</code></label>
+        <label><input type="radio" name="q12" value="B">B. 先搜私有笔记目录。</label>
+        <label><input type="radio" name="q12" value="C">C. 只看 README 标题，不看代码。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">这页的代码桥接就是这两个公开入口。</p>
+    </div>
+
+    <div class="q full" data-question="q13" data-group="四、桥接与复述" data-title="用 180 字左右把本页讲给学完 06 的同学">
+      <div class="q-meta"><span class="pill">open</span><span class="pill">synthesis</span></div>
+      <h3>用 180 字左右把本页讲给学完 06 的同学</h3>
+      <textarea name="q13" placeholder="至少要包含：checkpoint 账本、分片保存、原子发布、恢复验证。"></textarea>
+      <p class="solve-note">不要写成名词串。要写出“这一步先做什么，再做什么”。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>高分答案会先说 checkpoint 不只是保存模型，而是保存一轮训练继续所需的账本：模型、优化器、scheduler、step、RNG、数据游标和并行元数据。接着说 DCP / FSDP2 / Megatron Core 处理的是分布式语义和分片保存，恢复时可以按新的 world size 重新装配。最后要补上事务顺序：先写临时目录，再验证完整性，最后原子发布，并在恢复后做最小冒烟测试确认 step 和学习率都对齐。</p></details>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li>课程根目录 <code>index.html</code>：给出本课程的顺序、前后单元和课程边界。</li>
+  <li><code>06_激活检查点混合精度与优化器状态/学习页.html</code>：承接激活检查点、混合精度和优化器状态，为恢复链路铺垫。</li>
+  <li>PyTorch <a href="https://docs.pytorch.org/docs/stable/distributed.checkpoint.html" target="_blank" rel="noreferrer">Distributed Checkpoint</a>：用于分布式 state_dict、保存 / 加载和不同 world size 下的恢复语义。</li>
+  <li>PyTorch <a href="https://docs.pytorch.org/tutorials/recipes/distributed_checkpoint_recipe.html" target="_blank" rel="noreferrer">Getting Started with Distributed Checkpoint</a>：用于 DCP 和 FSDP 结合的最小教程入口。</li>
+  <li>PyTorch <a href="https://docs.pytorch.org/tutorials/recipes/distributed_async_checkpoint_recipe.html" target="_blank" rel="noreferrer">Asynchronous Saving with Distributed Checkpoint</a>：用于异步保存与后台写入的基本边界。</li>
+  <li>PyTorch <a href="https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html" target="_blank" rel="noreferrer">Getting Started with FSDP2</a>：用于参数、梯度和优化器状态分片的基础语义。</li>
+  <li>NVIDIA Megatron Core <a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/index.html" target="_blank" rel="noreferrer">User Guide</a>：用于训练入口、并行策略和 checkpoint 相关功能总览。</li>
+  <li>NVIDIA Megatron Core <a href="https://docs.nvidia.com/megatron-core/developer-guide/0.16.0/user-guide/features/dist_optimizer.html" target="_blank" rel="noreferrer">Distributed Optimizer</a>：用于说明优化器状态如何按 data parallel ranks 分摊。</li>
+  <li>NVIDIA Megatron Core <a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/apidocs/core/core.dist_checkpointing.html" target="_blank" rel="noreferrer">dist_checkpointing package</a> 和 <a href="https://docs.nvidia.com/megatron-core/developer-guide/0.16.1/apidocs/core/core.dist_checkpointing.core.html" target="_blank" rel="noreferrer">core.dist_checkpointing.core</a>：用于 checkpoint 元数据、分片格式和保存策略说明。</li>
+  <li>NVIDIA Megatron Core <a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/apidocs/core/core.dist_checkpointing.strategies.filesystem_async.html" target="_blank" rel="noreferrer">filesystem_async strategy</a>：用于异步保存函数和写桶计划的边界。</li>
+  <li><a href="https://github.com/NVIDIA/Megatron-LM" target="_blank" rel="noreferrer">NVIDIA/Megatron-LM</a>：用于看 <code>pretrain_gpt.py</code> 和 <code>examples/run_simple_mcore_train_loop.py</code> 这些公开入口。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

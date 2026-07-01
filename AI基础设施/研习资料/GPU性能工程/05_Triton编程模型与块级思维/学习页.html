@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Triton 编程模型与块级思维｜GPU 性能工程 05</title>
+  <meta name="description" content="GPU 性能工程第 05 课：用 Triton 的 program id、块级张量、mask、constexpr 和自动调参建立块级思维。">
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="GPU 性能工程" data-unit="05｜Triton编程模型与块级思维">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>GPU 性能工程</strong>
+        <span>05｜Triton编程模型与块级思维</span>
+      </div>
+      <nav>
+<!-- learning-kit:nav:start -->
+<a href="../index.html"><span class="dot"></span>返回课程地图</a>
+<a href="#goals"><span class="dot"></span>学习目标</a>
+<a href="#map"><span class="dot"></span>概念地图</a>
+<a href="#mental-model"><span class="dot"></span>核心直觉</a>
+<a href="#program-id"><span class="dot"></span>一维例子</a>
+<a href="#mask"><span class="dot"></span>mask 与语义</a>
+<a href="#two-d"><span class="dot"></span>二维 tile</a>
+<a href="#performance"><span class="dot"></span>参数与调参</a>
+<a href="#mistakes"><span class="dot"></span>常见错误</a>
+<a href="#lab"><span class="dot"></span>失败实验室</a>
+<a href="#practice"><span class="dot"></span>练习</a>
+<a href="#export"><span class="dot"></span>导出</a>
+<a href="#sources"><span class="dot"></span>参考资料</a>
+<!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">这一页把 Triton 压到一个可检查的块级模型：程序选块，块内生地址，mask 保边界，调参验证假设。</div>
+    </aside>
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">Triton programming model</div>
+          <h1>Triton 编程模型与块级思维</h1>
+          <p>这一页把 Triton 讲成一种“先选块、再生成地址、最后做块级计算”的语言。你会沿着一维向量、二维 tile 和 autotune 三条线，读懂 program id、offsets、mask 和调参候选空间的关系。学完后，你应该能把一个 Triton kernel 从地址、边界、数值语义和性能参数四个角度讲清楚。</p>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+            <li>区分 program id、offsets、mask、stride 和 constexpr 各自负责的层次。</li>
+            <li>手算一维尾块和二维 tile 的有效元素范围。</li>
+            <li>把 max / sum / min 的边界填充值和数值语义说清楚。</li>
+            <li>提出有理由的 autotune 候选，而不是只会改一个 BLOCK_SIZE。</li>
+          </ul>
+        </div>
+      </div>
+<section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">学习目标</span>
+  </div>
+
+      <div class="grid2">
+        <div class="box soft">
+          <h3>先把 Triton 读成块级算子语言</h3>
+          <p>这节课不从抽象语法开始，而是从一维向量加法和二维 tile 开始。你要看到的是：一个 program 负责一块连续数据，program id 定位块，offsets 生成地址，mask 保护边界，块级计算完成读写。</p>
+          <p>如果你已经会 CUDA，最大的变化不是“又学一种 kernel API”，而是把入口从线程索引抬到 tile 级对象。这样更容易把矩阵乘、Softmax、LayerNorm 这些算子读成同一种数据流。</p>
+        </div>
+        <div class="box">
+          <h3>本页不追的内容</h3>
+          <ul>
+  <li>不讲 Triton 的所有语言原语，只抓 program id、arange、load、store、mask 和 autotune。</li>
+  <li>不展开完整矩阵乘实现，二维 tile 只作为下一课的桥。</li>
+  <li>不做硬件微架构深挖，先学会读 kernel 的块级数据流。</li>
+  <li>不把自动调参当作黑盒，候选空间和测量假设仍然要自己写清。</li>
+</ul>
+        </div>
+      </div>
+      <div class="check"><b>你现在应该能做什么：</b>看到一个 Triton kernel 时，先判断它是一维块、二维 tile，还是带调参的模板，而不是从每个标量索引开始猜。</div>
+    
+</section>
+<section id="map">
+  <div class="head">
+    <h2>概念地图</h2>
+    <span class="tag">概念地图</span>
+  </div>
+
+      <div class="flow" data-export-context="05 Triton 概念地图" data-export-lang="text">
+        <div class="step"><b>1</b><span>grid 决定要启动多少个 program</span></div>
+        <div class="step"><b>2</b><span>program id 选中当前块的位置</span></div>
+        <div class="step"><b>3</b><span>arange 生成块内 offsets</span></div>
+        <div class="step"><b>4</b><span>mask 判断边界并保护读写</span></div>
+        <div class="step"><b>5</b><span>块级表达式完成计算和写回</span></div>
+      </div>
+      <div class="grid2">
+        <div class="box soft"><h3>线程思维和块级思维的差别</h3><p>CUDA 常让你先问某个 thread 处理哪个元素；Triton 更常让你先问某个 program 处理哪一块数据。这个差别会直接影响你如何读 offsets、mask 和 store。</p><p>一维时看线性块，二维时看 tile；两者共享同一条主线：先选块，再在块内生成坐标。</p></div>
+        <div class="box info"><h3>概念桥接</h3><p>如果把 Triton kernel 读成“块级加载 - 块级计算 - 块级写回”，你就能把很多算子归到同一套心智模型里。下一步要做的是检查边界、语义单位元和调参假设，而不是只盯着语法。</p></div>
+      </div>
+      <div class="check"><b>你现在应该能做什么：</b>在脑中把一个 Triton kernel 画成“program → offsets → mask → 计算 → 写回”的流程图。</div>
+    
+</section>
+<section id="mental-model">
+  <div class="head">
+    <h2>核心直觉：从线程思维到块级思维</h2>
+    <span class="tag">入口</span>
+  </div>
+
+      <div class="compare" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;">
+        <div class="card "><h3>CUDA 的典型起手式</h3><div class="math-block" data-export-context="CUDA 线程式起手" data-export-lang="math">$global_index = blockIdx.x \times blockDim.x + threadIdx.x$<p>线程先得到一个标量 index，再读写一个或少量元素。</p></div><p>这种写法贴近硬件线程层级，适合精细控制，但你要显式处理很多线程细节。</p></div>
+        <div class="card "><h3>Triton 的典型起手式</h3><div class="math-block" data-export-context="Triton 块式起手" data-export-lang="math">$offsets = pid \times BLOCK_SIZE + [0,1,\dots,BLOCK_SIZE-1]$<p>program 先得到一整块 index，再用块级张量 load、计算和 store。</p></div><p>编译器会处理很多线程映射细节，你则把注意力放在块的大小、布局和边界上。</p></div>
+      </div>
+      <div class="shape-tracer" data-shape-tracer>
+  <div class="trace-lines">
+    <button class="trace-line active" data-trace-step="step-grid"><code>grid</code><span>启动多少个 program</span></button>
+    <button class="trace-line" data-trace-step="step-pid"><code>pid</code><span>定位当前块编号</span></button>
+    <button class="trace-line" data-trace-step="step-offs"><code>offsets</code><span>生成全局地址</span></button>
+    <button class="trace-line" data-trace-step="step-mask"><code>mask</code><span>保护边界和语义</span></button>
+  </div>
+  <div class="trace-canvas">
+    <div class="tensor-card active" data-trace-target="step-grid"><b>grid 输入</b><span>一维或二维程序网格</span><p>决定总共会启动多少个 program。</p></div>
+    <div class="tensor-card" data-trace-target="step-pid"><b>program id</b><span>当前 program 的块编号</span><p>把网格坐标映射到当前块的位置。</p></div>
+    <div class="tensor-card" data-trace-target="step-offs"><b>块内 offsets</b><span>连续地址向量或 tile 坐标</span><p>由 pid、block size 和 arange 组合而成。</p></div>
+    <div class="tensor-card" data-trace-target="step-mask"><b>边界 mask</b><span>布尔向量或布尔矩阵</span><p>控制哪些位置真的参与 load / store。</p></div>
+  </div>
+</div>
+      <div class="box info"><h3>关键判断</h3><p>Triton 不等于“没有硬件细节”。你仍然要关心访存是否连续、块大小是否合适、寄存器压力是否太高、并行度是否足够。它只是把编程入口从 thread 级别抬到了 block / tile 级别。</p></div>
+      <div class="check"><b>你现在应该能做什么：</b>看到 <code>pid * BLOCK_SIZE + tl.arange(...)</code> 时，能立刻把它读成“当前 program 负责的一段连续数据”。</div>
+    
+</section>
+<section id="program-id">
+  <div class="head">
+    <h2>一维例子：向量加法读代码</h2>
+    <span class="tag">program id + offsets</span>
+  </div>
+
+      <div class="grid2">
+        <div>
+          <div class="codebar"><span>vector_add_kernel.py</span><button class="copy" data-copy="vector-code">复制</button></div>
+<pre id="vector-code" data-export-context="vector_add_kernel.py" data-export-lang="python"><code class="language-python">import triton
+import triton.language as tl
+
+@triton.jit
+def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets &lt; n_elements
+
+    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+    y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
+    out = x + y
+    tl.store(out_ptr + offsets, out, mask=mask)
+
+# Python 侧启动。grid 是“要启动多少个 program”。
+grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+add_kernel[grid](x, y, out, n_elements, BLOCK_SIZE=1024)</code></pre>
+        </div>
+        <div class="box info">
+          <h3>观察最后一块为什么需要 mask</h3>
+          <div class="metric-row"><span>向量长度 n</span><strong id="vecNText">20</strong></div>
+          <label class="ctrl">n_elements
+            <input id="vecN" type="range" min="5" max="39" value="20">
+          </label>
+          <div class="metric-row"><span>BLOCK_SIZE</span><strong id="blockText">8</strong></div>
+          <label class="ctrl">BLOCK_SIZE
+            <input id="blockSize" type="range" min="4" max="16" value="8" step="4">
+          </label>
+          <div class="metric-row"><span>program 数量</span><strong id="programCount">3</strong></div>
+          <div class="tile-board" id="vectorBoard" aria-label="向量块可视化"></div>
+          <p class="small">绿色是有效元素，黄色是最后一块中被 mask 屏蔽的位置。改变滑块，观察 <code>ceil(n / BLOCK_SIZE)</code> 和最后一块形状。</p>
+        </div>
+      </div>
+      <ol>
+        <li><code>pid = tl.program_id(0)</code>：当前 program 在一维 grid 里的编号。</li>
+        <li><code>block_start = pid * BLOCK_SIZE</code>：把块编号转换成这块在全局向量里的起点。</li>
+        <li><code>tl.arange(0, BLOCK_SIZE)</code>：生成块内相对位置。</li>
+        <li><code>offsets</code>：全局地址偏移，是块起点加块内相对位置。</li>
+        <li><code>mask = offsets &lt; n_elements</code>：判断 offsets 是否落在有效范围。</li>
+        <li><code>tl.load(..., other=0.0)</code>：mask 为假的位置不会读取真实地址。</li>
+        <li><code>tl.store(..., mask=mask)</code>：只把有效位置写回输出，避免越界写。</li>
+      </ol>
+      <div class="warn"><b>为什么 mask 不是可选优化？</b>如果 <code>n_elements</code> 不是 <code>BLOCK_SIZE</code> 的整数倍，最后一个 program 会生成超出向量尾部的 offsets。没有 mask，load 或 store 可能访问非法地址，轻则结果错误，重则 kernel 失败。</div>
+      <div class="terminal-lab" data-terminal-lab>
+  <div class="terminal-controls">
+    <button class="ghost active" data-terminal-case="case-1">case-1：整除</button>
+    <button class="ghost" data-terminal-case="case-2">case-2：尾块越界</button>
+    <button class="ghost" data-terminal-case="case-3">case-3：max 归约 other</button>
+  </div>
+  <pre class="terminal-output" aria-live="polite">n=16, BLOCK_SIZE=8
+program 0 -&gt; offsets 0..7
+program 1 -&gt; offsets 8..15
+所有位置都在边界内，mask 全真。</pre>
+  <template data-terminal-output="case-1">n=16, BLOCK_SIZE=8
+program 0 -&gt; offsets 0..7
+program 1 -&gt; offsets 8..15
+所有位置都在边界内，mask 全真。</template>
+  <template data-terminal-output="case-2">n=20, BLOCK_SIZE=8
+program 2 -&gt; offsets 16..23
+有效元素 16,17,18,19
+越界位置 20..23 必须被 mask。</template>
+  <template data-terminal-output="case-3">对 max 归约时，other 应该选 -inf，而不是 0.0。
+如果真实行全是负数，0 会污染最大值。</template>
+</div>
+      <div class="check"><b>你现在应该能做什么：</b>给定任意 <code>n_elements</code> 和 <code>BLOCK_SIZE</code>，算出 program 数量，并列出最后一个 program 的有效 offsets。</div>
+    
+</section>
+<section id="mask">
+  <div class="head">
+    <h2>mask：边界、默认值与数值语义</h2>
+    <span class="tag">语义与边界</span>
+  </div>
+
+      <div class="grid2">
+        <div class="box soft"><h3>加法类 load</h3><p>向量加法里，越界元素不应该参与结果。因为 store 也被 mask 掉，<code>other=0.0</code> 主要是为了让块级表达式完整。</p><div class="math-block" data-export-context="加法类 load 的 mask 语义" data-export-lang="math">$\begin{aligned} x &= load(mask, other=0) \\ y &= load(mask, other=0) \\ \text{store}(x+y, mask) \end{aligned}$<p>单位元 0 不改变加法结果。</p></div></div>
+        <div class="box info"><h3>最大值归约</h3><p>如果要做 <code>max</code>，越界位置不能填 0，因为真实数据可能全为负数。常见做法是填 <code>-inf</code>，让越界位置永远不会成为最大值。</p><div class="math-block" data-export-context="最大值归约的边界填充值" data-export-lang="math">$x = load(mask, other=-\infty), \quad m = max(x, axis=0)$<p>填充值要是不会抢走最大值的哨兵。</p></div></div>
+      </div>
+      <div class="table-wrap">
+  <table data-export-context="05 Triton mask 与 other 速查" data-export-lang="table">
+    <thead><tr><th>操作</th><th>越界位置常用 other</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>加法后 masked store</td><td><code>0.0</code></td><td>无效位置不会写回，填 0 让表达式可计算。</td></tr>
+      <tr><td>sum 归约</td><td><code>0.0</code></td><td>0 是加法单位元，不改变总和。</td></tr>
+      <tr><td>max 归约</td><td><code>-inf</code></td><td>不会把越界位置错误地选为最大值。</td></tr>
+      <tr><td>min 归约</td><td><code>+inf</code></td><td>不会把越界位置错误地选为最小值。</td></tr>
+    </tbody>
+  </table>
+</div>
+      <div class="box warn"><b>常见坏例子：</b>对一行负数做 max 时，越界位置填 <code>0.0</code>。如果真实值都是负数，最后结果会被越界位置的 0 污染。这不是性能问题，而是语义错误。</div>
+      <div class="check"><b>你现在应该能做什么：</b>为每个 <code>tl.load</code> 说清楚：mask 为假时是否会参与后续计算；如果会，<code>other</code> 应该是什么单位元或哨兵值。</div>
+    
+</section>
+<section id="two-d">
+  <div class="head">
+    <h2>二维块级思维：从向量到 tile</h2>
+    <span class="tag">矩阵类算子的入口</span>
+  </div>
+
+      <div class="grid2">
+        <div>
+          <div class="codebar"><span>2d_tile_offsets.py</span><button class="copy" data-copy="tile-code">复制</button></div>
+<pre id="tile-code" data-export-context="2d_tile_offsets.py" data-export-lang="python"><code class="language-python">@triton.jit
+def tile_kernel(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr,
+                stride_m: tl.constexpr, stride_n: tl.constexpr,
+                BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+
+    ptrs = x_ptr + offs_m[:, None] * stride_m + offs_n[None, :] * stride_n
+    mask = (offs_m[:, None] &lt; M) &amp; (offs_n[None, :] &lt; N)
+
+    tile = tl.load(ptrs, mask=mask, other=0.0)
+    result = tile * 2.0
+    tl.store(out_ptr + offs_m[:, None] * stride_m + offs_n[None, :] * stride_n,
+             result, mask=mask)</code></pre>
+        </div>
+        <div class="box info">
+          <h3>二维 tile 可视化</h3>
+          <label class="ctrl">M 行数
+            <input id="matM" type="range" min="5" max="14" value="10">
+          </label>
+          <label class="ctrl">N 列数
+            <input id="matN" type="range" min="5" max="18" value="13">
+          </label>
+          <label class="ctrl">查看的 pid_m
+            <input id="pidM" type="range" min="0" max="2" value="1">
+          </label>
+          <label class="ctrl">查看的 pid_n
+            <input id="pidN" type="range" min="0" max="3" value="2">
+          </label>
+          <div class="metric-row"><span>BLOCK_M x BLOCK_N</span><strong>4 x 4</strong></div>
+          <div class="metric-row"><span>当前 tile</span><strong id="tileText">pid=(1,2)</strong></div>
+          <div class="tile-board" id="matrixBoard" aria-label="二维 tile 可视化"></div>
+          <p class="small">绿色是当前 program 的有效 tile。黄色是这个 tile 中坐标落在矩阵外的元素，必须被 mask。</p>
+        </div>
+      </div>
+      <div class="math-block" data-export-context="二维 tile 的广播和 stride" data-export-lang="math">$ptrs[i,j] = base + offs_m[i] \times stride_m + offs_n[j] \times stride_n$<p><code>offs_m[:, None]</code> 把行 offsets 变成列形状，<code>offs_n[None, :]</code> 把列 offsets 放在行方向；两者相加会广播成 <code>BLOCK_M x BLOCK_N</code> 的地址矩阵。</p></div>
+      <div class="box"><b>为什么要显式写 stride？</b><p>真实深度学习张量可能经过转置、切片或布局变换，逻辑上是二维矩阵，物理内存却不一定按紧密连续行存放。stride 让 kernel 按真实内存布局寻址。</p></div>
+      <div class="check"><b>你现在应该能做什么：</b>读懂二维 Triton kernel 里的 <code>offs_m[:, None]</code>、<code>offs_n[None, :]</code> 和二维 mask，并能判断 tile 是否碰到右边界或下边界。</div>
+    
+</section>
+<section id="performance">
+  <div class="head">
+    <h2>性能参数：先提出假设，再自动调参</h2>
+    <span class="tag">BLOCK_SIZE / warps / stages</span>
+  </div>
+
+      <p>Triton 降低了写 kernel 的门槛，但不会自动替你知道最佳块大小。块太小，program 太多、每个 program 的工作太少；块太大，寄存器压力、共享资源和并行度可能变差。性能工程的做法是：先根据瓶颈提出小范围候选，再测量。</p>
+      <div class="grid2">
+        <div class="card "><h3><code>BLOCK_SIZE</code> / <code>BLOCK_M</code> / <code>BLOCK_N</code></h3><p>决定每个 program 处理多少元素。影响访存连续性、每个 program 的工作量、寄存器数量和边界浪费。</p></div>
+        <div class="card "><h3><code>num_warps</code> / <code>num_stages</code></h3><p>决定并行展开和流水加载强度。更多 warp 可能提高并行计算能力，也可能增加调度和资源压力。</p></div>
+      </div>
+      <div class="codebar"><span>autotune_sketch.py</span><button class="copy" data-copy="autotune-code">复制</button></div>
+<pre id="autotune-code" data-export-context="autotune_sketch.py" data-export-lang="python"><code class="language-python">@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE': 256}, num_warps=4),
+        triton.Config({'BLOCK_SIZE': 512}, num_warps=4),
+        triton.Config({'BLOCK_SIZE': 1024}, num_warps=8),
+    ],
+    key=['n_elements'],
+)
+@triton.jit
+def kernel(x, y, out, n_elements, BLOCK_SIZE: tl.constexpr):
+    ...</code></pre>
+      <div class="table-wrap">
+  <table data-export-context="05 Triton 调参现象速查" data-export-lang="table">
+    <thead><tr><th>现象</th><th>第一轮怀疑</th><th>可以尝试</th></tr></thead>
+    <tbody>
+      <tr><td>带宽远低于预期，load/store 不连续</td><td>offsets 或 stride 导致非合并访存</td><td>检查数据布局，调整 tile 方向，让相邻元素尽量连续访问。</td></tr>
+      <tr><td>小 shape 很慢</td><td>kernel 启动开销或 program 工作量过少</td><td>考虑融合算子，增大每个 program 工作量，或让上层避免过碎调用。</td></tr>
+      <tr><td>块变大后反而慢</td><td>寄存器压力上升，占用率下降</td><td>缩小块，减少中间张量，查看编译报告或 profiler 指标。</td></tr>
+      <tr><td>最后一块浪费明显</td><td>shape 与块大小不匹配</td><td>选择更合适的块大小，或对常见 shape 专门调参。</td></tr>
+    </tbody>
+  </table>
+</div>
+      <div class="box warn"><b>自动调参不是免思考。</b>如果候选空间太大，编译和测试成本会上升；如果候选空间不包含正确方向，autotune 只能在一堆差方案里选一个相对不差的。</div>
+      <div class="check"><b>你现在应该能做什么：</b>为一个简单 kernel 写出 3 到 5 个有理由的参数候选，并说明每个候选想验证什么性能假设。</div>
+    
+</section>
+<section id="mistakes">
+  <div class="head">
+    <h2>常见错误与修正</h2>
+    <span class="tag">调试优先级</span>
+  </div>
+
+      <div class="grid2">
+        <div class="card "><h3>错误 1：把 program id 当 thread id</h3><p>表现：用 <code>pid</code> 只处理一个元素，导致并行度和表达方式都不对。修正：用 <code>tl.arange</code> 生成块内多个 offsets。</p></div>
+        <div class="card "><h3>错误 2：只 mask store，不 mask load</h3><p>表现：最后一块越界 load，结果不稳定或 kernel 报错。修正：load 和 store 都根据访问边界加 mask；load 还要选择正确 <code>other</code>。</p></div>
+        <div class="card "><h3>错误 3：二维 tile 忘记 stride</h3><p>表现：逻辑矩阵和物理地址错位。修正：总是写出 <code>stride_m</code> 和 <code>stride_n</code>，不要默认紧密连续。</p></div>
+        <div class="card "><h3>错误 4：把 autotune 当魔法</h3><p>表现：候选乱填、shape 不分、测量不稳。修正：先提出假设，再定义候选空间和要看的指标。</p></div>
+      </div>
+      <div class="box info"><b>错误优先级</b><p>先排边界和语义，再排性能。比起“慢一点”，越界、错填充值、读写错位这些问题更会让 kernel 不可用。</p></div>
+      <div class="check"><b>你现在应该能做什么：</b>拿到一个 Triton kernel 后，先检查 pid、offsets、mask、stride 和调参假设有没有对上，而不是立刻改 BLOCK_SIZE。</div>
+    
+</section>
+<section id="lab">
+  <div class="head">
+    <h2>失败实验室</h2>
+    <span class="tag">terminal</span>
+  </div>
+
+      <p>下面三个案例都来自这页的核心机制。切换后先看失败文本，再反推是哪一层出错。</p>
+      <div class="terminal-lab" data-terminal-lab>
+  <div class="terminal-controls">
+    <button class="ghost active" data-terminal-case="case-1">case-1：整除形状</button>
+    <button class="ghost" data-terminal-case="case-2">case-2：max 归约</button>
+    <button class="ghost" data-terminal-case="case-3">case-3：二维 stride</button>
+  </div>
+  <pre class="terminal-output" aria-live="polite">输入: n=32, BLOCK_SIZE=8
+结果: 所有 program 都能在边界内完成 load/store。
+检查点: grid = cdiv(n, BLOCK_SIZE)。</pre>
+  <template data-terminal-output="case-1">输入: n=32, BLOCK_SIZE=8
+结果: 所有 program 都能在边界内完成 load/store。
+检查点: grid = cdiv(n, BLOCK_SIZE)。</template>
+  <template data-terminal-output="case-2">输入: 一行全为负数的 max 归约
+错误做法: other=0.0
+症状: 返回值被 0 污染，应该改成 -inf。</template>
+  <template data-terminal-output="case-3">输入: 转置后的二维张量
+错误做法: 按紧密连续地址寻址
+症状: 读到错位元素，应该显式使用 stride_m / stride_n。</template>
+</div>
+      <div class="box warn"><b>读实验的顺序</b><p>先看加载和边界，再看语义单位元，最后看布局。不要一上来就怀疑编译器。</p></div>
+      <div class="check"><b>你现在应该能做什么：</b>从一个失败文本里判断是边界、语义还是布局出了问题，并给出下一步要查的代码行。</div>
+      <div class="box soft">
+        <h3>尾块链路：从 offsets 到语义</h3>
+        <p>把 n=20、BLOCK_SIZE=8 的例子拆开看，前三个 program 都在同一件事上工作：先用 pid 选块，再用 offsets 生成全局位置，最后用 mask 决定哪些位置真的参与读写。最后一个 program 之所以容易出错，不是因为它“更特殊”，而是因为它唯一会把越界 offsets 暴露出来。</p>
+        <p>这也是为什么边界问题不能只靠“看起来结果差不多”来蒙过去。对加法、sum、max、min 而言，越界位置要么必须是单位元，要么必须是哨兵值；一旦 other 选错，块级表达式会把错误值当成合法数据，后面的 store 再正确也救不回来。</p>
+        <p>如果你把尾块理解成一个可推理对象，而不是一段“顺手处理一下的特殊代码”，你就会自然地先列出 offsets、有效元素、mask、other 和 store 条件，再去看性能。这样排查，bug 会落在边界、语义或布局中的某一类，而不是散成一团。</p>
+        <div class="table-wrap">
+          <table data-export-context="05 尾块诊断账本" data-export-lang="table">
+            <thead><tr><th>症状</th><th>先查什么</th><th>最小修法</th></tr></thead>
+            <tbody>
+              <tr><td>最后一块数值飘</td><td>load 和 store 是否共用同一张 mask</td><td>把边界判断放在 offsets 之后，所有访问都走同一个 mask。</td></tr>
+              <tr><td>max 被 0 污染</td><td>other 是否误填成 0.0</td><td>max 改成 <code>-inf</code>，min 改成 <code>+inf</code>。</td></tr>
+              <tr><td>调大块后仍然错位</td><td>是不是 layout 或 stride 写错</td><td>先核对 stride，再调块；不要用更大的块掩盖地址错误。</td></tr>
+              <tr><td>尾块和前面块结果不一致</td><td>是不是把边界判断分散到多个地方</td><td>把同一套 mask 复用到 load、计算和 store。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="codebar"><span>tail-mask sketch</span><button class="copy" data-copy="tail-mask-code">复制</button></div>
+<pre id="tail-mask-code" data-export-context="05 tail mask sketch" data-export-lang="python"><code class="language-python">pid = tl.program_id(0)
+offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+mask = offsets &lt; n
+x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
+out = x + y
+tl.store(out_ptr + offsets, out, mask=mask)</code></pre>
+        <div class="box info">
+          <h3>块大小的取舍不是单调的</h3>
+          <p>很多人第一次写 Triton 时，会下意识把 BLOCK_SIZE 往上加，想用更大的块把循环次数压下去。这个直觉只对了一半：块变大确实能让单个 program 做更多工作，但它也会把寄存器压力、边界浪费和调度成本一起抬高。对于形状比较碎的输入，越大的块不一定越好，反而可能让最后一块空洞更多。</p>
+          <p>一个更稳的想法是把候选块大小和输入 shape 对齐。比如 n=192 时，BLOCK_SIZE=64 会得到 3 个整块，BLOCK_SIZE=128 会得到 2 个 program 但尾块工作更重，BLOCK_SIZE=256 则会让一半以上的地址都变成 mask。你真正要验证的不是“谁最大”，而是“谁让有效元素比例和资源占用最平衡”。</p>
+          <div class="table-wrap">
+            <table data-export-context="05 块大小候选账本" data-export-lang="table">
+              <thead><tr><th>候选</th><th>看到的现象</th><th>先查什么</th></tr></thead>
+              <tbody>
+                <tr><td>BLOCK_SIZE=64</td><td>program 数量偏多，但尾块浪费低</td><td>看调度开销是否能接受。</td></tr>
+                <tr><td>BLOCK_SIZE=128</td><td>块数减少，单块工作量增加</td><td>看寄存器和局部变量是否开始顶满。</td></tr>
+                <tr><td>BLOCK_SIZE=256</td><td>很多 offsets 只是在 mask 下空跑</td><td>看边界浪费是否已经盖过并行收益。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>这就是块级思维的第二层：不是把地址算出来就结束，而是继续问“这组地址在硬件上值不值”。一旦你能把边界浪费、语义单位元和调参假设连成一条线，Triton 代码就不再只是短，而是可解释、可排查、可比较。</p>
+          <p>最后再补一条实践判断：如果你在 profile 里看到小 shape 明显吃亏，不要只盯着“把块改大”。先问是不是函数调用本身太碎、是不是最后一块被 mask 掉太多、是不是重复 launch 把开销摊平不了。换句话说，块大小只是一个旋钮，不是一个答案。</p>
+          <p>还有一个经常被忽略的细节：当你同时改 block size 和 num warps 时，不要把它们混成一个“更大更快”的判断。num warps 改的是并行展开和资源调度，block size 改的是每个 program 的工作集，两者会一起影响寄存器、occupancy 和边界浪费。真正靠谱的做法，是一次只改一个旋钮，把观察到的变化和假设对齐，再决定要不要继续扩候选空间。</p>
+          <p>如果只剩一个收口句，那就是：Triton 不是把 CUDA 线程索引换个名字，而是把“先算地址、再定边界、最后看资源”的顺序讲得更清楚。顺序讲清楚了，性能判断才不会从一开始就乱掉。</p>
+        </div>
+      </div>
+    
+</section>
+<section id="practice">
+  <div class="head">
+    <h2>练习</h2>
+    <span class="tag">诊断</span>
+  </div>
+
+      <div class="practice-intro">
+        <div class="review-card"><strong>作答目标</strong><p>不是背术语，而是把 Triton kernel 读成块级数据流：块在哪里开始、边界在哪里、语义单位元是什么、参数怎么选。</p></div>
+        <div class="review-card"><strong>检查重点</strong><p>每个答案至少写出一个对象和一个检查动作。只说“更快”或“更大”不够。</p></div>
+      </div>
+      <div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第一组：块级思维</h3>
+      <p>确认你能从 program 到 offsets 再到 mask。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提示</b>
+      <span>先算块，再算地址，最后才谈语义。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+<div class="q" data-question="q1" data-group="第一组：块级思维" data-title="program id 最接近什么？" data-answer="B" data-explain="program id 选中的是一个块，不是一个线程。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">program / block</span></div>
+  <h3>program id 最接近什么？</h3>
+  <p>在本课语境里，<code>tl.program_id(0)</code> 最接近哪句话？</p>
+  <label><input type="radio" name="q1" value="A"> 当前 CUDA 线程在线程块内的编号</label>
+  <label><input type="radio" name="q1" value="B"> 当前 Triton program 在 grid 第 0 维上的编号</label>
+  <label><input type="radio" name="q1" value="C"> 当前元素在整个张量中的线性索引</label>
+  <label><input type="radio" name="q1" value="D"> 当前 SM 的硬件编号</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q" data-question="q2" data-group="第一组：块级思维" data-title="手算 offsets">
+  <div class="q-meta"><span class="pill">填空</span><span class="pill">offsets / mask</span></div>
+  <h3>手算 offsets</h3>
+  <p>n_elements=20，BLOCK_SIZE=8，pid=2 时，offsets 是什么？哪些位置 mask 为真？</p>
+  <input type="text" name="q2" data-answer="16;17;18;19" data-explain="只要包含 16,17,18,19 就算抓住了尾块有效范围。" placeholder="写出 offsets 向量，再写出有效元素。">
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q" data-question="q3" data-group="第一组：块级思维" data-title="max 归约的 other" data-answer="C" data-explain="max 的单位元是 -inf。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">mask / other</span></div>
+  <h3>max 归约的 other</h3>
+  <p>对一行可能全为负数的数据做 max，越界 load 最合适的 other 是什么？</p>
+  <label><input type="radio" name="q3" value="A"> <code>0.0</code></label>
+  <label><input type="radio" name="q3" value="B"> <code>1.0</code></label>
+  <label><input type="radio" name="q3" value="C"> <code>-inf</code></label>
+  <label><input type="radio" name="q3" value="D"> 任意值，因为 store 会 mask</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q" data-question="q4" data-group="第一组：块级思维" data-title="一维 grid 的数量关系" data-answer="A" data-explain="向上取整就是 cdiv。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">grid / launch</span></div>
+  <h3>一维 grid 的数量关系</h3>
+  <p>向量长度为 n，块大小为 B。需要启动的 program 数量通常是：</p>
+  <label><input type="radio" name="q4" value="A"> <code>cdiv(n, B)</code>，也就是向上取整</label>
+  <label><input type="radio" name="q4" value="B"> <code>n / B</code> 的整数部分</label>
+  <label><input type="radio" name="q4" value="C"> <code>n % B</code></label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+  </div>
+</div>
+      <div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第二组：二维和参数</h3>
+      <p>把向量模型迁移到 tile 和调参。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提示</b>
+      <span>先看布局，再看资源，再看候选空间。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+<div class="q" data-question="q5" data-group="第二组：二维和参数" data-title="为什么不能只 mask store？" data-answer="B" data-explain="load 和 store 都要考虑。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">debug / boundary</span></div>
+  <h3>为什么不能只 mask store？</h3>
+  <p>下面哪项最贴近边界错误的本质？</p>
+  <label><input type="radio" name="q5" value="A"> 因为 load 不需要真实地址</label>
+  <label><input type="radio" name="q5" value="B"> 因为越界 load 可能把错误值带进后续计算</label>
+  <label><input type="radio" name="q5" value="C"> 因为 store 的 mask 会自动修复 load 错误</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q" data-question="q6" data-group="第二组：二维和参数" data-title="解释广播地址">
+  <div class="q-meta"><span class="pill">填空</span><span class="pill">broadcast / stride</span></div>
+  <h3>解释广播地址</h3>
+  <p>解释 <code>offs_m[:, None] * stride_m + offs_n[None, :] * stride_n</code> 为什么会得到二维地址矩阵。回答时先说形状，再说 stride 的作用。</p>
+  <input type="text" name="q6" data-answer="stride_m; stride_n" data-explain="要点是二维广播后的地址矩阵，而不是字面字符串。" placeholder="按“形状 -&gt; 广播 -&gt; stride -&gt; 地址”的顺序解释。">
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q" data-question="q7" data-group="第二组：二维和参数" data-title="BLOCK_SIZE 的判断" data-answer="C" data-explain="块大小是资源和布局的共同约束。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">autotune / hypothesis</span></div>
+  <h3>BLOCK_SIZE 的判断</h3>
+  <p>关于 BLOCK_SIZE，下面哪个说法最符合性能工程思路？</p>
+  <label><input type="radio" name="q7" value="A"> 越大越好，因为一次处理更多元素</label>
+  <label><input type="radio" name="q7" value="B"> 越小越好，因为越不容易越界</label>
+  <label><input type="radio" name="q7" value="C"> 它会影响工作量、访存、寄存器压力和并行度，需要结合 shape 测量</label>
+  <label><input type="radio" name="q7" value="D"> 它只影响 Python 侧 grid，不影响 kernel 性能</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q full" data-question="q8" data-group="第二组：二维和参数" data-title="错误诊断">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">failure / fix</span></div>
+  <h3>错误诊断</h3>
+  <p>一个 Triton max kernel 在行长度不是块大小整数倍时偶尔返回 0，但输入全是负数。你最先怀疑哪一行逻辑？怎么改？</p>
+  <textarea name="q8" placeholder="从 cause / consequence / fix 三点回答。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>先检查越界位置的 other 是否被写成 0.0；max 归约应改成 -inf。原因是 0 会把全负数的真实最大值覆盖掉。</p>
+  </details>
+</div>
+<div class="q" data-question="q9" data-group="第二组：二维和参数" data-title="填空：constexpr">
+  <div class="q-meta"><span class="pill">填空</span><span class="pill">compile-time</span></div>
+  <h3>填空：constexpr</h3>
+  <p>BLOCK_SIZE: tl.constexpr 表示 BLOCK_SIZE 是 _____ 时常量，常用于决定块级张量形状和编译优化。</p>
+  <input type="text" name="q9" data-answer="编译期" data-explain="也可写“编译时”，核心是进入编译常量。" placeholder="填一个词">
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q" data-question="q10" data-group="第二组：二维和参数" data-title="布局问题" data-answer="B" data-explain="stride 让 kernel 按真实布局寻址。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">stride / layout</span></div>
+  <h3>布局问题</h3>
+  <p>为什么二维 kernel 里常传入 stride_m 和 stride_n？</p>
+  <label><input type="radio" name="q10" value="A"> 因为所有矩阵都必须是列主序</label>
+  <label><input type="radio" name="q10" value="B"> 因为逻辑相邻的元素在内存中不一定按紧密连续布局存放</label>
+  <label><input type="radio" name="q10" value="C"> 因为 mask 只能和 stride 一起使用</label>
+  <label><input type="radio" name="q10" value="D"> 因为 program id 只能处理 stride，不处理 offset</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q full" data-question="q11" data-group="第二组：二维和参数" data-title="调参假设">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">autotune / metrics</span></div>
+  <h3>调参假设</h3>
+  <p>给一个带宽密集的一维 elementwise kernel 设计 3 个 BLOCK_SIZE 候选，并说明你想观察什么指标变化。</p>
+  <textarea name="q11" placeholder="例如候选值、理由、要看的吞吐/带宽/occupancy 或边界浪费。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>至少给出三个有理由的候选，且说明观察对象应包括吞吐、带宽利用率、寄存器压力或尾块浪费，而不是只写“更快”。</p>
+  </details>
+</div>
+<div class="q full" data-question="q12" data-group="第二组：二维和参数" data-title="综合讲解">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">综合</span></div>
+  <h3>综合讲解</h3>
+  <p>用 150 字以内解释：Triton 的块级思维如何把“一个算子”拆成 grid、program、offsets、mask、块级计算和写回。</p>
+  <textarea name="q12" placeholder="要求连成一段话，不只列术语。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>要把块、地址、边界和写回连成一条线，说明 program 先选块，再生成 offsets，再用 mask 保护边界，最后完成块级计算和写回。</p>
+  </details>
+</div>
+  </div>
+</div>
+      <section id="export">
+        <div class="head"><h2>导出练习记录</h2><span class="tag">markdown</span></div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions"><button class="action" onclick="generateRecord()">生成记录</button><button class="ghost" onclick="copyRecord()">复制 Markdown</button></div>
+      </section>
+      <section id="sources">
+        <div class="head"><h2>参考资料</h2><span class="tag">参考</span></div>
+        <ul class="source-list">
+  <li><a href="https://triton-lang.org/main/getting-started/tutorials/01-vector-add.html">Triton 官方教程：Vector Addition</a>。本课的一维 program、offsets、mask 讲解以该类最小 kernel 为基础。</li>
+  <li><a href="https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html">Triton 官方教程：Matrix Multiplication</a>。二维 tile、program id 映射和调参思路与下一课矩阵乘相衔接。</li>
+  <li><a href="https://triton-lang.org/main/python-api/triton.language.html">Triton language API</a>。用于核对 <code>tl.load</code>、<code>tl.store</code>、<code>tl.arange</code>、<code>tl.program_id</code> 等语言原语。</li>
+  <li><a href="https://triton-lang.org/main/python-api/generated/triton.autotune.html">Triton autotune API</a>。用于理解自动调参配置与 key 的作用。</li>
+</ul>
+      </section>
+    
+</section>
+    </main>
+  </div>
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

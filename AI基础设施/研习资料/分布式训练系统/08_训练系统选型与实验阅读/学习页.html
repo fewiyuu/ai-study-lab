@@ -1,0 +1,932 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>训练系统选型与实验阅读</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="分布式训练系统" data-unit="08｜训练系统选型与实验阅读">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>分布式训练系统</strong>
+        <span>08｜训练系统选型与实验阅读</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>课程位置</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#terms"><span class="dot"></span>术语账本</a>
+        <a href="#ledger"><span class="dot"></span>选择矩阵</a>
+        <a href="#matrix"><span class="dot"></span>判断矩阵</a>
+        <a href="#micro-case"><span class="dot"></span>微案例</a>
+        <a href="#reading"><span class="dot"></span>读实验</a>
+        <a href="#case"><span class="dot"></span>写计划</a>
+        <a href="#bridge"><span class="dot"></span>代码桥接</a>
+        <a href="#failure-lab"><span class="dot"></span>故障实验</a>
+        <a href="#mistakes"><span class="dot"></span>常见误判</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先把模型约束、并行维度、报告证据和恢复要求分开，再决定从 FSDP2 还是 Megatron Core 起步。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">选型 / 实验阅读</div>
+          <h1>训练系统选型与实验阅读</h1>
+          <p>这一页接着 07 往上收束，把 checkpoint、恢复、并行维度和训练报告放回同一张选型表里。重点不是记住“FSDP2 还是 Megatron Core 哪个更强”，而是先判断你的瓶颈属于状态分片、模型内部切分，还是实验证据不够。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../07_检查点容错与集群运行/学习页.html">上一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页，你应该能做什么</h3>
+          <ul>
+  <li>能把训练需求翻成三个维度：状态压力、并行切法和恢复约束。</li>
+  <li>能读懂一份实验报告有没有把峰值显存、吞吐、通信和恢复成本说全。</li>
+  <li>能写出一个最小验证表，说明为什么先从 FSDP2 或 Megatron Core 其中一边起步。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>课程位置</h2>
+    <span class="tag">position</span>
+  </div>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>这页接在 06 和 07 后面</h3>
+      <p>06 讲激活检查点、混合精度和优化器状态，07 讲 checkpoint、恢复和容错。08 不再往低层追，而是把这些状态放进选型和实验阅读框架里，问清楚“该从哪种训练栈起步”。</p>
+    </div>
+    <div class="box info">
+      <h3>这页要解决什么</h3>
+      <p>很多训练报告只给一个 tokens/s 或一个最大规模结果。真正需要的是：这组数字支持了什么结论，没覆盖什么风险，是否足够支撑换框架。</p>
+    </div>
+    <div class="box warn">
+      <h3>边界</h3>
+      <p>这里不替你下最终工程结论，也不替你改代码。它只给一个可以落地的判断顺序：先看约束，再看并行维度，最后看证据是否完整。</p>
+    </div>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">route</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <p>选型顺序最好不是“先问框架名”，而是“先问问题属于哪一类”。如果主要压力来自参数、梯度和优化器状态，FSDP2 往往更直接；如果单层、长序列或 MoE 已经需要切进模型内部，Megatron Core 的并行构件更贴题。</p>
+      <p>再往上看，实验阅读的重点是把结果拆成三层：稳态吞吐、峰值和尾部成本、恢复和迁移成本。只看平均 tokens/s，结论很容易跑偏。</p>
+    </div>
+    <div class="box info">
+      <h3>读这页时先记住的四个词</h3>
+      <ul>
+        <li>状态：模型、优化器、scheduler、RNG、数据游标。</li>
+        <li>切法：DP、FSDP、TP、PP、CP、EP。</li>
+        <li>证据：显存、吞吐、通信、恢复时间。</li>
+        <li>约束：团队熟悉度、版本稳定性、可维护性。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语账本</h2>
+    <span class="tag">terms</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="训练系统选型术语账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>术语</th>
+          <th>这页里的意思</th>
+          <th>容易误解成什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>FSDP2 / fully_shard</td>
+          <td>把参数、梯度和优化器状态放进分片语义，保留 PyTorch 模型结构。</td>
+          <td>以为它会自动替你解决所有通信和流水线问题。</td>
+        </tr>
+        <tr>
+          <td>Megatron Core</td>
+          <td>把 TP、PP、CP、EP、分布式优化器和 checkpoint 组织成训练构件库。</td>
+          <td>以为它只是一个更大的 DDP 包装器。</td>
+        </tr>
+        <tr>
+          <td>DCP / Distributed Checkpoint</td>
+          <td>按分布式 state_dict 保存和恢复状态，支持 load-time resharding。</td>
+          <td>以为它只是把文件拆成很多块。</td>
+        </tr>
+        <tr>
+          <td>实验阅读</td>
+          <td>看设置、看指标、看消融、看失败边界，再判断结论是否成立。</td>
+          <td>以为看到一个最大吞吐数字就能下结论。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="ledger">
+  <div class="head">
+    <h2>选择账本</h2>
+    <span class="tag">ledger</span>
+  </div>
+  <div class="shape-tracer" data-shape-tracer data-export-context="训练系统选型状态账本" data-export-lang="text">
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1" type="button"><code>pressure</code><span>先判压力类型</span></button>
+      <button class="trace-line" data-trace-step="step-2" type="button"><code>parallelism</code><span>再判并行切法</span></button>
+      <button class="trace-line" data-trace-step="step-3" type="button"><code>evidence</code><span>再看实验证据</span></button>
+      <button class="trace-line" data-trace-step="step-4" type="button"><code>team</code><span>最后看团队约束</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1"><b>状态压力</b><span>参数 / 激活 / 优化器 / 通信</span><p>先判断瓶颈到底是状态体积，还是模型内部切分，或者两者都不是。</p></div>
+      <div class="tensor-card" data-trace-target="step-2"><b>并行切法</b><span>DP / FSDP / TP / PP / CP / EP</span><p>如果只要分片状态，FSDP2 更贴近问题；如果模型内部已经要切多维，Megatron Core 更贴近问题。</p></div>
+      <div class="tensor-card" data-trace-target="step-3"><b>证据类型</b><span>吞吐 / MFU / 峰值 / 恢复</span><p>只看平均 tokens/s 不够，要同时看峰值和尾部成本。</p></div>
+      <div class="tensor-card" data-trace-target="step-4"><b>团队能力</b><span>调试 / 维护 / 升级</span><p>复杂训练栈的上限高，但前提是团队能长期维护它。</p></div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="训练系统选型读写矩阵" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>判断对象</th>
+          <th>先读什么</th>
+          <th>写出什么结论</th>
+          <th>错了以后先看哪里</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>状态压力</td>
+          <td>模型、优化器、激活、RNG、数据游标</td>
+          <td>更偏 FSDP2 还是更偏 Megatron Core</td>
+          <td>训练 step 里哪一步最容易顶满显存</td>
+        </tr>
+        <tr>
+          <td>并行切法</td>
+          <td>DP、TP、PP、CP、EP 组合</td>
+          <td>当前问题是否需要模型内部并行</td>
+          <td>单层矩阵、序列长度、pipeline bubble</td>
+        </tr>
+        <tr>
+          <td>实验证据</td>
+          <td>设置、指标、消融、失败恢复</td>
+          <td>这组结果是否足以支持换栈</td>
+          <td>有没有漏掉恢复成本或跨节点扩展</td>
+        </tr>
+        <tr>
+          <td>团队约束</td>
+          <td>调试速度、维护成本、版本升级</td>
+          <td>先起步还是先对照实验</td>
+          <td>团队是否有能力长期维护更复杂的并行栈</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="matrix">
+  <div class="head">
+    <h2>判断矩阵</h2>
+    <span class="tag">matrix</span>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="FSDP2 与 Megatron Core 判断矩阵" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>判断维度</th>
+          <th>更偏向 FSDP2</th>
+          <th>更偏向 Megatron Core</th>
+          <th>必须实测</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>模型改动频率</td>
+          <td>模型结构还在频繁变化，想保留 PyTorch 原生迭代速度。</td>
+          <td>模型结构较稳定，愿意围绕并行构件重组训练栈。</td>
+          <td>包装或并行配置是否阻碍调试和迭代。</td>
+        </tr>
+        <tr>
+          <td>主要压力</td>
+          <td>参数、梯度、优化器状态占显存过大。</td>
+          <td>单层矩阵、长序列、pipeline 阶段或 MoE 专家需要切分。</td>
+          <td>峰值显存发生在哪个训练阶段。</td>
+        </tr>
+        <tr>
+          <td>并行维度</td>
+          <td>数据并行 + 参数分片就能覆盖主要需求。</td>
+          <td>需要 TP、PP、CP、EP 等多维组合。</td>
+          <td>并行维度增加后通信是否抵消收益。</td>
+        </tr>
+        <tr>
+          <td>checkpoint</td>
+          <td>希望和 PyTorch 生态、状态字典、现有保存逻辑更接近。</td>
+          <td>需要分片 checkpoint、跨并行维度恢复和训练栈级恢复策略。</td>
+          <td>保存、加载、迁移并行配置、故障恢复耗时。</td>
+        </tr>
+        <tr>
+          <td>团队能力</td>
+          <td>团队主要熟悉 PyTorch，系统人手有限。</td>
+          <td>团队能维护并行配置、启动脚本、模型适配和性能诊断。</td>
+          <td>新人上手、线上排障和版本升级成本。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="inline-note">
+    <b>读法</b>
+    先看这一行的瓶颈属于哪一类，再看它会把你推向哪种栈。不要先问“这个框架行不行”，先问“这件事到底切什么”。
+  </div>
+</section>
+
+<section id="micro-case">
+  <div class="head">
+    <h2>微案例</h2>
+    <span class="tag">mini-case</span>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>同样是 8xGPU，为什么起点不同</h3>
+      <p>如果你的 7B 级模型还在频繁改层数、attention heads 和激活检查点，先从 FSDP2 起步，能把状态压力和 PyTorch 代码迁移成本先压住；如果模型结构已经定型，但单层矩阵、长序列和通信都在顶满，先看 Megatron Core，才能把 TP / PP / CP / EP 的组合摆到位。</p>
+    </div>
+    <div class="box info">
+      <h3>失败会长什么样</h3>
+      <p>起步选错时，最常见的不是“完全跑不动”，而是你花了很多时间调 tokens/s，却仍然在 checkpoint、恢复或跨节点扩展上卡住。这个时候回去看症状和证据，比继续换参数更有效。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="8xGPU 起步微案例" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>场景</th>
+          <th>先选什么</th>
+          <th>看什么证据</th>
+          <th>下一步去练习哪题</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>模型还在频繁改</td>
+          <td>FSDP2</td>
+          <td>状态压力、包装边界、恢复时间</td>
+          <td>练习 4、6、9 题</td>
+        </tr>
+        <tr>
+          <td>模型结构已定型</td>
+          <td>Megatron Core</td>
+          <td>TP / PP / CP / EP、通信占比、扩展曲线</td>
+          <td>练习 5、7、8、11 题</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="reading">
+  <div class="head">
+    <h2>实验阅读</h2>
+    <span class="tag">reading</span>
+  </div>
+  <div class="timeline">
+    <div class="step">
+      <h3>先读问题，不先读结论</h3>
+      <p>把论文、文档或报告里的问题改写成一句话：它是在证明更省显存、更高吞吐、更好扩展、更易恢复，还是更容易迁移。目标不清楚，后面的数字就容易被误读。</p>
+    </div>
+    <div class="step">
+      <h3>记录配置，不只记录结果</h3>
+      <p>至少摘出模型参数量、层数、hidden size、attention heads、序列长度、global batch、micro-batch、精度、GPU 型号、节点数、互联、并行维度、是否重算、优化器和 checkpoint 策略。</p>
+    </div>
+    <div class="step">
+      <h3>分开看峰值、稳态和尾部成本</h3>
+      <p>稳态吞吐只是中间段；峰值可能出现在 forward、backward、optimizer step、all-gather 或 checkpoint 附近；尾部成本包括保存、恢复、排队和数据加载抖动。</p>
+    </div>
+    <div class="step">
+      <h3>看消融是否对应关键机制</h3>
+      <p>如果结论是 FSDP2 包装策略更好，就应看到包装边界、reshard、混合精度或 checkpoint 的对比。如果结论是 Megatron Core 多维并行更好，就应看到 TP/PP/CP/EP 或 micro-batch 配置变化的对比。</p>
+    </div>
+    <div class="step">
+      <h3>看扩展曲线，不只看最大点</h3>
+      <p>一个最大规模结果有价值，但选型更需要曲线：从 1 节点到多节点，从短序列到长序列，从小 batch 到大 batch，效率在哪里开始掉头。掉头位置通常暴露真正瓶颈。</p>
+    </div>
+    <div class="step">
+      <h3>把结论改写成自己的验收实验</h3>
+      <p>读完不要只保留“某系统更快”。把结论改写成你的最小实验：在你的 GPU、模型、序列长度、batch 和团队约束下，跑 3 个对照，收集 5 个指标，决定下一步。</p>
+    </div>
+  </div>
+</section>
+
+<section id="case">
+  <div class="head">
+    <h2>把需求写成实验表</h2>
+    <span class="tag">case</span>
+  </div>
+  <p>下面不是推荐固定参数，而是示范如何把口头需求变成可以执行的实验。真实项目要替换成自己的模型、硬件和版本。</p>
+  <div class="codebar">
+    <span class="label">selection-plan.md</span>
+    <span class="kind">实验计划骨架</span>
+    <button class="copy" data-copy="case-plan">复制</button>
+  </div>
+  <pre id="case-plan" data-export-context="训练系统选型实验计划骨架" data-export-lang="text"><code class="language-text">目标：在 8xGPU 单节点上训练 7B 级 Transformer，先验证可行性，再决定是否扩展到多节点。
+
+候选 A：PyTorch FSDP2
+- 并行：数据并行 + 参数/梯度/优化器状态分片
+- 关注：模块包装边界、reshard 策略、激活检查点、state_dict 保存/恢复
+- 指标：峰值显存、tokens/s、OOM 位置、checkpoint 保存/恢复时间
+
+候选 B：Megatron Core
+- 并行：数据并行 + 张量并行，必要时加入流水线并行
+- 关注：TP 大小、micro-batch、pipeline bubble、分布式优化器、分片 checkpoint
+- 指标：tokens/s、MFU、通信占比、pipeline bubble、恢复路径
+
+验收：
+1. 训练 200 step 无 OOM、无 loss 异常跳变。
+2. 保存 checkpoint 后能在同配置恢复。
+3. 改变 micro-batch 后曲线变化可解释。
+4. 记录完整启动命令、版本、GPU 拓扑和关键日志。</code></pre>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>这段例子先看什么</h3>
+      <p>它没有说哪个系统必胜，而是把候选方案、关注点和证据写清楚。工程决策的质量来自可验证的假设，不来自口号。</p>
+    </div>
+    <div class="box info">
+      <h3>这段例子先别追什么</h3>
+      <p>先别追具体仓库版本和启动参数细节。等你把“看什么证据”想清楚，再回到官方文档核对具体命令。</p>
+    </div>
+  </div>
+  <div class="box warn" style="margin-top:12px">
+    <h3>同一组数字，为什么会得出不同结论</h3>
+    <p>假设你手里有两份报告。A 方案是 FSDP2，稳态 tokens/s 稍低，但 checkpoint 保存和恢复更短，模型结构还在频繁改；B 方案是 Megatron Core，稳态 tokens/s 更高，但并行配置更早冻结，checkpoint 和恢复成本更高。两份报告都可能“对”，前提是你关心的目标不同。</p>
+    <p>如果目标是研究代码快速迭代、模型结构仍在大改，A 的分数会更高，因为它把调试和迁移成本压低了。如果目标是长时间稳定预训练、模型内部已经必须切成 TP / PP / CP / EP，B 的分数会更高，因为它更贴近大规模并行的结构。这里的关键不是把数字平均一下，而是把目标、代价和恢复要求一起放进判断。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="训练系统选型对照读法" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对照项</th>
+          <th>方案 A：FSDP2 起步</th>
+          <th>方案 B：Megatron Core 起步</th>
+          <th>你要补问什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>稳态吞吐</td>
+          <td>可能不是最高，但常常足够接近可用。</td>
+          <td>通常更容易把大规模并行的吞吐推高。</td>
+          <td>你的目标是研究迭代速度，还是极限吞吐？</td>
+        </tr>
+        <tr>
+          <td>状态和恢复</td>
+          <td>更贴近 PyTorch 生态，保存 / 恢复路径通常更容易接住。</td>
+          <td>保存语义更依赖并行构件和分布式 checkpoint。</td>
+          <td>checkpoint 保存、恢复、迁移世界规模时要不要重分片？</td>
+        </tr>
+        <tr>
+          <td>工程维护</td>
+          <td>团队更容易在现有训练代码上继续改。</td>
+          <td>需要更早冻结模型结构和并行配置。</td>
+          <td>团队有没有能力长期维护更复杂的启动脚本和排障流程？</td>
+        </tr>
+        <tr>
+          <td>实验证据</td>
+          <td>应该看到包装边界、reshard、混合精度或 checkpoint 对比。</td>
+          <td>应该看到 TP / PP / CP / EP 或 micro-batch 的对比。</td>
+          <td>作者有没有把结论和关键机制对上？</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar">
+    <span class="label">decision-notes.txt</span>
+    <span class="kind">判断笔记骨架</span>
+    <button class="copy" data-copy="decision-notes">复制</button>
+  </div>
+  <pre id="decision-notes" data-export-context="训练系统选型判断笔记骨架" data-export-lang="text"><code class="language-text">1. 当前主要压力是什么：状态、并行还是恢复。
+2. 这份报告的目标是什么：稳态吞吐、扩展效率、恢复能力，还是迁移成本。
+3. 结论和证据是否对上：包装边界、reshard、TP/PP/CP/EP、checkpoint、恢复时间。
+4. 如果只有一个最大 tokens/s，就先把它当作不完整结果，不直接下最终结论。
+5. 如果要起步，就选那个能最快把你的主约束暴露出来的方案。</code></pre>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>代码桥接</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>先看两个公开入口</h3>
+      <p><code>examples/run_simple_mcore_train_loop.py</code> 适合做最小烟测，<code>pretrain_gpt.py</code> 适合看更完整的训练入口。读代码时先找：状态从哪里进、并行怎么配、checkpoint 在哪里挂钩。</p>
+    </div>
+    <div class="box info">
+      <h3>这页和前面怎么接</h3>
+      <p>06 解决的是状态体积和数值路径，07 解决的是保存和恢复，这一页要做的是：在具体实验里决定先走哪条栈，并知道读哪类证据来修正决定。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="训练系统选型代码桥接矩阵" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>入口</th>
+          <th>先看什么</th>
+          <th>错了以后先查什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>examples/run_simple_mcore_train_loop.py</code></td>
+          <td>最小训练循环、状态构造、checkpoint 位置。</td>
+          <td>训练状态有没有被完整交给 checkpoint 逻辑。</td>
+        </tr>
+        <tr>
+          <td><code>pretrain_gpt.py</code></td>
+          <td>完整训练入口、并行策略、优化器和保存策略。</td>
+          <td>并行维度和保存策略是不是和报告结论一致。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box warn" style="margin-top:12px">
+    <h3>把结果翻成结论时，先看三件事</h3>
+    <p>第一，看报告是不是把“稳态吞吐”和“尾部成本”分开了。如果没有分开，就先把 checkpoint 和恢复成本补出来，再看谁更适合起步。第二，看结论是不是和关键机制对上了：FSDP2 的证据应该解释状态压力和包装边界，Megatron Core 的证据应该解释多维并行和布局成本。第三，看你现在的问题是不是已经到了需要改栈的级别，还是只需要调批次、重算或 checkpoint 语义。</p>
+    <p>这一层不难，但特别容易被跳过。很多人看到一个更高的 tokens/s 就直接抄结论，结果到恢复、跨节点、或者长序列阶段才发现并行方式并没有覆盖真正的瓶颈。选型报告读到最后，不是收一个名字，而是收一个可执行的下一步。</p>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="训练系统选型结论翻译表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>你看到的结论</th>
+          <th>它真正支持什么</th>
+          <th>还缺什么才能下决定</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>FSDP2 更容易起步</td>
+          <td>模型结构还在变、状态压力更大、PyTorch 迭代速度更重要。</td>
+          <td>还要确认 checkpoint、恢复和跨节点扩展是不是能接受。</td>
+        </tr>
+        <tr>
+          <td>Megatron Core 吞吐更高</td>
+          <td>模型内部并行已经必要，且团队能承受更复杂的并行构件。</td>
+          <td>还要确认保存、恢复、调试和版本升级成本。</td>
+        </tr>
+        <tr>
+          <td>tokens/s 最高</td>
+          <td>稳态训练速度更好。</td>
+          <td>还要补峰值显存、通信占比、checkpoint 和恢复时间。</td>
+        </tr>
+        <tr>
+          <td>恢复没问题</td>
+          <td>文件层面和部分语义层面都能接住。</td>
+          <td>还要确认 step、RNG、采样游标和并行布局都一致。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="failure-lab">
+  <div class="head">
+    <h2>故障实验</h2>
+    <span class="tag">lab</span>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>先看症状，再看结论</h3>
+      <p>选型时最容易出错的，不是“没听过某个框架”，而是把一个表面症状直接翻译成框架结论。tokens/s 只能告诉你稳态吞吐，不能告诉你 checkpoint 太慢、恢复太慢、跨节点通信太重，也不能告诉你是不是因为并行维度选错了。</p>
+      <p>所以诊断顺序要反过来：先看症状属于状态压力、并行切法、恢复代价，还是实验设置本身有问题；再决定是先看 FSDP2，还是先看 Megatron Core，或者先回去补实验变量。</p>
+    </div>
+    <div class="box info">
+      <h3>先别追的四件事</h3>
+      <p>不要一看到慢就换栈，不要一看到 OOM 就强行 TP/PP，不要一看到 checkpoint 失败就只盯存储，也不要一看到单点结果就外推到多节点。你现在要学的是排查顺序，不是结论口号。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="训练系统选型故障排查矩阵" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>先问的问题</th>
+          <th>先看什么证据</th>
+          <th>暂时别下什么结论</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>tokens/s 很高，但保存和恢复都慢</td>
+          <td>checkpoint 时间是不是被吞掉了</td>
+          <td>保存耗时、恢复耗时、latest 更新顺序</td>
+          <td>不要只说训练栈更快</td>
+        </tr>
+        <tr>
+          <td>optimizer step 处 OOM</td>
+          <td>是不是优化器状态和主参数太肥</td>
+          <td>优化器状态占用、显存峰值位置、state_dict 语义</td>
+          <td>不要立刻改成更复杂的模型并行</td>
+        </tr>
+        <tr>
+          <td>长序列下速度掉得很厉害</td>
+          <td>是不是 attention 激活、通信或 bubble 在作怪</td>
+          <td>TP / CP / PP 配置、micro-batch、重算开关</td>
+          <td>不要只拿短序列结果解释长序列</td>
+        </tr>
+        <tr>
+          <td>恢复后 loss 轨迹变了</td>
+          <td>是不是 step、RNG、采样游标没一起恢复</td>
+          <td>scheduler、global step、RNG、数据游标、完成标记</td>
+          <td>不要只说“文件能读”就算恢复成功</td>
+        </tr>
+        <tr>
+          <td>跨节点扩展很差</td>
+          <td>是通信、并行维度还是版本假设的问题</td>
+          <td>通信占比、扩展曲线、并行配置、版本快照</td>
+          <td>不要只凭单节点结论换系统</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="terminal-lab" data-terminal-lab data-export-context="训练系统选型故障实验" data-export-lang="text">
+    <div class="terminal-controls">
+      <button class="ghost" type="button" data-terminal-case="tokens">只看 tokens/s</button>
+      <button class="ghost" type="button" data-terminal-case="oom">optimizer step OOM</button>
+      <button class="ghost" type="button" data-terminal-case="resume">恢复后轨迹漂移</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite"></pre>
+    <template data-terminal-output="tokens"><span class="err">症状：报告只写 tokens/s。</span>
+    
+<span class="ok">下一步：</span>补模型规模、序列长度、GPU / 网络、并行配置、checkpoint 时间和恢复时间。
+
+<span class="ok">判断：</span>只有一个稳态指标时，不能说明该选 FSDP2 还是 Megatron Core，只能说明当前配置下的吞吐。</template>
+    <template data-terminal-output="oom"><span class="err">症状：OOM 出现在 optimizer step。</span>
+    
+<span class="ok">下一步：</span>先看优化器状态、主参数 shard、混合精度和 checkpoint 语义，再判断是否先用 FSDP2 验证状态压力。
+
+<span class="ok">判断：</span>这类问题通常先不是模型内部并行，而是状态体积和恢复语义没对齐。</template>
+    <template data-terminal-output="resume"><span class="err">症状：恢复后 loss 和学习率轨迹变了。</span>
+    
+<span class="ok">下一步：</span>检查 scheduler、global step、RNG、数据游标和 latest 指针，再看 checkpoint 是否按完整事务发布。
+
+<span class="ok">判断：</span>文件能打开不代表恢复正确；先确认语义，再确认布局。</template>
+  </div>
+  <div class="codebar">
+    <span class="label">diagnosis-order.txt</span>
+    <span class="kind">排查顺序</span>
+    <button class="copy" data-copy="diagnosis-order">复制</button>
+  </div>
+  <pre id="diagnosis-order" data-export-context="训练系统选型故障排查顺序" data-export-lang="text"><code class="language-text">1. 先判断症状属于状态压力、并行切法、恢复代价，还是实验设置有问题。
+2. 再找能直接解释症状的证据：峰值、通信、checkpoint、step、RNG、数据游标。
+3. 如果证据只来自单点或单卡，就补一组对照实验，不要立刻换栈。
+4. 如果结论需要跨节点或跨 world size，先回到公开入口核对版本和并行语义。
+5. 只有当问题被同一类证据重复指向时，才把 FSDP2、Megatron Core 或 DCP 放到结论里。</code></pre>
+  <div class="box warn">
+    <h3>这一段真正想训练你什么</h3>
+    <p>训练系统选型不是“选一个最强的名字”，而是“在一堆不完整的证据里，先把最可能解释症状的那层挑出来”。这一步做对了，后面读实验、看 checkpoint、看恢复路径，才不会总是跳层。</p>
+  </div>
+  <div class="codebar">
+    <span class="label">report-readout.txt</span>
+    <span class="kind">报告读法</span>
+    <button class="copy" data-copy="report-readout">复制</button>
+  </div>
+  <pre id="report-readout" data-export-context="训练系统选型报告读法" data-export-lang="text"><code class="language-text">如果 tokens/s 高，但 save / resume 慢：
+  先补 checkpoint 保存时间和恢复时间，再看 latest 发布顺序。
+
+如果 optimizer step OOM：
+  先补优化器状态、主参数 shard、mixed precision 路径，再看是否需要先从 FSDP2 起步。
+
+如果长序列掉速：
+  先补 TP / CP / PP、micro-batch 和 recompute，再看通信占比和 bubble。
+
+如果跨节点扩展差：
+  先补扩展曲线和版本快照，再判断是网络还是并行配置。</code></pre>
+  <div class="box info" style="margin-top:12px">
+    <h3>和练习怎么连起来</h3>
+    <p>这段读法正好对应练习里的报告阅读题、场景判断题和复述题。你先用它把症状翻成“缺什么证据”，再回到练习去写完整答案。若你只能多补一项，优先补 checkpoint 和恢复时间；若你只能多改一项并行配置，优先改最能暴露压力来源的那项，而不是先换整个训练栈。</p>
+  </div>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见误判</h2>
+    <span class="tag">debug</span>
+  </div>
+  <div class="grid2">
+    <div class="box danger">
+      <h3>误判 1：把框架名当结论</h3>
+      <p>“我们要用 Megatron”或“我们要用 FSDP2”不是选型结论，只是候选方案。真正的结论必须包含约束、配置、指标和验证计划。</p>
+    </div>
+    <div class="box warn">
+      <h3>误判 2：只看平均吞吐</h3>
+      <p>平均 tokens/s 可能掩盖 checkpoint、数据加载、通信抖动和恢复成本。预训练任务不能只用一个稳态数字做决策。</p>
+    </div>
+    <div class="box warn">
+      <h3>误判 3：把小规模实验外推到大规模</h3>
+      <p>单节点实验看不出跨节点网络瓶颈，短序列实验看不出上下文并行压力，小 batch 实验看不出流水线填充效果。</p>
+    </div>
+    <div class="box danger">
+      <h3>误判 4：忽略 checkpoint 形态</h3>
+      <p>训练跑通不代表系统可用。分片状态、并行维度、优化器状态和随机数状态保存不完整，会让恢复或迁移变成事故。</p>
+    </div>
+    <div class="box info">
+      <h3>误判 5：同时改太多变量</h3>
+      <p>如果同时改模型、batch、精度、并行维度和框架，就无法知道收益来自哪里。一次只改一个主变量，才知道证据指向什么。</p>
+    </div>
+    <div class="box info">
+      <h3>误判 6：忽略人的调试成本</h3>
+      <p>复杂训练栈的性能上限更高，但调试成本也更高。没人能定位并行配置和数值问题时，高上限反而会拖慢项目。</p>
+    </div>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>作答目标</strong>
+    <p>不要只报框架名。每题尽量写出“先看什么、为什么、下一步验证什么”。</p>
+  </div>
+  <div class="review-card">
+    <strong>检查重点</strong>
+    <p>你是否能把状态压力、并行维度、实验指标和恢复边界放在同一张判断表里。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、概念识别</h3>
+      <p>先确认你不会把选型问题和恢复问题混成一类。</p>
+    </div>
+    <div class="quick-review">
+      <b>检查点</b>
+      <span>先判压力，再判切法，再判证据。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、概念识别" data-title="FSDP2 更直接解决哪类问题？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">state pressure</span></div>
+      <h3>FSDP2 更直接解决哪类问题？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q1" value="A">A. 参数、梯度、优化器状态带来的显存压力。</label>
+        <label><input type="radio" name="q1" value="B">B. 所有长序列 attention 通信问题。</label>
+        <label><input type="radio" name="q1" value="C">C. 自动消除所有流水线气泡。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">想一想名字里“shard”主要切什么。</p>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、概念识别" data-title="Megatron Core 只是 DDP 包装器吗？" data-answer="false">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">parallelism</span></div>
+      <h3>Megatron Core 只是 DDP 包装器吗？</h3>
+      <label><input type="radio" name="q2" value="true">对</label>
+      <label><input type="radio" name="q2" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">回忆它提供的 TP、PP、CP、EP 和 distributed optimizer。</p>
+    </div>
+
+    <div class="q full" data-question="q3" data-group="一、概念识别" data-title="填空：选型前先问哪三类问题？">
+      <div class="q-meta"><span class="pill">mini-fields</span><span class="pill">decision order</span></div>
+      <h3>填空：选型前先问哪三类问题？</h3>
+      <div class="mini-fields">
+        <label>先看什么 1
+          <input type="text" data-answer="状态压力,状态;压力" placeholder="状态压力">
+        </label>
+        <label>先看什么 2
+          <input type="text" data-answer="并行切法,并行;切法" placeholder="并行切法">
+        </label>
+        <label>先看什么 3
+          <input type="text" data-answer="实验证据,证据;实验" placeholder="实验证据">
+        </label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">只要顺序说清楚，选型讨论就不会被框架名带跑。</p>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、场景判断</h3>
+      <p>把实际需求翻译成候选方案和验证计划。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题方式</b>
+      <span>每题至少写出起点、风险和要验证的指标。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q4" data-group="二、场景判断" data-title="场景 A：研究代码频繁改模型，单节点 8 卡，主要 OOM 在 optimizer step">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">FSDP2</span></div>
+      <h3>场景 A：研究代码频繁改模型，单节点 8 卡，主要 OOM 在 optimizer step</h3>
+      <div class="choices">
+        <label><input type="radio" name="q4" value="A">A. 先评估 FSDP2，因为它更贴近 PyTorch 迭代体验，且先解决状态压力。</label>
+        <label><input type="radio" name="q4" value="B">B. 先跳到 Megatron Core，因为任何 OOM 都说明必须改成多维并行。</label>
+        <label><input type="radio" name="q4" value="C">C. 先不看任何并行，直接扩大 batch 一倍。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">optimizer step OOM 指向优化器状态；研究代码频繁变化影响迁移成本。</p>
+    </div>
+
+    <div class="q full" data-question="q5" data-group="二、场景判断" data-title="场景 B：长序列预训练，attention 激活和通信成为主压力">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">Megatron Core</span></div>
+      <h3>场景 B：长序列预训练，attention 激活和通信成为主压力</h3>
+      <div class="choices">
+        <label><input type="radio" name="q5" value="A">A. 先关注 TP、CP、重算和 micro-batch，再看通信占比和 pipeline bubble。</label>
+        <label><input type="radio" name="q5" value="B">B. 只看 loss，其他都不重要。</label>
+        <label><input type="radio" name="q5" value="C">C. 先把 checkpoint 删除，避免 I/O 干扰。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">不要只写 TP；长序列通常还要看序列/上下文相关切分和重算。</p>
+    </div>
+
+    <div class="q full" data-question="q6" data-group="二、场景判断" data-title="把一句结论改写成验收实验">
+      <div class="q-meta"><span class="pill">open</span><span class="pill">experiment design</span></div>
+      <h3>把一句结论改写成验收实验</h3>
+      <textarea name="q6" placeholder="结论：某训练栈在 64 卡上比另一方案快 20%。请改写成你自己的 3 个验收实验。"></textarea>
+      <p class="solve-note">提示：固定变量、列指标、说明通过/不通过标准。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>合格答案会把“快 20%”拆成可重复的实验：固定模型、序列长度、batch 和版本，只改并行或 checkpoint 策略；分别记录稳态 tokens/s、峰值显存、通信占比、checkpoint 时间和恢复结果；最后写清楚通过条件，例如 200 step 内无 OOM、恢复后第一步 loss 和 step 对齐。只写“再跑一次看看”不算验收实验。</p></details>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、报告阅读</h3>
+      <p>练习把报告里的“结果”改写成“还缺什么证据”。</p>
+    </div>
+    <div class="quick-review">
+      <b>最低要求</b>
+      <span>看设置、看消融、看尾部成本。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q7" data-group="三、报告阅读" data-title="一个实验只给最大规模 tokens/s，你先追问什么？" data-answer="B">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">evidence gap</span></div>
+      <h3>一个实验只给最大规模 tokens/s，你先追问什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q7" value="A">A. 先问作者是不是用了漂亮字体。</label>
+        <label><input type="radio" name="q7" value="B">B. 先问模型、序列长度、GPU / 网络、并行配置和 checkpoint 成本。</label>
+        <label><input type="radio" name="q7" value="C">C. 先问图表颜色好不好看。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">只有一个吞吐数字时，缺的往往不是算术，而是上下文。</p>
+    </div>
+
+    <div class="q full" data-question="q8" data-group="三、报告阅读" data-title="填空：扩展效率下降时先看哪三项">
+      <div class="q-meta"><span class="pill">mini-fields</span><span class="pill">diagnosis</span></div>
+      <h3>填空：扩展效率下降时先看哪三项</h3>
+      <div class="mini-fields">
+        <label>因素 1
+          <input type="text" data-answer="通信占比,通信" placeholder="通信占比">
+        </label>
+        <label>因素 2
+          <input type="text" data-answer="pipeline bubble,气泡" placeholder="pipeline bubble">
+        </label>
+        <label>因素 3
+          <input type="text" data-answer="数据加载,加载抖动" placeholder="数据加载">
+        </label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">不要只写“更慢了”，要写出最可能先掉的环节。</p>
+    </div>
+
+    <div class="q full" data-question="q9" data-group="三、报告阅读" data-title="解释：为什么恢复成本不能从 tokens/s 里看出来？">
+      <div class="q-meta"><span class="pill">open</span><span class="pill">tail cost</span></div>
+      <h3>解释：为什么恢复成本不能从 tokens/s 里看出来？</h3>
+      <textarea name="q9" placeholder="请至少提到 checkpoint 时间、恢复时间和失败恢复。"></textarea>
+      <p class="solve-note">回答结构：先说 tokens/s 描述什么，再说它漏掉什么，最后给出补充指标。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>好的答案会说明 tokens/s 主要描述稳态吞吐，不包含保存 checkpoint、恢复 checkpoint、排队等待、失败后重启和重新装配状态的成本。选型时如果只看 tokens/s，可能会把保存时间很长、恢复很慢的方案误判成更优。补充指标应该包括 checkpoint 保存/恢复时间、崩溃后的恢复成功率、恢复后第一步是否对齐，以及端到端运行成本。</p></details>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、桥接与复述</h3>
+      <p>把这页讲回给别人听，顺手检查你有没有把对象说清。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提醒</b>
+      <span>先讲直觉，再讲术语，最后讲一个坑。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q10" data-group="四、桥接与复述" data-title="你最先会去读哪一个公开入口？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">code bridge</span></div>
+      <h3>你最先会去读哪一个公开入口？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q10" value="A"><code>examples/run_simple_mcore_train_loop.py</code></label>
+        <label><input type="radio" name="q10" value="B">先搜私有笔记目录。</label>
+        <label><input type="radio" name="q10" value="C">只看 README 标题，不看代码。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">这页的最小入口就是公开训练循环和 GPT 预训练脚本。</p>
+    </div>
+
+    <div class="q full" data-question="q11" data-group="四、桥接与复述" data-title="用 180 字左右把本页讲给学完 07 的同学">
+      <div class="q-meta"><span class="pill">open</span><span class="pill">synthesis</span></div>
+      <h3>用 180 字左右把本页讲给学完 07 的同学</h3>
+      <textarea name="q11" placeholder="至少要包含：状态压力、并行切法、实验证据、代码入口。"></textarea>
+      <p class="solve-note">不要写成名词串。要写出“这一步先做什么，再做什么”。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>高分答案会先说，这页不是再讲 checkpoint 本身，而是把 06 和 07 的状态、保存和恢复拿来做选型。接着讲判断顺序：先看问题属于状态压力还是模型内部切分，再看要不要 DP、FSDP2、TP、PP、CP、EP 组合，最后看报告有没有给出吞吐、峰值、恢复和尾部成本。再往下要指出最小入口是公开训练循环和 GPT 预训练脚本，而不是只看一个最大 tokens/s。</p></details>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="四、桥接与复述" data-title="给同事写一段 3 句的选型起步建议">
+      <div class="q-meta"><span class="pill">open</span><span class="pill">practical note</span></div>
+      <h3>给同事写一段 3 句的选型起步建议</h3>
+      <textarea name="q12" placeholder="建议里要同时出现：起点、风险、验证指标。"></textarea>
+      <p class="solve-note">这题只看你能不能把“先做什么”说具体。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>合格答案会先给起点，例如模型结构还在变、主要压力在优化器状态时先看 FSDP2；再点出风险，例如只看 tokens/s 会漏掉保存和恢复成本；最后写出验证指标，例如峰值显存、通信占比、checkpoint 保存/恢复时间和 200 step 稳定性。三句里如果能把“起点、风险、指标”都放进去，就已经够用了。</p></details>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <ul class="source-list">
+  <li>课程根目录 <code>index.html</code>：给出本课程的顺序、前后单元和课程边界。</li>
+  <li><code>06_激活检查点混合精度与优化器状态/学习页.html</code>：承接激活、混合精度和优化器状态，为选型时的状态压力判断铺垫。</li>
+  <li><code>07_检查点容错与集群运行/学习页.html</code>：承接 checkpoint、恢复和容错，为这页的实验阅读和恢复成本判断铺垫。</li>
+  <li>PyTorch <a href="https://docs.pytorch.org/docs/stable/distributed.checkpoint.html" target="_blank" rel="noreferrer">Distributed Checkpoint</a> 与 <a href="https://docs.pytorch.org/tutorials/recipes/distributed_checkpoint_recipe.html" target="_blank" rel="noreferrer">Getting Started with Distributed Checkpoint</a>：用于分布式 state_dict、保存 / 加载和不同 world size 下的恢复语义。</li>
+  <li>PyTorch <a href="https://docs.pytorch.org/tutorials/recipes/distributed_async_checkpoint_recipe.html" target="_blank" rel="noreferrer">Asynchronous Saving with Distributed Checkpoint</a>：用于异步保存、后台写入和发布边界说明。</li>
+  <li>PyTorch <a href="https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html" target="_blank" rel="noreferrer">Getting Started with Fully Sharded Data Parallel (FSDP2)</a> 与 <a href="https://docs.pytorch.org/docs/stable/distributed.fsdp.fully_shard.html" target="_blank" rel="noreferrer">fully_shard</a>：用于参数、梯度和优化器状态的分片语义。</li>
+  <li>NVIDIA Megatron Core <a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/index.html" target="_blank" rel="noreferrer">User Guide</a> 与 <a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/parallelism-strategies-guide.html" target="_blank" rel="noreferrer">Parallelism Strategies Guide</a>：用于 DP、TP、PP、CP、EP 等并行构件说明。</li>
+  <li>NVIDIA Megatron Core <a href="https://docs.nvidia.com/megatron-core/developer-guide/0.16.0/user-guide/features/dist_optimizer.html" target="_blank" rel="noreferrer">Distributed Optimizer</a>、<a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/apidocs/core/core.dist_checkpointing.html" target="_blank" rel="noreferrer">core.dist_checkpointing</a>、<a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/apidocs/core/core.dist_checkpointing.strategies.filesystem_async.html" target="_blank" rel="noreferrer">filesystem_async strategy</a>：用于分布式优化器、checkpoint 元数据和异步写入边界说明。</li>
+  <li><a href="https://github.com/NVIDIA/Megatron-LM" target="_blank" rel="noreferrer">NVIDIA/Megatron-LM</a>：用于看 <code>examples/run_simple_mcore_train_loop.py</code> 和 <code>pretrain_gpt.py</code> 这两个公开入口。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

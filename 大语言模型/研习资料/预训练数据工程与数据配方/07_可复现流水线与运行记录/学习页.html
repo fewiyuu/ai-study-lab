@@ -1,0 +1,894 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>07｜可复现流水线与运行记录</title>
+  <meta name="description" content="预训练数据工程中的可复现流水线、运行记录、产物清单和恢复边界学习页，含练习记录导出。">
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="预训练数据工程与数据配方" data-unit="单元 07">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>可复现流水线与运行记录</strong>
+        <span>第 07 单元：把数据处理从“跑过一次”变成“可解释、可复查、可重跑”。</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#map"><span class="dot"></span>概念骨架</a>
+        <a href="#terms"><span class="dot"></span>术语与误区</a>
+        <a href="#pipeline"><span class="dot"></span>流水线与契约</a>
+        <a href="#records"><span class="dot"></span>运行记录</a>
+        <a href="#failure"><span class="dot"></span>故障定位</a>
+        <a href="#replay"><span class="dot"></span>完整复跑链</a>
+        <a href="#handoff"><span class="dot"></span>交接模板</a>
+        <a href="#bridge"><span class="dot"></span>前后衔接</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">
+        本页承接第 06 单元的消融验证：你已经知道一条配方有没有早期信号，这一页继续追问它能不能被别人按同一规则重建。先看对象，再看记录，最后看恢复边界。
+      </div>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <div>
+          <div class="kicker">预训练数据工程与数据配方｜后半段</div>
+          <h1>可复现流水线与运行记录</h1>
+          <p>这一页不把数据处理当成一串临时脚本，而是当成一份可审计的运行。你要能说清楚：输入从哪来、版本怎么锁、哪一步改了什么、产物怎么校验、失败后从哪里接着跑。做不到这些，前面的过滤、去重和配方都很难被真正复查。</p>
+          <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../06_小模型消融与数据验证/学习页.html">上一单元</a>
+            <a href="../08_许可隐私与发布边界/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完这一页，你应该能做什么</h3>
+          <ul>
+            <li>把原始快照、解析、过滤、去重、分片和发布清单拆成可追踪的阶段。</li>
+            <li>区分代码版本、输入快照、tokenizer、过滤器、配置和运行记录。</li>
+            <li>看见一份 manifest 或运行日志时，马上知道缺了什么证据。</li>
+          </ul>
+        </div>
+      </header>
+
+      <section id="goals">
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">deep unit</span>
+        </div>
+        <div class="grid3">
+          <div class="box">
+            <h3>先把对象锁住</h3>
+            <p>知道 run、manifest、snapshot、tokenizer、stage、shard、run_id 分别是什么，避免把“跑过一次”和“可复现”混为一谈。</p>
+          </div>
+          <div class="box">
+            <h3>再把过程写清楚</h3>
+            <p>能把每个阶段的输入、输出、依赖、恢复点和失败症状写成一张表，别人照着表就能看懂你在做什么。</p>
+          </div>
+          <div class="box">
+            <h3>最后把证据留住</h3>
+            <p>知道哪些字段必须进运行记录：校验和、大小、样本数、token 数、资源消耗、失败原因、重试方式和负责人判断。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="map">
+        <div class="head">
+          <h2>概念骨架</h2>
+          <span class="tag">run = spec + inputs + execution + outputs</span>
+        </div>
+        <div class="shape-tracer" data-shape-tracer>
+          <div class="trace-lines">
+            <button class="trace-line active" data-trace-step="step-1" type="button">
+              <code>step 1</code><span>原始快照</span>
+            </button>
+            <button class="trace-line" data-trace-step="step-2" type="button">
+              <code>step 2</code><span>解析与标准化</span>
+            </button>
+            <button class="trace-line" data-trace-step="step-3" type="button">
+              <code>step 3</code><span>过滤与去重</span>
+            </button>
+            <button class="trace-line" data-trace-step="step-4" type="button">
+              <code>step 4</code><span>分片与 token 统计</span>
+            </button>
+            <button class="trace-line" data-trace-step="step-5" type="button">
+              <code>step 5</code><span>manifest 与运行记录</span>
+            </button>
+          </div>
+          <div class="trace-canvas">
+            <div class="tensor-card active" data-trace-target="step-1">
+              <b>before</b><span>原始网页、代码仓库镜像、文档快照、时间戳和访问权限。</span><p>读的是来源清单和校验和；写的是“这批输入到底是什么”。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="step-2">
+              <b>after</b><span>统一成 document schema，保留正文、id、元数据和解析版本。</span><p>读的是 parser、编码和字段规则；写的是可继续处理的标准对象。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="step-3">
+              <b>state</b><span>过滤后只剩可训练文本，旁边还有拒绝统计和原因分布。</span><p>读的是语言、长度、重复和质量模型；写的是 keep/drop 结果。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="step-4">
+              <b>output</b><span>shard、token 数、字节数、样本数、生成时间。</span><p>读的是 tokenizer 和分片规则；写的是后续训练要用的可校验产物。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="step-5">
+              <b>symptom</b><span>manifest 和运行记录缺字段时，别人只能看到文件，却不知道为什么可信。</span><p>读的是所有阶段输出；写的是可复查的证据链。</p>
+            </div>
+          </div>
+        </div>
+        <div class="box info">
+          <h3>和前后单元怎么接</h3>
+          <p>第 06 单元已经教你如何用小模型和统一评测判断一条配方值不值得继续。第 07 单元补上前提：你得先能稳定地重建同一批输入和同一条流水线。第 08 单元会继续追问：这批输入能不能公开、能不能训练、能不能对外发。</p>
+        </div>
+      </section>
+
+      <section id="terms">
+        <div class="head">
+          <h2>术语与误区</h2>
+          <span class="tag">先分清对象</span>
+        </div>
+        <div class="table-wrap">
+          <table class="metric-table" data-export-context="07 术语表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>术语</th>
+                <th>直觉解释</th>
+                <th>精确定义</th>
+                <th>常见误解</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>流水线</td>
+                <td>把原始数据加工成训练语料的一整套步骤。</td>
+                <td>由阶段、依赖、输入输出、参数和恢复边界组成的可执行规范。</td>
+                <td>只要有一串脚本就算流水线。脚本只是执行片段，流水线还要说明谁先谁后、失败后怎么接。</td>
+              </tr>
+              <tr>
+                <td>Run</td>
+                <td>按同一规范真实跑出来的一次事件。</td>
+                <td>在特定代码、配置、输入、环境和资源条件下完成的一次处理过程。</td>
+                <td>只记最后生成了什么文件。真正的 run 还要能回答“为什么是这一批文件”。</td>
+              </tr>
+              <tr>
+                <td>Manifest</td>
+                <td>产物目录的机器可读清单。</td>
+                <td>列出路径、校验和、字节数、样本数、token 数、阶段、来源和时间的记录。</td>
+                <td>把 README 当 manifest。README 是给人看的，manifest 还要能被程序校验。</td>
+              </tr>
+              <tr>
+                <td>run_id</td>
+                <td>一次运行的唯一标签。</td>
+                <td>把配置、日志、产物、检查点和复现实验连接起来的主键。</td>
+                <td>run_id 只是日志编号。它的作用是把证据串成一条链。</td>
+              </tr>
+              <tr>
+                <td>latest 指针</td>
+                <td>总是指向“最新结果”的目录名。</td>
+                <td>可变指向，常用于操作，但不适合当复现的唯一依据。</td>
+                <td>最新就等于最可信。实际上 latest 最容易漂移。</td>
+              </tr>
+              <tr>
+                <td>资源账本</td>
+                <td>这批数据花了多少机器和时间。</td>
+                <td>按阶段记录 CPU、GPU、内存、磁盘、网络、时长、失败重试和成本估算。</td>
+                <td>只记总耗时就够。定位瓶颈时，你需要知道卡在哪一步。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="pipeline">
+        <div class="head">
+          <h2>流水线与契约</h2>
+          <span class="tag">输入 / 输出 / 依赖 / 症状</span>
+        </div>
+        <div class="math-block" data-export-context="07 产量估算公式" data-export-lang="math">
+          $$
+          \text{shard\_count} = \left\lceil \frac{\text{total\_tokens}}{\text{shard\_tokens}} \right\rceil
+          $$
+          <p>这里的意思很直接：先估算总 token，再按 shard 上限切分。这个公式本身不复杂，但它提醒你，tokenizer 版本一变、过滤阈值一变，最终分片数也会跟着变，所以 shard 数不能只靠“记得大概是多少”来复现。</p>
+        </div>
+        <div class="table-wrap">
+          <table class="metric-table" data-export-context="07 阶段契约表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>阶段</th>
+                <th>输入</th>
+                <th>输出</th>
+                <th>必须记录</th>
+                <th>最常见症状</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>snapshot</td>
+                <td>原始下载列表、时间范围、权限。</td>
+                <td>固定的输入快照和校验和。</td>
+                <td>URL、文件名、sha256、下载时间、版本号。</td>
+                <td>“latest” 路径被替换后，复跑得到另一批输入。</td>
+              </tr>
+              <tr>
+                <td>parse</td>
+                <td>WARC、HTML、PDF、Markdown 等原始格式。</td>
+                <td>统一的 document 对象。</td>
+                <td>解析器版本、正文抽取规则、编码处理、丢弃字段。</td>
+                <td>正文抽出来了，元数据却不见了。</td>
+              </tr>
+              <tr>
+                <td>filter</td>
+                <td>标准化 document。</td>
+                <td>保留集、拒绝集、原因统计。</td>
+                <td>模型版本、阈值、规则、保留率、拒绝原因分布。</td>
+                <td>看起来更干净了，实际上误杀了大量有效文本。</td>
+              </tr>
+              <tr>
+                <td>dedupe</td>
+                <td>过滤后文本和指纹。</td>
+                <td>去重后的语料和重复命中统计。</td>
+                <td>指纹算法、窗口、跨 crawl 还是 crawl 内去重、保留策略。</td>
+                <td>评测看起来涨了，训练预算却被重复样本吃掉。</td>
+              </tr>
+              <tr>
+                <td>shard / tokenize</td>
+                <td>清洗好的文档和 tokenizer。</td>
+                <td>shard、token 数、字节数、样本数。</td>
+                <td>tokenizer 版本、分片上限、随机种子、排序方式。</td>
+                <td>同一批文本换了 tokenizer，token 数却完全变了。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>为什么要分阶段保存中间产物</h3>
+            <p>因为不是所有错误都应该从头重跑。解析坏了，先看原始输入；去重过头了，先看保留样本；分片出了差异，先看 tokenizer 和排序。中间产物保存得越清楚，越容易判断问题发生在哪一步，而不是把所有失败都归到最后一段脚本。</p>
+          </div>
+          <div class="box warn">
+            <h3>这里先别急着追的东西</h3>
+            <p>先不要钻进分布式调度、文件系统性能、并行抢锁和容器编排。那是后面的工程细节。现在只要先把“谁读了什么、写了什么、出了错怎么看”讲明白就够。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="records">
+        <div class="head">
+          <h2>运行记录</h2>
+          <span class="tag">manifest / log / evidence</span>
+        </div>
+        <div class="table-wrap">
+          <table class="metric-table" data-export-context="07 核心复盘上下文" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>对象</th>
+                <th>示例字段</th>
+                <th>为什么要带进复盘</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>输入快照</td>
+                <td>URL、sha256、下载时间、权限。</td>
+                <td>复查时先确认“喂进来的是哪一批”。</td>
+              </tr>
+              <tr>
+                <td>运行记录</td>
+                <td>run_id、stage、resources、retries。</td>
+                <td>复盘时能看见哪一步出了问题、成本花在哪。</td>
+              </tr>
+              <tr>
+                <td>输出清单</td>
+                <td>path、documents、tokens、bytes、source_mix。</td>
+                <td>复跑时能确认产物到底长什么样。</td>
+              </tr>
+              <tr>
+                <td>恢复边界</td>
+                <td>completion marker、checkpoint、skip 条件。</td>
+                <td>断点续跑时知道该接着跑还是该重算。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <div class="codebar">
+              <span>broken_manifest.json</span>
+              <button class="copy" type="button" data-copy="broken-manifest">复制</button>
+            </div>
+            <pre id="broken-manifest" data-export-context="07 broken manifest" data-export-lang="json"><code class="language-json">{"path":"s3://train-data/web-v3/shard-00042.jsonl.zst","documents":801200}</code></pre>
+            <p class="hint">这个清单能告诉你文件在什么位置，但不能告诉你它是不是完整、从哪来、是不是和别的 shard 冲突。</p>
+          </div>
+          <div class="terminal-lab" data-terminal-lab>
+            <div class="terminal-controls">
+              <button class="ghost active" type="button" data-terminal-case="case-1">固定快照</button>
+              <button class="ghost" type="button" data-terminal-case="case-2">latest 指针</button>
+              <button class="ghost" type="button" data-terminal-case="case-3">断点续跑</button>
+            </div>
+            <pre class="terminal-output" aria-live="polite" data-export-context="07 故障输出" data-export-lang="text">run_id=2026-06-21-001
+input=s3://bucket/snapshot-202406
+status=ok
+manifest=complete</pre>
+            <template data-terminal-output="case-1">run_id=2026-06-21-001
+input=s3://bucket/snapshot-202406
+status=ok
+manifest=complete</template>
+            <template data-terminal-output="case-2">run_id=2026-06-21-001
+input=s3://bucket/latest
+status=drift
+reason=input moved after the previous run</template>
+            <template data-terminal-output="case-3">run_id=2026-06-21-001
+resume_from=shard-0042
+marker=done
+status=skip completed shards, keep checksum</template>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="metric-table" data-export-context="07 运行记录字段表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>字段</th>
+                <th>为什么要记</th>
+                <th>缺了会怎样</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>run_id</td>
+                <td>把配置、日志、产物和复核连接起来。</td>
+                <td>无法证明这一批产物属于哪次运行。</td>
+              </tr>
+              <tr>
+                <td>sha256</td>
+                <td>校验文件内容有没有损坏或被替换。</td>
+                <td>路径还在，内容却可能已经不是原文件。</td>
+              </tr>
+              <tr>
+                <td>bytes / documents / tokens</td>
+                <td>说明规模和处理结果。</td>
+                <td>只知道有文件，不知道这批数据到底有多大。</td>
+              </tr>
+              <tr>
+                <td>stage / source_mix</td>
+                <td>说明它在管线里的位置和配方上下文。</td>
+                <td>看不到产物是从哪一步出来的，也看不到它属于哪个混合配方。</td>
+              </tr>
+              <tr>
+                <td>resources / retries</td>
+                <td>判断成本、瓶颈和幂等性。</td>
+                <td>只会得到一个总时长，却不知道真正慢在哪。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="failure">
+        <div class="head">
+          <h2>故障定位</h2>
+          <span class="tag">先找源头，再修症状</span>
+        </div>
+        <div class="table-wrap">
+          <table class="metric-table" data-export-context="07 故障定位表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>症状</th>
+                <th>优先怀疑什么</th>
+                <th>先看哪里</th>
+                <th>怎么修</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>重跑后结果和上次不一样</td>
+                <td>输入快照漂移、latest 指针变化、随机种子没锁。</td>
+                <td>run_id、输入清单、时间戳、下载路径。</td>
+                <td>把快照固定下来，不要直接依赖 latest。</td>
+              </tr>
+              <tr>
+                <td>token 数变了，分片数也变了</td>
+                <td>tokenizer 版本或排序方式变了。</td>
+                <td>tokenizer、分词参数、分片上限。</td>
+                <td>把 tokenizer 版本写进记录，别只记脚本名。</td>
+              </tr>
+              <tr>
+                <td>manifest 有文件名却校不过</td>
+                <td>文件损坏、截断或被替换。</td>
+                <td>sha256、bytes、生成时间、传输日志。</td>
+                <td>重新生成 manifest，不要只改路径。</td>
+              </tr>
+              <tr>
+                <td>断点续跑后少了一批 shard</td>
+                <td>完成标记和实际产物不同步。</td>
+                <td>completion marker、shard 清单、重试日志。</td>
+                <td>先核对中间产物，再决定跳过还是重跑。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="box info">
+          <h3>这里要养成的习惯</h3>
+          <p>先找数据从哪里进来，再找它在哪一步被改写，最后才看失败看起来像什么。这样做的好处是，你不会因为一个表面错误去修另一个阶段的症状。</p>
+        </div>
+      </section>
+
+      <section id="replay">
+        <div class="head">
+          <h2>完整复跑链</h2>
+          <span class="tag">drift 发生时先别急着改代码</span>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>先把 drift 说成一个可检查的故事</h3>
+            <p>很多“结果变了”的问题，实际上不是算法突然坏了，而是输入、依赖或恢复点中的某一项偷偷变了。最常见的误判是：你只对比了最终 shard 数，或者只看了一个总 token 数，却没有回到原始快照和运行记录。这样一来，你看到的差异可能只是输入漂移，而不是处理逻辑本身出了问题。</p>
+            <p>复跑时要先问三个问题：第一，这一轮是不是同一份输入快照；第二，解析器、过滤器和 tokenizer 有没有换版本；第三，断点续跑时是不是跳过了不该跳过的部分。只要这三个问题中有一个回答不清楚，就不要把结果当成同一件事的复验。</p>
+            <p>真正有价值的复跑，不是“跑出来了”，而是“每个看起来一样的地方都真的一样”。这句话听上去抽象，但落到工程上其实很直接：快照固定、环境固定、记录固定、检查点固定，四个条件都成立，复跑才有比较意义。</p>
+          </div>
+          <div class="box warn">
+            <h3>先锁哪一层，再看哪一层</h3>
+            <p>第一层锁的是输入。输入不稳，后面的任何统计都不可信。第二层锁的是执行。代码 commit、依赖版本、配置 hash、随机种子、tokenizer 和过滤模型，一项都不能只靠记忆。第三层锁的是恢复边界。断点续跑时，跳过哪些 shard、哪些产物已写、哪些产物只写了一半，都必须写在可读的记录里。</p>
+            <p>很多团队会在口头上把“复现”理解成“再执行一次”。这会忽略一个事实：再执行一次并不等于在同一条件下执行。只要输入快照变过，或者 `latest` 指针换过，或者中间文件被人手工补过，你看到的就已经是另一轮实验了。把这件事讲清楚，才能知道该修输入、修代码，还是修流程。</p>
+            <p>所以这页的重点不是某个术语，而是判断顺序：先把对象和条件锁住，再去看差异，最后才决定要不要重跑。顺序一旦反过来，团队就会拿着错误的证据修错误的层。</p>
+          </div>
+        </div>
+        <div class="box">
+          <div class="codebar">
+            <span>replay-runbook.yml</span>
+            <button class="copy" type="button" data-copy="replay-runbook">复制</button>
+          </div>
+          <pre id="replay-runbook" data-export-context="07 复跑手册" data-export-lang="yaml"><code class="language-yaml">run_id: 2026-06-21-001
+input_snapshot:
+  uri: s3://bucket/snapshot-202406
+  sha256: 6b7f4a91a2c8d3e1
+environment:
+  parser: docparse v2.4.1
+  tokenizer: tok-v5.8.0
+  filter_model: lang-filter-0.9
+  seed: 42
+stages:
+  - parse
+  - normalize
+  - filter
+  - dedupe
+  - shard
+resume:
+  marker: shard-0042.done
+  allow_skip: completed_only
+checks:
+  - compare_input_manifest
+  - compare_token_count
+  - compare_shard_count
+  - compare_output_checksum</code></pre>
+          <p class="hint">这个手册的作用是把“别忘了锁版本”变成可读的步骤。它不替代脚本，但能让任何接手的人知道先验条件是什么。</p>
+        </div>
+        <div class="table-wrap">
+          <table class="metric-table" data-export-context="07 复跑对照表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>常见变化</th>
+                <th>表面现象</th>
+                <th>优先核对</th>
+                <th>应该怎么解释</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>输入快照被替换</td>
+                <td>输出文件数量和 token 数一起变了。</td>
+                <td>snapshot URI、sha256、下载时间。</td>
+                <td>这通常不是模型问题，而是喂入对象已经变了。</td>
+              </tr>
+              <tr>
+                <td>tokenizer 升级</td>
+                <td>总 token 数上升或下降，但文本看着没变。</td>
+                <td>tokenizer 版本、词表、特殊符号和空白规则。</td>
+                <td>这表示分词口径变了，不能把新旧数字直接并排比较。</td>
+              </tr>
+              <tr>
+                <td>filter 阈值变化</td>
+                <td>保留率骤变，某些来源被批量放行或拒绝。</td>
+                <td>模型权重、阈值、规则文件、拒绝原因分布。</td>
+                <td>这反映的是配方变化，不是“数据质量本来就这样”。</td>
+              </tr>
+              <tr>
+                <td>断点续跑失败</td>
+                <td>看起来像少跑了几段，或者重复写了某些 shard。</td>
+                <td>completion marker、checkpoint、已写文件列表。</td>
+                <td>这说明恢复边界没守住，不能简单靠重试糊过去。</td>
+              </tr>
+              <tr>
+                <td>manifest 不完整</td>
+                <td>目录能打开，但无法判断产物是否可信。</td>
+                <td>path、sha256、bytes、documents、tokens、stage。</td>
+                <td>没有证据链时，目录存在并不等于结果可审计。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="grid2">
+          <div class="box info">
+            <h3>把结论写回记录</h3>
+            <p>当你确认问题来自输入漂移时，记录里应该写的是“固定快照后重跑”，而不是“重新执行”。当你确认问题来自 tokenizer 或过滤模型变化时，记录里应该写的是版本和参数变化，而不是“结果不稳定”。当你确认问题来自恢复标记失配时，记录里应该写的是“清点中间产物并回滚重算”，而不是“再试一次”。</p>
+            <p>这里的区别很关键，因为复盘不是为了给失败找一个模糊的名字，而是为了让下一次复跑更便宜、更快、更可解释。记录写得越准，后面越不会重复踩同一个坑。</p>
+          </div>
+          <div class="box info">
+            <h3>一条能用的判断线</h3>
+            <p>如果你能回答“这一批输入是什么、谁改了什么、哪一步能继续、哪一步必须重算”，那就说明这条流水线已经具备最基本的复跑能力。反过来，如果你只能说“我再跑一次看看”，那说明你还没有把运行、证据和恢复边界分开。</p>
+            <p>这也是为什么这页看起来像在讲日志，其实是在讲控制变量。控制变量做得越好，后面的配方验证、消融对比和审计判断才越站得住。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="handoff">
+        <div class="head">
+          <h2>写回与交接</h2>
+          <span class="tag">把一次运行变成可继续的工作</span>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>复盘之后要写什么</h3>
+            <p>复盘不是停在“知道原因”这一步。真正有用的是把原因写回记录，把修正动作写成下一次可以照做的约束。比如你发现 `latest` 指针不稳定，就应该把“只允许使用固定 snapshot URI”写进 runbook；你发现 tokenizer 版本会影响结果，就应该把 tokenizer 名称、版本和词表 hash 写进 manifest；你发现断点续跑会跳过未完成 shard，就应该把完成标记和文件列表一起核对。</p>
+            <p>这类写回有一个很实用的标准：接手的人不需要先问你“当时到底怎么想的”。如果他能根据记录知道输入、版本、恢复点和异常处理，说明你的交接已经够用了。否则，复盘只是在你脑子里完成，团队并没有真正得到可复制的知识。</p>
+            <p>所以记录里最好同时保留三种东西：事实、判断和动作。事实是发生了什么，判断是为什么这样解释，动作是下一次该怎么做。三者缺一个，后面的人就只能猜。</p>
+          </div>
+          <div class="box warn">
+            <h3>别把运行记录写成事后说明</h3>
+            <p>事后说明往往只解释结果，不解释边界。运行记录则要解释边界本身：哪些输入被固定了，哪些阶段被跳过了，哪些产物是重新生成的，哪些只是复用的。只有把这几项分开，别人才能判断变化究竟来自数据、代码还是恢复策略。</p>
+            <p>如果你把所有东西都写成一句“已处理完毕”，那下一次遇到问题还是会回到原点。因为“完毕”没有告诉任何人哪一步完成了，也没有告诉任何人哪一步只是看起来完成了。</p>
+          </div>
+        </div>
+        <div class="box">
+          <div class="codebar">
+            <span>handoff-note.yml</span>
+            <button class="copy" type="button" data-copy="handoff-note">复制</button>
+          </div>
+          <pre id="handoff-note" data-export-context="07 交接模板" data-export-lang="yaml"><code class="language-yaml">run_id: 2026-06-21-001
+status: completed_with_notes
+facts:
+  - input_snapshot_fixed: true
+  - tokenizer_version_pinned: true
+  - manifest_complete: true
+  - resume_marker_validated: false
+judgement:
+  - drift_source: latest_pointer
+  - action: pin_snapshot_and_rerun
+handoff:
+  owner: data-pipeline
+  next_check: regenerate_output_manifest
+  note: leave checksum and stage logs intact</code></pre>
+          <p class="hint">这类交接模板的价值是把“我已经看过了”变成“下一轮会怎么接着做”。</p>
+        </div>
+        <div class="table-wrap">
+          <table class="metric-table" data-export-context="07 交接对照表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>写回项</th>
+                <th>要记录什么</th>
+                <th>最怕漏掉什么</th>
+                <th>漏掉后的后果</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>输入证据</td>
+                <td>snapshot URI、sha256、下载时间、权限来源。</td>
+                <td>固定输入和临时输入的差别。</td>
+                <td>下一轮会以为自己在复跑，其实是在换输入。</td>
+              </tr>
+              <tr>
+                <td>执行证据</td>
+                <td>代码 commit、依赖版本、参数、随机种子。</td>
+                <td>会改变输出的隐性对象。</td>
+                <td>结果漂了却找不到真正的变化源。</td>
+              </tr>
+              <tr>
+                <td>产物证据</td>
+                <td>manifest、token 数、bytes、documents、checksum。</td>
+                <td>校验字段和规模字段。</td>
+                <td>文件存在却无法证明它完整、正确、属于哪次运行。</td>
+              </tr>
+              <tr>
+                <td>恢复说明</td>
+                <td>marker、checkpoint、跳过条件、回滚条件。</td>
+                <td>哪些 shard 已完成、哪些只写了一半。</td>
+                <td>断点续跑会把“部分完成”误当“全部完成”。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="box info">
+          <h3>这套模板怎么真正用起来</h3>
+          <p>最实用的做法不是把交接模板当成文档末尾的装饰，而是每次跑完都立刻填。先填输入快照，再填执行版本，再填产物，再填恢复边界，最后再写判断和动作。这样做有个直接好处：你不会把“应该记住的东西”拖到第二天，因为第二天通常就只剩模糊印象了。</p>
+          <p>当你要把这份记录发给别人时，重点不是展示你做了多少事，而是让别人知道哪里要复查、哪里可以复用、哪里不能跳过。好的交接不会把人带进你的思路里，而是把他带到证据旁边。只要接手者能根据这份记录重新找到输入、版本和恢复点，它就算完成了。</p>
+          <p>如果团队里多人都在做数据流水线，最好统一使用同一份模板。这样一来，日志格式、命名方式和恢复标记都更容易对齐。你以后再看别人的 runbook，也能很快找到关键字段，而不是每次都重新解码一套写法。</p>
+          <p>更具体一点，交接时最好让接手的人只做三件事：先核对输入快照是不是同一份，再核对运行版本和参数是不是被固定，再核对恢复边界和 completion marker 有没有冲突。如果这三件事里有一个不清楚，就不要把它记成“已完成”，而是写成“待复查”。这样记录会直接推动下一轮动作，而不是只留下一个结束标记。</p>
+          <p>你也可以把这套模板当成一个最小的周报结构：本周改了哪些对象、哪个对象影响最大、哪次重跑最值得回看、下一次要固定什么。这样做的目的不是写得更像汇报，而是让团队对数据处理的变化有共同语言。共同语言一旦稳定，排查速度通常会快很多。</p>
+          <p>如果一份记录还要再往前走一步，可以把它和变更单、代码提交和产物目录互相链接。这样一来，你看到一条 run_id，就能顺着它找到输入、脚本、输出和复查意见。链条一旦连起来，后续出现问题时就不会每次都从目录树最上层重新翻。</p>
+          <p>最后再补一个很实用的判断：如果你手里的记录只能回答“结果是什么”，那它还不够；如果它还能回答“为什么是这个结果、下一次怎么重跑、哪里不能跳过”，才算真正进入可复用状态。这个门槛不高，但一旦跨过去，很多临时排查就会变成稳定流程。</p>
+        </div>
+      </section>
+
+      <section id="bridge">
+        <div class="head">
+          <h2>前后衔接</h2>
+          <span class="tag">到 08 之前先停一下</span>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>这一页到这里就够了</h3>
+            <p>你现在需要的不是更花哨的调度系统，而是能说明一次运行是否可复查、可复跑、可解释。只要这三件事讲得通，后面的配方验证才有可信的基础。</p>
+          </div>
+          <div class="box warn">
+            <h3>下一页会换一个问题</h3>
+            <p>第 08 单元不再问“怎么把流水线跑稳”，而是问“这批数据能不能训练、能不能发布、能不能公开”。许可、隐私和发布边界是另一层判断，不要混在一起。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>一、概念辨认</h3>
+              <p>先确认你能区分规格、运行、产物和记录。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回看</b>
+              <span>可复现不是“我记得怎么跑”，而是别人能按记录复查或复跑。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q1" data-group="一、概念辨认" data-title="Q1 选择：哪项最能代表流水线规格？" data-answer="B" data-explain="流水线规格要先定义阶段依赖、参数和输入输出约束，最终文件只是输出，不是规格本身。">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">对象识别</span></div>
+              <h3>Q1 选择：哪项最能代表流水线规格？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q1" value="A">A. 最终训练 shard 的下载地址。</label>
+                <label><input type="radio" name="q1" value="B">B. 阶段依赖、参数、输入输出和资源约束的配置。</label>
+                <label><input type="radio" name="q1" value="C">C. 运行结束后写给同事看的总结邮件。</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q" data-question="q2" data-group="一、概念辨认" data-title="Q2 判断：只要 git commit 一样，数据处理就可复现。" data-answer="false" data-explain="代码一样不等于输入、依赖、tokenizer 和过滤模型一样。任何一个会改输出的对象漂了，结果都会变。">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">版本边界</span></div>
+              <h3>Q2 判断：只要 git commit 一样，数据处理就可复现。</h3>
+              <label><input type="radio" name="q2" value="true">对</label>
+              <label><input type="radio" name="q2" value="false">错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q short" data-question="q3" data-group="一、概念辨认" data-title="Q3 填空：每个 shard 一行的机器可读产物清单通常叫做什么？">
+              <div class="q-meta"><span class="pill">填空</span><span class="pill">术语</span></div>
+              <h3>Q3 填空：每个 shard 一行的机器可读产物清单通常叫做什么？</h3>
+              <input type="text" name="q3" data-answer="manifest,清单,输出清单" placeholder="填写英文或中文术语">
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">本页用它记录 path、sha256、bytes、documents、tokens。</p>
+            </div>
+
+            <div class="q" data-question="q4" data-group="一、概念辨认" data-title="Q4 选择：下面哪个变化最可能导致同一文本 token 数改变？" data-answer="A" data-explain="token 数主要受 tokenizer 版本、词表和分词规则影响。标题、负责人或汇报措辞不会改变 token 化结果。">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">tokenizer</span></div>
+              <h3>Q4 选择：下面哪个变化最可能导致同一文本 token 数改变？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q4" value="A">A. tokenizer 版本改变。</label>
+                <label><input type="radio" name="q4" value="B">B. 运行记录标题改变。</label>
+                <label><input type="radio" name="q4" value="C">C. 负责人名字改变。</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">训练看到的是 token 流，不是原始字符串。</p>
+            </div>
+
+            <div class="q full" data-question="q5" data-group="一、概念辨认" data-title="Q5 多选：哪些对象应该进入版本记录？">
+              <div class="q-meta"><span class="pill">诊断</span><span class="pill">版本化</span></div>
+              <h3>Q5 多选：哪些对象应该进入版本记录？</h3>
+              <div class="choices">
+                <label><input type="checkbox" name="q5" value="代码 commit">代码 commit</label>
+                <label><input type="checkbox" name="q5" value="原始数据快照">原始数据快照</label>
+                <label><input type="checkbox" name="q5" value="质量过滤模型权重">质量过滤模型权重</label>
+                <label><input type="checkbox" name="q5" value="tokenizer">tokenizer</label>
+                <label><input type="checkbox" name="q5" value="配置 hash">配置 hash</label>
+              </div>
+              <p class="hint">只要会改变输出，就应该记录。</p>
+              <details>
+                <summary>展开反馈</summary>
+                <p>判断标准很简单：这个对象会不会改变最终产物，或者会不会影响别人复查同一结果。会的话就该进版本记录。别把“我没改脚本”误当成“所有输入都没变”。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>二、流水线设计</h3>
+              <p>把抽象原则落到阶段、字段和恢复边界。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回看</b>
+              <span>每个阶段都要说明输入、输出、不变量和失败恢复策略。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q full" data-question="q6" data-group="二、流水线设计" data-title="Q6 排序：把以下阶段排成合理顺序。">
+              <div class="q-meta"><span class="pill">排序</span><span class="pill">步骤</span></div>
+              <h3>Q6 排序：把以下阶段排成合理顺序。</h3>
+              <textarea name="q6" placeholder="阶段：tokenize、声明原始快照、质量过滤、解析与标准化、去重、配方混合与分片。请写出你的顺序。"></textarea>
+              <p class="solve-note">先想“谁依赖谁”。例如 tokenize 不应该在配方混合之前随意执行，除非你的系统明确支持 token 级混合。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>合理顺序通常是：声明原始快照 → 解析与标准化 → 质量过滤 → 去重 → 配方混合与分片 → tokenize 或 token 统计。你可以把 tokenize 提前到分片前后，但必须明确它依赖什么、产生什么、是否会影响配方判断。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q7" data-group="二、流水线设计" data-title="Q7 设计：为 language_filter 阶段写输入、输出、参数和指标。">
+              <div class="q-meta"><span class="pill">设计</span><span class="pill">阶段契约</span></div>
+              <h3>Q7 设计：为 <code>language_filter</code> 阶段写输入、输出、参数和指标。</h3>
+              <textarea name="q7" placeholder="输入：……；输出：……；关键参数：……；指标：……"></textarea>
+              <p class="solve-note">至少包含语言识别模型版本、保留语言、置信度阈值、通过/拒绝数量。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>好答案会把输入写成标准化 document，输出写成保留集和拒绝统计，参数写清语言识别模型版本、阈值和保留语言，指标写成通过率、拒绝原因分布和抽样复核结果。只写“过滤掉非目标语言”不够。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>三、记录与恢复</h3>
+              <p>判断一份记录是否足够支撑复查、复跑和训练使用。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回看</b>
+              <span>manifest 让机器校验产物，run record 让人理解判断。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q8" data-group="三、记录与恢复" data-title="Q8 选择：manifest 中最适合校验文件内容是否损坏的字段是？" data-answer="B" data-explain="路径存在不等于内容正确。sha256 才是内容级校验字段。">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">校验</span></div>
+              <h3>Q8 选择：manifest 中最适合校验文件内容是否损坏的字段是？</h3>
+              <div class="choices">
+                <label><input type="radio" name="q8" value="A">A. path</label>
+                <label><input type="radio" name="q8" value="B">B. sha256</label>
+                <label><input type="radio" name="q8" value="C">C. owner</label>
+              </div>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+
+            <div class="q" data-question="q9" data-group="三、记录与恢复" data-title="Q9 判断：资源账本只需要总耗时，不需要按阶段拆分。" data-answer="false" data-explain="不同阶段的瓶颈不一样。只看总耗时会让你不知道是解析慢、去重慢，还是分片慢。">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">资源</span></div>
+              <h3>Q9 判断：资源账本只需要总耗时，不需要按阶段拆分。</h3>
+              <label><input type="radio" name="q9" value="true">对</label>
+              <label><input type="radio" name="q9" value="false">错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+              <p class="hint">不同阶段的瓶颈不一样。</p>
+            </div>
+
+            <div class="q full" data-question="q10" data-group="三、记录与恢复" data-title="Q10 补字段：下面这条 manifest 缺什么？">
+              <div class="q-meta"><span class="pill">补字段</span><span class="pill">manifest</span></div>
+              <h3>Q10 补字段：下面这条 manifest 缺什么？</h3>
+              <textarea name="q10" placeholder="写出至少 4 个应补字段，并说明其中 1 个字段的作用。"></textarea>
+              <p class="solve-note">考虑 run_id、sha256、bytes、tokens、source_mix、stage、shard。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>至少要补 run_id、sha256、bytes、tokens、stage、source_mix、生成时间中的四个。解释时要说清字段如何帮助校验、追溯或复跑，比如 sha256 用来确认内容没坏，stage 用来说明它属于哪一步，source_mix 用来说明它来自哪个配方。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q11" data-group="三、记录与恢复" data-title="Q11 写记录：为一次失败重试写 4 行运行记录。">
+              <div class="q-meta"><span class="pill">写作</span><span class="pill">运行中记录</span></div>
+              <h3>Q11 写记录：为一次失败重试写 4 行运行记录。</h3>
+              <textarea name="q11" placeholder="例如：时间、阶段、失败原因、影响范围、重试方式、是否改变输出。"></textarea>
+              <p class="solve-note">要写清“重试是否改变输出”，否则复查时无法判断幂等性。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>四行至少要包含：失败发生在哪一步、失败原因是什么、重试改了什么、重试后输出是否变化。最好再补一条受影响范围或责任人。重点不是写得像流水账，而是让别人能决定“要不要从头跑、从哪一步接着跑”。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>四、迁移与审计</h3>
+              <p>把本节方法迁移到数据配方和公开数据审计中。</p>
+            </div>
+            <div class="quick-review">
+              <b>快速回看</b>
+              <span>没有可复现的数据版本，数据配方实验就很难被解释。</span>
+            </div>
+          </div>
+          <div class="drill-grid">
+            <div class="q full" data-question="q12" data-group="四、迁移与审计" data-title="Q12 数据配方：为什么 mixture recipe 也需要版本化？">
+              <div class="q-meta"><span class="pill">解释</span><span class="pill">配方</span></div>
+              <h3>Q12 数据配方：为什么 mixture recipe 也需要版本化？</h3>
+              <textarea name="q12" placeholder="从来源比例、训练分布、消融对比三个角度回答。"></textarea>
+              <p class="solve-note">重点说明：比例变化会改变模型看到的数据分布。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>recipe 版本化是为了知道训练时到底用了哪些来源、各占多少、在哪个阶段被放大或缩小，以及这些变化对应了什么结果。没有版本号，后续的消融对比就只能“差不多记得”，无法判断到底是哪一步带来了收益。</p>
+              </details>
+            </div>
+
+            <div class="q full" data-question="q13" data-group="四、迁移与审计" data-title="Q13 审计：你拿到一个公开数据集，只看到下载链接和总 token 数。你会追问哪 6 件事？">
+              <div class="q-meta"><span class="pill">清单</span><span class="pill">审计</span></div>
+              <h3>Q13 审计：你拿到一个公开数据集，只看到下载链接和总 token 数。你会追问哪 6 件事？</h3>
+              <textarea name="q13" placeholder="列出 6 个追问，并说明其中 1 个为什么关键。"></textarea>
+              <p class="solve-note">优先追问输入来源、过滤、去重、污染、tokenizer、许可或 manifest。</p>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>至少要问：数据来自哪里、有没有快照、怎么过滤、怎么去重、用的 tokenizer 是什么、有没有污染或泄漏检查、许可是什么、manifest 在哪。真正关键的一项通常是快照或 tokenizer，因为它们直接决定别人能不能重建同一批 token。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">Practice Record</span>
+        </div>
+        <p>点击“生成记录”会把你的选择、判断和文字答案整理成 Markdown。记录里会保留题目标题和核心复盘上下文，便于离开本页后继续回看。</p>
+        <div class="quality" id="quality"></div>
+        <div class="export" id="record">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" type="button" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" type="button" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source boundary</span>
+        </div>
+        <p>这一页的判断框架来自公开资料和课程地图。具体实现会随项目变化，所以这里保留的是可复用的审查思路，不是某个仓库的唯一写法。</p>
+        <ul class="source-list">
+          <li><a href="https://github.com/huggingface/datatrove">DataTrove repository</a>：支撑 Document、读写器、过滤器、token block、dedup block 和可恢复流水线的组织方式。</li>
+          <li><a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb">FineWeb dataset page</a>：支撑按 crawl 去重、语言过滤、质量过滤和 PII 处理的公开案例。</li>
+          <li><a href="https://ai.meta.com/blog/meta-llama-3/">Meta Llama 3 blog</a>：支撑大规模预训练数据管线、过滤和数据混合的公开说明。</li>
+          <li><a href="https://arxiv.org/abs/2501.00656">OLMo 2 paper</a>：支撑透明训练日志、checkpoint 和 recipe 记录的重要性。</li>
+          <li><a href="../index.html">课程地图</a>：支撑本页与第 06、08 单元的衔接位置。</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

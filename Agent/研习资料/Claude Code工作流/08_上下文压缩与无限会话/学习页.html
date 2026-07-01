@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>08 上下文压缩与无限会话｜Claude Code 工作流</title>
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand"><strong>Claude Code 工作流</strong><span>08｜上下文压缩与无限会话</span></div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>目标与主线</a>
+      <a href="#why"><span class="dot"></span>为什么压缩</a>
+      <a href="#micro"><span class="dot"></span>micro compact</a>
+      <a href="#token"><span class="dot"></span>token 估算</a>
+      <a href="#auto"><span class="dot"></span>auto compact</a>
+      <a href="#risk"><span class="dot"></span>压缩风险</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>整理学习答案</a>
+    </nav>
+    <div class="side-note">压缩不是让模型忘掉一切，而是把历史变短，让会话能继续跑下去。</div>
+  </aside>
+  <main>
+    <header class="hero" id="goal">
+      <div>
+        <div class="kicker">Context compaction</div>
+        <h1>上下文压缩与无限会话</h1>
+        <p class="muted">模型上下文窗口有上限，Agent 的 messages 却会随着工具调用不断增长。本节的压缩机制分三层：micro compact 替换旧的长 tool_result；客户端按 token 阈值自动触发 auto compact；模型也可以调用 `compact` 工具手动触发压缩。压缩后，长历史会被摘要替代，会话得以继续。</p>
+        <div class="map">
+          <span class="node">messages grow</span><span class="arrow">→</span>
+          <span class="node">micro compact</span><span class="arrow">→</span>
+          <span class="node">estimate tokens</span><span class="arrow">→</span>
+          <span class="node">auto compact</span><span class="arrow">→</span>
+          <span class="node">summary resume</span>
+        </div>
+        <p>学完本页，你应该能解释旧工具结果如何被替换、为什么要估算 token、auto compact 如何把 messages 变成摘要，以及压缩可能丢失哪些关键约束。</p>
+      </div>
+      <div class="box soft">
+        <h3>来源材料</h3>
+        <p>视频：《Learn Claude Code 源码详解》上下文压缩，换来无限会话，开发实战分享屋，2026-03-16。</p>
+        <p>本页聚焦 micro compact、token 阈值、manual compact、transcript 保存、摘要替换和压缩风险。</p>
+      </div>
+    </header>
+
+    <section id="why">
+      <div class="head"><h2>1. 为什么 Agent 需要上下文压缩</h2><span class="tag">bounded window</span></div>
+      <p>Agent 循环会不断把用户消息、模型响应、tool use、tool result 写入 messages。读取文件、列目录、运行命令这类工具结果可能很长。如果用户让 Agent “逐个读取目录下所有 Python 文件”，messages 很快就会堆满大量历史输出。</p>
+      <p>模型的上下文窗口不是无限的。超过窗口后，模型无法完整接收历史；即使没超过，大量旧工具结果也会稀释当前任务重点。上下文压缩的目标不是美化历史，而是减少无关细节，让 Agent 继续保留足够的任务连续性。</p>
+      <div class="grid2">
+        <div class="box warn">
+          <h3>不压缩的后果</h3>
+          <ul>
+            <li>旧 tool_result 占用大量上下文。</li>
+            <li>后续请求成本和延迟变高。</li>
+            <li>模型被无关输出干扰，任务焦点变弱。</li>
+            <li>长会话最终触达窗口上限。</li>
+          </ul>
+        </div>
+        <div class="box ok">
+          <h3>压缩后的收益</h3>
+          <ul>
+            <li>保留最近关键结果。</li>
+            <li>旧细节替换为短标记或摘要。</li>
+            <li>会话能继续推进。</li>
+            <li>父循环更容易保持任务连续性。</li>
+          </ul>
+        </div>
+      </div>
+      <p>直觉上，micro compact 是“把旧工具输出缩短”，auto compact 是“把整段对话改写成续航摘要”。前者轻，后者重；前者保留 messages 结构，后者会重建 messages。</p>
+    </section>
+
+    <section id="micro">
+      <div class="head"><h2>2. micro compact：旧工具结果替换成短标记</h2><span class="tag">tool_result cleanup</span></div>
+      <p>micro compact 每轮 Agent loop 开始时先跑。它会遍历 messages，找到 content 是 list 的 user 消息，再从里面收集 `tool_result`。收集时不仅保存结果本身，还保存 message index 和 part index，因为后面要回到原 messages 里原地替换。</p>
+      <p>它不会处理所有 tool_result。示例里 `keep_recent = 3`，也就是最近三条工具结果保留原文，旧结果才进入待清理列表。这样模型仍能看到最近工具调用的真实输出，不至于刚读完的结果马上被压掉。</p>
+      <div class="codebar"><span class="label">逐行拆解：收集旧 tool_result</span><span>Python</span></div>
+      <pre><code>tool_results = []
+
+for message_index, message in enumerate(messages):
+    if message["role"] != "user":
+        continue
+    if not isinstance(message.get("content"), list):
+        continue
+
+    for part_index, part in enumerate(message["content"]):
+        if part.get("type") == "tool_result":
+            tool_results.append((message_index, part_index, part))</code></pre>
+      <p>然后它会构造 tool use id 到工具名的映射。原因是不同轮次即使都调用 Bash，tool use id 也不同；替换时要知道某个旧结果来自哪个工具，才能写成 `previously used bash` 这类可读标记。</p>
+      <div class="codebar"><span class="label">正确示例：只清理旧且过长的结果</span><span>Python</span></div>
+      <pre><code>to_clear = tool_results[:-keep_recent]
+
+for message_index, part_index, part in to_clear:
+    content = part.get("content", "")
+    tool_use_id = part.get("tool_use_id")
+    tool_name = tool_name_map.get(tool_use_id, "tool")
+
+    if isinstance(content, str) and len(content) > 100:
+        messages[message_index]["content"][part_index]["content"] = (
+            f"previously used {tool_name}"
+        )</code></pre>
+      <p>这个操作很粗，但很有效：几千字符的命令输出会变成十几个字符。模型仍然知道“这里曾经用过 bash”，但不再反复读取旧输出的细节。</p>
+    </section>
+
+    <section id="token">
+      <div class="head"><h2>3. token 估算决定是否进入重压缩</h2><span class="tag">estimate threshold</span></div>
+      <p>micro compact 后，程序会估算 messages 消耗多少 token。示例里用的是粗略算法：把 messages 转成字符串，长度除以 4。真实 tokenizer 会更复杂，英文、中文、符号和 JSON 结构都会影响 token 数；但工程上先用估算值可以快速判断是否接近阈值。</p>
+      <p>视频里阈值示例是 5 万 token。低于阈值，就继续正常 Agent loop；高于阈值，就触发 auto compact，把长历史压成摘要。这个阈值不是绝对真理，而是保护上下文窗口的工程参数。</p>
+      <div class="codebar"><span class="label">最小示例：token 粗估</span><span>Python</span></div>
+      <pre><code>def estimate_tokens(messages):
+    return len(str(messages)) // 4
+
+messages = micro_compact(messages)
+
+if estimate_tokens(messages) > 50_000:
+    messages = auto_compact(messages)</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>阶段</th><th>触发条件</th><th>处理强度</th><th>保留信息</th></tr></thead>
+          <tbody>
+            <tr><td>micro compact</td><td>每轮先跑</td><td>轻</td><td>保留 messages 结构和最近工具结果。</td></tr>
+            <tr><td>auto compact</td><td>估算 token 超过阈值</td><td>重</td><td>把历史浓缩成 continuity summary。</td></tr>
+            <tr><td>manual compact</td><td>模型调用 `compact` 工具</td><td>重</td><td>走同一套 auto compact 流程。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>你现在应该能做什么：看到一个长会话时，能判断“先用微压缩清旧工具结果，不够再用摘要压缩整段历史”。</p>
+    </section>
+
+    <section id="auto">
+      <div class="head"><h2>4. auto compact：保存 transcript，再用摘要替换历史</h2><span class="tag">summary resume</span></div>
+      <p>auto compact 是重压缩。它会先创建 `.transcripts` 目录，把当前完整 messages 序列化保存到磁盘。这样做有两个价值：第一，压缩后如果发现摘要漏了信息，还能回看原始 transcript；第二，审计时可以知道压缩前到底发生过什么。</p>
+      <p>保存后，程序构造一个给模型的摘要请求，大意是“summarize this conversation for continuity”，再附上 conversation text。示例代码只取 messages 文本的前 8 万字符用于摘要。模型返回 summary 后，原 messages 会被替换成两条左右的短消息：一条说明这是压缩后的历史，一条包含摘要。</p>
+      <div class="codebar"><span class="label">逐行拆解：auto compact 的核心流程</span><span>Python</span></div>
+      <pre><code>def auto_compact(messages):
+    transcript_dir.mkdir(exist_ok=True)
+    transcript_path = transcript_dir / "conversation.json"
+    transcript_path.write_text(json.dumps(messages, ensure_ascii=False))
+
+    conversation_text = str(messages)[:80_000]
+    response = call_model([
+        {
+            "role": "user",
+            "content": "Summarize this conversation for continuity:\n"
+                       + conversation_text,
+        }
+    ])
+    summary = extract_text(response)
+
+    return [
+        {"role": "user", "content": "Previous conversation was compacted."},
+        {"role": "assistant", "content": summary},
+    ]</code></pre>
+      <div class="viz-panel">
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <h3>压缩前后 messages</h3>
+            <div class="viz-actions">
+              <button data-view="before" class="active">压缩前</button>
+              <button data-view="micro">micro 后</button>
+              <button data-view="auto">auto 后</button>
+            </div>
+            <div class="context-box" id="messageBox"></div>
+            <div class="meter"><span id="meterBar"></span></div>
+            <p class="mini" id="meterText">上下文占用：高。旧工具输出仍在历史中。</p>
+          </div>
+          <div class="viz-cell">
+            <h3 id="viewTitle">长历史不断增长</h3>
+            <p id="viewText">多轮工具调用会让 messages 里塞入大量 tool_result。模型每次请求都要带上这些历史。</p>
+            <div class="viz-note" id="viewHint">观察点：压缩目标是保留继续任务所需的信息，而不是保留所有原文。</div>
+          </div>
+        </div>
+      </div>
+      <p>`compact` 工具的手动触发也是这个思路。模型响应里出现 `compact` tool use 后，本地没有像 Bash 那样调用具体处理函数，而是把 `manual_compact` 标记设为 true，随后进入 auto compact 流程。</p>
+    </section>
+
+    <section id="risk">
+      <div class="head"><h2>5. 压缩会带来信息丢失风险</h2><span class="tag">lossy summary</span></div>
+      <p>压缩不是免费的。micro compact 会丢掉旧工具结果的具体内容；auto compact 更明显，它把一大段历史变成摘要。摘要能保留主线，但可能漏掉用户后面强调的限制、某个失败原因、某个关键文件路径或“不允许做什么”的约束。</p>
+      <p>视频里特别提醒：auto compact 只取前 8 万字符做摘要。如果关键要求出现在 8 万字符之后，它可能根本没进入摘要输入。即使进入了，模型摘要时也可能没保留下来。因此压缩系统需要配套风险控制：保存 transcript、让摘要明确保留约束、压缩后让模型复述当前任务状态。</p>
+      <div class="grid3">
+        <div class="route"><h3>保存原文</h3><p>压缩前写入 `.transcripts`，方便事后审计和恢复。</p></div>
+        <div class="route"><h3>摘要保留约束</h3><p>prompt 要要求保留用户目标、禁止事项、当前进度和未解决问题。</p></div>
+        <div class="route"><h3>压缩后校准</h3><p>让模型确认下一步和关键限制，避免摘要漏信息后继续跑偏。</p></div>
+      </div>
+      <div class="codebar error"><span class="label">错误示例：摘要没有保留禁止事项</span><span>压缩风险</span></div>
+      <pre><code># 原历史后段有一句：
+用户：不要修改原始素材文件，只能在指定输出目录新增资料。
+
+# 压缩摘要只写：
+用户正在制作 Claude Code 工作流 学习资料。
+
+# 后果：
+模型可能误以为可以改原始字幕。</code></pre>
+      <p>你现在应该能做什么：使用或设计压缩机制时，不只问“压缩了多少”，还要问“哪些信息不能丢”。</p>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>先分清上下文、messages、token 和压缩层级。</p></div><div class="box soft">提示：上下文窗口有限，messages 会增长。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="1. 压缩目的"><div class="q-meta"><span class="pill">选择</span></div><h3>1. 上下文压缩最主要的目的是什么？</h3><label><input type="radio" name="q1" value="A">A. 让模型忘掉所有历史</label><br><label><input type="radio" name="q1" value="B">B. 降低历史长度并保留连续性</label><br><label><input type="radio" name="q1" value="C">C. 替代工具调用</label></div>
+          <div class="q" data-title="2. 三层压缩"><div class="q-meta"><span class="pill">填空</span></div><h3>2. 本节三层压缩可以概括为 micro compact、______ auto compact、______ compact。</h3><input type="text" name="q2"></div>
+          <div class="q" data-title="3. token估算"><div class="q-meta"><span class="pill">判断</span></div><h3>3. 示例中的 token 估算 `len(str(messages)) // 4` 是精确 tokenizer。</h3><label><input type="radio" name="q3" value="对">对</label><br><label><input type="radio" name="q3" value="错">错</label></div>
+          <div class="q" data-title="4. keep_recent"><div class="q-meta"><span class="pill">短答</span></div><h3>4. micro compact 为什么要保留最近几条 tool_result？</h3><textarea name="q4"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、micro compact</h3><p>检查你能不能诊断旧工具结果替换过程。</p></div><div class="box warn">旧结果被替换，最近结果保留原文。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="5. tool_result定位"><div class="q-meta"><span class="pill">机制</span></div><h3>5. 为什么收集 tool_result 时要保存 message index 和 part index？</h3><textarea name="q5"></textarea></div>
+          <div class="q" data-title="6. tool_use_id映射"><div class="q-meta"><span class="pill">解释</span></div><h3>6. 为什么要构造 tool_use_id 到 tool name 的映射？</h3><textarea name="q6"></textarea></div>
+          <div class="q" data-title="7. 长度阈值"><div class="q-meta"><span class="pill">边界</span></div><h3>7. micro compact 为什么只替换长度大于 100 的 content？</h3><textarea name="q7"></textarea></div>
+          <div class="q" data-title="8. 替换结果"><div class="q-meta"><span class="pill">短答</span></div><h3>8. 一个旧 Bash 结果被 micro compact 后，大概会变成什么内容？</h3><input type="text" name="q8"></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、auto compact</h3><p>理解重压缩如何保存、摘要和替换 messages。</p></div><div class="box soft">auto compact 会重建 messages，不只是替换旧 tool_result。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="9. transcript"><div class="q-meta"><span class="pill">短答</span></div><h3>9. auto compact 为什么先保存 transcript？</h3><textarea name="q9"></textarea></div>
+          <div class="q" data-title="10. 摘要prompt"><div class="q-meta"><span class="pill">机制</span></div><h3>10. auto compact 向模型请求摘要时，摘要目标是什么？</h3><textarea name="q10"></textarea></div>
+          <div class="q" data-title="11. 两条消息"><div class="q-meta"><span class="pill">流程</span></div><h3>11. auto compact 后，原来很多条 messages 通常会被替换成什么？</h3><textarea name="q11"></textarea></div>
+          <div class="q" data-title="12. manual compact"><div class="q-meta"><span class="pill">判断</span></div><h3>12. 模型调用 `compact` 工具后，也会进入 auto compact 这类流程。</h3><label><input type="radio" name="q12" value="对">对</label><br><label><input type="radio" name="q12" value="错">错</label></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、风险与迁移</h3><p>把压缩设计成可继续工作的机制。</p></div><div class="box soft">表达重点：压缩是有损的，要保留约束和当前任务状态。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="13. 风险诊断"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 如果用户的“不准修改原文件”出现在被截断部分，压缩后可能发生什么？</h3><textarea name="q13"></textarea></div>
+          <div class="q" data-title="14. 摘要清单"><div class="q-meta"><span class="pill">设计</span></div><h3>14. 设计 auto compact 摘要 prompt 时，至少应要求保留哪 5 类信息？</h3><textarea name="q14"></textarea></div>
+          <div class="q" data-title="15. micro vs auto"><div class="q-meta"><span class="pill">比较</span></div><h3>15. micro compact 和 auto compact 最大区别是什么？</h3><textarea name="q15"></textarea></div>
+          <div class="q" data-title="16. 面试短答"><div class="q-meta"><span class="pill">表达</span></div><h3>16. 用 2-3 句话解释上下文压缩的工程价值和代价。</h3><textarea name="q16"></textarea></div>
+          <div class="q full" data-title="17. 流程图"><div class="q-meta"><span class="pill">流程图</span></div><h3>17. 用文字画出一次 Agent loop 中压缩检查的完整流程。</h3><textarea name="q17"></textarea></div>
+          <div class="q full" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：Agent 如何通过上下文压缩换来长会话能力。</h3><div class="solve-note">请串联 messages、tool_result、micro compact、token threshold、auto compact、transcript、summary、信息丢失风险。</div><textarea name="q18"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>整理学习答案</h2><span class="tag">学习输出</span></div>
+      <p class="muted">完成练习后生成 Markdown 学习笔记，便于保存和继续学习。</p>
+      <div class="actions"><button onclick="generateRecord()">生成 Markdown 学习笔记</button><button class="ghost" onclick="copyRecord()">复制内容</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">学习笔记会显示在这里。</div>
+    </section>
+  </main>
+</div>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+const views={
+  before:["长历史不断增长","多轮工具调用会让 messages 里塞入大量 tool_result。模型每次请求都要带上这些历史。","观察点：压缩目标是保留继续任务所需的信息，而不是保留所有原文。","messages = [\n  user: read every Python file\n  assistant: tool_use bash id=97B5\n  user: tool_result content='very long ls output...'\n  assistant: tool_use bash id=3F3A\n  user: tool_result content='very long file content...'\n  ... many more results ...\n]",88,"上下文占用：高。旧工具输出仍在历史中。"],
+  micro:["轻压缩旧工具结果","micro compact 保留最近几条真实结果，把更旧且过长的结果替换成短标记。","观察点：messages 结构还在，只是旧 tool_result 的 content 变短。","messages = [\n  user: read every Python file\n  assistant: tool_use bash id=97B5\n  user: tool_result content='previously used bash'\n  assistant: tool_use bash id=3F3A\n  user: tool_result content='previously used bash'\n  ... recent 3 results keep full text ...\n]",46,"上下文占用：中。旧输出被短标记替换。"],
+  auto:["重压缩成续航摘要","auto compact 先保存 transcript，再让模型总结历史，最后把 messages 替换成压缩提示和 summary。","观察点：这是有损压缩，必须保留目标、限制、进度和待办。","messages = [\n  user: Previous conversation was compacted.\n  assistant: Summary: user asked to read files one by one; several files have been inspected; current goal is ...\n]",18,"上下文占用：低。长历史变成摘要。"]
+};
+function renderView(name){const d=views[name]||views.before;document.querySelectorAll("[data-view]").forEach(b=>b.classList.toggle("active",b.dataset.view===name));document.getElementById("viewTitle").textContent=d[0];document.getElementById("viewText").textContent=d[1];document.getElementById("viewHint").textContent=d[2];document.getElementById("messageBox").textContent=d[3];document.getElementById("meterBar").style.width=d[4]+"%";document.getElementById("meterText").textContent=d[5]}
+document.querySelectorAll("[data-view]").forEach(btn=>btn.addEventListener("click",()=>renderView(btn.dataset.view)));renderView("before");
+document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
+const questions=[
+  ["基础概念","1. 上下文压缩最主要目的。","q1","radio"],["基础概念","2. 三层压缩。","q2","text"],["基础概念","3. token 估算是否精确？","q3","radio"],["基础概念","4. 为什么保留最近 tool_result？","q4","text"],["micro compact","5. 为什么保存 message index 和 part index？","q5","text"],["micro compact","6. 为什么构造 tool_use_id 映射？","q6","text"],["micro compact","7. 为什么只替换长度大于 100 的 content？","q7","text"],["micro compact","8. 旧 Bash 结果会变成什么？","q8","text"],["auto compact","9. 为什么先保存 transcript？","q9","text"],["auto compact","10. 摘要目标是什么？","q10","text"],["auto compact","11. auto compact 后 messages 变成什么？","q11","text"],["auto compact","12. compact 工具是否进入 auto compact？","q12","radio"],["风险迁移","13. 禁止事项被截断的风险。","q13","text"],["风险迁移","14. 摘要 prompt 保留哪 5 类信息？","q14","text"],["风险迁移","15. micro 与 auto 最大区别。","q15","text"],["风险迁移","16. 压缩工程价值和代价。","q16","text"],["风险迁移","17. Agent loop 压缩流程。","q17","text"],["费曼解释","18. Agent 如何通过上下文压缩换来长会话能力。","q18","text"]
+];
+function val(q){if(q[3]==="radio"){const el=document.querySelector(`input[name="${q[2]}"]:checked`);return el?el.value:""}const el=document.querySelector(`[name="${q[2]}"]`);return el?el.value.trim():""}
+function generateRecord(){const groups={};const missing=[];questions.forEach(q=>{const v=val(q);if(!v)missing.push(q[1]);if(!groups[q[0]])groups[q[0]]=[];groups[q[0]].push({t:q[1],a:v||"（未填写）"})});let out="# 08 上下文压缩与无限会话｜学习笔记\n\n";Object.keys(groups).forEach(g=>{out+=`## ${g}\n\n`;groups[g].forEach(item=>{out+=`### ${item.t}\n${item.a}\n\n`})});document.getElementById("record").textContent=out;const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=val(["","","q18","text"]);const keys=["messages","tool_result","micro","auto","transcript","summary"];const lack=keys.filter(k=>!f.includes(k));if(f&&f.length<120)warnings.push("费曼解释偏短，建议讲成 6-9 句话。");if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join("、")}。`);const q=document.getElementById("quality");q.style.display="block";q.textContent=warnings.length?warnings.join("\n"):"学习笔记已生成，便于保存和继续学习。"}
+function copyRecord(){navigator.clipboard.writeText(document.getElementById("record").textContent).catch(()=>alert("复制失败，请手动复制。"))}
+</script>
+<script src="../assets/study-page.js"></script>
+</body>
+</html>

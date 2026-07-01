@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LoRA 低秩更新公式｜学习页</title>
+  <link rel="stylesheet" href="../assets/lora-study-page.css">
+</head>
+<body data-course="LoRA 低秩更新公式">
+<div class="progress"></div>
+<div class="layout">
+<aside>
+  <div class="brand"><strong>LoRA 低秩更新公式</strong><span>把 Delta W 写成 BA，读懂形状、参数量、初始化和 merge</span></div>
+  <nav><a href="#goal"><span class="dot"></span>目标与地图</a>
+<a href="#intuition"><span class="dot"></span>直觉：不直接改 W，而是学 W 的改变量</a>
+<a href="#shape"><span class="dot"></span>参数量：为什么两个小矩阵会省这么多</a>
+<a href="#init"><span class="dot"></span>初始化：为什么 B 从 0 开始</a>
+<a href="#scale"><span class="dot"></span>alpha/r：控制 LoRA 分支的尺度</a>
+<a href="#merge"><span class="dot"></span>merge：为什么部署时可以零额外延迟</a>
+<a href="#pitfalls"><span class="dot"></span>常见错法：公式看似会了，代码却写坏了</a>
+<a href="#examples"><span class="dot"></span>试一试：用形状检查公式</a>
+<a href="#practice"><span class="dot"></span>综合练习</a>
+<a href="#final"><span class="dot"></span>导出记录</a></nav>
+  <div class="side-note">这一块只盯住一个公式：h = W0x + BAx。公式看懂了，LoRA 的大半机制就不会飘。</div>
+</aside>
+<main>
+<header class="hero" id="goal">
+  <div>
+    <div class="kicker">第 2 块 · 方法核心</div>
+    <h1>LoRA 低秩更新公式</h1>
+    <p>把 Delta W 写成 BA，读懂形状、参数量、初始化和 merge</p>
+  </div>
+  <div class="route">
+    <h3>学完你应该能做什么</h3>
+    <ol><li>写出 LoRA 的核心前向公式，并解释每个矩阵的形状。</li><li>根据 d、k、r 计算一个 LoRA 模块的可训练参数量。</li><li>说明为什么 A 随机初始化、B 初始化为 0。</li><li>解释 alpha/r 的缩放作用，以及 merge 为什么能消除额外推理延迟。</li></ol>
+  </div>
+</header>
+<section id="intuition"><div class="head"><h2>1. 直觉：不直接改 W，而是学 W 的改变量</h2><span class="tag">low-rank</span></div>
+<p>LoRA 的核心不是“加一个小网络”，而是把原来要学习的权重改变量拆成两个小矩阵。预训练权重 <code>W0</code> 保持不动，下游任务只学习 <code>Delta W</code>。但 <code>Delta W</code> 仍然可能和 <code>W0</code> 一样大，于是 LoRA 进一步约束：让 <code>Delta W = BA</code>，其中中间维度 <code>r</code> 很小。</p>
+<p>用形状看会更清楚。假设原线性层权重 <code>W0</code> 的形状是 <code>d x k</code>，输入 <code>x</code> 是 <code>k</code> 维，输出是 <code>d</code> 维。LoRA 让 <code>A</code> 先把输入从 <code>k</code> 维压到 <code>r</code> 维，再让 <code>B</code> 从 <code>r</code> 维还原到 <code>d</code> 维。这样 <code>BA</code> 的形状仍然是 <code>d x k</code>，可以和 <code>W0</code> 相加。</p>
+<p>术语上，这叫低秩参数化更新。它不是说原模型权重 <code>W0</code> 必须低秩，而是说下游任务需要的改变量可能只占少数方向。LoRA 把可训练自由度限制在这些低维方向里。限制得太小可能表达不够，限制得合适就能省大量参数。</p>
+<p>判断句：看到一个 LoRA 公式时，先检查 <code>BA</code> 是否和 <code>W0</code> 同形状。如果形状对不上，后面讲得再漂亮也不能加到原线性层上。你现在应该能用形状判断一个 LoRA 实现是否写反。</p>
+<div class="formula"><span class="big">h = W<span class="sub">0</span>x + Delta W x = W<span class="sub">0</span>x + BAx</span><br>W<span class="sub">0</span> in R<span class="sup">d x k</span>, &nbsp; B in R<span class="sup">d x r</span>, &nbsp; A in R<span class="sup">r x k</span>, &nbsp; r << min(d,k)</div>
+<div class="svg-wrap">
+<svg viewBox="0 0 760 230" role="img" aria-label="LoRA 矩阵形状图">
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#1b2a4a"/></marker></defs>
+  <rect x="30" y="70" width="90" height="70" fill="#eef8fe" stroke="#1b2a4a"/><text x="75" y="110" text-anchor="middle" font-size="18">x</text><text x="75" y="132" text-anchor="middle" font-size="12">k 维</text>
+  <line x1="125" y1="105" x2="205" y2="105" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="210" y="35" width="120" height="70" fill="#fff8e1" stroke="#a66b00"/><text x="270" y="74" text-anchor="middle" font-size="18">W0</text><text x="270" y="95" text-anchor="middle" font-size="12">d x k 冻结</text>
+  <rect x="210" y="130" width="120" height="70" fill="#ecfdf3" stroke="#166534"/><text x="270" y="160" text-anchor="middle" font-size="18">A 再 B</text><text x="270" y="181" text-anchor="middle" font-size="12">r x k, d x r</text>
+  <line x1="335" y1="70" x2="455" y2="105" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/><line x1="335" y1="165" x2="455" y2="115" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="460" y="78" width="90" height="70" fill="#f8fafc" stroke="#1b2a4a"/><text x="505" y="110" text-anchor="middle" font-size="18">相加</text><text x="505" y="132" text-anchor="middle" font-size="12">d 维</text>
+  <line x1="555" y1="113" x2="645" y2="113" stroke="#1b2a4a" stroke-width="2" marker-end="url(#arrow)"/><rect x="650" y="78" width="90" height="70" fill="#eef8fe" stroke="#1b2a4a"/><text x="695" y="110" text-anchor="middle" font-size="18">h</text><text x="695" y="132" text-anchor="middle" font-size="12">输出</text>
+</svg>
+</div>
+</section>
+<section id="shape"><div class="head"><h2>2. 参数量：为什么两个小矩阵会省这么多</h2><span class="tag">parameters</span></div>
+<p>一个普通 <code>d x k</code> 权重矩阵有 <code>d*k</code> 个参数。如果全量微调这个矩阵，任务更新也可以覆盖这 <code>d*k</code> 个自由度。LoRA 只训练 <code>A</code> 和 <code>B</code>，参数量变成 <code>r*k + d*r = r(d+k)</code>。如果是 Transformer 里常见的方阵 <code>d_model x d_model</code>，每个目标矩阵就是 <code>2*d_model*r</code>。</p>
+<p>这不是魔法，而是明确牺牲了一部分表达自由度。LoRA 只能表示 rank 不超过 <code>r</code> 的更新矩阵。论文的经验发现是：语言模型下游适配常常不需要满秩更新，小 <code>r</code> 就能捕捉主要任务方向。你要记住的是“低秩假设”，不是“免费变强”。</p>
+<p>当 LoRA 应用于多层 Transformer 时，还要乘以层数和每层选中的目标矩阵数。论文里常用 <code>W_q</code> 和 <code>W_v</code>，也就是每层两个目标矩阵。GPT-3 175B 有 96 层，<code>d_model=12288</code>，如果 <code>r=8</code> 且每层两个矩阵，参数量大约 3770 万个，FP16 约 72MB。论文也展示了更小预算，比如 4.7M 参数配置。</p>
+<div class="formula"><span class="big">|Theta| = r*k + d*r = r(d+k)</span><br>若 W 是 d<span class="sub">model</span> x d<span class="sub">model</span>：每个目标矩阵约 2 x d<span class="sub">model</span> x r</div>
+<div class="viz-panel" data-param-demo>
+  <div class="viz-title"><span>LoRA 参数量计算器</span><span class="tag">2 x modules x layers x d x r</span></div>
+  <div class="viz-grid">
+    <div class="viz-cell">
+      <label>rank r：<span data-rank-out>8</span><input data-rank type="range" min="1" max="64" value="8"></label>
+      <label>每层 LoRA 矩阵数：<span data-targets-out>2</span><input data-targets type="range" min="1" max="6" value="2"></label>
+      <label>层数 L<input data-layers type="text" value="96"></label>
+      <label>隐藏维度 d_model<input data-dim type="text" value="12288"></label>
+    </div>
+    <div class="viz-cell">
+      <div class="viz-output"><b>估算结果</b><span data-param-out></span></div>
+      <div class="viz-note">判断提示：对一个方阵投影，LoRA 每个目标矩阵训练 A 和 B 两个矩阵，所以参数量约为 2 x d_model x r。再乘以层数和目标矩阵数。</div>
+    </div>
+  </div>
+</div>
+
+<p>判断句：当你看到“LoRA 参数量很小”，应该马上问：rank 是多少，作用了多少层，作用了几个目标矩阵，隐藏维度是多少。你现在应该能手算一个 LoRA 配置的大致参数量。</p>
+</section>
+<section id="init"><div class="head"><h2>3. 初始化：为什么 B 从 0 开始</h2><span class="tag">initialization</span></div>
+<p>论文使用的初始化很朴素：<code>A</code> 随机高斯初始化，<code>B</code> 初始化为 0。这样训练刚开始时 <code>BA=0</code>，LoRA 分支不会改变预训练模型的输出。模型一开始等同于原模型，然后训练逐步学出任务更新。</p>
+<p>如果 <code>A</code> 和 <code>B</code> 都随机，刚开始就会给原模型加上一段随机扰动。预训练模型本来已经有可用行为，随机扰动可能让训练初期不稳定。反过来，如果两者都初始化为 0，梯度会出现对称性问题：其中一个矩阵可能拿不到有效方向，训练启动会受影响。随机 A、零 B 是一种常用折中。</p>
+<p>这里的判断不要停在“论文这么做”。你要能解释删改后果：B 不为 0 会扰动底座输出；A 和 B 都为 0 会让低秩分支起步困难；忘记冻结 <code>W0</code> 则会变成“LoRA + 部分全量微调”，参数和显存收益都会跑偏。</p>
+<div class="codebar good"><span><span class="badge ok">正确示例</span> 正确示例：LoRA 初始化思路</span><button class="copy" onclick="copyCode('c2_init_good')">复制</button></div><pre><code id="c2_init_good"># A: r x in_features，随机初始化
+A = normal(mean=0, std=small_value, shape=(r, in_features))
+
+# B: out_features x r，初始化为 0
+B = zeros(shape=(out_features, r))
+
+# 初始时 Delta W = B @ A = 0
+delta = B @ A</code></pre><div class="codebar error"><span><span class="badge err">错误示例</span> 错误示例：两个矩阵都随机扰动底座</span><button class="copy" onclick="copyCode('c2_init_bad')">复制</button></div><pre><code id="c2_init_bad">A = normal(shape=(r, in_features))
+B = normal(shape=(out_features, r))
+
+# 问题：刚开始 Delta W != 0
+# 预训练模型输出被随机分支改写，训练初期可能更不稳。</code></pre><p>判断句：初始化是否合理，要看训练第 0 步 LoRA 分支有没有改变原模型输出。你现在应该能诊断 LoRA 初始化错误。</p></section>
+<section id="scale"><div class="head"><h2>4. alpha/r：控制 LoRA 分支的尺度</h2><span class="tag">scaling</span></div>
+<p>LoRA 前向通常不是直接加 <code>BAx</code>，而是加上 <code>(alpha/r) * BAx</code>。这里 <code>alpha</code> 是缩放常数，<code>r</code> 是 rank。缩放的目的，是让改变 rank 时，LoRA 分支输出的量级不至于失控，也减少每次改 rank 后大幅重调学习率的负担。</p>
+<p>直觉上，rank 变大代表分支里有更多方向。如果不做缩放，不同 rank 的输出尺度可能差很多。论文提到，在 Adam 下调 <code>alpha</code> 和调学习率有相近味道，但它不是学习率本身。学习率控制优化步长，<code>alpha/r</code> 控制 LoRA 分支进入主干输出的幅度。</p>
+<p>实际项目里常见错误是只记公式但忘记配置语义。<code>alpha</code> 太小，LoRA 分支影响弱；太大，训练可能不稳或覆盖预训练行为。不同库还会把 <code>lora_alpha</code>、<code>scaling</code>、<code>rank</code> 写成不同字段，验收时要确认最终乘到输出上的系数。</p>
+<div class="formula"><span class="big">h = W<span class="sub">0</span>x + <span class="frac"><span>alpha</span><span>r</span></span> BAx</span></div>
+<div class="viz-panel">
+  <div class="viz-title"><span>缩放直觉</span><span class="tag">alpha / r</span></div>
+  <div class="viz-cell">
+    <div class="bar-row"><b>r=4, alpha=8</b><div class="bar"><span style="width:50%"></span></div><span>scale=2</span></div>
+    <div class="bar-row"><b>r=8, alpha=8</b><div class="bar"><span style="width:25%"></span></div><span>scale=1</span></div>
+    <div class="bar-row"><b>r=16, alpha=8</b><div class="bar"><span style="width:12.5%"></span></div><span>scale=0.5</span></div>
+    <div class="viz-note">判断提示：rank 改了，LoRA 分支的表达方向数变了；缩放项用于控制它进入主分支的量级。</div>
+  </div>
+</div>
+<p>你现在应该能区分：rank 控制低秩空间大小，alpha 控制分支强度，学习率控制参数更新步长。</p>
+</section>
+<section id="merge"><div class="head"><h2>5. merge：为什么部署时可以零额外延迟</h2><span class="tag">merge</span></div>
+<p>LoRA 在训练时有两条路径：原始线性层 <code>W0x</code> 和低秩分支 <code>BAx</code>。但 <code>BA</code> 的结果本身就是一个和 <code>W0</code> 同形状的矩阵。部署时可以先算出 <code>W = W0 + BA</code>，以后推理仍然只跑一个普通线性层。这就是论文说“不引入额外推理延迟”的关键。</p>
+<p>merge 不是把 LoRA 扔掉，而是把任务更新吸收到原权重里。切换任务时，可以从 <code>W0</code> 出发，加载另一个任务的 <code>B'A'</code>。工程上要小心重复 merge：如果同一个 LoRA 权重被加了两次，输出就错了。也要记住，merge 后如果还想继续训练 LoRA，需要知道当前权重是否已经包含 LoRA 更新。</p>
+<p>这里还有一个边界：如果一个 batch 里混合不同任务，并且每个样本要用不同 LoRA，提前 merge 成单一权重就不方便。可以选择不 merge，动态按样本选择 LoRA 分支，但这样会牺牲一部分延迟优势。论文也提到这个限制。</p>
+<div class="codebar walk"><span><span class="badge walk">逐行拆解</span> 逐行拆解：merge 和 unmerge 的状态</span><button class="copy" onclick="copyCode('c2_merge')">复制</button></div><pre><code id="c2_merge"># 训练时
+y = x @ W0.T + scaling * (x @ A.T @ B.T)
+
+# 部署前 merge
+W_merged = W0 + scaling * (B @ A)
+y = x @ W_merged.T
+
+# 切换任务时，从干净 W0 加另一个 LoRA
+W_task_b = W0 + scaling_b * (B_b @ A_b)</code></pre><div class="grid3"><div class="box blue"><h3>merge 前</h3><p>便于训练 LoRA、切换不同低秩分支；推理要额外算低秩路径。</p></div>
+<div class="box ok"><h3>merge 后</h3><p>推理就是普通线性层；适合单任务部署或服务当前任务。</p></div>
+<div class="box bad"><h3>重复 merge</h3><p>同一份 Delta W 被加两次，模型输出偏移。要记录 merge 状态。</p></div></div><p>判断句：“LoRA 零额外推理延迟”默认指已经 merge 到权重后的推理路径。你现在应该能说明这句话的前提。</p></section>
+<section id="pitfalls"><div class="head"><h2>6. 常见错法：公式看似会了，代码却写坏了</h2><span class="tag">diagnosis</span></div><div class="grid3"><div class="box bad"><h3>A/B 形状写反</h3><p>如果 B@A 不能得到 d x k，就无法和 W0 相加。先用形状验收。</p></div>
+<div class="box bad"><h3>忘记冻结 W0</h3><p>底座参数继续训练，显存、优化器状态和任务 checkpoint 都会变重。</p></div>
+<div class="box warn"><h3>B 不为 0</h3><p>初始输出被随机 LoRA 分支扰动，训练起点不再是预训练模型。</p></div>
+<div class="box warn"><h3>alpha 当学习率</h3><p>alpha 控制 LoRA 输出尺度，不等同于优化器步长。两者都会影响训练，但位置不同。</p></div>
+<div class="box bad"><h3>重复 merge</h3><p>多次把同一 LoRA 加到 W0，会让更新翻倍。需要 merge 状态标记。</p></div>
+<div class="box warn"><h3>rank 盲目越大越好</h3><p>rank 越大参数越多，不保证指标单调提升。论文实验里小 r 已经很强。</p></div></div></section>
+<section id="examples"><div class="head"><h2>7. 试一试：用形状检查公式</h2><span class="tag">examples</span></div>
+<div class="grid3">
+  <div class="example-card"><h3>例题 1</h3><p><code>W0</code> 是 4096 x 4096，<code>r=8</code>。一个 LoRA 目标矩阵有多少可训练参数？</p><p class="hint">参考：2 x 4096 x 8 = 65536。</p></div>
+  <div class="example-card"><h3>例题 2</h3><p>如果 <code>A</code> 是 4096 x 8，<code>B</code> 是 8 x 4096，哪里不对？</p><p class="hint">按论文约定，B@A 应得到 d x k。这个写法乘出来是 8 x 8 或需要换转置语义。</p></div>
+  <div class="example-card"><h3>例题 3</h3><p>为什么刚开始 <code>Delta W=0</code> 是好事？</p><p class="hint">训练第 0 步保留预训练模型行为，LoRA 分支从不扰动开始学习。</p></div>
+</div>
+</section>
+
+
+<section id="practice">
+  <div class="head"><h2>综合练习</h2><span class="tag">mixed drills</span></div>
+  <div class="practice-intro">
+    <div class="review-card"><strong>作答方式</strong><p>前面的例题用于即时检查；这里的综合练习会整理成记录。短答题尽量写出判断依据，不只写一个结论。</p></div>
+    <div class="review-card"><strong>自查重点</strong><ul><li>诊断题是否写了错因、后果、修法。</li><li>概念题是否区分相邻概念。</li><li>费曼题是否串起本块主线。</li></ul></div>
+  </div>
+  <div class="practice-check">
+    <div class="check-item"><b>概念</b>能说清术语含义。</div>
+    <div class="check-item"><b>公式</b>能解释符号和形状。</div>
+    <div class="check-item"><b>诊断</b>能指出错误后果。</div>
+    <div class="check-item"><b>表达</b>能用自己的话复述。</div>
+  </div>
+
+  <div class="practice-group">
+    <div class="group-head"><div><h3>一、公式和形状</h3><p>先检查你是否真的能读懂 h = W0x + BAx。</p></div><div class="quick-review"><b>检查点</b><span>任何 LoRA 实现先验形状，再谈效果。</span></div></div>
+    <div class="drill-grid">
+<div class="q" data-role="homework" data-type="fill" data-title="核心公式"><div class="q-meta"><span class="pill">填空</span><span class="pill">一、公式和形状</span></div><h3>1. LoRA 把权重更新写成 Delta W = ____。</h3><input type="text"></div>
+<div class="q" data-role="homework" data-type="choice" data-title="冻结对象"><div class="q-meta"><span class="pill">单选</span><span class="pill">一、公式和形状</span></div><h3>2. LoRA 训练时通常冻结哪个对象？</h3><label><input type="radio" name="q2" value="预训练权重 W0"> 预训练权重 W0</label><label><input type="radio" name="q2" value="低秩矩阵 A 和 B"> 低秩矩阵 A 和 B</label><label><input type="radio" name="q2" value="下游数据集"> 下游数据集</label></div>
+<div class="q" data-role="homework" data-type="fill" data-title="形状判断"><div class="q-meta"><span class="pill">填空</span><span class="pill">一、公式和形状</span></div><h3>3. 若 W0 是 d x k，A 是 r x k，则 B 应该是 ____。</h3><input type="text"></div>
+<div class="q" data-role="homework" data-type="short" data-title="输出维度"><div class="q-meta"><span class="pill">短答</span><span class="pill">一、公式和形状</span></div><h3>4. 为什么 BAx 的输出维度必须和 W0x 一样？</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="低秩含义"><div class="q-meta"><span class="pill">短答</span><span class="pill">一、公式和形状</span></div><h3>5. LoRA 中“低秩”限制的是 W0 还是 Delta W？请说明。</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="choice" data-title="判断 rank"><div class="q-meta"><span class="pill">判断</span><span class="pill">一、公式和形状</span></div><h3>6. rank r 越大，LoRA 的可训练参数越多。</h3><label><input type="radio" name="q6" value="正确"> 正确</label><label><input type="radio" name="q6" value="错误"> 错误</label></div>
+    </div>
+  </div>
+
+  <div class="practice-group">
+    <div class="group-head"><div><h3>二、参数量和缩放</h3><p>这一组把公式落到可计算数量。</p></div><div class="quick-review"><b>检查点</b><span>先写参数量公式，再代数。</span></div></div>
+    <div class="drill-grid">
+<div class="q" data-role="homework" data-type="fill" data-title="参数量公式"><div class="q-meta"><span class="pill">填空</span><span class="pill">二、参数量和缩放</span></div><h3>7. 一个 d x k 权重矩阵的 LoRA 参数量是 ____。</h3><input type="text"></div>
+<div class="q" data-role="homework" data-type="short" data-title="方阵计算"><div class="q-meta"><span class="pill">计算</span><span class="pill">二、参数量和缩放</span></div><h3>8. W0 是 4096 x 4096，r=16。一个目标矩阵的 LoRA 参数量是多少？</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="多层计算"><div class="q-meta"><span class="pill">计算</span><span class="pill">二、参数量和缩放</span></div><h3>9. 一个 32 层模型，每层对 Wq 和 Wv 加 LoRA，d_model=4096，r=8。可训练参数量约是多少？</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="alpha/r"><div class="q-meta"><span class="pill">短答</span><span class="pill">二、参数量和缩放</span></div><h3>10. alpha/r 缩放控制的是什么？它和学习率有什么区别？</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="choice" data-title="rank 越大越好"><div class="q-meta"><span class="pill">判断</span><span class="pill">二、参数量和缩放</span></div><h3>11. 只要显存允许，rank 越大验证集指标一定越好。</h3><label><input type="radio" name="q11" value="正确"> 正确</label><label><input type="radio" name="q11" value="错误"> 错误</label></div>
+<div class="q" data-role="homework" data-type="short" data-title="参数少的代价"><div class="q-meta"><span class="pill">短答</span><span class="pill">二、参数量和缩放</span></div><h3>12. 为什么说 LoRA 参数少不是免费午餐？</h3><textarea placeholder=""></textarea></div>
+    </div>
+  </div>
+
+  <div class="practice-group">
+    <div class="group-head"><div><h3>三、初始化、merge 和诊断</h3><p>这一组检查你能不能发现实现错误。</p></div><div class="quick-review"><b>检查点</b><span>诊断题按错因、后果、修法写。</span></div></div>
+    <div class="drill-grid">
+<div class="q" data-role="homework" data-type="short" data-title="初始化理由"><div class="q-meta"><span class="pill">短答</span><span class="pill">三、初始化、merge 和诊断</span></div><h3>13. 为什么论文让 A 随机初始化、B 初始化为 0？</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="diagnostic" data-title="错误诊断：两个都随机"><div class="q-meta"><span class="pill">诊断</span><span class="pill">三、初始化、merge 和诊断</span></div><h3>14. 诊断：A 和 B 都随机初始化，训练第 0 步模型输出已经改变。按错因、后果、修法回答。</h3><textarea placeholder="错因：
+后果：
+修法："></textarea></div>
+<div class="q" data-role="homework" data-type="diagnostic" data-title="错误诊断：忘记冻结"><div class="q-meta"><span class="pill">诊断</span><span class="pill">三、初始化、merge 和诊断</span></div><h3>15. 诊断：训练 LoRA 时 W0 也在更新。按错因、后果、修法回答。</h3><textarea placeholder="错因：
+后果：
+修法："></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="merge 前提"><div class="q-meta"><span class="pill">短答</span><span class="pill">三、初始化、merge 和诊断</span></div><h3>16. 为什么 LoRA merge 后可以没有额外推理延迟？</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="diagnostic" data-title="重复 merge"><div class="q-meta"><span class="pill">诊断</span><span class="pill">三、初始化、merge 和诊断</span></div><h3>17. 诊断：同一个 LoRA 权重被 merge 两次。按错因、后果、修法回答。</h3><textarea placeholder="错因：
+后果：
+修法："></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="混批边界"><div class="q-meta"><span class="pill">场景</span><span class="pill">三、初始化、merge 和诊断</span></div><h3>18. 如果一个 batch 里每个样本要用不同 LoRA，merge 策略会遇到什么问题？</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="面试追问"><div class="q-meta"><span class="pill">面试追问</span><span class="pill">三、初始化、merge 和诊断</span></div><h3>19. 用 1-3 句话解释 LoRA 为什么能省参数。</h3><textarea placeholder=""></textarea></div>
+<div class="q full" data-role="homework" data-type="feynman" data-title="费曼解释" data-keys="W0,Delta W,A,B,rank,alpha/r,merge"><div class="q-meta"><span class="pill">费曼解释</span><span class="pill">三、初始化、merge 和诊断</span></div><h3>20. 用 6-9 句话解释 LoRA 的低秩更新公式，从 W0、A、B、r、alpha/r 一直讲到 merge。</h3><p class="hint">请串联：W0、Delta W、A、B、rank、alpha/r、merge。</p><textarea placeholder=""></textarea></div>
+    </div>
+  </div>
+
+</section>
+<section id="final">
+  <div class="head"><h2>导出练习记录</h2><span class="tag">record</span></div>
+  <p class="muted">完成综合练习后生成一份记录，便于回看哪些判断还不稳。</p>
+  <div class="actions"><button onclick="generateAnswer()">生成记录</button><button class="ghost" onclick="copyAnswer()">复制记录</button></div>
+  <div id="quality" class="quality"></div>
+  <div id="answer" class="answer">尚未生成。</div>
+</section>
+
+</main>
+</div>
+<script src="../assets/lora-study-page.js"></script>
+</body>
+</html>

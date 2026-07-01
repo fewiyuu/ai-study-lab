@@ -1,0 +1,750 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM 基础 03｜预训练、微调、推理的角色边界</title>
+  <link rel="stylesheet" href="assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="assets/study-page.css">
+</head>
+<body data-course="LLM 基础与应用工程" data-unit="03｜预训练、微调、推理的角色边界">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>LLM 基础与应用工程</strong>
+        <span>03｜预训练、微调、推理<br>分清改参数、改输入和改链路</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goal"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>角色总览</a>
+        <a href="#boundary"><span class="dot"></span>阶段边界</a>
+        <a href="#pretrain"><span class="dot"></span>预训练</a>
+        <a href="#finetune"><span class="dot"></span>微调</a>
+        <a href="#inference"><span class="dot"></span>推理</a>
+        <a href="#roles"><span class="dot"></span>应用角色</a>
+        <a href="#readwrite"><span class="dot"></span>代码读写</a>
+        <a href="#decision"><span class="dot"></span>决策链路</a>
+        <a href="#operation"><span class="dot"></span>排查桥</a>
+        <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>来源</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">
+        判断一个 LLM 方案时，先问它改的是参数、输入、检索链路、排序策略，还是解码控制。边界分清，后面的 HuggingFace 调用和 RAG 流程才不会混在一起。
+      </div>
+    </aside>
+
+    <main>
+      <section class="hero" id="goal">
+        <div>
+          <div class="kicker">LLM FOUNDATION · BLOCK 03</div>
+          <h1>先分清三件事：训练、适配、调用</h1>
+          <p>这一页把大模型工程里最容易混用的几个词拆开：预训练、微调、推理，以及应用链路里的 embedding、reranking、generation。它们都和模型有关，但读写的位置不同，副作用不同，适合解决的问题也不同。</p>
+          <p>遇到效果问题时，先定位失败发生在哪一层。资料缺失，先看检索和上下文；输出格式飘，先看 prompt、schema、示例和解码参数；稳定任务长期重复、又有样本和评估集时，再比较微调。普通应用里，完整预训练很少排在第一步。</p>
+          <div class="course-links">
+            <a href="../02_Transformer与Attention直观理解/学习页.html">上一节：Transformer 与 Attention</a>
+            <a href="../index.html">课程地图</a>
+            <a href="../04_HuggingFace最小示例/学习页.html">下一节：HuggingFace 最小示例</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完这页，你先会分清什么</h3>
+          <ul>
+            <li>说清预训练、微调、推理分别读什么、写什么、留下什么副作用。</li>
+            <li>用失败症状选择 prompt、RAG、rerank、微调或换模型。</li>
+            <li>区分 embedding、reranking、generation 的输入输出。</li>
+            <li>解释 temperature 只能改采样，不能补证据。</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="overview">
+        <div class="head"><h2>先抓主线：一个模型从训练到调用会经历什么</h2><span class="tag">overview</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>把“模型变好”拆成几种动作</h3>
+            <p>预训练发生在基础模型形成阶段。训练目标通常是根据前文预测下一个 token，模型通过海量样本更新参数，学到语言结构、常识片段、代码模式和大量统计关联。它解决的是通用能力起点，成本高，数据和训练工程都重。</p>
+            <p>微调发生在已有模型之后。它仍然会更新参数，只是数据规模、目标范围和成本小得多。它适合把模型拉向稳定任务口径、输出格式、领域表达或偏好行为。推理发生在模型参数基本固定之后，工程师主要改本次输入、上下文、工具结果、解码参数和输出约束。</p>
+        <p>应用工程大多在推理侧和检索链路里做文章。embedding 负责把文本变成向量来召回，reranking 负责对候选材料做精排，generation 负责根据 prompt 和上下文组织答案。它们属于调用侧，不在训练阶段内。</p>
+          </div>
+          <div class="box info">
+            <h3>这一页和前后单元的边界</h3>
+            <div class="table-wrap">
+              <table data-export-context="03 单元课程边界" data-export-lang="table">
+                <thead>
+                  <tr><th>位置</th><th>本页承接什么</th><th>本页交给下一步什么</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>从 02 来</td><td>已经知道 Transformer 用 attention 读取上下文</td><td>现在要知道模型能力从哪里来，调用时能控制什么</td></tr>
+                  <tr><td>本页</td><td>区分预训练、微调、推理和三种应用调用角色</td><td>形成“先定位失败层级”的工程判断</td></tr>
+              <tr><td>去 04</td><td>带着角色边界看 HuggingFace 最小调用</td><td>确认代码是在推理，不是在训练模型</td></tr>
+              <tr><td>去 05-08</td><td>把 embedding、reranking、generation 接进应用链路</td><td>进入检索、提示、评估和 RAG 最小流程</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="inline-note"><b>先知道，先别钻</b>这里先不展开优化器、分布式训练、LoRA 细节、RLHF 流程或推理加速。先把哪一步读什么、写什么、留下什么痕迹刻清楚，后面再看实现和成本。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="boundary">
+        <div class="head"><h2>阶段边界：同一句“让模型更好”，可能指四种改变</h2><span class="tag">boundary</span></div>
+        <p class="inline-note"><b>状态账本</b>先看读写方向，再看名词。训练会把状态写进参数；推理会把状态写进输出、日志和会话痕迹；评估会把状态写进失败分类和下一轮动作。</p>
+        <div class="table-wrap">
+          <table data-export-context="预训练微调推理边界表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>动作</th>
+                <th>读入</th>
+                <th>写出</th>
+                <th>副作用</th>
+                <th>什么时候会过期</th>
+                <th>常见误判</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>预训练</td>
+                <td>海量通用文本、代码、混合语料</td>
+                <td>基础模型参数 <code>theta</code> 和 checkpoint</td>
+                <td>训练成本高，周期长，常常先把算力和数据一起锁住</td>
+                <td>当目标是私有文档、频繁更新的规则或短周期业务口径时</td>
+                <td>把“给模型看一份新文件”叫预训练</td>
+              </tr>
+              <tr>
+                <td>微调 / 对齐</td>
+                <td>任务样本、指令样本、偏好样本、领域样本</td>
+                <td>原模型参数或少量适配参数</td>
+                <td>可能把口径学窄，也可能把通用能力挤掉一部分</td>
+                <td>当任务口径改得快，样本和评估集跟不上时</td>
+                <td>把微调当作频繁更新的知识库</td>
+              </tr>
+              <tr>
+                <td>推理</td>
+                <td>prompt、上下文、工具结果、检索片段</td>
+                <td>答案、JSON、代码、分数、日志和会话记录</td>
+                <td>不会改参数，但会留下 trace、缓存和外部工具结果</td>
+                <td>每次调用结束后，本次输入就失效</td>
+                <td>以为调 temperature 会补缺失知识</td>
+              </tr>
+              <tr>
+                <td>评估反馈</td>
+                <td>真实样例、期望答案、错误类型、指标</td>
+                <td>失败地图和下一轮工程动作</td>
+                <td>只改决策，不改模型</td>
+                <td>当样本太少、覆盖不全，或者只看了少数成功样例时</td>
+                <td>只看几个成功样例就决定微调</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="shape-tracer" data-shape-tracer>
+          <div class="trace-lines">
+            <button class="trace-line active" data-trace-step="step-pretrain"><code>pretrain(corpus)</code><span>读：语料 · 写：checkpoint</span></button>
+            <button class="trace-line" data-trace-step="step-finetune"><code>finetune(samples)</code><span>读：样本 · 写：adapter</span></button>
+            <button class="trace-line" data-trace-step="step-infer"><code>infer(prompt, context)</code><span>读：输入 · 写：输出/日志</span></button>
+            <button class="trace-line" data-trace-step="step-eval"><code>evaluate(cases)</code><span>读：样例 · 写：error map</span></button>
+          </div>
+          <div class="trace-canvas">
+            <div class="tensor-card active" data-trace-target="step-pretrain">
+              <b>预训练</b><span>读：corpus · 写：theta</span><p>模型反复预测下一个 token，参数被大规模更新。它形成通用能力起点，但成本最高。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="step-finetune">
+              <b>微调</b><span>读：samples · 写：theta_task / adapter</span><p>在已有模型上继续训练，让行为更稳定地贴近任务。它仍然是参数层面的改变。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="step-infer">
+              <b>推理</b><span>读：prompt/context · 写：answer</span><p>模型参数固定，工程师主要控制 prompt、上下文、工具返回、解码参数和输出格式。</p>
+            </div>
+            <div class="tensor-card" data-trace-target="step-eval">
+              <b>评估</b><span>读：outputs + labels · 写：error map</span><p>评估不直接让模型变聪明，它告诉你下一步该改检索、prompt、重排、微调还是模型选择。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="pretrain">
+        <div class="head"><h2>预训练：让基础模型先学会预测下一个 token</h2><span class="tag">pretrain</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>它改变的是基础参数</h3>
+            <p>预训练的直觉很朴素：给模型一段 token 序列，让它根据前面的 token 预测下一个 token。真实下一个 token 已知，模型预测错了，就通过损失函数和反向传播更新参数。样本足够多时，这个目标会把语言结构、事实片段、代码模式、问答格式和一些推理痕迹压进参数里。</p>
+            <p>这里要避免一个常见误会：参数更像统计压缩，不是逐篇原文存放的文件柜。模型不会把每篇文章原样放进某个格子里。它形成的是统计模式，所以会有过时、混淆、编造和不确定。新政策、私有文档、每天变化的资料，通常更适合通过检索和上下文交给模型，也更适合放在外部存储里更新。</p>
+          </div>
+          <div class="box">
+            <h3>训练目标长什么样</h3>
+            <div class="math-block" data-export-context="预训练下一个 token 目标" data-export-lang="math">
+              $$
+              \mathcal{L}(\theta) = - \sum_{t=1}^{T} \log p_{\theta}(x_t \mid x_{<t})
+              $$
+              <p><code>x_t</code> 是当前位置的真实 token，<code>x_{&lt;t}</code> 是它前面的 token，<code>theta</code> 是模型参数。训练时最小化这个损失；推理时用学到的概率分布继续生成。</p>
+            </div>
+            <div class="codebar"><span>最小训练循环的读法</span><button class="copy" data-copy="pretrain-code">复制</button></div>
+            <pre id="pretrain-code" data-export-context="预训练循环读法" data-export-lang="python"><code class="language-python">for batch in token_batches:
+    x = batch[:, :-1]        # 前缀 token
+    y = batch[:, 1:]         # 真实下一个 token
+    logits = model(x)        # 参数 theta 参与前向计算
+    loss = cross_entropy(logits.reshape(-1, vocab), y.reshape(-1))
+    loss.backward()
+    optimizer.step()         # 这里会更新参数
+    optimizer.zero_grad()</code></pre>
+          </div>
+        </div>
+        <p class="inline-note"><b>检查点</b>如果一个方案只是把一份制度文档放进 prompt、向量库或上下文窗口，它没有做预训练。预训练意味着参数被训练过程更新，通常需要很大的数据和算力。</p>
+      </section>
+
+      <section id="finetune">
+        <div class="head"><h2>微调：在已有模型上稳定改变任务行为</h2><span class="tag">finetune</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>它适合改变“怎么答”</h3>
+            <p>微调是在基础模型或指令模型上继续训练。它可以让模型更稳定地遵守某类格式，学习某个任务的判断口径，适应领域表达，或通过偏好数据更贴近人类反馈。常见做法包括全量微调、LoRA/QLoRA 这类参数高效微调、指令微调和偏好对齐。</p>
+            <p>微调适合稳定、重复、高价值的问题。比如每天有大量同类客服质检文本，需要输出固定 JSON 字段；或模型总是在同一类标签边界上摇摆，而你已经有高质量标注样本和评估集。它不适合当成“把最新资料同步进模型”的唯一手段。</p>
+          </div>
+          <div class="box">
+            <h3>微调前先问四个问题</h3>
+            <div class="table-wrap">
+              <table data-export-context="微调前四问" data-export-lang="table">
+                <thead><tr><th>问题</th><th>为什么要问</th><th>如果答案是否定</th></tr></thead>
+                <tbody>
+                  <tr><td>失败是否稳定重复？</td><td>微调适合改长期模式</td><td>先保存失败样例，别急着训练</td></tr>
+                  <tr><td>是否有高质量样本？</td><td>坏样本会把错误口径写进参数</td><td>先做数据清洗和标注规范</td></tr>
+                  <tr><td>是否有评估集？</td><td>没有评估就无法判断整体是否退化</td><td>先建 20-50 条真实样例做最小 Eval</td></tr>
+                  <tr><td>prompt / RAG / rerank 是否已排查？</td><td>很多问题在推理链路能低成本解决</td><td>先修输入、上下文、召回和排序</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="codebar"><span>一条指令微调样本的边界</span><button class="copy" data-copy="finetune-json">复制</button></div>
+        <pre id="finetune-json" data-export-context="指令微调样本边界" data-export-lang="json"><code class="language-json">{
+  "instruction": "判断客服质检文本是否存在承诺超范围。",
+  "input": "客服表示：这个赔付一定能通过，明天到账。",
+  "output": {
+    "label": "违规",
+    "reason": "承诺了无法保证的赔付结果和到账时间。"
+  }
+}</code></pre>
+        <p>这条样本教的是任务口径和输出格式。它可以帮助模型在同类文本上更稳定，但不适合承载每天变化的政策手册。资料频繁变化时，把资料放进检索系统，再用 prompt、schema 或微调约束回答方式，通常更容易维护。</p>
+      </section>
+
+      <section id="inference">
+        <div class="head"><h2>推理：参数固定后，工程师主要改输入和解码</h2><span class="tag">inference</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>推理阶段能控制什么</h3>
+            <p>普通推理调用时，模型参数通常固定。你能控制的是 system prompt、用户输入、检索上下文、工具返回、函数调用约束、输出 schema、temperature、top_p、max_tokens、stop sequence 等。本次调用结束后，这些设置不会永久改变模型参数。</p>
+            <p>很多应用质量问题发生在这里。模型没有引用证据，先检查证据是否真的放进上下文；输出 JSON 不稳定，先检查 schema、示例和格式约束；答案忽长忽短，先看 <code>max_tokens</code> 和任务拆分；答案发散，先看采样参数和问题边界。</p>
+          </div>
+          <div class="box">
+            <h3>解码参数读法</h3>
+            <div class="table-wrap">
+              <table data-export-context="推理解码参数表" data-export-lang="table">
+                <thead><tr><th>控制项</th><th>影响什么</th><th>不能解决什么</th></tr></thead>
+                <tbody>
+                  <tr><td><code>temperature</code></td><td>采样发散程度，越低越保守</td><td>不能补缺失证据或私有知识</td></tr>
+                  <tr><td><code>top_p</code></td><td>候选 token 的概率截断范围</td><td>不能修复错误上下文</td></tr>
+                  <tr><td><code>max_tokens</code></td><td>输出长度上限</td><td>不能保证答案完整，只会截断</td></tr>
+                  <tr><td><code>response_format</code> / schema</td><td>输出结构约束</td><td>不能替代任务定义和字段语义</td></tr>
+                  <tr><td>上下文材料</td><td>模型本次可读的证据</td><td>不能修复召回不到材料的问题</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="codebar"><span>推理调用关注输入、上下文和解码参数</span><button class="copy" data-copy="inference-code">复制</button></div>
+        <pre id="inference-code" data-export-context="推理调用边界代码" data-export-lang="python"><code class="language-python">messages = [
+    {"role": "system", "content": "只根据给定证据回答；没有证据就说无法判断。"},
+    {"role": "user", "content": user_question},
+    {"role": "tool", "content": retrieved_policy_snippets}
+]
+
+response = client.responses.create(
+    model="deployed-instruction-model",
+    input=messages,
+    temperature=0.2,
+    max_output_tokens=400,
+)
+
+# 这段代码没有训练模型。它改变的是本次输入和生成控制。</code></pre>
+      </section>
+
+      <section id="roles">
+        <div class="head"><h2>embedding、reranking、generation：应用链路里的三种调用角色</h2><span class="tag">roles</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>先看输入输出</h3>
+            <p><strong>embedding</strong> 把文本变成向量，常用于相似度检索、聚类和去重。它的输出通常是一串浮点数，适合拿去做相似度计算，而不是直接拿来回答问题。</p>
+            <p><strong>reranking</strong> 通常接收“查询 + 候选文档”，输出相关性分数或排序。它不负责从全库召回，而是对已经召回的候选做精排。它更细，也更慢，所以常放在召回之后。</p>
+            <p><strong>generation</strong> 负责生成文本、代码或结构化结果。它可以基于 prompt 和检索材料组织答案，但如果没有给它证据，它对最新或私有知识不一定可靠。</p>
+          </div>
+          <div class="box">
+            <h3>三者对照</h3>
+            <div class="table-wrap">
+              <table data-export-context="embedding reranking generation 对照" data-export-lang="table">
+                <thead><tr><th>角色</th><th>输入</th><th>输出</th><th>典型位置</th></tr></thead>
+                <tbody>
+                  <tr><td>embedding</td><td>一段文本或 query</td><td>向量</td><td>召回相似文档、聚类、去重</td></tr>
+                  <tr><td>reranking</td><td>query + 候选文本</td><td>相关性分数或排序</td><td>召回之后，进入上下文之前</td></tr>
+                  <tr><td>generation</td><td>prompt + 上下文 + 工具结果</td><td>自然语言、代码、JSON</td><td>最终回答或执行指令</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="codebar"><span>RAG 中三种角色的最小链路</span><button class="copy" data-copy="rag-chain-code">复制</button></div>
+        <pre id="rag-chain-code" data-export-context="RAG 三角色链路代码" data-export-lang="python"><code class="language-python">query_vec = embedding_model.encode(user_question)
+candidates = vector_store.search(query_vec, top_k=30)
+
+ranked = reranker.score_pairs(user_question, candidates)
+context = take_top(ranked, k=5)
+
+answer = generation_model.generate(
+    prompt=build_prompt(user_question, context),
+    temperature=0.2,
+)</code></pre>
+        <p class="inline-note"><b>判断句</b>要“找资料”，先看 embedding 和 reranking；要“组织答案”，再看 generation；要“长期稳定改变任务行为”，才看微调和评估集。</p>
+      </section>
+
+      <section id="readwrite">
+        <div class="head"><h2>代码读写：先看一条调用链到底改了谁</h2><span class="tag">read/write</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>把一条调用拆成四个动作</h3>
+            <p>同一段代码里，最容易混在一起的是“读到什么”和“写出去什么”。如果不先拆这两件事，后面就很容易把推理当训练，把外部工具结果当参数记忆。</p>
+            <p>读法很简单：先找输入，再找模型是否产生新的状态，最后看这个状态是只留在本次调用里，还是会落到文件、日志、缓存或者 checkpoint。只要落点不同，工程决策就不同。</p>
+          </div>
+          <div class="box">
+            <h3>三类动作的读写账本</h3>
+            <div class="table-wrap">
+              <table data-export-context="代码读写账本" data-export-lang="table">
+                <thead><tr><th>动作</th><th>读什么</th><th>写什么</th><th>最常见的错读</th></tr></thead>
+                <tbody>
+                  <tr><td>预训练</td><td>大语料、token 序列、损失信号</td><td>参数、checkpoint、优化器状态</td><td>把“加载语料”误当成“完成训练”</td></tr>
+                  <tr><td>微调</td><td>任务样本、标签、偏好数据</td><td>参数或 adapter</td><td>把“改提示词”误当成“已经改参数”</td></tr>
+                  <tr><td>推理</td><td>prompt、上下文、工具结果、schema</td><td>答案、分数、日志、缓存痕迹</td><td>把 temperature 当成知识补丁</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="codebar"><span>读写顺序的最小示意</span><button class="copy" data-copy="rw-code">复制</button></div>
+        <pre id="rw-code" data-export-context="读写顺序示意代码" data-export-lang="python"><code class="language-python"># 读：当前问题、上下文、检索片段
+messages = build_messages(question, context, retrieved_docs)
+
+# 写：这次调用的输出，不改参数
+result = client.responses.create(
+    model=model_name,
+    input=messages,
+    temperature=0.2,
+    max_output_tokens=400,
+)
+
+# 如果这一层还要留下副作用，通常写到日志、数据库或缓存
+log_interaction(question, result.output_text)</code></pre>
+        <p class="inline-note"><b>检查点</b>如果代码只看到 <code>result = ...</code>，那还不够。还要问一遍：这次调用改了模型参数吗，还是只写出了结果和日志。这个判断会直接影响你后面是改 prompt、补检索，还是去做微调比较。</p>
+        <p class="inline-note"><b>最小回放</b>如果系统只允许你保留一条记录，优先保留问题、上下文、输出和当时的 trace。后面排查经常要回看中间状态；只留最终答案，通常只能知道错了，不能知道错在召回、排序还是约束。</p>
+        <p class="inline-note"><b>状态分界</b>训练状态通常放在参数、adapter、checkpoint 和优化器状态里；调用状态通常放在消息、上下文、缓存和日志里。看到文件落点不同，就能知道下一步是回训练流程，还是回推理流程。界面上把这两类按钮放在一起，最容易让人误判。</p>
+      </section>
+
+      <section id="decision">
+        <div class="head"><h2>决策链路：效果差时先定位，再选择动作</h2><span class="tag">decision</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>同一个“答错”，可能来自不同层</h3>
+            <p>假设内部助手把“报销超过 5000 元需要两级审批”答成“一级审批”。如果检索上下文里没有最新制度，先修 RAG：更新资料、重建索引、检查召回。若上下文里有正确条款，但模型没有引用，先修 prompt 和输出约束：要求只根据证据回答，列来源，资料冲突时拒答。</p>
+            <p>如果问题不是知识缺失，而是长期把同类质检文本分错类，并且你有稳定样本、标注规范和 Eval，再考虑微调。三种动作都可能让少数样例变好，但维护成本和风险完全不同。工程决策先从失败分类入手，再看技术选型。</p>
+          </div>
+          <div class="box">
+            <h3>失败到动作的映射</h3>
+            <div class="table-wrap">
+              <table data-export-context="失败症状到工程动作" data-export-lang="table">
+                <thead><tr><th>症状</th><th>先查哪里</th><th>优先动作</th><th>先别急着做</th></tr></thead>
+                <tbody>
+                  <tr><td>缺最新政策或私有文档</td><td>上下文里有没有证据</td><td>RAG / 上下文注入</td><td>完整预训练</td></tr>
+                  <tr><td>召回结果相关但顺序乱</td><td>候选文档和 query 是否匹配</td><td>reranking</td><td>盲目塞更多片段</td></tr>
+                  <tr><td>输出格式不稳定</td><td>schema、示例、temperature</td><td>prompt、结构化输出约束、低温度</td><td>马上微调</td></tr>
+                  <tr><td>同类任务长期大量重复</td><td>样本、评估集、标注口径</td><td>评估集 + 高质量样本 + 微调</td><td>只靠越来越长的 prompt</td></tr>
+                  <tr><td>答案忽长忽短或截断</td><td>任务拆分和 token 上限</td><td>调整 max tokens，拆分步骤</td><td>把截断归因于模型没学会</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="terminal-lab" data-terminal-lab>
+          <div class="terminal-controls">
+            <button class="ghost active" data-terminal-case="missing-context">缺证据</button>
+            <button class="ghost" data-terminal-case="bad-format">格式乱</button>
+            <button class="ghost" data-terminal-case="stable-task">长期任务</button>
+          </div>
+          <pre class="terminal-output" aria-live="polite">CASE missing-context
+symptom: 模型答错最新政策
+inspect: 打印检索上下文
+finding: 没有召回新制度条款
+next: 更新资料、重建索引、检查召回，而不是直接微调</pre>
+          <template data-terminal-output="missing-context">CASE missing-context
+symptom: 模型答错最新政策
+inspect: 打印检索上下文
+finding: 没有召回新制度条款
+next: 更新资料、重建索引、检查召回，而不是直接微调</template>
+          <template data-terminal-output="bad-format">CASE bad-format
+symptom: 回答内容基本对，但 JSON 字段经常缺失
+inspect: 查看 system prompt、示例、schema 和 temperature
+finding: 没有结构约束，temperature 偏高
+next: 增加 schema/示例，降低随机性，记录失败样例</template>
+          <template data-terminal-output="stable-task">CASE stable-task
+symptom: 大量客服质检文本在同一类边界上反复错
+inspect: 查看样本量、标注一致性、评估集覆盖
+finding: 有稳定高质量样本，也有固定 Eval
+next: 可以比较 prompt/RAG 基线和微调方案，再决定是否训练</template>
+        </div>
+        <p class="inline-note"><b>真实排错顺序</b>先看证据有没有进来，再看证据有没有被排到前面，再看输出约束有没有把答案锁住，最后才问要不要训练。这个顺序不是形式主义，目的是把低成本动作放在前面，避免把可修的链路问题直接推成训练问题。</p>
+      </section>
+
+      <section id="operation">
+        <div class="head"><h2>排查桥：把一个失败样例拆到可行动</h2><span class="tag">operation</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>先保留现场，再谈方案</h3>
+            <p>当一个 LLM 应用答错时，最有用的第一步是保存一条完整失败现场。至少记录六样东西：原始用户问题、系统提示、检索到的上下文、候选文档排序、模型实际输出、期望行为。缺哪一项，后面的判断就容易靠感觉。</p>
+            <p>例如“报销审批答错”这类问题，先把检索上下文打印出来。如果正确条款没有出现，问题更接近资料更新、切分、索引、召回或权限过滤。如果正确条款出现了，但答案仍然没引用，问题更接近 prompt 约束、输出格式、证据引用规则或 generation 的任务描述。如果条款和 prompt 都没问题，却在同类分类任务上长期摇摆，再检查是否有足够样本支持微调。</p>
+            <p>这条路径能保护你少走弯路：RAG 问题用 RAG 证据修，格式问题用结构约束修，排序问题用 reranking 修，稳定行为问题才进入微调比较。每一步都要能留下对比结果，否则只是把一个不确定动作换成另一个不确定动作。</p>
+          </div>
+          <div class="box">
+            <h3>失败现场的读写账本</h3>
+            <div class="table-wrap">
+              <table data-export-context="失败样例排查账本" data-export-lang="table">
+                <thead><tr><th>检查点</th><th>读取什么</th><th>写下什么结论</th><th>下一步动作</th></tr></thead>
+                <tbody>
+                  <tr><td>问题和期望</td><td>原问题、业务规则、人工期望答案</td><td>错误是事实错、格式错、排序错还是判断口径错</td><td>给失败样例贴一个主标签</td></tr>
+                  <tr><td>检索上下文</td><td>top-k 文档、chunk、来源、更新时间</td><td>模型是否看到了必要证据</td><td>没看到就修索引、召回、权限或资料同步</td></tr>
+                  <tr><td>候选排序</td><td>召回候选和 rerank 分数</td><td>正确片段是否被排到可用位置</td><td>候选有但靠后，就看 reranking 或上下文截断</td></tr>
+                  <tr><td>生成约束</td><td>system prompt、schema、示例、temperature</td><td>模型是否被要求只按证据回答并按格式输出</td><td>约束弱就先改 prompt / schema / 解码配置</td></tr>
+                  <tr><td>稳定性证据</td><td>同类失败数量、样本质量、Eval 覆盖</td><td>是否值得进入微调实验</td><td>有稳定证据才做训练方案对比</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>把这张账本真正用起来时，先填一条实际失败样例，再看哪一列是空的。空在“检索上下文”，就修索引和召回；空在“生成约束”，就改 prompt、schema 或温度；三列都不空还反复错，才值得去比较微调。</p>
+          </div>
+        </div>
+        <div class="codebar"><span>最小排查记录结构</span><button class="copy" data-copy="debug-ledger-code">复制</button></div>
+        <pre id="debug-ledger-code" data-export-context="LLM 失败样例排查记录" data-export-lang="json"><code class="language-json">{
+  "case_id": "policy-reimburse-001",
+  "user_question": "报销超过 5000 元需要几级审批？",
+  "expected": "需要两级审批，并引用最新制度条款。",
+  "retrieved_context": {
+    "has_required_policy": false,
+    "top_chunks": ["旧版报销制度：超过 5000 元由直属主管审批"]
+  },
+  "model_output": "需要一级审批。",
+  "primary_failure": "missing_evidence",
+  "next_action": "更新资料、重建索引，并用同一问题回归测试"
+}</code></pre>
+        <div class="grid2">
+          <div class="box">
+            <h3>修完以后要回归同一批样例</h3>
+            <p>排查写完结论以后还没结束。你至少要用同一批失败样例再跑一次，比较改动前后的证据命中、候选排序、输出格式和最终答案。比如这个案例的第一轮结论是 <code>missing_evidence</code>，修复动作就应该让最新制度条款进入 top-k，并且最终答案能引用它。如果只是答案偶然变对，但上下文里仍然没有证据，问题没有真正解决。验收时要同时看“证据找到了”和“答案按证据说了”。这能避免把偶然正确当成系统修复。</p>
+          </div>
+          <div class="box">
+            <h3>把诊断写成可复查的句子</h3>
+            <p>好的诊断句通常有四段：我观察到什么、它说明哪一层出问题、我先做哪个低成本动作、我用什么样例验证。写成“因为 top-k 没有最新制度，所以先更新索引并回归 20 条制度问答”比写成“模型不行，微调一下”更可执行，也更容易被别人复查。</p>
+          </div>
+        </div>
+        <p class="inline-note"><b>练习钩子</b>后面的诊断题不要只写“应该微调”或“应该 RAG”。先写你读到了什么现场证据，再写为什么这个动作比另一个动作更接近根因；最后补一句你会怎么回归验证。</p>
+      </section>
+
+      <section id="diagnosis">
+        <div class="head"><h2>误区诊断：把边界说清，方案才不会乱</h2><span class="tag">diagnosis</span></div>
+        <div class="grid2">
+          <div class="box redsoft">
+            <h3>五个高频误区</h3>
+            <ol>
+              <li>把 RAG 和微调混在一起。RAG 把材料放进当前上下文；微调改变模型参数或适配参数。</li>
+              <li>用微调同步频繁变化的事实。事实每周更新时，检索系统比参数记忆更容易维护。</li>
+              <li>拿 embedding 模型直接问答。embedding 输出向量，生成模型才负责组织自然语言答案。</li>
+              <li>用 temperature 修事实错误。temperature 改采样倾向，不会凭空增加证据。</li>
+              <li>没有 Eval 就训练。少数样例变好不代表整体变好，微调可能让别的能力退化。</li>
+            </ol>
+          </div>
+          <div class="box">
+            <h3>易混概念快查</h3>
+            <div class="table-wrap">
+              <table data-export-context="易混概念诊断表" data-export-lang="table">
+                <thead><tr><th>概念组</th><th>区别</th><th>最快判断</th></tr></thead>
+                <tbody>
+                  <tr><td>pretraining / finetuning</td><td>预训练学通用基础参数；微调用较小数据适配任务或行为</td><td>看数据规模、目标和是否从基础模型继续训练</td></tr>
+                  <tr><td>finetuning / prompting</td><td>微调改参数；prompting 改本次输入</td><td>调用结束后模型是否永久改变</td></tr>
+                  <tr><td>RAG / long context</td><td>RAG 包含检索、筛选、注入；长上下文只是窗口更大</td><td>看有没有召回、排序和证据管理</td></tr>
+                  <tr><td>embedding / reranking</td><td>embedding 做向量召回；reranking 对候选精排</td><td>看输入是单文本，还是 query 加候选对</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <p class="inline-note"><b>回到下一节</b>下一页看 HuggingFace 最小示例时，先认出自己是在做推理调用：加载已有模型，组织输入，读取输出。代码里出现训练循环、loss、backward、optimizer step，才是在训练。</p>
+      </section>
+
+      <section id="practice">
+        <div class="head"><h2>综合练习</h2><span class="tag">practice</span></div>
+        <div class="practice-intro">
+          <div class="review-card">
+            <strong>作答目标</strong>
+            <p>每题都从这几件事里选证据：是否改参数、输入输出是什么、适合解决哪类失败、应该先检查哪一层。不要只背术语。</p>
+          </div>
+          <div class="review-card">
+            <strong>诊断顺序</strong>
+            <p>先看模型是否拿到了证据，再看输出约束和解码参数，再看召回与排序，最后才评估是否需要微调。能用低成本动作验证的问题，先不要直接进入训练。</p>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>一、阶段边界</h3>
+              <p>这组题检查你能否分清预训练、微调、推理各自改变什么。</p>
+            </div>
+            <div class="quick-review"><b>复习</b>预训练和微调会更新参数；普通推理改变的是本次输入、上下文和解码配置。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q1" data-group="阶段边界" data-title="1. 预训练目标" data-answer="对" data-explain="预训练通常通过下一个 token 预测等目标更新基础模型参数。">
+              <div class="q-meta"><span class="pill">true/false</span><span class="pill">pretrain</span></div>
+              <h3>1. 预训练通常在海量文本上更新基础模型参数。</h3>
+              <label><input type="radio" name="q1" value="对"> 对</label>
+              <label><input type="radio" name="q1" value="错"> 错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q" data-question="q2" data-group="阶段边界" data-title="2. 普通推理改变什么" data-answer="B" data-explain="普通推理不会永久更新模型参数，主要改变本次输入、上下文和解码参数。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">inference</span></div>
+              <h3>2. 普通推理调用主要改变什么？</h3>
+              <label><input type="radio" name="q2" value="A"> 模型全部参数</label>
+              <label><input type="radio" name="q2" value="B"> 本次输入、上下文和解码配置</label>
+              <label><input type="radio" name="q2" value="C"> 训练语料本身</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q" data-question="q3" data-group="阶段边界" data-title="3. 典型顺序" data-answer="A" data-explain="典型顺序是先预训练形成基础模型，再微调或对齐，最后部署后推理调用。">
+              <div class="q-meta"><span class="pill">ordering</span><span class="pill">pipeline</span></div>
+              <h3>3. 哪个顺序最符合常见模型生命周期？</h3>
+              <label><input type="radio" name="q3" value="A"> 预训练 -> 微调/对齐 -> 部署推理</label>
+              <label><input type="radio" name="q3" value="B"> 推理 -> 预训练 -> 微调/对齐</label>
+              <label><input type="radio" name="q3" value="C"> reranking -> 预训练 -> embedding</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q" data-question="q4" data-group="阶段边界" data-title="4. prompt 与微调" data-answer="错" data-explain="prompt 改本次输入；微调改参数或适配参数。">
+              <div class="q-meta"><span class="pill">true/false</span><span class="pill">boundary</span></div>
+              <h3>4. prompt 调整和微调都会永久改变模型参数。</h3>
+              <label><input type="radio" name="q4" value="对"> 对</label>
+              <label><input type="radio" name="q4" value="错"> 错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>二、微调和 RAG 的选择</h3>
+              <p>这一组检查你能否把知识更新、格式稳定和行为适配分开。</p>
+            </div>
+            <div class="quick-review"><b>复习</b>频繁变化事实走检索；稳定重复任务且有样本和 Eval，才适合认真比较微调。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q5" data-group="微调和 RAG 的选择" data-title="5. 每周更新的制度问答" data-answer="B" data-explain="资料每周更新，优先把最新证据放进检索和上下文，微调不是同步资料的首选。">
+              <div class="q-meta"><span class="pill">scenario</span><span class="pill">RAG</span></div>
+              <h3>5. 企业制度每周更新，问答经常答错。第一优先级更接近哪项？</h3>
+              <label><input type="radio" name="q5" value="A"> 从头预训练一个模型</label>
+              <label><input type="radio" name="q5" value="B"> 检查资料更新、索引、召回和上下文注入</label>
+              <label><input type="radio" name="q5" value="C"> 只把 temperature 降到 0</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q" data-question="q6" data-group="微调和 RAG 的选择" data-title="6. 微调前置条件" data-answer="C" data-explain="稳定样本、标注规范和评估集是进入微调讨论的基本条件。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">finetune</span></div>
+              <h3>6. 哪种情况更适合认真比较微调方案？</h3>
+              <label><input type="radio" name="q6" value="A"> 只看见一次输出格式错了</label>
+              <label><input type="radio" name="q6" value="B"> 资料今天刚更新，模型不知道</label>
+              <label><input type="radio" name="q6" value="C"> 大量稳定任务反复出错，已有高质量样本和 Eval</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q full" data-question="q7" data-group="微调和 RAG 的选择" data-title="7. 微调前检查清单">
+              <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">decision</span></div>
+              <h3>7. 你准备微调前，会先检查哪些项？</h3>
+              <p class="solve-note">选择最接近微调前置条件和低成本排查的项。</p>
+              <label><input type="checkbox" name="q7" value="失败是否稳定重复">失败是否稳定重复</label>
+              <label><input type="checkbox" name="q7" value="样本和标注是否可靠">样本和标注是否可靠</label>
+              <label><input type="checkbox" name="q7" value="是否有固定评估集">是否有固定评估集</label>
+              <label><input type="checkbox" name="q7" value="prompt、RAG、rerank 是否已经排查">prompt、RAG、rerank 是否已经排查</label>
+              <label><input type="checkbox" name="q7" value="是否只是想尝试新技术">是否只是想尝试新技术</label>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>应优先勾选前四项。微调前要确认失败稳定、样本可靠、有评估集，并且已经排查低成本动作。“只是想尝试新技术”不是工程理由。好的答案还会说明：没有 Eval 时，微调可能只是在少数样例上显得更好。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>三、推理和应用角色</h3>
+              <p>这组题检查 embedding、reranking、generation 和解码参数的边界。</p>
+            </div>
+            <div class="quick-review"><b>复习</b>embedding 找相似，reranking 排候选，generation 组织答案；temperature 只管采样倾向。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q8" data-group="推理和应用角色" data-title="8. embedding 输出" data-answer="A" data-explain="embedding 模型通常输出向量，用于相似度检索、聚类或去重。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">embedding</span></div>
+              <h3>8. embedding 模型通常输出什么？</h3>
+              <label><input type="radio" name="q8" value="A"> 向量</label>
+              <label><input type="radio" name="q8" value="B"> 完整自然语言回答</label>
+              <label><input type="radio" name="q8" value="C"> 训练损失曲线</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q" data-question="q9" data-group="推理和应用角色" data-title="9. reranking 位置" data-answer="B" data-explain="reranking 通常发生在向量召回之后，对候选文档做更细的排序。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">rerank</span></div>
+              <h3>9. reranking 在 RAG 链路中通常解决什么？</h3>
+              <label><input type="radio" name="q9" value="A"> 从零训练基础模型</label>
+              <label><input type="radio" name="q9" value="B"> 对已经召回的候选材料重新排序</label>
+              <label><input type="radio" name="q9" value="C"> 把回答截短到固定字数</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q" data-question="q10" data-group="推理和应用角色" data-title="10. temperature 的边界" data-answer="错" data-explain="temperature 影响采样随机性，不能补模型没有看到的证据。">
+              <div class="q-meta"><span class="pill">true/false</span><span class="pill">decoding</span></div>
+              <h3>10. 只要降低 temperature，模型就能知道最新政策。</h3>
+              <label><input type="radio" name="q10" value="对"> 对</label>
+              <label><input type="radio" name="q10" value="错"> 错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q full" data-question="q11" data-group="推理和应用角色" data-title="11. 代码读法" data-answer="C" data-explain="这段链路先用 embedding 召回，再用 reranker 排序，最后用 generation 组织答案。">
+              <div class="q-meta"><span class="pill">code reading</span><span class="pill">RAG</span></div>
+              <h3>11. 下面这条链路的角色顺序更接近哪项？</h3>
+              <div class="codebar"><span>代码片段</span><button class="copy" data-copy="q11-code">复制</button></div>
+              <pre id="q11-code" data-export-context="练习代码读法片段" data-export-lang="python"><code class="language-python">query_vec = embed(question)
+candidates = search(query_vec)
+ranked = rerank(question, candidates)
+answer = generate(question, ranked[:5])</code></pre>
+              <label><input type="radio" name="q11" value="A"> 预训练 -> 微调 -> 评估</label>
+              <label><input type="radio" name="q11" value="B"> generation -> embedding -> reranking</label>
+              <label><input type="radio" name="q11" value="C"> embedding -> 召回 -> reranking -> generation</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>四、诊断和迁移</h3>
+              <p>最后一组要求你把症状、错因和动作连起来。</p>
+            </div>
+            <div class="quick-review"><b>复习</b>强答案通常包含：失败层级、证据、优先动作、为什么不选另一个动作。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q12" data-group="诊断和迁移" data-title="12. 缺证据案例" data-answer="A" data-explain="上下文没有召回最新制度时，先修资料、索引和召回链路。">
+              <div class="q-meta"><span class="pill">scenario</span><span class="pill">debug</span></div>
+              <h3>12. 终端案例显示：检索上下文里没有最新制度条款。下一步优先做什么？</h3>
+              <label><input type="radio" name="q12" value="A"> 更新资料、重建索引、检查召回</label>
+              <label><input type="radio" name="q12" value="B"> 直接做完整预训练</label>
+              <label><input type="radio" name="q12" value="C"> 只把输出长度调大</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q full" data-question="q13" data-group="诊断和迁移" data-title="13. 诊断“RAG 就是微调”">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">misconception</span></div>
+              <h3>13. 有人说“RAG 就是微调的一种”。请写出错因、后果和修法。</h3>
+              <p class="solve-note">答案至少覆盖三点：RAG 改上下文不改参数；混用后会选错维护方式；修法是区分外部证据注入和参数适配。</p>
+              <textarea name="q13" placeholder="按“错因 / 后果 / 修法”写。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>好的答案会说：RAG 是在推理时检索外部材料并注入上下文，通常不改变模型参数；微调会训练参数或适配参数。把两者混在一起，会导致频繁变化资料被错误地拿去训练，维护成本变高，还难以及时更新事实。修法是先判断问题需要外部证据、排序优化、格式约束，还是稳定行为适配。</p>
+              </details>
+            </div>
+            <div class="q full" data-question="q14" data-group="诊断和迁移" data-title="14. 费曼解释">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">Feynman</span></div>
+              <h3>14. 用 6-8 句话解释：预训练、微调、推理、embedding、reranking、generation 各自负责什么，并给出一个效果差时的决策顺序。</h3>
+              <p class="solve-note">先说三大阶段是否改参数，再说三种调用角色的输入输出，最后给出“先证据、再格式、再召回/排序、最后微调”的诊断顺序。</p>
+              <textarea name="q14" placeholder="尽量写成你能讲给同事听的版本。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>高质量答案会把六个词放在同一张工程地图里：预训练形成基础参数，微调用任务样本稳定行为，推理用固定参数处理本次输入；embedding 输出向量用于召回，reranking 给候选排序，generation 组织最终答案。面对效果差，先检查模型有没有证据，再检查 prompt、schema、temperature 和输出约束，然后检查召回与排序；只有在任务稳定、大量重复、有样本和评估集时，才进入微调比较。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head"><h2>生成练习记录</h2><span class="tag">export</span></div>
+        <p class="muted">完成练习后生成记录，适合回看订正。记录里会保留题目、分组、你的作答、客观题检查状态，以及上方关键公式、表格和代码上下文。</p>
+        <div class="actions">
+          <button type="button" onclick="generateRecord()">生成练习记录</button>
+          <button type="button" class="ghost" onclick="copyRecord()">复制记录</button>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">练习记录会显示在这里。</div>
+      </section>
+
+      <section id="sources">
+        <div class="head"><h2>来源与边界</h2><span class="tag">sources</span></div>
+        <div class="table-wrap">
+          <table data-export-context="本页来源摘要" data-export-lang="table">
+            <thead>
+              <tr><th>来源</th><th>支持内容</th><th>备注</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>课程地图</td>
+                <td>确认本单元位于 Transformer 基础之后、HuggingFace 最小示例之前</td>
+                <td>用于确定课程顺序和学习边界</td>
+              </tr>
+              <tr>
+                <td>旧版 03 学习页</td>
+                <td>提供预训练、微调、推理、embedding、reranking、generation、RAG 决策和误区诊断主线</td>
+                <td>本次保留主线，改写为共享 shell、可导出练习和可检查组件</td>
+              </tr>
+              <tr>
+                <td>课程共享运行时</td>
+                <td>提供进度条、导航、代码复制、公式渲染、形状 tracer、终端案例和练习记录导出</td>
+                <td>用于统一页面交互，不引入外部网络依赖</td>
+              </tr>
+              <tr>
+                <td>本地来源说明</td>
+                <td>记录本页来源边界、课程角色和已知缺口</td>
+                <td>Snapshot / access date: 2026-06-21</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="inline-note"><b>本页边界</b>这里不声称覆盖训练工程全流程，也不提供某个厂商 API 的完整契约。它解决的是角色边界和工程决策顺序，下一节再把这些边界放进最小代码调用里看。</p>
+      </section>
+    </main>
+  </div>
+
+  <script src="assets/vendor/katex/katex.min.js"></script>
+  <script src="assets/vendor/katex/auto-render.min.js"></script>
+  <script src="assets/vendor/prism/prism-core.min.js"></script>
+  <script src="assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="assets/vendor/prism/prism-python.min.js"></script>
+  <script src="assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="assets/vendor/prism/prism-json.min.js"></script>
+  <script src="assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="assets/study-page.js"></script>
+</body>
+</html>

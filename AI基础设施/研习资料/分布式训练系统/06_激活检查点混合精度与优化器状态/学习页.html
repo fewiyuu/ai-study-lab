@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>激活检查点、混合精度与优化器状态</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="分布式训练系统" data-unit="06｜激活检查点、混合精度与优化器状态">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>分布式训练系统</strong>
+        <span>06｜激活检查点、混合精度与优化器状态</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#terms"><span class="dot"></span>术语与边界</a>
+        <a href="#checkpoint-ledger"><span class="dot"></span>激活账本</a>
+        <a href="#recompute"><span class="dot"></span>重算策略</a>
+        <a href="#precision-path"><span class="dot"></span>混合精度</a>
+        <a href="#optimizer-state"><span class="dot"></span>优化器状态</a>
+        <a href="#bridge"><span class="dot"></span>代码桥接</a>
+        <a href="#boundary"><span class="dot"></span>这里先不追</a>
+        <a href="#mistakes"><span class="dot"></span>常见错误</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">先顺着三张账读，再去练习区判断症状。这里的重点是把重算、dtype 和状态分片分开看。</div>
+    </aside>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">显存、精度与状态分片</div>
+          <h1>激活检查点、混合精度与优化器状态</h1>
+          <p>这一页接着 05 往下，只盯三件事：激活检查点怎样把 forward 里的中间态换成 backward 里的重算，混合精度怎样把算子 dtype 和梯度缩放分开，优化器状态怎样在 DP 维上分片。这里先学到能判断配置、读懂显存账本、看出恢复前后状态差异的程度；更晚的 durable checkpoint 和集群容错放到 07 再展开。</p>
+
+          <div class="course-links">
+            <a href="../index.html">课程地图</a><a href="../05_Megatron_Core训练栈/学习页.html">上一单元</a><a href="../07_检查点容错与集群运行/学习页.html">下一单元</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+  <li>能把激活检查点和训练 checkpoint 区分开，并说清它在 backward 时重算的是哪一段 forward。</li>
+  <li>能看懂 `autocast`、`GradScaler`、BF16 / FP16 / FP8 在一轮训练里各自负责什么。</li>
+  <li>能顺着 distributed optimizer 的 reduce-scatter / step / all-gather，解释 optimizer state 为什么要分片。</li>
+</ul>
+
+        </div>
+      </div>
+
+      <section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goal</span>
+  </div>
+  <div class="grid3">
+    <div class="box soft">
+      <h3>先看激活账</h3>
+      <p>你要能判断一段 forward 里哪些中间态可以丢，哪些必须保留，什么时候该用 checkpoint 把显存换成重算。</p>
+    </div>
+    <div class="box info">
+      <h3>再看 dtype 账</h3>
+      <p>你要能区分 autocast、GradScaler、BF16、FP16、FP8 各自改的是哪一层，不把“低精度”当成单一开关。</p>
+    </div>
+    <div class="box warn">
+      <h3>最后看状态账</h3>
+      <p>你要能把参数、梯度、主权重和 Adam 状态分开看，解释为什么 distributed optimizer 会改变通信和恢复边界。</p>
+    </div>
+  </div>
+</section>
+
+<section id="overview">
+  <div class="head">
+    <h2>先抓主线</h2>
+    <span class="tag">overview</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <p>拿一个常见锚点来读：7B 级 decoder block、较长序列、BF16 训练、DP=8。这个场景里，OOM 可能来自激活，也可能来自 optimizer state；loss 不稳可能来自 FP16 缩放，也可能来自 checkpoint 重算时的随机状态没对齐。你要先分清三张账，再去调 knob。</p>
+      <div class="table-wrap">
+        <table data-export-context="06 单元三张账对照表" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>账</th>
+              <th>常见省法</th>
+              <th>代价</th>
+              <th>先查什么</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>激活账</td>
+              <td>activation checkpointing / selective recompute</td>
+              <td>多一次或多次 forward 重算</td>
+              <td>重算颗粒度、`preserve_rng_state`、是否挑对了 block</td>
+            </tr>
+            <tr>
+              <td>dtype 账</td>
+              <td>autocast、BF16、FP16、FP8</td>
+              <td>数值范围和 kernel 支持变窄</td>
+              <td>compute dtype、是否需要 GradScaler、是否有 overflow/NaN</td>
+            </tr>
+            <tr>
+              <td>状态账</td>
+              <td>distributed optimizer / state sharding</td>
+              <td>多一次通信和状态布局约束</td>
+              <td>DP 维、reduce-scatter / all-gather、checkpoint shard 格式</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="box soft">
+      <h3>读法提示</h3>
+      <p>这里不要先背名词。先问自己：这次 OOM 更像哪张账被吃满了，先改哪一个 knob 才能让症状变得可解释。</p>
+    </div>
+  </div>
+  <div class="shape-tracer" data-shape-tracer data-export-context="06 单元显存账本追踪" data-export-lang="text">
+    <div class="trace-lines">
+      <button class="trace-line active" data-trace-step="step-1" type="button"><code>forward(block)</code><span>激活暂存</span></button>
+      <button class="trace-line" data-trace-step="step-2" type="button"><code>checkpoint(block)</code><span>丢弃部分中间态</span></button>
+      <button class="trace-line" data-trace-step="step-3" type="button"><code>autocast(op)</code><span>算子 dtype 下移</span></button>
+      <button class="trace-line" data-trace-step="step-4" type="button"><code>dist_opt(step)</code><span>状态分片与回收</span></button>
+    </div>
+    <div class="trace-canvas">
+      <div class="tensor-card active" data-trace-target="step-1"><b>前向阶段</b><span>完整激活还在</span><p>模块前向结束后，中间激活会留给 backward。这个阶段显存通常被激活和临时 buffer 吃掉。</p></div>
+      <div class="tensor-card" data-trace-target="step-2"><b>重算阶段</b><span>只留必要输入</span><p>checkpoint 把部分中间态丢掉，backward 时再把对应 forward 跑一遍。省下的是保存激活的显存，付出的是额外计算。</p></div>
+      <div class="tensor-card" data-trace-target="step-3"><b>精度阶段</b><span>eligible ops 改 dtype</span><p><code>autocast</code> 影响的是算子执行 dtype；它不负责保存激活，也不负责分片 optimizer state。</p></div>
+      <div class="tensor-card" data-trace-target="step-4"><b>状态阶段</b><span>DP 维分片</span><p>distributed optimizer 把梯度和主权重按 DP 维切开，通信和恢复边界因此改变。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="terms">
+  <div class="head">
+    <h2>术语与边界</h2>
+    <span class="tag">terms</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <h3>先分清这些词</h3>
+      <div class="table-wrap">
+        <table data-export-context="06 单元术语对照表" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>术语</th>
+              <th>先这样理解</th>
+              <th>最容易误成什么</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>activation checkpointing</td>
+              <td>前向少存一部分激活，反向时重算</td>
+              <td>训练 checkpoint，或者“把模型存盘”</td>
+            </tr>
+            <tr>
+              <td><code>torch.autocast</code></td>
+              <td>让允许的算子用更合适的低精度执行</td>
+              <td>自动替你把整个训练变成低精度</td>
+            </tr>
+            <tr>
+              <td><code>GradScaler</code></td>
+              <td>给 FP16 路径做 loss / grad 缩放，减轻 underflow</td>
+              <td>和 autocast 是同一个东西</td>
+            </tr>
+            <tr>
+              <td>distributed optimizer</td>
+              <td>把梯度、主权重和优化器状态按 DP 维分片</td>
+              <td>只是把 `optimizer.step()` 换个名字</td>
+            </tr>
+            <tr>
+              <td>BF16 / FP16 / FP8</td>
+              <td>不同的计算和存储精度选择</td>
+              <td>只是在代码里换一个字符串</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="box warn">
+      <h3>这里先别追的概念</h3>
+      <p>sequence parallel、context parallel、activation offloading、async checkpoint save、MoE router replay 先别钻。它们会在后面的单元或 Megatron Core 的更深文档里回来，这一页先把重算、精度和状态分片对齐。</p>
+    </div>
+  </div>
+</section>
+
+<section id="checkpoint-ledger">
+  <div class="head">
+    <h2>激活重算账本</h2>
+    <span class="tag">ledger</span>
+  </div>
+  <p>这一步最重要的直觉是：checkpoint 不会“凭空省显存”，它只是把 forward 里的某些中间态不再常驻，等 backward 需要时再重跑一遍。只要你把读写顺序看清，后面再看 Megatron Core 的 selective recompute 就容易了。</p>
+  <div class="table-wrap">
+    <table data-export-context="06 单元激活检查点状态账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>对象</th>
+          <th>进入前</th>
+          <th>进入后</th>
+          <th>读取</th>
+          <th>写入 / 变更</th>
+          <th>错位症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>forward 激活</td>
+          <td>forward 结束后会常驻到 backward</td>
+          <td>部分激活被丢弃，只保留必要输入</td>
+          <td>模块输入、权重、必要的 RNG 状态</td>
+          <td>释放中间态，缩小峰值显存</td>
+          <td>如果 checkpoint 颗粒度太粗，显存没降多少；太细则重算过多</td>
+        </tr>
+        <tr>
+          <td><code>preserve_rng_state</code></td>
+          <td>随机层的前向 / 反向轨迹可能要保持一致</td>
+          <td>需要时保存并恢复 RNG 状态</td>
+          <td>dropout / 采样类算子的随机流</td>
+          <td>保证重算和原 forward 走同一条随机路径</td>
+          <td>如果关掉，训练可能还能跑，但数值轨迹和复现性会变差</td>
+        </tr>
+        <tr>
+          <td>recomputed forward</td>
+          <td>backward 还没请求中间态</td>
+          <td>backward 期间重新执行同一段 forward</td>
+          <td>当前输入、权重、激活边界</td>
+          <td>生成新的中间态给梯度计算用</td>
+          <td>如果重算块选错，额外计算大于省下的显存</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>PyTorch 激活检查点最小调用</span><button class="copy" data-copy="ckpt-code">复制</button></div>
+  <pre id="ckpt-code" data-export-context="PyTorch 激活检查点最小调用" data-export-lang="python"><code class="language-python">from torch.utils.checkpoint import checkpoint
+
+def block_forward(x, mask):
+    return transformer_block(x, mask)
+
+hidden = checkpoint(block_forward, hidden, attention_mask, preserve_rng_state=True)</code></pre>
+  <div class="math-block" data-export-context="激活检查点代价公式" data-export-lang="math">
+    $$
+    M_{\text{peak}} \approx M_{\text{param}} + M_{\text{grad}} + M_{\text{opt}} + r_{\text{act}} M_{\text{act}}
+    $$
+    <p><code>M_peak</code> 是峰值显存，<code>r_act</code> 是 checkpoint 后仍保留的激活比例，<code>M_act</code> 是原本的激活账。<code>r_act</code> 越小，省下的显存越多，但 backward 里要补回更多重算。</p>
+  </div>
+</section>
+
+<section id="recompute">
+  <div class="head">
+    <h2>Megatron Core 的选择式重算</h2>
+    <span class="tag">recompute</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <p>Megatron Core 的文档把 activation recompute 做成了可配置能力：你可以只挑最吃显存、又相对不太吃计算的子模块做重算。官方文档里最典型的锚点是 attention 里的 <code>core_attn</code>，因为它常常是大模型里最重的激活热点。</p>
+      <div class="table-wrap">
+        <table data-export-context="06 单元选择式重算对照表" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>模式</th>
+              <th>适合谁</th>
+              <th>常见代价</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>不重算</td>
+              <td>激活本来就不大，或者先跑基线</td>
+              <td>显存压力最大，但最简单</td>
+            </tr>
+            <tr>
+              <td>selective / <code>core_attn</code></td>
+              <td>attention 是主要热点，MLP 还可接受</td>
+              <td>省显存但只多付一部分计算</td>
+            </tr>
+            <tr>
+              <td>更大范围重算</td>
+              <td>长序列、深层堆叠、激活非常重的块</td>
+              <td>显存继续下降，吞吐也更容易受影响</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="box info">
+      <h3>这一步怎么读配置</h3>
+      <p>看到 <code>recompute</code>、<code>recompute-modules</code>、<code>core_attn</code> 这类词，先问自己：它是在挑重算颗粒度，还是在挑具体子模块。前者决定策略，后者决定落点。</p>
+    </div>
+  </div>
+  <div class="terminal-lab" data-terminal-lab data-export-context="06 单元重算故障实验" data-export-lang="text">
+    <div class="terminal-controls">
+      <button class="ghost active" data-terminal-case="case-1" type="button">激活太大</button>
+      <button class="ghost" data-terminal-case="case-2" type="button">随机层不一致</button>
+      <button class="ghost" data-terminal-case="case-3" type="button">重算太重</button>
+    </div>
+    <pre class="terminal-output" aria-live="polite">症状：把 checkpoint 打开以后，显存还是高。先查是不是只包了轻模块，或者重算颗粒度没落到 attention 这种真正的热点上。</pre>
+    <template data-terminal-output="case-1">症状：checkpoint 已经开了，但峰值显存变化不大。先查 `recompute` 是否真正命中了 `core_attn` 或相近的热点子模块，而不是只包了很轻的层。</template>
+    <template data-terminal-output="case-2">症状：loss 轨迹和不开 checkpoint 时不一样，偶尔还会出现难复现的波动。先查 `preserve_rng_state`，以及重算是否跨过了 dropout / 采样类随机层。</template>
+    <template data-terminal-output="case-3">症状：吞吐掉得比预期多，但显存省得不多。先查是不是把 checkpoint 放在了计算很贵、显存却不算最重的块上。</template>
+  </div>
+</section>
+
+<section id="precision-path">
+  <div class="head">
+    <h2>混合精度路径</h2>
+    <span class="tag">precision</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <p>PyTorch AMP 文档里最典型的 FP16 路径，是把 <code>torch.autocast</code> 和 <code>GradScaler</code> 一起看。前者决定哪些算子可以用低精度算，后者负责把 loss / grad 缩放到更安全的范围。两者都在训练里有位置，但职责不同。</p>
+      <div class="table-wrap">
+        <table data-export-context="06 单元混合精度角色矩阵" data-export-lang="table">
+          <thead>
+            <tr>
+              <th>组件 / dtype</th>
+              <th>负责什么</th>
+              <th>最容易误解成什么</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>autocast</code></td>
+              <td>让可支持的算子在合适的 dtype 下执行</td>
+              <td>自动接管整个训练</td>
+            </tr>
+            <tr>
+              <td><code>GradScaler</code></td>
+              <td>给 FP16 路径做缩放，减轻 underflow / overflow 风险</td>
+              <td>和 autocast 是一个开关</td>
+            </tr>
+            <tr>
+              <td>BF16</td>
+              <td>更看重稳定性和工程可用性</td>
+              <td>只是 FP16 的另一个名字</td>
+            </tr>
+            <tr>
+              <td>FP16</td>
+              <td>更省带宽和显存，但数值范围更窄</td>
+              <td>不需要再管缩放</td>
+            </tr>
+            <tr>
+              <td>FP8</td>
+              <td>更依赖框架 recipe、内核和通信支持</td>
+              <td>只要把 dtype 改掉就能跑</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="box soft">
+      <h3>怎么把它和 Megatron Core 连起来</h3>
+      <p>Megatron Core 的训练栈会把 BF16、FP16、FP8 和 distributed optimizer 放在同一条训练路径里看。你调精度时，先看 compute dtype，再看通信 dtype，最后才看主权重和 optimizer state 的 dtype。</p>
+    </div>
+  </div>
+  <div class="codebar"><span>FP16 典型 AMP 训练步</span><button class="copy" data-copy="amp-code">复制</button></div>
+  <pre id="amp-code" data-export-context="FP16 典型 AMP 训练步" data-export-lang="python"><code class="language-python">scaler = torch.amp.GradScaler()
+
+with torch.autocast(device_type="cuda", dtype=torch.float16):
+    loss = model(batch)
+
+scaler.scale(loss).backward()
+scaler.step(optimizer)
+scaler.update()</code></pre>
+  <p class="note">这个骨架只说明分工：<code>autocast</code> 管算子 dtype，<code>GradScaler</code> 管缩放。BF16 训练是否需要同样的缩放策略，要看 recipe 和数值表现，不能直接照搬 FP16 的做法。</p>
+</section>
+
+<section id="optimizer-state">
+  <div class="head">
+    <h2>优化器状态分片</h2>
+    <span class="tag">optimizer</span>
+  </div>
+  <p>Megatron Core 的 distributed optimizer 文档给了一个很直观的流程：backward 结束后，梯度先在每个 DP rank 的 buffer 里聚合，再做 reduce-scatter；随后 optimizer.step() 更新主权重；最后 all-gather 把更新后的参数拼回 forward 可用的布局。你只要把这个顺序看清，就能解释为什么“能训练”不等于“能省显存”或者“能轻松恢复”。</p>
+  <div class="table-wrap">
+    <table data-export-context="06 单元分布式优化器状态账本" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>步骤</th>
+          <th>进入前</th>
+          <th>进入后</th>
+          <th>读什么</th>
+          <th>写什么</th>
+          <th>错位症状</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>backward 完成</td>
+          <td>梯度还分散在计算图里</td>
+          <td>梯度 buffer 里有完整的 fp32 / bf16 视图</td>
+          <td>每个参数的局部梯度</td>
+          <td>聚合后的梯度缓冲</td>
+          <td>如果这一步没收口，后面 step 的基础就不稳</td>
+        </tr>
+        <tr>
+          <td>reduce-scatter</td>
+          <td>全量梯度还在每个 rank 上</td>
+          <td>每个 DP rank 只保留自己那一段 fully reduced 梯度</td>
+          <td>DP 维上的 shard 范围</td>
+          <td>局部分片梯度</td>
+          <td>如果 shard 范围算错，通信和恢复都会错位</td>
+        </tr>
+        <tr>
+          <td><code>optimizer.step()</code></td>
+          <td>有分片梯度和主权重</td>
+          <td>主权重更新完成</td>
+          <td>分片梯度、主权重、优化器状态</td>
+          <td>更新后的主权重和 moment buffers</td>
+          <td>如果只保存了参数没保存状态，继续训练会像重开一样</td>
+        </tr>
+        <tr>
+          <td>all-gather</td>
+          <td>各 rank 只拿到自己的主权重片段</td>
+          <td>forward 可用的完整参数布局恢复</td>
+          <td>更新后的分片主权重</td>
+          <td>完整参数 buffer</td>
+          <td>如果布局没恢复，下一轮 forward 会找不到正确参数视图</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="math-block" data-export-context="优化器状态分片粗算公式" data-export-lang="math">
+    $$
+    M_{\text{opt, shard}} \approx \frac{M_{\text{opt}}}{DP}
+    $$
+    <p><code>DP</code> 是数据并行分片数，<code>M_opt</code> 是原本 optimizer state 的总账。这个式子只描述分片方向，不把通信、buffer 和 master weight 的开销一起算进去。</p>
+  </div>
+  <div class="codebar"><span>分布式优化器步骤骨架</span><button class="copy" data-copy="distopt-code">复制</button></div>
+  <pre id="distopt-code" data-export-context="分布式优化器步骤骨架" data-export-lang="text"><code class="language-text">backward -> reduce-scatter -> optimizer.step() -> copy main weights -> all-gather -> next forward</code></pre>
+</section>
+
+<section id="worked-case">
+  <div class="head">
+    <h2>一个能手算的排查例子</h2>
+    <span class="tag">case</span>
+  </div>
+  <div class="grid2">
+    <div class="box">
+      <p>把三张账放进同一个场景里最有用。假设你在跑一个 24 层 decoder-only 模型，序列长度 4096，BF16 训练，DP=8，所有 transformer block 都开了 activation checkpoint。第一个症状是：打开 checkpoint 后，显存确实降了一截，但 backward 还是会在注意力层附近顶到峰值；第二个症状是：关掉 distributed optimizer 以后，显存又明显抬头；第三个症状是：如果你把 FP16 强行塞进去，loss 轨迹更容易抖。这三件事说明，激活账、状态账和 dtype 账分别在起作用，不能用同一个 knob 解释完。</p>
+  <p>这个例子里，正确的排查顺序是先问“哪一张账仍然是大头”，再决定改哪些配置。如果重算已经开了但 OOM 还在，先看 attention 热点和 checkpoint 颗粒度；如果激活省下来的不够，再看 optimizer state 有没有按 DP 分片；只有当数值不稳、overflow 或 NaN 出现时，才回头查 autocast 和 GradScaler。</p>
+    </div>
+    <div class="box soft">
+      <h3>你该怎么读这个例子</h3>
+      <ul>
+        <li>先看症状落在哪一步：前向、反向、step，还是恢复。</li>
+        <li>再看这一步主要碰的是哪张账：激活、dtype、还是 optimizer state。</li>
+        <li>最后才决定改 checkpoint 颗粒度、精度策略，还是分片方式。</li>
+      </ul>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="06 单元手算排查表" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>症状</th>
+          <th>最先怀疑的账</th>
+          <th>先看什么</th>
+          <th>下一步怎么改</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>checkpoint 已开，还是在 backward 顶峰值</td>
+          <td>激活账</td>
+          <td>重算颗粒度、是否命中 <code>core_attn</code></td>
+          <td>先把重算放到真正热点上，而不是轻模块上</td>
+        </tr>
+        <tr>
+          <td>把 checkpoint 关掉后，显存只更早爆</td>
+          <td>激活账 + 状态账</td>
+          <td>optimizer state 是否仍然全量驻留</td>
+          <td>同时看激活重算和 distributed optimizer 的 shard</td>
+        </tr>
+        <tr>
+          <td>FP16 下 loss / grad 更容易抖</td>
+          <td>dtype 账</td>
+          <td><code>autocast</code> 和 <code>GradScaler</code> 是否一起配</td>
+          <td>先修缩放和算子 dtype，再谈更激进的省显存策略</td>
+        </tr>
+        <tr>
+          <td>恢复 checkpoint 后状态不对</td>
+          <td>状态账</td>
+          <td>分片优化器状态和元数据是否一起保存</td>
+          <td>检查 shard 格式，不要只看权重文件能不能打开</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="codebar"><span>这组症状先对应哪些开关</span><button class="copy" data-copy="case-code">复制</button></div>
+  <pre id="case-code" data-export-context="这组症状先对应哪些开关" data-export-lang="text"><code class="language-text">if oom_at_backward:
+    check(recompute_granularity, core_attn, optimizer_state_shard)
+elif nan_or_overflow:
+    check(autocast, GradScaler, fp16_recipe)
+elif resume_fails:
+    check(sharded_optimizer_state, checkpoint_metadata, dp_world_size)</code></pre>
+  <div class="box warn">
+    <h3>这个例子要防的坑</h3>
+    <p>不要一看到 OOM 就先关 BF16，也不要一看到数值波动就先怀疑 checkpoint。先让症状落到正确的账本，再改对应开关，排查才会收敛。这个顺序会在 07 的恢复检查里继续用到，只是那一页会把保存和恢复说得更完整。</p>
+  </div>
+</section>
+
+<section id="bridge">
+  <div class="head">
+    <h2>代码桥接</h2>
+    <span class="tag">bridge</span>
+  </div>
+  <div class="grid2">
+    <div class="box soft">
+      <h3>下一步先看哪里</h3>
+      <p>从这一页往代码走，先打开 Megatron-LM 公开仓库里的 <code>pretrain_gpt.py</code> 和 <code>examples/run_simple_mcore_train_loop.py</code>，先搜 <code>recompute</code>、<code>bf16</code>、<code>fp16</code>、<code>fp8</code>、<code>use_distributed_optimizer</code>、<code>checkpoint</code> 这几个词，再回头对照这一页的三张账。</p>
+    </div>
+    <div class="box info">
+      <h3>先按什么顺序试</h3>
+      <p>先跑能对照的 BF16 基线，再加激活检查点，再决定是否把 optimizer state 分片。FP16 或 FP8 先别一口气全开；先让症状变可解释，再改下一项。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table data-export-context="06 单元操作桥接清单" data-export-lang="table">
+      <thead>
+        <tr>
+          <th>看到什么</th>
+          <th>先查什么</th>
+          <th>最先可能失败在哪</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>OOM 仍然明显</td>
+          <td>重算颗粒度、有没有命中 <code>core_attn</code></td>
+          <td>激活账仍然是大头</td>
+        </tr>
+        <tr>
+          <td>FP16 里 loss / grad 不稳</td>
+          <td><code>autocast</code>、<code>GradScaler</code>、overflow 日志</td>
+          <td>dtype 账没收好</td>
+        </tr>
+        <tr>
+          <td>optimizer state 看起来很大</td>
+          <td><code>use_distributed_optimizer</code> 和 DP 维</td>
+          <td>状态账还在每卡全量驻留</td>
+        </tr>
+        <tr>
+          <td>checkpoint 相关代码难找</td>
+          <td><code>recompute</code> / <code>checkpoint</code> 关键词</td>
+          <td>先找训练入口，不先找工具函数</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="boundary">
+  <div class="head">
+    <h2>这里先不追</h2>
+    <span class="tag">boundary</span>
+  </div>
+  <div class="grid2">
+    <div class="box info">
+      <h3>先放一边的概念</h3>
+      <p>sequence parallel、context parallel、activation offloading、async checkpoint save、MoE router replay 先别追。它们会在后面的单元或更深的 Megatron Core 文档里回来，这一页先把重算、精度和状态分片对齐。</p>
+    </div>
+    <div class="box warn">
+      <h3>这一页先追到什么程度</h3>
+      <p>你只要能判断一段训练代码是在省激活、改 dtype，还是切 optimizer state，就已经够用。更细的耐久恢复、容错和集群级检查点，留给 07。</p>
+    </div>
+  </div>
+</section>
+
+<section id="mistakes">
+  <div class="head">
+    <h2>常见错误</h2>
+    <span class="tag">mistakes</span>
+  </div>
+  <div class="grid2">
+    <div class="box danger">
+      <h3>把激活检查点当成训练 checkpoint</h3>
+      <p>activation checkpointing 是 backward 时重算 forward 片段；训练 checkpoint 才是保存模型、优化器和进度。前者省显存，后者保恢复。</p>
+    </div>
+    <div class="box danger">
+      <h3>把 autocast 和 GradScaler 混成一个按钮</h3>
+      <p><code>autocast</code> 改的是算子 dtype，<code>GradScaler</code> 处理的是 FP16 的缩放。只看其中一个，FP16 训练很容易出 NaN 或 underflow。</p>
+    </div>
+    <div class="box danger">
+      <h3>把 BF16 当成“自动稳”</h3>
+      <p>BF16 往往更稳，但它仍然需要检查。kernel 支持、通信 dtype 和 optimizer state 都要看，不然只是把问题换个地方藏起来。</p>
+    </div>
+    <div class="box danger">
+      <h3>checkpoint 挂在太轻的块上</h3>
+      <p>如果你把 checkpoint 放在显存并不重、计算却很贵的块上，省下的显存有限，吞吐却会掉得更明显。先挑 attention 这种真正热点。</p>
+    </div>
+    <div class="box danger">
+      <h3>只看参数，不看 optimizer state</h3>
+      <p>很多 OOM 来自 Adam 的 moment buffers、主权重和梯度账。只盯参数量，很容易误判瓶颈。</p>
+    </div>
+    <div class="box danger">
+      <h3>reduce-scatter 后不管布局</h3>
+      <p>分片状态和 forward 可用布局需要分开看。更新后要恢复成模块能继续读的参数视图，不然下一轮 forward 会对不上。</p>
+    </div>
+  </div>
+</section>
+
+
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+        <div class="practice-intro">
+  <div class="review-card">
+    <strong>作答目标</strong>
+    <p>每题都要把“省什么、付什么代价、先看哪一张账”说清楚。不要只背名词，也不要把 checkpoint、dtype 和 optimizer state 混成一类。</p>
+  </div>
+  <div class="review-card">
+    <strong>检查重点</strong>
+    <p>先确认你能判断激活、混合精度和状态分片各改哪一步，再确认你能把一个 OOM 或 NaN 症状拉回到最可能的配置项。</p>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>一、先分清三张账</h3>
+      <p>先确认你没有把 activation checkpointing、autocast 和 distributed optimizer 混在一条线上。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提醒</b>
+      <span>先分清“省显存的对象”，再看“付出的代价”。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q1" data-group="一、先分清三张账" data-title="Q1：activation checkpointing 最接近哪件事？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">激活账</span></div>
+      <h3>Q1：activation checkpointing 最接近哪件事？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q1" value="A">A. 在 backward 时重算 forward 片段，用计算换显存。</label>
+        <label><input type="radio" name="q1" value="B">B. 把模型权重存到磁盘，留给下次训练继续用。</label>
+        <label><input type="radio" name="q1" value="C">C. 把所有算子都改成 FP8。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">先想 forward / backward 里的哪一段被重新执行。</p>
+    </div>
+
+    <div class="q" data-question="q2" data-group="一、先分清三张账" data-title="Q2：判断：activation checkpointing 和训练 checkpoint 是同一个东西。" data-answer="false">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">边界</span></div>
+      <h3>Q2：判断：activation checkpointing 和训练 checkpoint 是同一个东西。</h3>
+      <label><input type="radio" name="q2" value="true">对</label>
+      <label><input type="radio" name="q2" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">一个发生在 forward/backward 内，一个发生在保存/恢复阶段。</p>
+    </div>
+
+    <div class="q" data-question="q3" data-group="一、先分清三张账" data-title="Q3：`autocast` 主要在训练里做什么？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">dtype</span></div>
+      <h3>Q3：<code>autocast</code> 主要在训练里做什么？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q3" value="A">A. 让支持的算子在合适的低精度 dtype 下执行。</label>
+        <label><input type="radio" name="q3" value="B">B. 自动保存所有梯度和优化器状态到 checkpoint。</label>
+        <label><input type="radio" name="q3" value="C">C. 自动把 batch size 改小。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">它管的是算子执行 dtype，不是状态保存。</p>
+    </div>
+
+    <div class="q" data-question="q4" data-group="一、先分清三张账" data-title="Q4：FP16 路径里常和 GradScaler 一起出现的是哪一个词？" data-answer="FP16;float16">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">精度</span></div>
+      <h3>Q4：FP16 路径里常和 <code>GradScaler</code> 一起出现的是哪一个词？</h3>
+      <input type="text" name="q4" data-answer="FP16;float16" placeholder="例如：FP16">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">写短词即可，不要展开成整句。</p>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>二、重算与精度</h3>
+      <p>把 checkpoint、随机状态和 selective recompute 放回一个具体例子里。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提醒</b>
+      <span>先看哪一块最重，再看重算会不会碰到随机层。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q full" data-question="q5" data-group="二、重算与精度" data-title="Q5：阅读代码：这段 checkpoint 代码里，哪一步最关键？删掉 `preserve_rng_state=True` 会先影响什么？">
+      <div class="q-meta"><span class="pill">code reading</span><span class="pill">recompute</span></div>
+      <h3>Q5：阅读代码：这段 checkpoint 代码里，哪一步最关键？删掉 <code>preserve_rng_state=True</code> 会先影响什么？</h3>
+      <textarea name="q5" placeholder="按“对象、作用、删掉后的症状”回答。"></textarea>
+      <p class="solve-note">要点：先说 checkpoint 把 forward 片段挂到 backward 上重算；再说 RNG 状态不保留时，dropout / 采样类随机层的轨迹会变，复现性和数值一致性会受影响。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>高分答案会先指出代码里真正的控制点是 <code>checkpoint(..., preserve_rng_state=True)</code>。它让 backward 重算时能回到和原 forward 一样的随机状态。删掉以后，训练不一定立刻报错，但包含 dropout 或其他随机算子的块会出现轨迹不一致，可能让 loss 波动更难复现。只写“会变慢”不够，因为这里的关键不是速度，而是随机路径。</p></details>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-question="q6" data-group="二、重算与精度" data-title="Q6：Megatron Core 文档里，最常见的 selective recompute 锚点是哪一个？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">core_attn</span></div>
+      <h3>Q6：Megatron Core 文档里，最常见的 selective recompute 锚点是哪一个？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q6" value="A">A. <code>core_attn</code></label>
+        <label><input type="radio" name="q6" value="B">B. <code>embedding</code></label>
+        <label><input type="radio" name="q6" value="C">C. <code>final_layernorm</code></label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">官方文档把 attention 里的 core attention 当成常见热点。</p>
+    </div>
+
+    <div class="q" data-question="q7" data-group="二、重算与精度" data-title="Q7：判断：FP16 训练里，`autocast` 和 `GradScaler` 通常是同一件事。" data-answer="false">
+      <div class="q-meta"><span class="pill">true/false</span><span class="pill">AMP</span></div>
+      <h3>Q7：判断：FP16 训练里，<code>autocast</code> 和 <code>GradScaler</code> 通常是同一件事。</h3>
+      <label><input type="radio" name="q7" value="true">对</label>
+      <label><input type="radio" name="q7" value="false">错</label>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">一个管执行 dtype，一个管缩放。</p>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>三、状态分片与故障诊断</h3>
+      <p>把 optimizer state 放进真实的 DP 维分片场景里判断。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提醒</b>
+      <span>先问“谁持有全量状态”，再问“谁只持有 shard”。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q8" data-group="三、状态分片与故障诊断" data-title="Q8：16 个梯度元素、DP=4 时，每个 rank 在 reduce-scatter 后拿到多少个 fully reduced 元素？" data-answer="4">
+      <div class="q-meta"><span class="pill">fill</span><span class="pill">reduce-scatter</span></div>
+      <h3>Q8：16 个梯度元素、DP=4 时，每个 rank 在 reduce-scatter 后拿到多少个 fully reduced 元素？</h3>
+      <input type="text" name="q8" data-answer="4" placeholder="只写数字">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">把元素总数按 DP 维平均切开。</p>
+    </div>
+
+    <div class="q" data-question="q9" data-group="三、状态分片与故障诊断" data-title="Q9：`use_distributed_optimizer=True` 主要把梯度聚合从哪种方式改成哪种方式？" data-answer="A">
+      <div class="q-meta"><span class="pill">choice</span><span class="pill">communication</span></div>
+      <h3>Q9：<code>use_distributed_optimizer=True</code> 主要把梯度聚合从哪种方式改成哪种方式？</h3>
+      <div class="choices">
+        <label><input type="radio" name="q9" value="A">A. 从 all-reduce 改成 reduce-scatter。</label>
+        <label><input type="radio" name="q9" value="B">B. 从 reduce-scatter 改成广播。</label>
+        <label><input type="radio" name="q9" value="C">C. 从 all-gather 改成复制整个模型。</label>
+      </div>
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">先看文档里写的通信原语。</p>
+    </div>
+
+    <div class="q full" data-question="q10" data-group="三、状态分片与故障诊断" data-title="Q10：BF16 训练已经开了 checkpoint，但还是 OOM。你会先查哪一张账，为什么？">
+      <div class="q-meta"><span class="pill">error diagnosis</span><span class="pill">budget</span></div>
+      <h3>Q10：BF16 训练已经开了 checkpoint，但还是 OOM。你会先查哪一张账，为什么？</h3>
+      <textarea name="q10" placeholder="按“先查哪张账、为什么、下一步看什么”回答。"></textarea>
+      <p class="solve-note">提示：别先把问题归到 dtype。很多时候真正的大头是激活或者 optimizer state。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>好的答案会先把问题拆回三张账：如果 checkpoint 已经开了但 OOM 还在，先查激活账和 optimizer state 账，而不是立刻怀疑 BF16 本身。理由是 checkpoint 只改变激活账，BF16 主要改变 dtype 账；如果这两张账都还不够，才去看 distributed optimizer、DP 维和主权重是否仍然全量驻留。答案里最好写出下一步检查项，比如重算颗粒度、`core_attn`、DP 分片和 optimizer state 的布局。</p></details>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+<div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>四、代码桥接与复述</h3>
+      <p>把这一页接到公开代码和下一步实验上。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提醒</b>
+      <span>先讲顺序，再讲原因，最后讲一个坑。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+    <div class="q" data-question="q11" data-group="四、代码桥接与复述" data-title="Q11：如果你打开 `pretrain_gpt.py`，最先会搜哪些关键词？" data-answer="recompute;bf16;fp16;fp8;use_distributed_optimizer;checkpoint">
+      <div class="q-meta"><span class="pill">code reading</span><span class="pill">bridge</span></div>
+      <h3>Q11：如果你打开 <code>pretrain_gpt.py</code>，最先会搜哪些关键词？</h3>
+      <input type="text" name="q11" data-answer="recompute;bf16;fp16;fp8;use_distributed_optimizer;checkpoint" placeholder="用逗号或空格列出关键词">
+      <button class="check" type="button">检查</button>
+      <div class="feedback"></div>
+      <p class="hint">先搜这页最关心的三张账对应的词。</p>
+    </div>
+
+    <div class="q full" data-question="q12" data-group="四、代码桥接与复述" data-title="Q12：把本页讲给刚学完 05 的同学听，要求先说顺序，再说一个典型失败。">
+      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">复述</span></div>
+      <h3>Q12：把本页讲给刚学完 05 的同学听，要求先说顺序，再说一个典型失败。</h3>
+      <textarea name="q12" placeholder="先说激活、dtype、状态的顺序，再补一个 OOM 或 NaN 的例子。"></textarea>
+      <p class="solve-note">建议至少包含三点：这页为什么先看激活账，再看 dtype 账，最后看状态账；一个你会先查的配置；一个常见失败的判断顺序。</p>
+      <button class="reveal" type="button">展开反馈</button>
+      <details><summary>参考答案 / 评分要点</summary><p>高分答案会把顺序说清楚：先用 activation checkpointing 处理激活账，再用 autocast / BF16 / FP16 处理 dtype 账，最后用 distributed optimizer 处理状态账。然后给一个典型失败，比如“checkpoint 开了但 OOM 还在”时先查激活热点和优化器状态，而不是立刻怀疑 BF16；或者“FP16 出 NaN”时先查 autocast 和 GradScaler，而不是去改 checkpoint。只复述名词还不够，关键是把顺序和失败映射讲出来。</p></details>
+      <div class="feedback"></div>
+    </div>
+  </div>
+</div>
+
+      </section>
+
+      <section id="export">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">markdown</span>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions">
+          <button class="action" onclick="generateRecord()">生成记录</button>
+          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+        </div>
+      </section>
+
+      <section id="sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+        <p>公开资料的快照取自 2026-06-21；Megatron Core 的 API 名称和训练 recipe 可能随版本变化，正式抄写命令或参数前请再核对当期文档。</p>
+<ul class="source-list">
+  <li><code>课程根目录/index.html</code>：给出课程顺序、前后单元和课程边界。</li>
+  <li><code>05_Megatron_Core训练栈/学习页.html</code>：承接并行组、调度器和分布式 optimizer 的主线。</li>
+  <li><code>07_检查点容错与集群运行/学习页.html</code>：说明训练 checkpoint、恢复和容错会在后面继续展开。</li>
+  <li><a href="https://docs.pytorch.org/docs/stable/checkpoint.html" target="_blank" rel="noreferrer">PyTorch `torch.utils.checkpoint` 文档</a>：用于 activation checkpointing、`preserve_rng_state` 和 backward 重算边界。</li>
+  <li><a href="https://docs.pytorch.org/docs/stable/amp.html" target="_blank" rel="noreferrer">PyTorch `torch.amp` 文档</a>：用于 `autocast`、`GradScaler` 和 FP16 / BF16 的典型训练路径。</li>
+  <li><a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/features/activation_recomputation.html" target="_blank" rel="noreferrer">Megatron Core Activation Recompute</a>：用于 activation recompute 的 forward / backward 机制。</li>
+  <li><a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/features/dist_optimizer.html" target="_blank" rel="noreferrer">Megatron Core Distributed Optimizer</a>：用于 reduce-scatter、all-gather 和状态分片顺序。</li>
+  <li><a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/features/custom_fsdp.html" target="_blank" rel="noreferrer">Megatron Core Megatron-FSDP</a>：用于状态读写、重算和 reduce-scatter / all-gather 的关系。</li>
+  <li><a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/apidocs/core/core.distributed.distributed_data_parallel_config.html" target="_blank" rel="noreferrer">Megatron Core DDP config</a>：用于 `use_distributed_optimizer` 和梯度同步方式的边界。</li>
+  <li><a href="https://docs.nvidia.com/megatron-core/developer-guide/0.15.0/apidocs/core/core.transformer.transformer_config.html" target="_blank" rel="noreferrer">Megatron Core TransformerConfig</a>：用于 selective activation checkpointing 和 `core_attn` 这类重算落点。</li>
+  <li><a href="https://github.com/NVIDIA/Megatron-LM" target="_blank" rel="noreferrer">NVIDIA/Megatron-LM</a>：用于确认公开训练入口与参考实现，重点看 <code>pretrain_gpt.py</code> 和 <code>examples/run_simple_mcore_train_loop.py</code>。</li>
+</ul>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

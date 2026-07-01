@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>07 注意力优化与工程边界｜GPU 性能工程</title>
+  <meta name="description" content="GPU 性能工程第 07 单元：从注意力公式、IO 账本、在线 softmax、FlashAttention 分块，到 CUDA/Triton 工程边界。">
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="GPU 性能工程" data-unit="07｜注意力优化与工程边界">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>GPU 性能工程</strong>
+        <span>07｜注意力优化与工程边界</span>
+      </div>
+      <nav>
+<!-- learning-kit:nav:start -->
+<a href="../index.html"><span class="dot"></span>返回课程地图</a>
+<a href="#goals"><span class="dot"></span>学习目标</a>
+<a href="#position"><span class="dot"></span>课程位置</a>
+<a href="#map"><span class="dot"></span>概念导图</a>
+<a href="#terms"><span class="dot"></span>术语与误区</a>
+<a href="#lesson"><span class="dot"></span>核心讲解</a>
+<a href="#example"><span class="dot"></span>工程例子</a>
+<a href="#mistakes"><span class="dot"></span>常见错误</a>
+<a href="#boundary"><span class="dot"></span>资料边界</a>
+<a href="#practice"><span class="dot"></span>练习</a>
+<a href="#export"><span class="dot"></span>导出</a>
+<a href="#sources"><span class="dot"></span>参考资料</a>
+<!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">这一页把注意力优化压到工程边界：先看中间矩阵和 IO，再看状态重标定，最后判断该不该继续手写。</div>
+    </aside>
+    <main>
+      <div class="hero">
+        <div>
+          <div class="kicker">attention optimization</div>
+          <h1>注意力优化与工程边界</h1>
+          <p>这一页把注意力优化讲成一条工程判断链：先看公式和中间矩阵，再看 HBM 账本，再看在线 softmax 和分块实现，最后停在工程边界上。你会看到为什么某些优化能真省带宽，为什么某些形状不值得手写，为什么“更快”并不总是“该上生产”。</p>
+        </div>
+        <div class="box soft">
+          <h3>读完本页应该能做什么</h3>
+          <ul>
+            <li>把注意力公式、IO 账本和在线 softmax 串成一条解释链。</li>
+            <li>判断什么时候 tile 变大是收益，什么时候会压低并发。</li>
+            <li>区分 prefill 和 decode 的注意力优化重点。</li>
+            <li>写出继续手写 kernel 之前必须满足的工程边界。</li>
+          </ul>
+        </div>
+      </div>
+<section id="goals">
+  <div class="head">
+    <h2>学习目标</h2>
+    <span class="tag">goals</span>
+  </div>
+
+      <div class="grid2">
+        <div class="box soft">
+          <h3>把注意力优化压到工程边界</h3>
+          <p>这一页不只讲 FlashAttention，还讲“为什么优化要停下来”。你会从注意力公式、IO 账本、在线 softmax 和分块实现一路走到 CUDA / Triton 的工程边界：什么时候继续手写 kernel，什么时候该停，什么时候该看系统层而不是再调块。</p>
+          <p>学完后，你应该能把注意力优化拆成可检查的对象：中间矩阵、HBM 往返、数值稳定、tile 资源和推理场景边界。</p>
+        </div>
+        <div class="box">
+          <h3>本页不追的内容</h3>
+          <ul>
+  <li>不讲完整多头注意力实现，只保留前向优化主线。</li>
+  <li>不追求所有硬件和所有形状的最优，只讲判断方法。</li>
+  <li>不展开反向推导的全部细节，只说明边界在哪里。</li>
+  <li>不把“更快”当答案，必须说清楚代价和前提。</li>
+</ul>
+        </div>
+      </div>
+      <div class="check"><b>你现在应该能做什么：</b>在看到一个注意力 kernel 时，先问它是在省 HBM、保数值稳定，还是在系统层遇到了边界。</div>
+    
+</section>
+<section id="position">
+  <div class="head">
+    <h2>所在课程位置</h2>
+    <span class="tag">boundary</span>
+  </div>
+
+      <div class="grid2">
+        <div class="box info"><h3>从哪里来</h3><p>前几节已经把执行模型、访存、Roofline 和 Triton 块级思维铺好。注意力优化是这些基础在真实算子上的合流：它既要关心矩阵乘的复用，也要关心 Softmax 的归约和填充值语义。</p></div>
+        <div class="box info"><h3>往哪里去</h3><p>再往后，课程会把注意力优化落到更具体的 kernel、推理路径和工程边界上。这里先学会判断，不急着把所有优化手段背完。</p></div>
+      </div>
+      <div class="check"><b>你现在应该能做什么：</b>把本页放在课程里正确定位：它是“算子优化 + 工程边界”的交叉页，不是单纯的论文摘要。</div>
+    
+</section>
+<section id="map">
+  <div class="head">
+    <h2>概念导图</h2>
+    <span class="tag">map</span>
+  </div>
+
+      <div class="flow" data-export-context="07 注意力优化概念导图" data-export-lang="text">
+        <div class="step"><b>1</b><span>注意力公式：QK^T → softmax → V</span></div>
+        <div class="step"><b>2</b><span>IO 账本：S / P 是否写回 HBM</span></div>
+        <div class="step"><b>3</b><span>在线 softmax：维护 m 与 l</span></div>
+        <div class="step"><b>4</b><span>分块实现：Q / K / V tile 循环</span></div>
+        <div class="step"><b>5</b><span>工程边界：形状、硬件、维护和系统瓶颈</span></div>
+      </div>
+      <div class="box info"><b>主线</b><p>如果中间矩阵必须落 HBM，你通常会付出很大的带宽代价；如果在线 softmax 和分块把中间量留在片上资源里，你就能把“精确注意力”的中间步骤压缩掉。</p></div>
+      <div class="check"><b>你现在应该能做什么：</b>把注意力优化按“公式 → IO 账本 → 分块 → 边界”四层讲出来。</div>
+    
+</section>
+<section id="terms">
+  <div class="head">
+    <h2>术语与误区</h2>
+    <span class="tag">terms</span>
+  </div>
+
+      <div class="table-wrap">
+  <table data-export-context="07 术语与误区" data-export-lang="table">
+    <thead><tr><th>术语</th><th>直觉解释</th><th>精确定义</th><th>常见误解</th></tr></thead>
+    <tbody>
+      <tr><td>HBM</td><td>GPU 的大显存，容量大但离计算单元远。</td><td>High Bandwidth Memory，通常承载全局内存读写。</td><td>以为 HBM 带宽很高就可以随便写中间矩阵。</td></tr>
+      <tr><td>SRAM / 片上存储</td><td>离 SM 更近的小容量工作台。</td><td>共享内存、寄存器等片上资源的统称。</td><td>以为把所有东西放进片上存储就一定快。</td></tr>
+      <tr><td>在线 softmax</td><td>不用一次看完整行，也能稳定地累计 softmax。</td><td>分块遍历一行分数时，维护当前最大值 m 和归一化因子 l。</td><td>以为这是近似算法。</td></tr>
+      <tr><td>算子融合</td><td>把多个小步骤放进一个 kernel，减少中间读写和启动开销。</td><td>将 QK^T、mask、softmax、dropout 或 PV 的部分过程合并执行。</td><td>以为融合越多越好。</td></tr>
+      <tr><td>工程边界</td><td>优化该停下来的地方。</td><td>由硬件、数据形状、数值需求、维护成本和可复现测量共同决定的范围。</td><td>以为论文算法必然在所有形状上更快。</td></tr>
+    </tbody>
+  </table>
+</div>
+      <div class="grid2">
+        <div class="box info"><h3>容易混淆：算法收益和系统收益</h3><p>单个 kernel 更快，不代表整个请求更快。注意力优化常常先解决 HBM 往返，再看调度、KV cache 和 batch 组织。</p></div>
+        <div class="box info"><h3>容易混淆：近似和重排</h3><p>在线 softmax 改变的是遍历和累计方式，不是 softmax 的定义。它仍然要得到精确结果，只是用更稳定的状态更新来计算。</p></div>
+      </div>
+      <div class="check"><b>你现在应该能做什么：</b>把“在线 softmax”“HBM”“融合”“工程边界”放到各自正确的定义里。</div>
+    
+</section>
+<section id="lesson">
+  <div class="head">
+    <h2>核心讲解</h2>
+    <span class="tag">8 parts</span>
+  </div>
+
+      <article class="lesson-block">
+        <h3><span>1</span>从注意力公式看优化对象</h3>
+        <p>缩放点积注意力通常写作：</p>
+        <div class="math-block" data-export-context="07 注意力公式" data-export-lang="math">$O = \operatorname{softmax}(QK^T / \sqrt{d})V$<p>Q、K、V 的形状可以简化成 <code>[N, d]</code>。朴素实现会先算出 <code>S = QK^T</code>，再对 S 的每一行做 softmax 得到 P，最后计算 <code>O = PV</code>。</p></div>
+        <p>真正需要留到最后的是 O。S 和 P 只是通往 O 的中间状态。如果每次都把 S、P 写入 HBM，再读回来继续计算，就会把大量时间花在搬运暂时数据上。</p>
+      </article>
+      <article class="lesson-block">
+        <h3><span>2</span>为什么朴素注意力容易被 IO 卡住</h3>
+        <p>长序列下，S 和 P 都是 N×N。N 从 2K 增到 8K，中间矩阵元素数量会放大 16 倍。即使矩阵乘本身使用 Tensor Core 很快，写出和读回 N×N 中间矩阵也会成为主要成本。</p>
+        <div class="split-list"><div class="box danger"><h3>朴素路径</h3><p>读 Q/K → 写 S → 读 S → 写 P → 读 P/V → 写 O。中间矩阵多次经过 HBM。</p></div><div class="box soft"><h3>优化目标</h3><p>读 Q/K/V，尽量在片上存储完成局部 softmax 和局部 PV 累计，最后只写 O。</p></div></div>
+        <p>这就是 FlashAttention 论文强调的 IO-aware 思路：不是只数 FLOPs，而是把 HBM 与片上存储之间的数据移动当成一等公民。</p>
+      </article>
+      <article class="lesson-block">
+        <h3><span>3</span>分块不是近似，而是改变数据停留位置</h3>
+        <p>分块做注意力时，可以把 Q 的一小块和 K/V 的一小块搬到片上资源，计算一个局部分数块。关键是不能只对局部块做 softmax，因为完整 softmax 的分母来自整行所有 key。</p>
+        <p>解决办法是在线 softmax。对每一行维护两个状态：当前最大值 <code>m</code> 和归一化因子 <code>l</code>。当新块分数 <code>x</code> 到来，先更新最大值 <code>m_new = max(m_old, max(x))</code>，再把旧累计值按新的最大值重标定，同时加入新块贡献。</p>
+        <div class="math-block" data-export-context="07 在线 softmax 状态更新" data-export-lang="math">$m_{new} = \max(m_{old}, \max(x)), \quad l_{new} = l_{old} \cdot \exp(m_{old} - m_{new}) + \sum \exp(x - m_{new})$<p>输出累计值也需要同样重标定。这样每次只处理一块，但最终等价于对完整行做数值稳定 softmax。</p></div>
+      </article>
+      <article class="lesson-block">
+        <h3><span>4</span>CUDA 视角：资源账本决定 tile 大小</h3>
+        <p>CUDA Programming Guide 里的执行模型提醒我们：kernel 不是抽象公式在运行，而是 grid、block、thread 在 SM 上调度。每个 block 可用的共享内存和寄存器有限，线程束执行、访存合并和 occupancy 都会影响吞吐。</p>
+        <p>在注意力 kernel 中，tile 太小会增加循环次数和启动/调度开销；tile 太大则可能占用过多共享内存或寄存器，导致同一个 SM 上能同时驻留的 block 变少。工程上常见的调参，本质是在“片上复用更多数据”和“保持足够并发”之间找平衡。</p>
+        <div class="box info"><h3>判断句</h3><p>当你改变 block size、num warps 或 head_dim 特化时，先问两个问题：HBM 读写是否减少？SM 并发度是否被寄存器和共享内存压低？</p></div>
+      </article>
+      <article class="lesson-block">
+        <h3><span>5</span>Triton 视角：块级张量让算法结构更直接</h3>
+        <p>Triton Tutorials 的价值在于，它让你用 program id、块级 load、mask 和 <code>tl.dot</code> 表达 tile 算法，而不必从每个 CUDA thread 的索引开始写。注意力优化很适合这种模型：一个 program 负责一块 query 行，循环扫过 K/V 块，维护在线 softmax 状态。</p>
+        <p>但 Triton 不是自动性能魔法。<code>BLOCK_M</code>、<code>BLOCK_N</code>、<code>num_warps</code>、<code>num_stages</code>、数据布局和 mask 处理都要结合硬件测量。Triton 让实现更短，不代表可以跳过性能账本。</p>
+      </article>
+      <article class="lesson-block">
+        <h3><span>6</span>数值稳定：最大值重标定是底线</h3>
+        <p>softmax 直接计算 <code>exp(x)</code> 容易溢出，所以常规稳定写法会先减去行最大值。分块之后，行最大值不是一开始就知道，因此必须在每个块到来时更新最大值，并把旧的累计分母和输出累计值按新最大值重新缩放。</p>
+        <p>这也是很多手写注意力 bug 的来源：看起来只差一个缩放因子，结果会在长序列或较大 logits 下明显漂移。性能优化不能牺牲这种数学不变量。</p>
+      </article>
+      <article class="lesson-block">
+        <h3><span>7</span>训练和推理的边界不一样</h3>
+        <p>训练时要考虑反向传播，需要保存或重算足够的信息；FlashAttention 的思路通常会用重算换取更低显存占用。推理时则分 prefill 和 decode：prefill 类似长序列注意力，decode 常常是单步 query 访问已有 KV cache。</p>
+        <p>因此，注意力优化不是一个单一答案。训练关注激活显存和反向成本；prefill 关注长序列吞吐；decode 关注 KV cache 布局、批量组织和访存模式。本页的分块 softmax 是理解这些分支的共同底座。</p>
+      </article>
+      <article class="lesson-block">
+        <h3><span>8</span>工程边界：何时不该继续手写</h3>
+        <p>如果官方库或成熟框架已经覆盖你的形状、精度、mask 和硬件，手写 kernel 的收益通常要用稳定基准证明。没有 profile、没有数值对照、没有异常形状测试，就不应该把自定义 kernel 放进关键路径。</p>
+        <p>合理的停止条件包括：优化收益低于测量噪声；特殊形状导致代码分支爆炸；新硬件上性能不可预测；维护成本高于节省的 GPU 时间；或者目标瓶颈已经转移到调度、通信、KV cache 管理等系统层。</p>
+      </article>
+      <div class="check"><b>你现在应该能做什么：</b>把注意力优化拆成“公式、IO、分块、数值、硬件、场景、边界”七个问题来问，而不是直接问“能不能写个更快 kernel”。</div>
+    
+</section>
+<section id="example">
+  <div class="head">
+    <h2>工程例子</h2>
+    <span class="tag">worked example</span>
+  </div>
+
+      <div class="grid2">
+        <div>
+          <h3>场景：长序列 prefill 的注意力 kernel</h3>
+          <p>假设一个 batch 中有若干长度为 4096 的序列，每个头维度为 64。朴素路径会生成 4096×4096 的分数矩阵和概率矩阵。以 FP16 粗略估算，一个矩阵约 32 MiB；每个头如果写 S 和 P，再读回来做后续步骤，HBM 流量会迅速放大。</p>
+          <p>分块路径不保存完整 S/P，而是让每个 program 负责若干 query 行，循环读取 K/V 块，维护 <code>m</code>、<code>l</code> 和输出累计值。最后只把 O 写回 HBM。</p>
+        </div>
+        <div class="box warn"><h3>注意这个例子没有给出速度承诺</h3><p>具体收益取决于 GPU 型号、精度、head_dim、mask、batch 组织、编译器版本和基准方式。这里的目的只是展示判断路径。</p></div>
+      </div>
+      <div class="codebar"><span>attention block pseudocode</span><button class="copy" data-copy="attn-code">复制</button></div>
+<pre id="attn-code" data-export-context="attention block pseudocode" data-export-lang="python"><code class="language-python"># 一个 program 处理一块 query 行
+q = load_q_block()
+m = full([BLOCK_M], -inf)
+l = zeros([BLOCK_M])
+acc = zeros([BLOCK_M, HEAD_DIM])
+
+for start_n in range(0, sequence_length, BLOCK_N):
+    k = load_k_block(start_n)
+    v = load_v_block(start_n)
+    scores = dot(q, transpose(k)) * scale
+    scores = apply_mask(scores, start_n)
+
+    m_new = maximum(m, row_max(scores))
+    alpha = exp(m - m_new)
+    p = exp(scores - m_new[:, None])
+
+    l = l * alpha + row_sum(p)
+    acc = acc * alpha[:, None] + dot(p, v)
+    m = m_new
+
+o = acc / l[:, None]
+store_o_block(o)</code></pre>
+      <div class="box info"><b>状态最重要</b><p><code>m</code> 保护数值稳定，<code>l</code> 保存分母，<code>acc</code> 保存加权 V 的未归一化累计值。每个新块到来时，旧状态必须按新的最大值重标定。</p></div>
+      <div class="check"><b>你现在应该能做什么：</b>从一段注意力伪代码里指出哪些状态必须保留，为什么不能直接拼接局部 softmax 的结果。</div>
+    
+</section>
+<section id="scenario">
+  <div class="head">
+    <h2>场景拆解</h2>
+    <span class="tag">prefill / decode</span>
+  </div>
+
+      <div class="grid2">
+        <div class="box soft">
+          <h3>prefill 看大矩阵，decode 看单步请求</h3>
+          <p>prefill 阶段像长序列矩阵计算：query 很多，K/V 块也很多，优化重点往往落在分块、复用和减少中间矩阵写回。decode 阶段更像单步请求：每次只生成少量 query，但要频繁访问 KV cache，瓶颈会更偏向访存组织、批处理和调度。</p>
+          <p>所以同一个 attention kernel，在 prefill 上可能要先看 tile、HBM 和在线 softmax；到了 decode 上，可能先看 KV cache 布局、batch 合并和 launch 开销。工程边界不是抽象概念，它会随着场景切换。</p>
+        </div>
+        <div class="box info">
+          <h3>先看什么，后看什么</h3>
+          <p>如果你拿到的是长序列 prefill，先问 S/P 是否会落 HBM，能不能把 softmax 状态保留在片上。<br>如果你拿到的是 decode，先问每步 query 的工作量是不是太小，KV cache 是否连续，batch 是否碎得过头。</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table data-export-context="07 场景账本" data-export-lang="table">
+          <thead><tr><th>场景</th><th>主要压力</th><th>第一判断</th><th>先别急着做什么</th></tr></thead>
+          <tbody>
+            <tr><td>prefill</td><td>长序列、S/P 中间矩阵、HBM 往返</td><td>能否用分块和在线 softmax 减少中间写回</td><td>先别把问题归咎于 launch 次数</td></tr>
+            <tr><td>decode</td><td>单步 query、KV cache 访问、batch 组织</td><td>是否连续访问、是否过度碎片化</td><td>先别只调大 tile</td></tr>
+            <tr><td>两者共同点</td><td>都要保证数值稳定和边界正确</td><td>mask、state、layout 是否对齐</td><td>先别用局部最优结论推广全部场景</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="codebar"><span>scenario sketch</span><button class="copy" data-copy="scenario-code">复制</button></div>
+<pre id="scenario-code" data-export-context="07 scenario sketch" data-export-lang="python"><code class="language-python">if stage == "prefill":
+    bottleneck = "HBM + long sequence reduction"
+    focus = "block softmax and reuse"
+else:
+    bottleneck = "KV cache access + launch overhead"
+    focus = "layout and batching"</code></pre>
+      <div class="check"><b>你现在应该能做什么：</b>看到 prefill 或 decode 其中一个词时，先能说出它的主要压力点和第一条优化判断。</div>
+      <div class="box danger terminal-lab" data-terminal-lab>
+        <h3>失败实验室：同一个优化，在两个场景里可能相反</h3>
+        <p>假设你在 prefill 上把 tile 从 64 提到 128，观察到 S/P 中间矩阵少写了一点，kernel 看上去更快了；但到了 decode，同样的 tile 让每步 query 变重、KV cache 访问更碎，反而让整体请求吞吐下降。这不是 bug，而是场景切换后，根因已经换了。</p>
+        <div class="terminal-controls">
+          <button class="ghost active" data-terminal-case="case-1">case-1：prefill</button>
+          <button class="ghost" data-terminal-case="case-2">case-2：decode</button>
+          <button class="ghost" data-terminal-case="case-3">case-3：边界</button>
+        </div>
+        <pre class="terminal-output" aria-live="polite">prefill：tile=64 时，中间矩阵仍然写回较多。
+先确认在线 softmax 和分块是否真的减少了 HBM 往返。</pre>
+        <template data-terminal-output="case-1">prefill：tile=64 时，中间矩阵仍然写回较多。
+先确认在线 softmax 和分块是否真的减少了 HBM 往返。</template>
+        <template data-terminal-output="case-2">decode：tile=128 时，KV cache 访问更碎，launch 次数也更显眼。
+先检查 packing 和 cache locality，而不是继续把 tile 调大。</template>
+        <template data-terminal-output="case-3">如果中间矩阵已经压到最小，但端到端仍慢，根因多半转到了 batch 组织或系统调度。
+这时继续改 kernel 只会换症状。</template>
+        <p>所以注意力优化的排查顺序不能永远固定。prefill 先看中间矩阵和在线 softmax，decode 先看访存和 batch 组织。你要对照的不是某个“绝对最优块大小”，而是“在当前场景里，谁的代价更低”。</p>
+        <div class="table-wrap">
+          <table data-export-context="07 failure contrast" data-export-lang="table">
+            <thead><tr><th>做法</th><th>prefill 结果</th><th>decode 结果</th></tr></thead>
+            <tbody>
+              <tr><td>加大 tile</td><td>可能减少中间写回</td><td>可能抬高单步开销和碎片化</td></tr>
+              <tr><td>拆小 batch</td><td>对长序列收益有限</td><td>可能让 launch 和调度更糟</td></tr>
+              <tr><td>保留在线 softmax 状态</td><td>通常是核心步骤</td><td>只有在长上下文下才显著</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="codebar"><span>failure contrast sketch</span><button class="copy" data-copy="failure-contrast">复制</button></div>
+<pre id="failure-contrast" data-export-context="07 failure contrast sketch" data-export-lang="python"><code class="language-python">if stage == "prefill":
+    keep = ["m", "l", "acc"]
+    avoid = ["S/P writeback"]
+else:
+    keep = ["KV cache locality", "batch packing"]
+    avoid = ["oversized tile"]</code></pre>
+        <p>如果你把这件事讲给一个做推理部署的人听，可以直接落成一条排查顺序：先看是不是把 prefill 和 decode 混在同一个结论里，再看 tile 是否真的在省 HBM，最后再看是否已经碰到系统瓶颈。很多优化报告失败，不是因为优化不对，而是因为它把两个场景说成了一个场景。</p>
+        <p>这个实验说明，工程边界不是“写不写 kernel”的单一开关，而是场景变化之后你是不是还在拿旧假设做判断。只要你能把 prefill 和 decode 的失败模式分开，很多“同一个优化为什么前后不一致”的问题就会变得可解释。</p>
+        <p>换成更直接的说法：如果你已经把中间矩阵压到了最小、把在线 softmax 状态也保住了、但 decode 还是慢，那就该把注意力 kernel 之外的部分也纳入判断，比如 batch 是否太碎、KV cache 是否跨得太散、launch 是否在抢你的时间。工程边界不是退缩，而是知道问题已经不在同一层了。</p>
+        <p>最后的检查单可以很短：prefill 看矩阵和中间写回，decode 看 KV cache 和批处理，两个场景都要看数值稳定和边界 mask。只要你每次都能把当前场景、当前瓶颈和当前停止线写出来，注意力优化就不会变成一句“再调调 tile”就完事的空话。</p>
+        <p>再补一个最小判断：如果 decode 的慢主要来自 KV cache 的访问碎片，那把 tile 继续调大通常不会救它；如果 prefill 的慢主要来自中间矩阵写回，那把 batch 再拆细也不会救它。前者要看布局和 packing，后者要看分块和状态保留。把这两句分开记住，很多“同一个 kernel 为啥在两个阶段表现相反”的问题就不用猜了。</p>
+        <div class="box soft">
+          <h3>把判断落成一条检查线</h3>
+          <p>如果你需要一个更机械的版本，可以直接按这四步走：第一步，把当前场景标出来，是 prefill 还是 decode；第二步，把中间矩阵和 KV cache 的去向写清楚，看它们是不是还在 HBM 上来回跑；第三步，确认在线 softmax 的状态有没有被保留住；第四步，明确停止线，看看问题是不是已经转到 batch 组织、调度或别的系统层。</p>
+          <p>这四步的好处是，它把“注意力优化”从一个很大的概念压成了一个很小的动作序列。你不需要每次都重新发明一套判断，只要按这条线检查，就能快速知道当前优化是在省什么、牺牲了什么、有没有越过工程边界。</p>
+          <p>如果你希望把它继续变成一个工作习惯，就在每次实验后补一句记录：当前是 prefill 还是 decode、观察到的瓶颈是什么、下一步准备改哪一层。这个记录很短，但它会逼你把“优化感受”变成“可回放的判断”，也更容易让别人复查你的结论。</p>
+          <div class="table-wrap">
+            <table data-export-context="07 检查线" data-export-lang="table">
+              <thead><tr><th>步骤</th><th>看什么</th><th>目标</th></tr></thead>
+              <tbody>
+                <tr><td>场景</td><td>prefill 还是 decode</td><td>先选对压力模型</td></tr>
+                <tr><td>数据</td><td>S/P、KV cache、在线状态</td><td>确认数据停留位置</td></tr>
+                <tr><td>边界</td><td>mask、shape、tile、batch</td><td>避免把局部最优当全局结论</td></tr>
+                <tr><td>停止线</td><td>系统瓶颈是否已接管</td><td>决定要不要继续手写</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>这也是为什么本页把工程边界放在最后：不是为了收尾，而是为了提醒你，优化不总是继续往 kernel 深处走。知道什么时候停，比知道怎么继续更值钱。</p>
+        </div>
+      </div>
+    
+</section>
+<section id="mistakes">
+  <div class="head">
+    <h2>常见错误</h2>
+    <span class="tag">pitfalls</span>
+  </div>
+
+      <div class="grid2">
+        <div class="box danger"><h3>错误 1：只比较 FLOPs，不比较 HBM 流量</h3><p>注意力优化的核心收益常常来自减少中间读写，而不是减少主要矩阵乘的计算量。只看 FLOPs 会误判瓶颈。</p></div>
+        <div class="box danger"><h3>错误 2：局部 softmax 后直接拼接</h3><p>每个块单独归一化再拼起来不是全局 softmax。必须维护全行的最大值和分母。</p></div>
+        <div class="box danger"><h3>错误 3：忽略 mask 的边界</h3><p>causal mask、padding mask、变长序列和越界 mask 会改变分数矩阵中哪些元素有效。mask 处理错，速度再快也不可用。</p></div>
+        <div class="box danger"><h3>错误 4：用一个 shape 的结果推广所有场景</h3><p>短序列、小 batch、不同 head_dim、不同精度和不同硬件可能给出完全不同的结论。优化报告必须说明形状边界。</p></div>
+        <div class="box danger"><h3>错误 5：寄存器压力失控</h3><p>过大的 tile 或过多融合会让每个线程使用太多寄存器，降低 occupancy，甚至发生寄存器溢出。</p></div>
+        <div class="box danger"><h3>错误 6：只测 kernel，不测端到端</h3><p>单 kernel 更快不代表请求吞吐更高。实际系统还会受到数据准备、调度、KV cache、同步和其他算子的影响。</p></div>
+      </div>
+      <div class="check"><b>你现在应该能做什么：</b>把“快了但没用”的原因拆成形状、数值、资源和系统四类，而不是只盯 kernel 时间。</div>
+      <div class="box info"><b>停止线</b><p>当你已经知道瓶颈是 KV cache、batch 组织或系统调度时，再继续缩 tile 往往不会解决根因。这个时候更该换的是路径，而不是继续堆 kernel 技巧。</p></div>
+      <div class="box soft">
+        <h3>decode 检查样例</h3>
+        <p>假设你在一个小 batch 的 decode 服务里看到：Q 很小，KV cache 很散，launch 次数反而比矩阵乘时间更显眼。这个时候你真正要做的，不是把 tile 继续加到更大，而是把每个请求的 cache 访问整理得更连续。能不能做这件事，通常比能不能再省一点 FLOPs 更重要。</p>
+        <p>对应的检查动作也很简单：先看 cache 是否连在一起，再看 batch 是否拆得太碎，再看当前 tile 是否已经不再是瓶颈。你会发现，问题一旦落到 decode，很多优化目标都会从“更大块”变成“更好的 packing”。</p>
+        <div class="table-wrap">
+          <table data-export-context="07 decode check list" data-export-lang="table">
+            <thead><tr><th>检查项</th><th>正常时</th><th>异常时</th></tr></thead>
+            <tbody>
+              <tr><td>KV cache</td><td>连续、可预测</td><td>碎片化、难命中</td></tr>
+              <tr><td>batch</td><td>能合并、能复用</td><td>过碎、launch 偏多</td></tr>
+              <tr><td>tile</td><td>不抢资源</td><td>不是主瓶颈还在变重</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="codebar"><span>decode packing sketch</span><button class="copy" data-copy="decode-packing">复制</button></div>
+<pre id="decode-packing" data-export-context="07 decode packing sketch" data-export-lang="python"><code class="language-python">if stage == "decode":
+    if cache_scattered:
+        action = "repack cache and batch requests"
+    elif launches_too_many:
+        action = "reduce fragmentation before touching tile"
+    else:
+        action = "keep kernel simple and stop early"</code></pre>
+        <p>这个样例把场景、检查项、代码和后果连起来后，你就能很自然地判断：当前慢的不是 attention 公式，而是把数据路径摆直这件事。把它写明白，比继续争论一个更大的块大小更有用。</p>
+        <p>如果你要把这页的内容压成一句话，那就是：注意力优化先分场景，再查数据路径，最后才决定是不是继续手写。只要这三步没走完，任何“更大 tile”“更深融合”的建议都还只是猜测。这一步能让结论可复查。</p>
+      </div>
+    
+</section>
+<section id="boundary">
+  <div class="head">
+    <h2>资料边界</h2>
+    <span class="tag">boundary</span>
+  </div>
+
+      <div class="grid3">
+        <div class="box info"><h3>什么属于本页</h3><p>注意力公式、IO 账本、在线 softmax、分块实现、工程边界和什么时候停下来。</p></div>
+        <div class="box info"><h3>什么不属于本页</h3><p>完整多头实现、所有反向细节、所有框架 API 和所有硬件细节都不在这里展开。</p></div>
+        <div class="box info"><h3>下一页会接什么</h3><p>后续会继续把这些判断落到更具体的 kernel、推理路径和系统边界上。</p></div>
+      </div>
+      <div class="check"><b>你现在应该能做什么：</b>在写优化结论时，主动写出“这里先不追什么”，避免把别的专题混进来。</div>
+    
+</section>
+<section id="bridge-notes">
+  <div class="head">
+    <h2>迁移提纲</h2>
+    <span class="tag">bridge</span>
+  </div>
+
+      <div class="grid2">
+        <div class="box soft">
+          <h3>从 06 过来</h3>
+          <p>06 已经把你带到“算子画像”的层面：矩阵乘看复用，Softmax 看归约，LayerNorm 看统计量。到了 07，这些判断变成注意力里的具体约束，因为注意力同时包含矩阵乘、Softmax 和分块状态更新。</p>
+        </div>
+        <div class="box info">
+          <h3>往 08 走</h3>
+          <p>接下来的推进不再只是“把 kernel 写得更快”，而是把这套判断落到更具体的推理路径、部署路径和系统瓶颈上。此处先把公式、IO 账本和工程边界对齐。</p>
+        </div>
+      </div>
+      <div class="check"><b>你现在应该能做什么：</b>把 06 的算子画像迁移到 07 的注意力场景里，说明为什么注意力同时受计算、带宽和状态管理三类因素影响。</div>
+
+</section>
+<section id="practice">
+  <div class="head">
+    <h2>练习</h2>
+    <span class="tag">diagnostic</span>
+  </div>
+
+      <div class="practice-intro">
+        <div class="review-card"><strong>作答目标</strong><p>练习不是背术语，而是把注意力优化写成可检查的工程判断：瓶颈在哪里、算法怎样保持精确、边界条件是什么。</p></div>
+        <div class="review-card"><strong>检查重点</strong><p>每个答案至少包含一个原因和一个限制条件。只写“更快”“更省显存”通常不够。</p></div>
+      </div>
+      <div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第一组：概念判断</h3>
+      <p>先判断你是否抓住了 IO 账本和数值稳定。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提示</b>
+      <span>优先用“中间矩阵是否落到 HBM”来解释。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+<div class="q" data-question="q1" data-group="第一组：概念判断" data-title="朴素注意力的主要内存问题是什么？" data-answer="B" data-explain="核心问题是中间矩阵的写回和读回。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">IO / matrix</span></div>
+  <h3>朴素注意力的主要内存问题是什么？</h3>
+  <p>朴素注意力的主要内存问题是什么？</p>
+  <label><input type="radio" name="q1" value="A"> A. QK^T 没有矩阵乘，所以不能用 GPU</label>
+  <label><input type="radio" name="q1" value="B"> B. S 和 P 这类 N×N 中间矩阵会产生大量 HBM 读写</label>
+  <label><input type="radio" name="q1" value="C"> C. softmax 一定比矩阵乘需要更多 FLOPs</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q" data-question="q2" data-group="第一组：概念判断" data-title="在线 softmax 是近似算法吗？" data-answer="错" data-explain="它改变的是累计方式，不是 softmax 定义。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">stability / exact</span></div>
+  <h3>在线 softmax 是近似算法吗？</h3>
+  <p>在线 softmax 是近似算法吗？</p>
+  <label><input type="radio" name="q2" value="对"> 对</label>
+  <label><input type="radio" name="q2" value="错"> 错</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q" data-question="q3" data-group="第一组：概念判断" data-title="在线 softmax 至少维护哪两个行级状态？">
+  <div class="q-meta"><span class="pill">填空</span><span class="pill">state / update</span></div>
+  <h3>在线 softmax 至少维护哪两个行级状态？</h3>
+  <p>在线 softmax 至少维护哪两个行级状态？</p>
+  <input type="text" name="q3" data-answer="m;l" data-explain="一个防溢出，一个负责归一化。" placeholder="例如：当前最大值 m 和……">
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q full" data-question="q4" data-group="第一组：概念判断" data-title="用自己的话解释 FlashAttention 的核心收益">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">explain / IO-aware</span></div>
+  <h3>用自己的话解释 FlashAttention 的核心收益</h3>
+  <p>用自己的话解释 FlashAttention 的核心收益。</p>
+  <textarea name="q4" placeholder="请用 3-5 句话说明：它减少了什么数据移动？为什么仍然是精确注意力？"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>应说明减少的是 S/P 等中间矩阵的 HBM 往返，且仍保持精确注意力，只是用在线 softmax 和分块改变了数据停留位置。</p>
+  </details>
+</div>
+  </div>
+</div>
+      <div class="practice-group">
+  <div class="group-head">
+    <div>
+      <h3>第二组：工程诊断</h3>
+      <p>把算法直觉转成实际优化判断。</p>
+    </div>
+    <div class="quick-review">
+      <b>答题提示</b>
+      <span>不要只说“调大块”。写出资源代价。</span>
+    </div>
+  </div>
+  <div class="drill-grid">
+<div class="q full" data-question="q5" data-group="第二组：工程诊断" data-title="为什么 tile 不能无限变大？">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">resources / occupancy</span></div>
+  <h3>为什么 tile 不能无限变大？</h3>
+  <p>为什么 tile 不能无限变大？</p>
+  <textarea name="q5" placeholder="从共享内存、寄存器、occupancy、并发度里至少选两点解释。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>tile 变大能提高局部复用，但也会抬高共享内存和寄存器压力，降低 occupancy 和并发度。</p>
+  </details>
+</div>
+<div class="q full" data-question="q6" data-group="第二组：工程诊断" data-title="你会如何给注意力 kernel 做基准测试？">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">benchmark / measurement</span></div>
+  <h3>你会如何给注意力 kernel 做基准测试？</h3>
+  <p>你会如何给注意力 kernel 做基准测试？</p>
+  <textarea name="q6" placeholder="写出你会固定和记录的条件：硬件、精度、shape、mask、warmup、数值对照、端到端指标等。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>应固定硬件、精度、shape、mask、warmup、测量方法和基准对照，还要说明只测一个 shape 不够。</p>
+  </details>
+</div>
+<div class="q full" data-question="q7" data-group="第二组：工程诊断" data-title="什么时候不该继续手写注意力 kernel？">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">boundary / tradeoff</span></div>
+  <h3>什么时候不该继续手写注意力 kernel？</h3>
+  <p>什么时候不该继续手写注意力 kernel？</p>
+  <textarea name="q7" placeholder="列出至少三种停止条件，并说明它们为什么会抵消优化价值。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>包括维护成本、形状覆盖、数值风险、硬件差异、端到端瓶颈转移等停止条件。</p>
+  </details>
+</div>
+<div class="q full" data-question="q8" data-group="第二组：工程诊断" data-title="迁移题：decode 阶段和 prefill 阶段的注意力优化重点有什么不同？">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">decode / prefill</span></div>
+  <h3>迁移题：decode 阶段和 prefill 阶段的注意力优化重点有什么不同？</h3>
+  <p>decode 阶段和 prefill 阶段的注意力优化重点有什么不同？</p>
+  <textarea name="q8" placeholder="用 4-6 句话比较：长序列矩阵计算、单步 query、KV cache 读写、批处理组织。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>prefill 更像长序列矩阵计算，decode 更关注单步 query、KV cache 和批处理组织，瓶颈会从大矩阵计算逐渐转向访存和调度。</p>
+  </details>
+</div>
+<div class="q" data-question="q9" data-group="第二组：工程诊断" data-title="在线 softmax 的状态更新顺序" data-answer="A" data-explain="先更新最大值，再缩放旧状态，最后加入新块贡献。">
+  <div class="q-meta"><span class="pill">选择</span><span class="pill">state / update</span></div>
+  <h3>在线 softmax 的状态更新顺序</h3>
+  <p>当新块 scores 到来时，正确的状态更新顺序更接近哪项？</p>
+  <label><input type="radio" name="q9" value="A"> 先更新 <code>m</code>，再缩放旧状态，最后加入新块贡献</label>
+  <label><input type="radio" name="q9" value="B"> 先把新块直接拼到旧输出，再统一做一次 softmax</label>
+  <label><input type="radio" name="q9" value="C"> 只更新 <code>acc</code>，<code>m</code> 和 <code>l</code> 不动</label>
+  <button class="check" type="button">检查</button>
+  <div class="feedback"></div>
+</div>
+<div class="q full" data-question="q10" data-group="第二组：工程诊断" data-title="给一个注意力优化计划">
+  <div class="q-meta"><span class="pill">开放</span><span class="pill">plan / boundary</span></div>
+  <h3>给一个注意力优化计划</h3>
+  <p>假设你在处理一个长序列 prefill 的 attention kernel。请写出一份短计划：先查什么、先改什么、什么时候应该停下来不再手写。</p>
+  <textarea name="q10" placeholder="至少包含：形状、IO 账本、在线 softmax、tile、停止线。"></textarea>
+  <button class="reveal" type="button">展开反馈</button>
+  <details>
+    <summary>参考答案 / 评分要点</summary>
+    <p>好的答案应说明先看形状和中间矩阵是否落 HBM，再看在线 softmax 的状态更新，再选 tile 候选，最后给出停止条件：收益低于噪声、形状覆盖不够或系统层已成瓶颈。</p>
+  </details>
+</div>
+  </div>
+</div>
+      <section id="export">
+        <div class="head"><h2>导出练习记录</h2><span class="tag">markdown</span></div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">还没有生成练习记录。</div>
+        <div class="actions"><button class="action" onclick="generateRecord()">生成记录</button><button class="ghost" onclick="copyRecord()">复制 Markdown</button><button class="ghost" onclick="downloadRecord()">下载 .md</button></div>
+      </section>
+      <section id="sources">
+        <div class="head"><h2>参考资料</h2><span class="tag">source</span></div>
+        <ul class="source-list">
+  <li><a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/">CUDA Programming Guide</a>。用于执行模型、线程层级、内存层次和资源边界。</li>
+  <li><a href="https://github.com/Dao-AILab/flash-attention">FlashAttention 代码仓库</a>。用于查看公开实现里的分块、融合和工程边界。</li>
+  <li><a href="https://triton-lang.org/main/getting-started/tutorials/">Triton Tutorials</a>。用于理解 program id、block、mask、矩阵乘和 fused attention 的工程表达方式。</li>
+  <li><a href="https://arxiv.org/abs/2205.14135">FlashAttention 论文</a>。用于 IO-aware 注意力、分块和在线 softmax 的核心思想。</li>
+</ul>
+      </section>
+    
+</section>
+    </main>
+  </div>
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

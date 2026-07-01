@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM 基础 02｜Transformer 与 Attention 直观理解</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="LLM 基础与应用工程" data-unit="02｜Transformer 与 Attention 直观理解">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <strong>LLM 基础与应用工程</strong>
+        <span>02｜Transformer 与 Attention<br>从“每个位置怎样读上下文”开始</span>
+      </div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goal"><span class="dot"></span>学习目标</a>
+        <a href="#overview"><span class="dot"></span>先抓主线</a>
+        <a href="#attention"><span class="dot"></span>attention 直觉</a>
+        <a href="#qkv"><span class="dot"></span>QKV 分工</a>
+        <a href="#block"><span class="dot"></span>块结构</a>
+        <a href="#mask"><span class="dot"></span>mask 与生成</a>
+        <a href="#code"><span class="dot"></span>代码验收</a>
+        <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>来源</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">
+        先把这一层看清：attention 的作用，是让每个位置按相关性读同一序列里的其他位置。上一单元看输入怎么进模型，下一单元看预训练、微调和推理各自负责什么。
+      </div>
+    </aside>
+
+    <main>
+      <section class="hero" id="goal">
+        <div>
+          <div class="kicker">LLM 基础 · 第 02 单元</div>
+          <h1>Transformer 这一层，先让 token 彼此读取上下文</h1>
+          <p>这一单元只做一件事：把 Transformer 的第一层逻辑讲顺。你会先看到 attention 怎样把一串 token 变成一串“带上下文的表示”，再把 Q、K、V、残差、LayerNorm、FFN 和 causal mask 放回完整 block 里，最后用代码和诊断题验收实现是否真的对了。</p>
+          <p>读完后，拿到一张 attention 图，你先看 query 行、key 列和 value 汇总；再去查转置、缩放、mask 顺序和 softmax 轴。多头推导、位置编码细节、FlashAttention 和长上下文优化，先放到后面的单元和专门主题里。</p>
+          <div class="course-links">
+            <a href="../01_tokenizer_embedding_contextwindow/学习页.html">上一节：输入边界</a>
+            <a href="../index.html">课程地图</a>
+            <a href="../03_预训练微调推理角色边界/学习页.html">下一节：角色边界</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <h3>这一页先抓住什么</h3>
+          <ul>
+            <li>attention 先算相关性，再按权重汇总 value。</li>
+            <li>Q、K、V 来自同一输入的不同投影。</li>
+            <li>softmax、mask 和缩放的顺序会直接改变语义。</li>
+            <li>FFN、残差和 LayerNorm 负责把单层读到的信息稳稳传下去。</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="goal-map">
+        <div class="head"><h2>先看这层为什么值得学</h2><span class="tag">目标</span></div>
+        <div class="grid">
+          <div class="box">
+            <h3>你要练出的判断</h3>
+            <p>Transformer 这章最容易学歪的地方，是把术语背得很熟，却仍然分不清一层 block 里哪部分在跨 token 读信息，哪部分只是在每个位置自己加工。这一页要做的，就是把这两件事拆开。你看到一个 token 时，先问它在读谁，再问它把读到的信息怎么混回自己的表示里。</p>
+            <p>如果你能把 attention 说成“每个位置给所有候选位置打分，再从对应的 value 里取回信息”，后面的内容就能顺着接上：为什么 decoder 需要 causal mask，为什么 softmax 要沿 key 轴，为什么输出还是长度不变的一串向量，以及为什么它不会直接变成答案文本。</p>
+          </div>
+          <div class="box">
+            <h3>先查什么</h3>
+            <p>学完这一单元，先盯住四个检查点：<code>QK^T</code> 的形状、softmax 的轴、mask 的位置、最后乘回去的是 V 还是 K。只要这四个点错一个，代码可能照样跑，语义却已经变了。</p>
+            <p>这些检查点也会决定你怎么看调试日志：如果输出还像一个正常 tensor，注意力也未必是对的；如果图上看起来“很关注某个词”，也不能直接说明它做了正确的读取。要把观察点放回 query 行、key 列和 value 汇总这三件事上。</p>
+          </div>
+          <div class="box soft">
+            <h3>读完就能做的事</h3>
+            <ul>
+              <li>用一句话解释 self-attention 的读取方式。</li>
+              <li>用形状读法解释 `Q @ K.transpose(-2, -1)`。</li>
+              <li>说清 causal mask 和 padding mask 的差别。</li>
+              <li>写出一个不会把 softmax 轴搞错的最小实现。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="overview">
+        <div class="head"><h2>先抓主线：一层 block 到底做了什么</h2><span class="tag">总览</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>把“读上下文”放回一条链路里</h3>
+            <p>一串 token 先进入注意力子层。每个位置都先形成自己的 query、key、value，然后 query 和所有 key 做相似度计算，得到一张“我该从谁那里拿多少信息”的表。这个表经过缩放、mask 和 softmax 以后，变成真正的读取权重，再去加权汇总 value。结果仍然是一串向量，只是每个位置混入了上下文。</p>
+            <p>后面的 FFN 不负责跨 token 通信，它负责对每个位置自己的表示做非线性加工。残差连接把原表示保留下来，LayerNorm 把数值范围稳住。整层 block 的目标，是让表示经过几轮小步骤后越来越适合下一层继续处理。</p>
+          </div>
+          <div class="box info">
+            <h3>这一页和后面几节的边界</h3>
+            <div class="table-wrap">
+              <table data-export-context="单元边界表" data-export-lang="table">
+                <thead>
+                  <tr>
+                    <th>先看什么</th>
+                    <th>这一页负责</th>
+                    <th>暂时不追什么</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>attention 的读法</td>
+                    <td>解释 query、key、value、softmax 和 mask 的语义</td>
+                    <td>多头拆分的完整推导</td>
+                  </tr>
+                  <tr>
+                    <td>block 的组成</td>
+                    <td>把 attention、FFN、残差、LayerNorm 接起来</td>
+                    <td>不同模型家族的深层结构差异</td>
+                  </tr>
+                  <tr>
+                    <td>生成时的约束</td>
+                    <td>说明为什么 decoder 不能看未来</td>
+                    <td>长上下文优化和稀疏注意力</td>
+                  </tr>
+                  <tr>
+                    <td>代码验收</td>
+                    <td>给出最小 attention 实现的检查点</td>
+                    <td>性能工程和内核级优化</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="inline-note"><b>先知道，先别追</b>多头、位置编码、RoPE、FlashAttention、KV cache 都是后面会回来看的东西。现在先把“这层怎么读、怎么写、怎么挡未来”弄稳。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="ledger">
+        <div class="head"><h2>读写台账：每一步在读什么、写什么</h2><span class="tag">台账</span></div>
+        <div class="table-wrap">
+          <table data-export-context="attention 读写台账" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>步骤</th>
+                <th>读什么</th>
+                <th>写什么</th>
+                <th>出错时常见症状</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>X → Q/K/V</td>
+                <td>原始 token 表示</td>
+                <td>三组投影后的向量</td>
+                <td>头维没拆开，Q/K/V 混在一起</td>
+              </tr>
+              <tr>
+                <td>Q @ K^T</td>
+                <td>query 和 key 的相关性</td>
+                <td>分数 scores</td>
+                <td>转置丢了，或者内积方向错了</td>
+              </tr>
+              <tr>
+                <td>scores + scale + mask</td>
+                <td>当前位置可见的候选集合</td>
+                <td>masked scores</td>
+                <td>未来位没挡住，分数还太尖</td>
+              </tr>
+              <tr>
+                <td>softmax</td>
+                <td>一行分数</td>
+                <td>读取权重 weights</td>
+                <td>归一化轴错了，权重语义反了</td>
+              </tr>
+              <tr>
+                <td>weights @ V</td>
+                <td>加权后的内容</td>
+                <td>上下文表示</td>
+                <td>把 K 当内容回写，索引和内容混了</td>
+              </tr>
+              <tr>
+                <td>residual + LayerNorm + FFN</td>
+                <td>当前表示</td>
+                <td>更稳的下一层输入</td>
+                <td>稳定、通信、加工三件事混成一件事</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+            <p>先按这张台账读一遍，再去看图和代码。很多“形状看着对、行为却不对”的问题，根子常常不在公式本身，而在某一步读错了对象：该读 key 的时候去读了 query，该写 value 的时候回写了 K，或者把 mask 放到了它不该出现的位置。</p>
+      </section>
+
+      <section id="attention">
+        <div class="head"><h2>attention 直觉：一行向量怎样读同一句里的其他位置</h2><span class="tag">直觉</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>先从“相关性表”开始读</h3>
+            <p>把一句话切成 N 个 token 之后，每个位置都会对同一句里的所有位置算一遍相关性。结果是一张 <code>N × N</code> 的表：第 i 行表示第 i 个 token 在更新自己表示时，准备从哪些位置读取信息、各读多少。这里的“读”，指的是把对应位置的 value 混到自己的向量里。</p>
+            <p>softmax 的作用，是把一行分数变成可以解释的比例。比例之和约等于 1，意味着这一行把注意力分给了若干个候选位置。缩放项 <code>sqrt(d_k)</code> 的作用，是避免点积太大，让 softmax 一开始就被极端值压扁。mask 的作用，是把不该看的位置从候选集合里排出去。</p>
+            <p>从这个角度看，attention 的输出仍然是一串向量，只是每个位置带上了上下文。把它当成一轮按权重重写表示的步骤更合适。解释时先看 query 行，再看 key 列；单独拿热力图下结论，常常会看偏。</p>
+          </div>
+          <div class="box soft">
+            <h3>切换 query 看它在读谁</h3>
+            <div class="shape-tracer" data-shape-tracer>
+              <div class="trace-lines">
+                <button class="trace-line active" data-trace-step="step-1"><code>X</code><span>[B, N, D]</span></button>
+                <button class="trace-line" data-trace-step="step-2"><code>Q / K / V</code><span>[B, H, N, Dh]</span></button>
+                <button class="trace-line" data-trace-step="step-3"><code>scores = Q @ K^T</code><span>[B, H, N, N]</span></button>
+                <button class="trace-line" data-trace-step="step-4"><code>weights = softmax(scores)</code><span>[B, H, N, N]</span></button>
+                <button class="trace-line" data-trace-step="step-5"><code>out = weights @ V</code><span>[B, H, N, Dh]</span></button>
+              </div>
+              <div class="trace-canvas">
+                <div class="tensor-card active" data-trace-target="step-1">
+                  <b>输入 X</b>
+                  <span>[B, N, D]</span>
+                  <p>这是进入注意力层之前的 token 表示，每个位置一行向量。</p>
+                </div>
+                <div class="tensor-card" data-trace-target="step-2">
+                  <b>Q / K / V</b>
+                  <span>[B, H, N, Dh]</span>
+                  <p>同一批输入经过三组投影后，分别变成读取条件、匹配索引和被汇总内容。</p>
+                </div>
+                <div class="tensor-card" data-trace-target="step-3">
+                  <b>分数</b>
+                  <span>[B, H, N, N]</span>
+                  <p>每个 query 对同一序列里的每个 key 打分，得到一张“我该读谁”的表。</p>
+                </div>
+                <div class="tensor-card" data-trace-target="step-4">
+                  <b>权重</b>
+                  <span>[B, H, N, N]</span>
+                  <p>softmax 把分数变成比例。比例变化的方向，会直接体现 mask 和轴是否正确。</p>
+                </div>
+                <div class="tensor-card" data-trace-target="step-5">
+                  <b>输出</b>
+                  <span>[B, H, N, Dh]</span>
+                  <p>每个 query 位置从 value 里拿回上下文信息，准备在多头合并后回到 [B, N, D]。</p>
+                </div>
+              </div>
+            </div>
+            <div class="math-block" data-export-context="Attention 公式与记法" data-export-lang="math">
+              $$
+              \mathrm{Attention}(Q,K,V)=\mathrm{softmax}\!\left(\frac{QK^T}{\sqrt{d_k}}\right)V
+              $$
+              <p>这里的 <code>QK^T</code> 是“相关性分数”，<code>sqrt(d_k)</code> 是缩放项，<code>softmax</code> 把一行分数变成读取比例，最后乘回 <code>V</code> 得到新的表示。公式不长，但每个符号都对应一个可以检查的动作。</p>
+            </div>
+            <div class="table-wrap">
+              <table data-export-context="attention 单行读取示例" data-export-lang="table">
+                <thead>
+                  <tr>
+                    <th>query 位置</th>
+                    <th>高权重 key</th>
+                    <th>这行在读什么</th>
+                    <th>容易看错的地方</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>“模型”</td>
+                    <td>“写代码”</td>
+                    <td>当前位置在拿最后一个 token 的 value 来补全当前语境</td>
+                    <td>这里不等于“模型”这个词自己变成答案</td>
+                  </tr>
+                  <tr>
+                    <td>“用”</td>
+                    <td>“模型”</td>
+                    <td>当前位置在借前一个语义块，补足动作对象</td>
+                    <td>高权重未必代表词义强，只是当前 query 的需要更高</td>
+                  </tr>
+                  <tr>
+                    <td>“我”</td>
+                    <td>“我 / 喜欢”</td>
+                    <td>当前位置可能更偏向保留前缀语气和主语结构</td>
+                    <td>权重图只是混合比例，不能直接当因果解释</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="qkv">
+        <div class="head"><h2>Q、K、V：三种投影视角</h2><span class="tag">QKV</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>为什么同一输入要过三组投影</h3>
+            <p>self-attention 里，输入 X 通常先经过三组不同的线性投影，分别得到 Q、K、V。它们来自同一批 token 表示，但用途不同。Q 代表当前位置提出的读取条件，K 代表每个位置提供给别人匹配的索引，V 代表真正会被汇总回来的内容。把这三件事分开，模型就能学会“用一类特征判断相关性，用另一类特征提供内容”。</p>
+            <p>如果把 Q、K、V 想成三段不同文本，很容易把投影层和输入来源混成一件事。更准确的说法是：同一输入经过三套不同参数的线性层，得到三种不同的视角。对于 encoder-decoder attention，decoder 的 Q 会去读 encoder 的 K/V；在 self-attention 里，三者通常都来自同一侧的输入。</p>
+          </div>
+          <div class="box">
+            <h3>形状和语义要一起看</h3>
+            <div class="table-wrap">
+              <table data-export-context="Q/K/V 角色表" data-export-lang="table">
+                <thead>
+                  <tr>
+                    <th>对象</th>
+                    <th>常见形状</th>
+                    <th>在做什么</th>
+                    <th>如果看错会怎样</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>X</td>
+                    <td>[B, N, D]</td>
+                    <td>原始输入表示</td>
+                    <td>容易把 batch、长度和隐藏维度混起来</td>
+                  </tr>
+                  <tr>
+                    <td>Q / K / V</td>
+                    <td>[B, H, N, Dh]</td>
+                    <td>拆成多头后的读取条件、匹配索引和内容</td>
+                    <td>如果 head 维或 Dh 维理解错，后面矩阵乘法就会错位</td>
+                  </tr>
+                  <tr>
+                    <td>scores</td>
+                    <td>[B, H, N, N]</td>
+                    <td>每个 query 对每个 key 的分数</td>
+                    <td>softmax 轴错时，语义会从“读谁”变成“谁被读”</td>
+                  </tr>
+                  <tr>
+                    <td>out</td>
+                    <td>[B, H, N, Dh]</td>
+                    <td>每个 query 从 value 汇总到的新表示</td>
+                    <td>如果最后一步乘错对象，输出 shape 可能对，语义却不对</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="inline-note"><b>多头的作用</b>多头把同一层里的读取视角拆开，让不同头学到不同的相关性模式；最后再把这些头合并回去，回到统一的隐藏宽度。</p>
+          </div>
+        </div>
+        <div class="codebar"><span>逐行拆解：QK^T 怎么得到“每个位置对每个位置”的分数</span><button class="copy" data-copy="code-qkv">复制</button></div>
+        <pre id="code-qkv" data-export-context="QKV 逐行计算" data-export-lang="python"><code class="language-python">import torch
+
+B, H, N, Dh = 2, 4, 5, 16
+x = torch.randn(B, N, H * Dh)
+
+q = x.view(B, N, H, Dh).transpose(1, 2)
+k = x.view(B, N, H, Dh).transpose(1, 2)
+v = x.view(B, N, H, Dh).transpose(1, 2)
+
+scores = q @ k.transpose(-2, -1)          # [B, H, N, N]
+weights = torch.softmax(scores / (Dh ** 0.5), dim=-1)
+out = weights @ v                          # [B, H, N, Dh]</code></pre>
+        <p>这段代码最值得先看的，是三件事：第一，Q 和 K 先在最后两维上做内积，所以 K 必须转置到 <code>-2, -1</code>；第二，softmax 必须沿最后一维做，因为每一行是在所有 key 上分配权重；第三，最后乘回去的是 V。只要这三步位置错了，代码就算能跑，语义也已经变了。</p>
+      </section>
+
+      <section id="block">
+        <div class="head"><h2>块结构：attention 之外还要加工和稳定</h2><span class="tag">块结构</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>attention 负责通信，FFN 负责加工</h3>
+            <p>attention 把不同位置的信息互相传递，FFN 则在每个位置内部继续加工。可以把它理解成两步：先让 token 之间“开会”，再让每个 token 在自己这一行里“整理笔记”。如果只保留 attention，模型会缺少逐位置的非线性变换；如果只保留 FFN，模型就不会跨 token 交流。</p>
+            <p>残差连接的意义，是给输入保留一条直通路。LayerNorm 的意义，是把每个位置的数值范围稳住，让下一层看到的分布不要过于飘。现代大模型常见的是 Pre-LN 结构，但这一页不把不同变体展开成一整章，只抓住“先通信、再加工、再稳定地传下去”这一条线。</p>
+          </div>
+          <div class="box soft">
+            <h3>几个容易混的角色</h3>
+            <div class="table-wrap">
+              <table data-export-context="块结构角色对照" data-export-lang="table">
+                <thead>
+                  <tr>
+                    <th>组件</th>
+                    <th>主要职责</th>
+                    <th>常见误解</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>attention</td>
+                    <td>跨 token 读取信息</td>
+                    <td>以为它只是“挑重点词”</td>
+                  </tr>
+                  <tr>
+                    <td>FFN</td>
+                    <td>对每个位置做逐点非线性加工</td>
+                    <td>以为它也在做 token 间通信</td>
+                  </tr>
+                  <tr>
+                    <td>residual</td>
+                    <td>保留原输入的通路</td>
+                    <td>以为它和 LayerNorm 是同一件事</td>
+                  </tr>
+                  <tr>
+                    <td>LayerNorm</td>
+                    <td>稳定数值分布</td>
+                    <td>以为它负责屏蔽未来 token</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="inline-note"><b>先把 block 看完整</b>attention 只是第一步，后面的 FFN、残差和归一化一起把表示稳住，深层网络才更容易训练。</p>
+          </div>
+        </div>
+        <div class="codebar"><span>最小结构：一个 decoder block 的顺序</span><button class="copy" data-copy="code-block">复制</button></div>
+        <pre id="code-block" data-export-context="decoder block 伪代码" data-export-lang="python"><code class="language-python">def decoder_block(x, causal_mask):
+    attn_out = self_attention(x, mask=causal_mask)
+    x = layer_norm(x + attn_out)      # 残差保留原输入，norm 稳住分布
+
+    ffn_out = feed_forward(x)
+    x = layer_norm(x + ffn_out)       # FFN 对每个位置继续加工
+    return x</code></pre>
+        <p>这段伪代码省掉了 dropout、多头拆分和参数细节，但顺序已经足够说明逻辑：先让位置之间通信，再对每个位置单独加工，最后把两步的结果稳稳传给下一层。把这个顺序记住，比死背一串模块名更有用。</p>
+      </section>
+
+      <section id="mask">
+        <div class="head"><h2>mask 与生成：为什么 decoder 不能看未来</h2><span class="tag">mask</span></div>
+        <div class="grid2">
+          <div class="box">
+          <h3>causal mask 挡住未来 token 的读取</h3>
+            <p>自回归模型的目标，是根据已经出现的前缀去预测下一个 token。也就是说，在训练和生成时，当前位置只能看见当前之前的 token，不能提前偷看后面还没生成出来的 token。如果让它看到未来，训练就会变成作弊，推理时又没有这些未来信息，条件就对不上。</p>
+            <p>causal mask 的做法，是在注意力分数里把不允许读取的位置压成极小值，然后再做 softmax。这样未来位置在权重里几乎变成 0。顺序很重要：先 mask，再 softmax。先 softmax 再置零，表面上也像挡住了，归一化方式却已经变过了。</p>
+          </div>
+          <div class="box soft">
+            <h3>看一眼 mask 矩阵</h3>
+            <div class="terminal-lab" data-terminal-lab>
+              <div class="terminal-controls">
+                <button class="ghost active" data-terminal-case="case-1">正常顺序</button>
+                <button class="ghost" data-terminal-case="case-2">mask 放后</button>
+                <button class="ghost" data-terminal-case="case-3">轴放错</button>
+              </div>
+              <pre class="terminal-output" aria-live="polite">[case-1]
+scores shape  = [B, H, N, N]
+mask before softmax
+future keys   -> -1e9
+softmax(axis=-1)
+row sum       -> about 1
+result        -> each query reads only allowed keys</pre>
+              <template data-terminal-output="case-1">[case-1]
+scores shape  = [B, H, N, N]
+mask before softmax
+future keys   -&gt; -1e9
+softmax(axis=-1)
+row sum       -&gt; about 1
+result        -&gt; each query reads only allowed keys</template>
+              <template data-terminal-output="case-2">[case-2]
+scores shape  = [B, H, N, N]
+softmax(axis=-1) first
+future keys zeroed later
+row sum       != 1 after masking
+symptom       -> distribution already changed, leak is still hard to reason about</template>
+              <template data-terminal-output="case-3">[case-3]
+scores shape  = [B, H, N, N]
+softmax(axis=-2)
+normalization axis = query rows
+symptom       -> model learns "who gets read" instead of "who each query reads"</template>
+            </div>
+            <p class="checkpoint">观察点：第 3 个位置只能看前 3 个位置，不能看第 4、5 个未来位置。padding mask 的作用，是把补齐的空位从读取集合里移开。</p>
+          </div>
+        </div>
+        <div class="math-block" data-export-context="mask 记法" data-export-lang="math">
+          $$
+          \text{masked\_scores} = \text{scores} + \text{mask}
+          $$
+          <p><code>mask</code> 通常在非法位置写入一个很小的负数，softmax 之后这些位置的权重接近 0。重点在于它是否真的在 softmax 之前介入了分数。</p>
+        </div>
+        <div class="table-wrap">
+          <table data-export-context="mask 对照表" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>mask 类型</th>
+                <th>挡住什么</th>
+                <th>常见症状</th>
+                <th>下一步先看什么</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>causal mask</td>
+                <td>未来 token</td>
+                <td>生成时像偷看了答案，训练和推理不一致</td>
+                <td>看 mask 是否在 softmax 前加入</td>
+              </tr>
+              <tr>
+                <td>padding mask</td>
+                <td>补齐位</td>
+                <td>无效位混进了权重分配，短句和长句表现不一致</td>
+                <td>看 padding 是否被当成普通 token 处理</td>
+              </tr>
+              <tr>
+                <td>错误的轴</td>
+                <td>挡错了维度</td>
+                <td>shape 正常，但语义反了</td>
+                <td>看 softmax 到底沿哪一维做</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="code">
+        <div class="head"><h2>代码验收：先查轴、顺序和 mask</h2><span class="tag">代码</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>先查这四件事</h3>
+            <p>第一，Q、K、V 是否来自正确的输入，头维是否拆开。第二，<code>K</code> 有没有转置到最后两维，能不能真正形成 query 对 key 的两两打分。第三，缩放是否用了 <code>sqrt(d_k)</code>。第四，mask 是否在 softmax 前加入，softmax 是否沿最后一维做。</p>
+            <p>很多实现看起来都能输出同样的 shape，但语义已经变掉了。比如把 softmax 放到 query 轴，模型就在回答“每个 key 被多少 query 读取”，而不是“每个 query 应该读哪些 key”。这种错不一定马上报错，反而更容易埋进训练里。</p>
+          </div>
+          <div class="box redsoft">
+            <h3>错误示例：softmax 维度放错</h3>
+            <div class="codebar"><span>错误示例：沿 query 维度归一化</span><button class="copy" data-copy="code-wrong">复制</button></div>
+            <pre id="code-wrong" data-export-context="softmax 维度错误示例" data-export-lang="python"><code class="language-python">scores = q @ k.transpose(-2, -1)
+weights = torch.softmax(scores, dim=-2)   # 错：这里不是 key 维度
+out = weights @ v</code></pre>
+            <p>这段代码可能不报错，因为矩阵尺寸还能对上。问题在于每个 query 没有在所有 key 上分配读取比例，注意力图会看起来正常，语义却已经反了。下一步先把 softmax 移到最后一维，再看 query 行和 mask 是否一致。</p>
+          </div>
+        </div>
+        <div class="codebar"><span>正确示例：mask、缩放和 softmax 顺序</span><button class="copy" data-copy="code-right">复制</button></div>
+        <pre id="code-right" data-export-context="scaled dot-product attention" data-export-lang="python"><code class="language-python">def scaled_dot_product_attention(q, k, v, mask=None):
+    head_dim = q.size(-1)
+    scores = q @ k.transpose(-2, -1)
+    scores = scores / (head_dim ** 0.5)
+
+    if mask is not None:
+        scores = scores.masked_fill(mask == 0, -1e9)
+
+    weights = torch.softmax(scores, dim=-1)
+    out = weights @ v
+    return out, weights</code></pre>
+        <div class="table-wrap">
+          <table data-export-context="attention 验收清单" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>检查项</th>
+                <th>应该看到什么</th>
+                <th>常见错误</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>K 的转置</td>
+                <td>最后两维互换后才能做点积</td>
+                <td>直接相乘，虽然有时 shape 还能碰上，但语义不对</td>
+              </tr>
+              <tr>
+                <td>缩放</td>
+                <td>除以 <code>sqrt(d_k)</code></td>
+                <td>用 hidden size、序列长度或根本没缩放</td>
+              </tr>
+              <tr>
+                <td>mask 顺序</td>
+                <td>先挡非法位置，再 softmax</td>
+                <td>先 softmax 再置零，归一化已经被改过</td>
+              </tr>
+              <tr>
+                <td>输出来源</td>
+                <td>最后乘的是 V</td>
+                <td>把 K 当成内容回写，混淆了索引和内容</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="diagnosis">
+        <div class="head"><h2>误区诊断：最容易看偏的五个地方</h2><span class="tag">诊断</span></div>
+        <div class="grid2">
+          <div class="box redsoft">
+            <h3>五个最常见的理解偏差</h3>
+            <ol>
+              <li>把 attention 看成“只看重要词”会漏掉 query 行和 key 列的关系；更稳的说法是，当前位置按相关性读取上下文。</li>
+              <li>Q、K、V 来自同一输入 X 的三组投影，不是三份独立文本；混了这点，读 self-attention 代码时就会把参数和内容看反。</li>
+              <li>只盯 shape 不盯轴，容易在 <code>[B, H, N, N]</code> 里忽略 softmax 的方向；轴一错，语义就反了。</li>
+              <li>把 mask 放在 softmax 后，等于先把分布算完再删位；归一化方式已经被改过。</li>
+              <li>LayerNorm 负责稳定数值分布，不负责时间可见性；mask 和 LayerNorm 处理的是两件事。</li>
+            </ol>
+          </div>
+          <div class="box">
+            <h3>出错时先看什么</h3>
+            <div class="table-wrap">
+              <table data-export-context="attention 诊断表" data-export-lang="table">
+                <thead>
+                  <tr>
+                    <th>症状</th>
+                    <th>最先怀疑</th>
+                    <th>先看哪里</th>
+                    <th>为什么先看这里</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>输出 shape 正常，但行为怪</td>
+                    <td>softmax 轴或 mask 顺序</td>
+                    <td>注意力分数和归一化那一行</td>
+                    <td>shape 能对上，不代表语义对上</td>
+                  </tr>
+                  <tr>
+                    <td>未来 token 还能被读到</td>
+                    <td>causal mask 未生效</td>
+                    <td>softmax 前的分数</td>
+                    <td>事后置零并不能恢复正确归一化</td>
+                  </tr>
+                  <tr>
+                    <td>长序列训练不稳</td>
+                    <td>缩放缺失或数值过大</td>
+                    <td>点积分数的尺度</td>
+                    <td>softmax 很容易在极端值下变尖</td>
+                  </tr>
+                  <tr>
+                    <td>注意力图“很漂亮”但解释不通</td>
+                    <td>把可视化当因果解释</td>
+                    <td>回到 query 行和 value 汇总</td>
+                    <td>权重图只能说明混合比例，不等于原因</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="inline-note"><b>下一步再看什么</b>如果你已经能读懂这一页，再往后会遇到多头拆分、位置编码、训练目标、推理策略和长上下文优化。先别把这些东西混进同一个问题里。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="practice">
+        <div class="head"><h2>综合练习</h2><span class="tag">practice</span></div>
+        <div class="practice-intro">
+          <div class="box">
+            <strong>练习目标</strong>
+            <p>这组题检查你能不能把 attention、Q/K/V、mask、残差、LayerNorm 和 FFN 连成一条会检查的链路。做题时尽量按“看对象、看轴、看顺序、看失败症状”的顺序回答。</p>
+          </div>
+          <div class="box">
+            <strong>作答提醒</strong>
+            <p>选择题优先答稳，开放题至少写出对象、动作和后果三个点。看到代码题，先说哪一行在干什么，再说哪里会错。</p>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>一、基础直觉</h3>
+              <p>先确认你有没有把 attention 的读取方式说对。</p>
+            </div>
+            <div class="quick-review"><b>复习</b>self-attention 的 self 指“同一序列内部互相读取”。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q1" data-group="基础直觉" data-title="1. attention 的读取方式" data-answer="B" data-explain="attention 的输出仍然是一串向量，只是每行混入了上下文。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">概念</span></div>
+              <h3>1. self-attention 更接近下面哪句话？</h3>
+              <label><input type="radio" name="q1" value="A"> 每个 token 只看自己，不看其他位置</label>
+              <label><input type="radio" name="q1" value="B"> 每个 token 按相关性读取同一序列里的其他 token</label>
+              <label><input type="radio" name="q1" value="C"> 先把整句压成一个答案，再分配给每个位置</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q" data-question="q2" data-group="基础直觉" data-title="2. attention 输出的性质" data-answer="错" data-explain="attention 输出的是更新后的表示，不是最终自然语言答案。">
+              <div class="q-meta"><span class="pill">true/false</span><span class="pill">概念</span></div>
+              <h3>2. attention 的输出通常就是最终的自然语言答案。</h3>
+              <label><input type="radio" name="q2" value="对"> 对</label>
+              <label><input type="radio" name="q2" value="错"> 错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q" data-question="q3" data-group="基础直觉" data-title="3. Q/K/V 的作用" data-answer="B" data-explain="Q、K、V 通常来自同一输入 X 的三组投影，不是三段不同文本。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">语义</span></div>
+              <h3>3. 哪一种说法更准确？</h3>
+              <label><input type="radio" name="q3" value="A"> Q、K、V 是三段不同文本，各自负责不同句子</label>
+              <label><input type="radio" name="q3" value="B"> Q 提出读取条件，K 参与匹配，V 提供被汇总内容</label>
+              <label><input type="radio" name="q3" value="C"> Q 是标签，K 是损失，V 是学习率</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q full" data-question="q4" data-group="基础直觉" data-title="4. 用自己的话解释 Q/K/V" >
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">简答</span></div>
+              <h3>4. 用 3-4 句话解释 Q、K、V 的分工，要说到它们通常来自同一输入 X。</h3>
+              <p class="solve-note">参考答案至少要覆盖：同一输入、三组投影、Q 提条件、K 做匹配、V 提内容、按 query 行读 key。</p>
+              <textarea name="q4" placeholder="先说对象，再说动作，再说后果。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+              <p>高质量答案应该明确说出：Q、K、V 通常都来自同一输入 X 的不同线性投影；Q 代表当前位置提出的读取条件，K 代表可被匹配的索引，V 代表真正会被汇总回来的内容。答案里还应点出“按 query 行去看权重”，并说明这三者来自同一输入 X。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>二、形状与公式</h3>
+              <p>这一组检查你是否只会背公式，还不会读形状和轴。</p>
+            </div>
+            <div class="quick-review"><b>复习</b>注意力分数的最后两维，常常就是 query 位置和 key 位置。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q5" data-group="形状与公式" data-title="5. 分数形状" data-answer="B" data-explain="Q @ K^T 会把最后两维变成 query × key 的关系表。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">shape</span></div>
+              <h3>5. 如果 Q 和 K 的形状都是 <code>[B, H, N, Dh]</code>，<code>Q @ K.transpose(-2, -1)</code> 的形状是什么？</h3>
+              <label><input type="radio" name="q5" value="A"> [B, H, Dh, Dh]</label>
+              <label><input type="radio" name="q5" value="B"> [B, H, N, N]</label>
+              <label><input type="radio" name="q5" value="C"> [B, N, D]</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q" data-question="q6" data-group="形状与公式" data-title="6. softmax 的轴" data-answer="A" data-explain="每个 query 要在所有 key 上分配权重，所以 softmax 应沿最后一维做。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">axis</span></div>
+              <h3>6. softmax 应该沿哪一维做？</h3>
+              <label><input type="radio" name="q6" value="A"> key 维，也就是最后一维</label>
+              <label><input type="radio" name="q6" value="B"> batch 维</label>
+              <label><input type="radio" name="q6" value="C"> head 维</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q full" data-question="q7" data-group="形状与公式" data-title="7. 为什么要缩放">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">解释</span></div>
+              <h3>7. 为什么要除以 <code>sqrt(d_k)</code>？</h3>
+            <p class="solve-note">回答时至少说出：点积会随维度变大、softmax 容易过尖、缩放让分数尺度更稳、训练更不容易抖。</p>
+              <textarea name="q7" placeholder="先说原因，再说后果，最后说修法。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>好的答案会说明：如果不缩放，Q 和 K 的点积在维度变大时更容易变成大数，softmax 结果会过于尖锐，几乎把权重压到少数几个位置上，导致梯度和训练都更不稳定。除以 <code>sqrt(d_k)</code> 的作用，是把 logits 的尺度拉回一个更可控的范围，也不会直接跟序列长度或 hidden size 绑定。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>三、块结构与 mask</h3>
+              <p>这组题检查你有没有把 attention、FFN、残差、LayerNorm 和 causal mask 分开。</p>
+            </div>
+            <div class="quick-review"><b>复习</b>attention 跨 token 读，FFN 逐位置加工，mask 管可见性，LayerNorm 管数值分布。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q8" data-group="块结构与 mask" data-title="8. attention 和 FFN 的分工" data-answer="B" data-explain="attention 跨 token 读取，FFN 逐位置加工。">
+              <div class="q-meta"><span class="pill">choice</span><span class="pill">block</span></div>
+              <h3>8. 哪种说法更准确？</h3>
+              <label><input type="radio" name="q8" value="A"> attention 负责逐位置加工，FFN 负责跨 token 通信</label>
+              <label><input type="radio" name="q8" value="B"> attention 负责跨 token 读取，FFN 负责逐位置加工</label>
+              <label><input type="radio" name="q8" value="C"> 两者都只是把张量 reshape 一下</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q" data-question="q9" data-group="块结构与 mask" data-title="9. LayerNorm 的作用" data-answer="错" data-explain="LayerNorm 稳定数值分布，不负责屏蔽未来 token。">
+              <div class="q-meta"><span class="pill">true/false</span><span class="pill">稳定</span></div>
+              <h3>9. LayerNorm 的主要作用是屏蔽未来 token。</h3>
+              <label><input type="radio" name="q9" value="对"> 对</label>
+              <label><input type="radio" name="q9" value="错"> 错</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q full" data-question="q10" data-group="块结构与 mask" data-title="10. causal mask 和 padding mask">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">边界</span></div>
+              <h3>10. causal mask 挡住什么？padding mask 又挡住什么？</h3>
+              <p class="solve-note">作答时至少说出“未来 token / 补齐位置”“训练和生成的时间顺序”“两种 mask 在目的上不同”这三层。</p>
+              <textarea name="q10" placeholder="先说 causal，再说 padding，再说它们为什么不能混为一谈。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>causal mask 挡住的是未来 token，它保证当前位置只能读到当前之前的前缀，不会在训练时偷看未来。padding mask 挡住的是补齐位置，它不关心时间顺序，只是把空位从读取集合里排出去。好的答案还会说清：一个是时间约束，一个是数据对齐；两者的目的不同，不能混成同一件事。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div>
+              <h3>四、代码与诊断</h3>
+              <p>最后一组把概念拉回代码，检查你是否真的能验收实现。</p>
+            </div>
+            <div class="quick-review"><b>复习</b>形状对，不代表语义对。先查轴，再查顺序，再查 mask。</div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q11" data-group="代码与诊断" data-title="11. 代码读法" data-answer="B" data-explain="softmax 放在 query 维会把归一化方向完全改掉。">
+              <div class="q-meta"><span class="pill">code reading</span><span class="pill">诊断</span></div>
+              <h3>11. 看下面这两行代码，最主要的问题是什么？</h3>
+              <div class="codebar"><span>代码片段</span><button class="copy" data-copy="code-question">复制</button></div>
+              <pre id="code-question" data-export-context="代码读法题" data-export-lang="python"><code class="language-python">scores = q @ k.transpose(-2, -1)
+weights = torch.softmax(scores, dim=-2)</code></pre>
+              <label><input type="radio" name="q11" value="A"> 只是慢一点，但语义不变</label>
+              <label><input type="radio" name="q11" value="B"> 归一化轴放错了，变成了沿 query 维归一化</label>
+              <label><input type="radio" name="q11" value="C"> 这段代码一定会报语法错误</label>
+              <button class="check" type="button">检查</button>
+              <div class="feedback"></div>
+            </div>
+            <div class="q full" data-question="q12" data-group="代码与诊断" data-title="12. 输出正常但行为不对时先检查什么？">
+              <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">诊断</span></div>
+              <h3>12. 输出 shape 正常，但注意力行为不对时，先检查哪几项？</h3>
+              <p class="solve-note">先挑最接近根因的项，不要把所有可能原因都勾满。好的顺序通常是：转置、轴、缩放、mask。</p>
+              <label><input type="checkbox" name="q12" value="先看 K 是否转置到最后两维">先看 K 是否转置到最后两维</label>
+              <label><input type="checkbox" name="q12" value="再看 softmax 是否在最后一维做">再看 softmax 是否在最后一维做</label>
+              <label><input type="checkbox" name="q12" value="再看缩放是否用了 sqrt(d_k)">再看缩放是否用了 sqrt(d_k)</label>
+              <label><input type="checkbox" name="q12" value="再看 mask 是否在 softmax 前加入">再看 mask 是否在 softmax 前加入</label>
+              <label><input type="checkbox" name="q12" value="最后再看 FFN 维度">最后再看 FFN 维度</label>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>优先级通常是：<strong>先看 K 是否转置</strong>，再看 <strong>softmax 的轴</strong>，再看 <strong>缩放</strong>，再看 <strong>mask 是否在 softmax 前</strong>。FFN 维度也值得检查，但如果问题发生在注意力行为本身，先把“读谁、按什么轴读、能不能读未来”这四件事查清，往往更接近根因。</p>
+              </details>
+            </div>
+            <div class="q full" data-question="q13" data-group="代码与诊断" data-title="13. 费曼解释">
+              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">费曼</span></div>
+              <h3>13. 用 6-8 句话解释：Transformer 如何让 token 读取上下文并更新表示；再说明如果 mask 放在 softmax 后，会发生什么。</h3>
+              <p class="solve-note">尽量把“对象、动作、顺序、后果”都写出来：X、Q/K/V、scores、缩放、mask、softmax、V、残差、LayerNorm、FFN。</p>
+              <textarea name="q13" placeholder="先串一遍流程，再写出一个最典型的失败后果。"></textarea>
+              <button class="reveal" type="button">展开反馈</button>
+              <details>
+                <summary>参考答案 / 评分要点</summary>
+                <p>高质量答案会先把流程串起来：输入 X 先生成 Q/K/V，Q 和 K 计算 scores，scores 先缩放再加 mask，然后沿 key 轴做 softmax 得到权重，最后用权重对 V 加权求和得到新的表示。之后这个表示再经过残差、LayerNorm 和 FFN 继续加工。关于失败后果，答案要指出：如果把 mask 放在 softmax 后，非法位置已经参与了归一化，读未来的约束不再是原来的语义，训练和生成的条件也会被悄悄改掉。</p>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head"><h2>生成练习记录</h2><span class="tag">export</span></div>
+        <p class="muted">完成练习后生成记录，适合回看订正。记录里会保留题目、分组、你的作答和上方关键的公式、表格与代码上下文。</p>
+        <div class="actions">
+          <button type="button" onclick="generateRecord()">生成练习记录</button>
+          <button type="button" class="ghost" onclick="copyRecord()">复制记录</button>
+        </div>
+        <div id="quality" class="quality"></div>
+        <div id="record" class="export">练习记录会显示在这里。</div>
+      </section>
+
+      <section id="sources">
+        <div class="head"><h2>来源与边界</h2><span class="tag">来源</span></div>
+        <div class="table-wrap">
+          <table data-export-context="本页来源摘要" data-export-lang="table">
+            <thead>
+              <tr>
+                <th>来源</th>
+                <th>支持内容</th>
+                <th>备注</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>课程总图</td>
+                <td>确认本单元位于输入边界之后、角色边界之前，是模型结构的第二个基础单元</td>
+                <td>帮助确定前后关系，不替代公开论文或讲义</td>
+              </tr>
+              <tr>
+                <td>旧版学习页</td>
+                <td>提供 attention 直觉、Q/K/V、块结构、mask、代码验收和误区诊断的主线</td>
+                <td>这次重构保留原有学习目标，但重写成共享 shell 和可复盘结构</td>
+              </tr>
+              <tr>
+                <td>课程共享运行时</td>
+                <td>提供进度条、导航、代码复制、公式渲染、形状 tracer、终端式失败演示和练习记录导出</td>
+                <td>用于统一页面交互，不改变教学内容本身</td>
+              </tr>
+              <tr>
+                <td>课程共享样式</td>
+                <td>提供同一套读写体验：左侧导航、纸面感背景、代码块、练习区和导出区</td>
+                <td>保证这一页和课程里的其他学习页读起来像同一个系统</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="inline-note"><b>这页先到这里</b>这里先把“Transformer 第一层怎么读”讲完。多头拆分、位置编码、训练目标、推理策略和长上下文优化，留到后面的单元或专门主题。</p>
+      </section>
+    </main>
+  </div>
+
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

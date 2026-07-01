@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>为什么大模型微调需要 PEFT｜学习页</title>
+  <link rel="stylesheet" href="../assets/lora-study-page.css">
+</head>
+<body data-course="为什么大模型微调需要 PEFT">
+<div class="progress"></div>
+<div class="layout">
+<aside>
+  <div class="brand"><strong>为什么大模型微调需要 PEFT</strong><span>从全量微调的代价读懂 LoRA 的问题意识</span></div>
+  <nav><a href="#goal"><span class="dot"></span>目标与地图</a>
+<a href="#problem"><span class="dot"></span>全量微调贵在哪里</a>
+<a href="#objective"><span class="dot"></span>论文里的问题定义</a>
+<a href="#baselines"><span class="dot"></span>已有方法解决了什么，又留下什么问题</a>
+<a href="#map"><span class="dot"></span>PEFT 方法的对照地图</a>
+<a href="#pitfalls"><span class="dot"></span>常见误区和修正</a>
+<a href="#examples"><span class="dot"></span>试一试：把问题说成工程判断</a>
+<a href="#practice"><span class="dot"></span>综合练习</a>
+<a href="#final"><span class="dot"></span>导出记录</a></nav>
+  <div class="side-note">先把问题讲清楚，再谈方法。LoRA 不是为了显得参数少，而是为了让大模型能服务多个下游任务。</div>
+</aside>
+<main>
+<header class="hero" id="goal">
+  <div>
+    <div class="kicker">第 1 块 · 论文动机</div>
+    <h1>为什么大模型微调需要 PEFT</h1>
+    <p>从全量微调的代价读懂 LoRA 的问题意识</p>
+  </div>
+  <div class="route">
+    <h3>学完你应该能做什么</h3>
+    <ol><li>解释全量微调在大模型时代的存储、显存和部署代价。</li><li>区分 full fine-tuning、BitFit、adapter、prefix tuning、LoRA。</li><li>判断一个 PEFT 方法到底解决了参数量、延迟、上下文长度还是任务切换问题。</li><li>用论文中的 GPT-3 175B 例子说明为什么任务参数不能按任务复制一整份模型。</li></ol>
+  </div>
+</header>
+<section id="problem"><div class="head"><h2>1. 全量微调贵在哪里</h2><span class="tag">problem</span></div>
+<p>直觉先说清楚：全量微调不是只在训练时贵，它还会把每个下游任务都变成一份新的大模型。模型越大，这件事越不像“多存几个文件”，更像给每个任务都准备一套完整机器。GPT-3 175B 这种规模下，复制一个任务 checkpoint 就已经是几百 GB 级别；如果一个服务要支持上百个任务，存储和切换都会变成实际系统问题。</p>
+<p>术语上，full fine-tuning 是从预训练参数 <code>Phi_0</code> 出发，更新所有参数，得到 <code>Phi_0 + Delta Phi</code>。它的好处是表达能力强，模型所有层都能为新任务调整。代价也来自这里：每个任务学到的 <code>Delta Phi</code> 和原模型一样大，训练时还要为绝大多数参数保存梯度和 Adam 优化器状态。</p>
+<p>论文的问题意识不是“全量微调不行”，而是“当一个大模型要服务很多下游任务时，全量微调难以部署”。这点很重要。LoRA 要保住全量微调的任务质量，同时把任务相关的可训练参数压到很小，并且不要像一些 adapter 那样增加推理延迟。</p>
+<p>判断句：如果一个方法让每个任务都要保存一整份 175B 参数，它就没有解决多任务部署的主要成本。你现在应该能把“训练成本”和“部署成本”分开说。</p>
+<div class="formula"><span class="big">full fine-tuning:</span> &nbsp; Phi = Phi<span class="sub">0</span> + Delta Phi, &nbsp; |Delta Phi| = |Phi<span class="sub">0</span>|</div><div class="viz-panel"><div class="viz-title"><span>数值对比</span><span class="tag">scale</span></div><div class="viz-cell"><div class="bar-row"><b>单个 GPT-3 任务全量权重</b><div class="bar"><span style="width:100%"></span></div><span>约 350GB FP16</span></div>
+<div class="bar-row"><b>100 个任务全量微调</b><div class="bar"><span style="width:100%"></span></div><span>约 35TB</span></div>
+<div class="bar-row"><b>共享底座 + 100 个 LoRA</b><div class="bar"><span style="width:2%"></span></div><span>约 354GB</span></div></div></div><p>上面的数字来自论文的工程估算：底座模型仍然需要存在，但每个任务不再复制整份模型，只增加很小的 LoRA 权重。你现在应该能解释为什么“每任务参数量”比“总模型参数量”更适合作为 PEFT 的核心指标。</p></section>
+<section id="objective"><div class="head"><h2>2. 论文里的问题定义</h2><span class="tag">objective</span></div>
+<p>论文把任务写成条件文本生成：给定输入 <code>x</code>，模型生成目标序列 <code>y</code>。训练目标是在下游数据集上最大化每个 token 的条件概率。这个公式看起来像语言模型常规训练，但这里的重点不是损失函数本身，而是参数从哪里来、更新到哪里去。</p>
+<p>全量微调直接优化 <code>Phi</code>。PEFT 改成优化一个更小的参数集合 <code>Theta</code>，再由 <code>Theta</code> 间接决定模型更新 <code>Delta Phi(Theta)</code>。换句话说，模型最终仍然要适配任务，但我们不允许每个任务自由改动所有权重，而是给它一个受控、低成本的更新通道。</p>
+<p>这个写法帮你看清各类方法的共同点：adapter 学的是额外模块参数，prefix 学的是特殊 token 或层激活，BitFit 学的是 bias，LoRA 学的是低秩矩阵。它们都把“更新整个模型”改写为“学习小型任务参数”。</p>
+<div class="formula"><span class="big">PEFT:</span> &nbsp; max<span class="sub">Theta</span> Σ log p<span class="sub">Phi0 + Delta Phi(Theta)</span>(y<span class="sub">t</span> | x, y<span class="sub">&lt;t</span>), &nbsp; |Theta| << |Phi<span class="sub">0</span>|</div>
+<p>判断句：只要能指出 <code>Theta</code> 是什么、它如何影响模型输出，你就能读懂一个 PEFT 方法的核心设计。你现在应该能从公式里分出“底座参数”和“任务参数”。</p>
+</section>
+<section id="baselines"><div class="head"><h2>3. 已有方法解决了什么，又留下什么问题</h2><span class="tag">baselines</span></div>
+<p>Adapter 的想法很直接：在模型内部插入小的瓶颈层，只训练这些新层。它确实减少了可训练参数，但新层通常沿着网络深度顺序执行。在线推理时，特别是 batch size 小、序列短的时候，这些额外顺序计算会带来明显延迟。论文在 GPT-2 medium 上测到，adapter 可能带来 20% 到 30% 以上的延迟增加。</p>
+<p>Prefix tuning 走另一条路：不改模型权重，训练一组连续提示向量。它的代价不是额外深度，而是占用可用序列长度，并且优化可能不稳定。特殊 token 多了以后，下游任务真正能使用的上下文变短，输入分布也可能偏离预训练时见过的形式。</p>
+<p>BitFit 只训练 bias，参数更少，但表达能力有限。Top-k fine-tuning 只训练最后几层，比全量微调省一些，但仍然不是极小任务模块。LoRA 的位置就在这里：它想像 adapter 一样参数少，但推理时能并回原权重；想像 prefix 一样不复制整模型，但不占上下文长度。</p>
+<div class="grid3"><div class="box warn"><h3>Adapter</h3><p>优点是模块小、直观；问题是插入顺序计算，可能增加推理延迟。</p></div>
+<div class="box warn"><h3>Prefix tuning</h3><p>优点是不直接改权重；问题是占用上下文长度，训练和参数规模不一定单调变好。</p></div>
+<div class="box ok"><h3>LoRA</h3><p>训练低秩更新，部署时可 merge 进原线性层，目标是参数少且零额外推理延迟。</p></div></div><p>判断句：参数少只是 PEFT 的一个维度；还要问是否增加推理延迟、是否占上下文长度、是否方便切换任务。你现在应该能用这四个维度比较方法。</p></section>
+<section id="map"><div class="head"><h2>4. PEFT 方法的对照地图</h2><span class="tag">map</span></div>
+<div class="map"><span class="node">全量微调</span><span class="node">只训少量参数</span><span class="node">保持质量</span><span class="node">控制延迟</span><span class="node">方便切换任务</span></div>
+<p>LoRA 的论文贡献要放在这个地图里读。它不是第一个参数高效方法，也不是唯一能微调大模型的方法。它的关键组合是：冻结预训练权重、用低秩矩阵表达权重更新、推理时把更新并回原权重、在多个模型和任务上达到接近或超过全量微调的效果。</p>
+<p>学习论文时最容易犯的错，是只记“LoRA 把参数量减少 10000 倍”。这句话本身没错，但它不是完整理解。你还要知道这个数来自 GPT-3 175B、Adam 优化器、只适配部分 attention 权重、每任务 checkpoint 等具体语境。没有语境的数量级会变成宣传口径。</p>
+
+<div class="viz-panel">
+  <div class="viz-title"><span>交互观察</span><span class="tag">interactive</span></div>
+  <div class="viz-grid">
+    <div class="viz-cell"><div class="viz-flow"><button class="viz-btn" data-title="全量微调" data-note="每个任务复制或保存一整份更新后的模型，质量强但部署重。" data-rows="训练参数=全部权重|推理延迟=无额外层|任务切换=重|主要成本=存储/显存/优化器状态">全量微调</button>
+<button class="viz-btn" data-title="Adapter" data-note="只训练小模块，但模块顺序插入网络，在线短序列推理可能变慢。" data-rows="训练参数=adapter 层|推理延迟=可能增加|任务切换=换模块|主要成本=额外深度">Adapter</button>
+<button class="viz-btn" data-title="Prefix tuning" data-note="训练特殊提示向量，不复制模型，但会占用可用序列长度。" data-rows="训练参数=prefix token/层激活|推理延迟=不一定大|任务切换=换 prefix|主要成本=上下文长度/优化稳定性">Prefix</button>
+<button class="viz-btn" data-title="LoRA" data-note="训练低秩矩阵，部署时可以 merge 成普通线性层。" data-rows="训练参数=A 和 B|推理延迟=merge 后无额外延迟|任务切换=换 LoRA 权重|主要成本=不能轻易混批不同任务">LoRA</button></div></div>
+    <div class="viz-cell">
+      <div class="viz-output"><b class="viz-state-title">选择一个场景</b><span class="viz-note-text">这里会显示判断结果。</span></div>
+      <table class="metric-table"><thead><tr><th>项目</th><th>观察</th></tr></thead><tbody class="metric-body"></tbody></table>
+      <div class="viz-note">判断提示：读 PEFT 方法时，不要只看参数量。把训练参数、推理延迟、上下文长度、任务切换放到同一张表里。</div>
+    </div>
+  </div>
+</div>
+</section>
+<section id="pitfalls"><div class="head"><h2>5. 常见误区和修正</h2><span class="tag">pitfalls</span></div><div class="grid3"><div class="box bad"><h3>误区：PEFT 一定比全量微调弱</h3><p>参数少不等于表达力完全不足。论文实验显示 LoRA 在多组任务上可达到或超过全量微调，但这不是所有任务的保证。</p></div>
+<div class="box bad"><h3>误区：adapter 参数少所以零延迟</h3><p>adapter 的小矩阵仍然在网络里顺序执行。延迟取决于硬件、batch size、序列长度和实现。</p></div>
+<div class="box bad"><h3>误区：prefix 不改权重就没有代价</h3><p>prefix 会占用位置和序列长度，特殊 token 太多还可能让输入分布变怪。</p></div>
+<div class="box bad"><h3>误区：LoRA 不需要底座模型</h3><p>LoRA 只保存任务更新。推理时仍然需要完整预训练模型。</p></div>
+<div class="box warn"><h3>误区：10000 倍是所有场景通用数字</h3><p>这是论文在特定 GPT-3 配置下的数量级。换模型、rank、target modules 后要重新算。</p></div>
+<div class="box warn"><h3>误区：只看平均指标就够了</h3><p>PEFT 还要看训练吞吐、显存、部署延迟、任务切换和可维护性。</p></div></div></section>
+<section id="examples"><div class="head"><h2>6. 试一试：把问题说成工程判断</h2><span class="tag">examples</span></div>
+<div class="grid3">
+  <div class="example-card"><h3>例题 1</h3><p>一个 7B 模型要为 30 个客户做定制分类器。全量微调的主要部署问题是什么？</p><p class="hint">参考思路：每个客户一份大 checkpoint，存储和加载切换成本高，训练时优化器状态也重。</p></div>
+  <div class="example-card"><h3>例题 2</h3><p>adapter 和 LoRA 都有小矩阵，为什么推理延迟不同？</p><p class="hint">adapter 是顺序新层；LoRA 的线性更新可提前并回原权重。</p></div>
+  <div class="example-card"><h3>例题 3</h3><p>prefix tuning 为什么可能影响长上下文任务？</p><p class="hint">特殊 token 占用序列位置，任务 token 可用长度减少。</p></div>
+</div>
+</section>
+
+
+<section id="practice">
+  <div class="head"><h2>综合练习</h2><span class="tag">mixed drills</span></div>
+  <div class="practice-intro">
+    <div class="review-card"><strong>作答方式</strong><p>前面的例题用于即时检查；这里的综合练习会整理成记录。短答题尽量写出判断依据，不只写一个结论。</p></div>
+    <div class="review-card"><strong>自查重点</strong><ul><li>诊断题是否写了错因、后果、修法。</li><li>概念题是否区分相邻概念。</li><li>费曼题是否串起本块主线。</li></ul></div>
+  </div>
+  <div class="practice-check">
+    <div class="check-item"><b>概念</b>能说清术语含义。</div>
+    <div class="check-item"><b>公式</b>能解释符号和形状。</div>
+    <div class="check-item"><b>诊断</b>能指出错误后果。</div>
+    <div class="check-item"><b>表达</b>能用自己的话复述。</div>
+  </div>
+
+  <div class="practice-group">
+    <div class="group-head"><div><h3>一、基础概念</h3><p>先检查你是否能把论文动机说清楚。</p></div><div class="quick-review"><b>检查点</b><span>问自己：这个方法到底训练什么，部署时付出什么？</span></div></div>
+    <div class="drill-grid">
+<div class="q" data-role="homework" data-type="choice" data-title="PEFT 目的"><div class="q-meta"><span class="pill">单选</span><span class="pill">一、基础概念</span></div><h3>1. LoRA 论文中 PEFT 最直接要缓解的问题是哪一个？</h3><label><input type="radio" name="q1" value="每个下游任务复制和训练整套大模型太贵"> 每个下游任务复制和训练整套大模型太贵</label><label><input type="radio" name="q1" value="让模型完全不需要下游数据"> 让模型完全不需要下游数据</label><label><input type="radio" name="q1" value="让所有推理都不用底座模型"> 让所有推理都不用底座模型</label></div>
+<div class="q" data-role="homework" data-type="choice" data-title="全量微调"><div class="q-meta"><span class="pill">判断</span><span class="pill">一、基础概念</span></div><h3>2. 全量微调的任务参数增量 Delta Phi 通常和原模型参数规模相同。</h3><label><input type="radio" name="q2" value="正确"> 正确</label><label><input type="radio" name="q2" value="错误"> 错误</label></div>
+<div class="q" data-role="homework" data-type="choice" data-title="LoRA 是否需要底座"><div class="q-meta"><span class="pill">判断</span><span class="pill">一、基础概念</span></div><h3>3. 只保存 LoRA 权重就可以脱离预训练底座模型单独推理。</h3><label><input type="radio" name="q3" value="正确"> 正确</label><label><input type="radio" name="q3" value="错误"> 错误</label></div>
+<div class="q" data-role="homework" data-type="fill" data-title="Theta"><div class="q-meta"><span class="pill">填空</span><span class="pill">一、基础概念</span></div><h3>4. PEFT 公式里，小型可训练任务参数通常记作 ____。</h3><input type="text"></div>
+<div class="q" data-role="homework" data-type="fill" data-title="任务参数"><div class="q-meta"><span class="pill">填空</span><span class="pill">一、基础概念</span></div><h3>5. 全量微调中，每个任务学到的参数增量通常记作 ____。</h3><input type="text"></div>
+<div class="q" data-role="homework" data-type="short" data-title="部署代价"><div class="q-meta"><span class="pill">短答</span><span class="pill">一、基础概念</span></div><h3>6. 为什么“训练完以后保存一个新模型”在 GPT-3 175B 级别会变成部署问题？</h3><p class="hint">从每任务 checkpoint、存储、加载切换和多任务服务说。</p><textarea placeholder=""></textarea></div>
+    </div>
+  </div>
+
+  <div class="practice-group">
+    <div class="group-head"><div><h3>二、方法对照</h3><p>这一组检查你是否能把相邻方法分开。</p></div><div class="quick-review"><b>检查点</b><span>比较时至少说训练对象和推理影响。</span></div></div>
+    <div class="drill-grid">
+<div class="q" data-role="homework" data-type="short" data-title="方法匹配"><div class="q-meta"><span class="pill">匹配</span><span class="pill">二、方法对照</span></div><h3>7. 把 full fine-tuning、adapter、prefix tuning、LoRA 分别匹配到它们训练的对象。</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="adapter 延迟"><div class="q-meta"><span class="pill">短答</span><span class="pill">二、方法对照</span></div><h3>8. 为什么 adapter 参数很少，仍然可能增加在线推理延迟？</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="prefix 代价"><div class="q-meta"><span class="pill">短答</span><span class="pill">二、方法对照</span></div><h3>9. prefix tuning 可能牺牲什么资源？为什么？</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="choice" data-title="BitFit"><div class="q-meta"><span class="pill">单选</span><span class="pill">二、方法对照</span></div><h3>10. BitFit 主要训练什么？</h3><label><input type="radio" name="q10" value="bias 参数"> bias 参数</label><label><input type="radio" name="q10" value="全部 attention 权重"> 全部 attention 权重</label><label><input type="radio" name="q10" value="额外 prefix token 的文本内容"> 额外 prefix token 的文本内容</label></div>
+<div class="q" data-role="homework" data-type="multi" data-title="多选比较维度"><div class="q-meta"><span class="pill">多选</span><span class="pill">二、方法对照</span></div><h3>11. 评估 PEFT 方法时应该看哪些维度？</h3><label><input type="checkbox" name="q11" value="可训练参数量"> 可训练参数量</label><label><input type="checkbox" name="q11" value="推理延迟"> 推理延迟</label><label><input type="checkbox" name="q11" value="是否占用上下文长度"> 是否占用上下文长度</label><label><input type="checkbox" name="q11" value="任务切换成本"> 任务切换成本</label></div>
+<div class="q" data-role="homework" data-type="short" data-title="序列长度"><div class="q-meta"><span class="pill">短答</span><span class="pill">二、方法对照</span></div><h3>12. 为什么“占用上下文长度”在长文档、摘要或代码任务里会变成真实成本？</h3><textarea placeholder=""></textarea></div>
+    </div>
+  </div>
+
+  <div class="practice-group">
+    <div class="group-head"><div><h3>三、错误诊断与表达</h3><p>这一组要求你把概念放回真实判断。</p></div><div class="quick-review"><b>检查点</b><span>诊断题按错因、后果、修法写。</span></div></div>
+    <div class="drill-grid">
+<div class="q" data-role="homework" data-type="diagnostic" data-title="错误诊断：只看参数量"><div class="q-meta"><span class="pill">诊断</span><span class="pill">三、错误诊断与表达</span></div><h3>13. 诊断：“adapter 参数不到 1%，所以它一定不会影响推理速度。”按错因、后果、修法回答。</h3><textarea placeholder="错因：
+后果：
+修法："></textarea></div>
+<div class="q" data-role="homework" data-type="diagnostic" data-title="错误诊断：LoRA 不要底座"><div class="q-meta"><span class="pill">诊断</span><span class="pill">三、错误诊断与表达</span></div><h3>14. 诊断：“我训练了 LoRA，所以部署时只上传 35MB LoRA 权重就够了。”按错因、后果、修法回答。</h3><textarea placeholder="错因：
+后果：
+修法："></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="场景应用"><div class="q-meta"><span class="pill">场景</span><span class="pill">三、错误诊断与表达</span></div><h3>15. 你要给一个共享大模型接 50 个客户任务，会优先关注 PEFT 的哪 4 个工程指标？</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="面试追问"><div class="q-meta"><span class="pill">面试追问</span><span class="pill">三、错误诊断与表达</span></div><h3>16. 用 1-3 句话解释 LoRA 相对 adapter 的推理延迟优势。</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="面试追问：质量和效率"><div class="q-meta"><span class="pill">面试追问</span><span class="pill">三、错误诊断与表达</span></div><h3>17. 为什么论文不能只证明 LoRA 参数少，还必须证明它在任务指标上接近或超过全量微调？</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="场景：低数据任务"><div class="q-meta"><span class="pill">场景</span><span class="pill">三、错误诊断与表达</span></div><h3>18. 如果下游任务只有几百条样本，你会如何看待全量微调和 PEFT 的风险？</h3><textarea placeholder=""></textarea></div>
+<div class="q" data-role="homework" data-type="short" data-title="论文主张边界"><div class="q-meta"><span class="pill">短答</span><span class="pill">三、错误诊断与表达</span></div><h3>19. “LoRA 没有额外推理延迟”这句话默认依赖什么部署动作？</h3><textarea placeholder=""></textarea></div>
+<div class="q full" data-role="homework" data-type="feynman" data-title="费曼解释" data-keys="全量微调,任务参数,adapter,prefix,LoRA,推理延迟"><div class="q-meta"><span class="pill">费曼解释</span><span class="pill">三、错误诊断与表达</span></div><h3>20. 用 6-9 句话向刚学大模型的人解释：为什么 LoRA 论文要从 PEFT 问题讲起。</h3><p class="hint">请串联：全量微调、任务参数、adapter、prefix、LoRA、推理延迟。</p><textarea placeholder=""></textarea></div>
+    </div>
+  </div>
+
+</section>
+<section id="final">
+  <div class="head"><h2>导出练习记录</h2><span class="tag">record</span></div>
+  <p class="muted">完成综合练习后生成一份记录，便于回看哪些判断还不稳。</p>
+  <div class="actions"><button onclick="generateAnswer()">生成记录</button><button class="ghost" onclick="copyAnswer()">复制记录</button></div>
+  <div id="quality" class="quality"></div>
+  <div id="answer" class="answer">尚未生成。</div>
+</section>
+
+</main>
+</div>
+<script src="../assets/lora-study-page.js"></script>
+</body>
+</html>

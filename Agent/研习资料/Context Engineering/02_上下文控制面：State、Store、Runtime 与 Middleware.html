@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>02_上下文控制面：State、Store、Runtime 与 Middleware</title>
+  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <style>
+    .concept-flow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--report-line);border:1px solid var(--report-line);margin:14px 0}
+    .concept-flow .step{background:#fff;padding:14px;min-height:132px}
+    .concept-flow .step b{display:block;font-family:var(--mono);font-size:12px;letter-spacing:.08em;color:var(--rail);margin-bottom:7px}
+    .matrix{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--report-line);border:1px solid var(--report-line);margin:14px 0}
+    .matrix .cell{background:#fff;padding:15px;min-height:160px}
+    .matrix .cell h3{font-family:var(--serif);font-size:20px;margin-bottom:8px}
+    .axis-card{display:grid;grid-template-columns:180px minmax(0,1fr);gap:1px;background:var(--report-line);border:1px solid var(--report-line);margin:12px 0}
+    .axis-card div{background:#fff;padding:13px}
+    .axis-card b{font-family:var(--mono);font-size:12px;color:var(--rail)}
+    .mini-list{display:grid;gap:8px;margin:10px 0}
+    .mini-list div{border-left:4px solid var(--cyan);background:#f8fafc;padding:9px 11px}
+    .kbd{font-family:var(--mono);background:#eef5fb;border:1px solid #cfe3f5;color:var(--rail);padding:1px 5px}
+    .case-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--report-line);border:1px solid var(--report-line);margin:14px 0}
+    .case-grid .case{background:#fff;padding:15px;min-height:180px}
+    .case-grid h3{font-family:var(--serif);font-size:20px}
+    .bad-code .codebar{border-left:5px solid #e53935}
+    .good-code .codebar{border-left:5px solid var(--cyan)}
+    .budget-bars{display:grid;gap:10px}
+    .budget-row{display:grid;grid-template-columns:120px minmax(0,1fr) 58px;gap:10px;align-items:center}
+    .budget-track{height:18px;background:#e9edf3;overflow:hidden}
+    .budget-fill{height:100%;background:linear-gradient(90deg,var(--rail),var(--cyan));transition:width .2s}
+    .budget-fill.warn{background:linear-gradient(90deg,#f59e0b,#e53935)}
+    @media(max-width:940px){
+      .concept-flow,.case-grid{grid-template-columns:minmax(0,1fr)}
+      .matrix{grid-template-columns:minmax(0,1fr)}
+      .axis-card{grid-template-columns:minmax(0,1fr)}
+    }
+  
+
+</style>
+
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="layout">
+  
+  <aside>
+    <div class="brand"><strong>Context Engineering</strong><span>上下文工程学习资料</span></div>
+    <nav>
+      <a href="index.html"><span class="dot"></span>课程地图</a>
+      <a href="#goal"><span class="dot"></span>目标与主线</a>
+      <a href="#loop"><span class="dot"></span>Agent loop</a><a href="#transient"><span class="dot"></span>临时与持久</a><a href="#sources"><span class="dot"></span>三类来源</a><a href="#placement"><span class="dot"></span>位置判断</a><a href="#model-context"><span class="dot"></span>模型上下文</a><a href="#tool-context"><span class="dot"></span>工具上下文</a><a href="#lifecycle"><span class="dot"></span>生命周期</a><a href="#design"><span class="dot"></span>策略表</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>导出记录</a>
+    </nav>
+    <div class="side-note">先读讲义，再做练习。每页都可以单独打开，不依赖联网资源。</div>
+  </aside>
+
+  <main>
+    
+    <div class="hero" id="goal">
+      <div>
+        <div class="kicker">Context Engineering Course</div>
+        <h1>02_上下文控制面：State、Store、Runtime 与 Middleware</h1>
+        <p>本页把上下文工程落到 Agent loop：哪些信息临时注入，哪些持久保存，工具和生命周期如何读写上下文。</p>
+        <div class="concept-flow">
+          <div class="step"><b>01</b>定位 Agent loop 的控制点</div><div class="step"><b>02</b>区分 transient / persistent</div><div class="step"><b>03</b>理解 State / Store / Runtime</div><div class="step"><b>04</b>用 middleware 维护轨迹</div>
+        </div>
+      </div>
+      <div class="route">
+        <h3>本页学完要能做什么</h3>
+        <ol><li>给信息选择合适保存位置</li><li>读懂 LangChain context 示例</li><li>设计动态工具和提示控制</li><li>写出上下文策略表</li></ol>
+        <div class="mini-list"><div><b>自学闭环：</b>先给信息找位置，再判断谁能读写，最后把规则写进策略表。</div><div><b>判断标准：</b>能解释同一条信息为什么可能进 State、Store 或 Runtime，而不是背术语。</div></div>
+      </div>
+    </div>
+
+    
+    <section id="loop">
+      <div class="head"><h2>Agent loop：控制点藏在每一步</h2><span class="tag">LangChain</span></div>
+      <p>LangChain 文档把 Agent loop 拆成两个核心动作：模型调用和工具执行。模型调用会读入提示、消息、工具、模型配置和输出格式；工具执行会读取状态、长期存储或运行时配置，并把结果写回某个位置。上下文工程不是只发生在调用模型前，而是贯穿整个生命周期。</p><p>你现在应该能做一个基本判断：如果错误发生在模型选择工具之前，可能是 model context 没给对；如果错误发生在工具执行期间，可能是 tool context 没给对；如果错误发生在多轮之后，可能是 life-cycle context 没维护好。</p><div class="concept-flow"><div class="step"><b>Model call</b>动态提示、消息、工具、模型和输出格式。</div><div class="step"><b>Tool execution</b>工具读取 state、store、runtime context。</div><div class="step"><b>State update</b>保存消息、认证状态、摘要或任务进展。</div><div class="step"><b>Next turn</b>下一轮只选择需要的内容给模型。</div></div>
+    </section>
+
+    <section id="transient">
+      <div class="head"><h2>Transient 与 Persistent：临时注入不等于保存</h2><span class="tag">核心区分</span></div>
+      <p>Transient context 是当前这一次模型调用看到的内容。比如你根据消息数量临时让模型更简洁，或者根据当前任务临时隐藏某些工具，这些变化可以不写入状态。Persistent context 是跨步骤保存的内容，比如消息历史、摘要、用户偏好、认证状态、任务计划。</p><p>这个区分很重要。很多 Agent 失败不是因为没有上下文，而是把临时上下文误当长期事实保存了，或者把长期记忆每轮都完整塞进窗口。你现在应该能判断：一条信息是只影响当前调用，还是要成为后续任务的状态。</p><div class="table-wrap"><table class="metric-table"><thead><tr><th>类型</th><th>保存位置</th><th>适合内容</th><th>错法</th></tr></thead><tbody><tr><td>Transient</td><td>当前请求构造</td><td>临时语气、当前文件摘要、动态工具列表</td><td>误以为下一轮还会自动存在</td></tr><tr><td>Persistent</td><td>state / store / 文件 / 数据库</td><td>任务计划、用户偏好、项目规则、摘要</td><td>把过时内容永久保留</td></tr></tbody></table></div>
+    </section>
+
+    <section id="sources">
+      <div class="head"><h2>State、Store、Runtime Context</h2><span class="tag">三类来源</span></div>
+      <p>State 是当前会话或当前任务内的短期状态。它可以保存消息、上传文件元数据、认证结果、当前计划和工具执行后的中间结果。Store 是跨会话长期存储，适合用户偏好、项目规则、历史经验和长期记忆。Runtime context 是调用时带入的配置，比如 user_id、权限、环境、地区、成本等级。</p><p>三个词看起来像框架名，其实是工程边界。State 更像“这次任务进行到哪”；Store 更像“这个用户或项目长期知道什么”；Runtime context 更像“这次运行的外部条件是什么”。你现在应该能把一条信息放到合适的位置，而不是全部塞进 message history。</p><div class="axis-card"><div><b>State</b></div><div>短期、任务内、会变化。例：当前 TODO、已读文件、认证状态。</div><div><b>Store</b></div><div>长期、跨会话、可检索。例：用户偏好、项目规则、历史案例。</div><div><b>Runtime</b></div><div>调用配置、权限和环境。例：user_id、role、region、API key 引用。</div></div>
+    </section>
+
+    <section id="placement">
+      <div class="head"><h2>位置判断：同一条信息要看生命周期</h2><span class="tag">Worked Example</span></div>
+      <p>不要把 State、Store、Runtime 当成固定词表。真正的判断依据是生命周期、权限和可见性。同样是“用户所在地区”，如果它只是本次请求的环境配置，适合放 Runtime；如果用户长期偏好某个地区的内容，适合放 Store；如果当前任务里用户临时要求“这次按新加坡法规写”，适合放 State 或当前消息，不该永久覆盖长期偏好。</p><div class="table-wrap"><table class="metric-table"><thead><tr><th>信息</th><th>更适合的位置</th><th>原因</th><th>常见误区</th></tr></thead><tbody><tr><td>本次请求的 user_id</td><td>Runtime</td><td>工具需要身份，但模型不需要完整展开</td><td>把系统 ID 直接写入模型消息</td></tr><tr><td>当前任务 TODO</td><td>State</td><td>任务结束后通常清理或转存</td><td>写进长期记忆，污染后续任务</td></tr><tr><td>“默认回答要短”</td><td>Store</td><td>跨会话偏好，可按任务召回</td><td>每轮完整展开，挤占窗口</td></tr><tr><td>支付 API key</td><td>Runtime 安全引用</td><td>工具执行需要，模型不应看到密钥</td><td>把密钥塞进 system prompt</td></tr><tr><td>刚上传文件的摘要</td><td>State</td><td>当前任务内反复使用，过期后可清理</td><td>直接保存为永久用户知识</td></tr></tbody></table></div><p>你现在应该能动手画一张信息清单：每条信息写明生命周期、谁能读取、何时进入窗口、何时过期。</p>
+    </section>
+
+    <section id="model-context">
+      <div class="head"><h2>Model context：提示、消息、工具、模型、格式</h2><span class="tag">控制面</span></div>
+      <p>LangChain 把 model context 拆成五类：system prompt、messages、tools、model、response format。它们都可以动态变化。比如长对话时系统提示提醒模型简洁；用户未登录时隐藏支付工具；低成本环境选择更便宜模型；管理员和普通用户使用不同输出字段。</p><p>这不是为了复杂而复杂。真实应用里的上下文应该跟用户、任务阶段、权限和成本相关。你现在应该能读懂一个 middleware 的意图：它不是“写 prompt 的花活”，而是在模型调用前改造本轮可见信息。</p><div class="good-code"><div class="codebar"><span class="label">示例：根据消息数量改变系统提示</span><span class="kind">text</span></div><pre><code>@dynamic_prompt
+def state_aware_prompt(request):
+    message_count = len(request.messages)
+    base = &quot;You are a helpful assistant.&quot;
+    if message_count &gt; 10:
+        base += &quot;\nThis is a long conversation. Be concise and use the latest goal.&quot;
+    return base</code></pre></div><div class="table-wrap"><table class="metric-table"><thead><tr><th>控制项</th><th>能动态调整什么</th><th>常见用途</th></tr></thead><tbody><tr><td>System prompt</td><td>行为规则、语气、阶段说明</td><td>长对话简洁、项目规范、角色差异</td></tr><tr><td>Messages</td><td>历史消息、文件摘要、检索片段</td><td>只注入当前任务相关材料</td></tr><tr><td>Tools</td><td>可用工具集合</td><td>按权限、状态或任务过滤工具</td></tr><tr><td>Model</td><td>模型和参数</td><td>按成本、难度、窗口大小切换</td></tr><tr><td>Response format</td><td>schema 或结构</td><td>按用户角色输出不同字段</td></tr></tbody></table></div>
+    </section>
+
+    <section id="tool-context">
+      <div class="head"><h2>Tool context：工具也读写上下文</h2><span class="tag">工具语义</span></div>
+      <p>工具不是只接收模型给的参数。真实工具经常需要读数据库连接、API key、用户 ID、权限、当前认证状态或历史偏好。LangChain 文档强调工具可以从 state、store、runtime context 读取，也可以写回 state 或 store。</p><p>这能减少模型窗口压力。比如支付工具不需要让模型看到完整 API key，只需要从 runtime context 里读取安全引用；偏好保存工具不需要把所有偏好写进消息，只要写入 store。你现在应该能说清：工具上下文既保护敏感信息，也让模型少看无关细节。</p><div class="good-code"><div class="codebar"><span class="label">示例：工具读取 runtime context，而不是把密钥暴露给模型</span><span class="kind">text</span></div><pre><code>@tool
+def fetch_order(order_id: str, runtime: ToolRuntime[Context]):
+    user_id = runtime.context.user_id
+    api_key = runtime.context.api_key
+    return query_order_api(user_id=user_id, order_id=order_id, api_key=api_key)</code></pre></div><div class="bad-code"><div class="codebar"><span class="label">错误示例：把敏感配置直接塞进模型消息</span><span class="kind">text</span></div><pre><code>System: 当前用户 API_KEY=sk_live_...
+User: 查询订单 10086
+Assistant: 调用 fetch_order</code></pre></div>
+      <div class="mini-list"><div><b>易混点：</b>模型参数不是工具权限。模型可以提出调用意图，工具仍然要用 runtime context 做鉴权。</div><div><b>易混点：</b>工具返回值不是天然要进消息历史。长结果可以先写 State 或文件，只把摘要和引用交给模型。</div><div><b>易混点：</b>Store 写入要有触发条件。用户一句临时要求不等于长期偏好。</div></div>
+    </section>
+
+    <section id="lifecycle">
+      <div class="head"><h2>Life-cycle context：在步骤之间维护轨迹</h2><span class="tag">Middleware</span></div>
+      <p>生命周期上下文控制的是模型调用和工具执行之间发生什么。最典型的例子是总结：当消息超过阈值时，系统用另一个模型把旧消息压缩成摘要，永久替换 state 里的旧消息，同时保留最近消息。这个动作不只是临时裁剪，而是改变了后续所有回合看到的历史。</p><p>生命周期控制还可以做日志、护栏、跳过工具执行、重复模型调用、清理工具结果。你现在应该能理解 middleware 的价值：它让上下文工程变成可插拔的生命周期逻辑，而不是散落在 prompt 里的口头提醒。</p><div class="good-code"><div class="codebar"><span class="label">示例：超过 token 阈值后压缩旧消息</span><span class="kind">text</span></div><pre><code>agent = create_agent(
+    model=&quot;gpt-5.4&quot;,
+    tools=[...],
+    middleware=[
+        SummarizationMiddleware(
+            model=&quot;gpt-5.4-mini&quot;,
+            trigger={&quot;tokens&quot;: 4000},
+            keep={&quot;messages&quot;: 20},
+        )
+    ],
+)</code></pre></div>
+    </section>
+
+    <section id="design">
+      <div class="head"><h2>一张上下文策略表</h2><span class="tag">落地</span></div>
+      <p>设计 Agent 时，不要只写“需要记忆”和“需要 RAG”。更好的做法是列出每种信息的来源、进入窗口的条件、保存位置、过期规则和验证方式。这样才能避免两个常见错误：该保存的没保存，该临时注入的永久污染。</p><p>你现在应该能为一个业务 Agent 画出最小上下文策略表。表不需要复杂，但必须回答：谁读、谁写、何时进窗口、何时移除。</p><div class="table-wrap"><table class="metric-table"><thead><tr><th>信息</th><th>来源</th><th>进入窗口条件</th><th>保存/过期</th></tr></thead><tbody><tr><td>用户写作偏好</td><td>Store</td><td>生成邮件或报告时</td><td>用户更新后覆盖旧值</td></tr><tr><td>上传文件列表</td><td>State</td><td>用户问题引用文件时</td><td>任务结束后清理</td></tr><tr><td>支付工具</td><td>Runtime 权限</td><td>用户已认证且有权限</td><td>不写入模型消息</td></tr><tr><td>旧对话摘要</td><td>Life-cycle middleware</td><td>历史过长时</td><td>保留摘要和最近消息</td></tr></tbody></table></div>
+    </section>
+
+    
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">18-22 题</span></div>
+      
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、控制面基础</h3><p>检查你是否能拆开 Agent loop 和上下文入口。</p></div>
+          <div class="quick-review"><b>作答提示</b>先定位错误发生在模型调用、工具执行还是步骤之间。</div>
+        </div>
+        <div class="drill-grid">
+          <div class="q short" data-title="Agent loop 通常包含哪两个核心步骤？">
+            <div class="q-meta"><span class="pill">填空</span></div>
+            <h3>Agent loop 通常包含哪两个核心步骤？</h3>
+            
+            <textarea name="q1"></textarea>
+          </div>
+
+          <div class="q short" data-title="Transient context 和 persistent context 的区别是什么？">
+            <div class="q-meta"><span class="pill">简答</span></div>
+            <h3>Transient context 和 persistent context 的区别是什么？</h3>
+            
+            <textarea name="q2"></textarea>
+          </div>
+
+          <div class="q short" data-title="一条当前任务 TODO 更适合放 State 还是 Store？为什么？">
+            <div class="q-meta"><span class="pill">判断</span></div>
+            <h3>一条当前任务 TODO 更适合放 State 还是 Store？为什么？</h3>
+            
+            <textarea name="q3"></textarea>
+          </div>
+
+          <div class="q short" data-title="用户长期偏好更适合放哪里？">
+            <div class="q-meta"><span class="pill">选择</span></div>
+            <h3>用户长期偏好更适合放哪里？</h3>
+            
+            <div class="choices"><label><input type="radio" name="q4" value="State">State</label><label><input type="radio" name="q4" value="Store">Store</label><label><input type="radio" name="q4" value="一次性消息">一次性消息</label></div>
+          </div>
+</div>
+      </div>
+
+
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、State / Store / Runtime</h3><p>这一组训练你给信息找位置。</p></div>
+          <div class="quick-review"><b>作答提示</b>State 看任务内变化，Store 看长期记忆，Runtime 看外部配置和权限。</div>
+        </div>
+        <div class="drill-grid">
+          <div class="q short" data-title="user_id、region、权限等级属于哪类上下文？">
+            <div class="q-meta"><span class="pill">分类</span></div>
+            <h3>user_id、region、权限等级属于哪类上下文？</h3>
+            
+            <input type="text" name="q5">
+          </div>
+
+          <div class="q short" data-title="为什么 API key 不应该直接放进模型消息？">
+            <div class="q-meta"><span class="pill">安全</span></div>
+            <h3>为什么 API key 不应该直接放进模型消息？</h3>
+            
+            <textarea name="q6"></textarea>
+          </div>
+
+          <div class="q short" data-title="上传文件元数据在当前任务内反复用，适合放哪里？">
+            <div class="q-meta"><span class="pill">分类</span></div>
+            <h3>上传文件元数据在当前任务内反复用，适合放哪里？</h3>
+            
+            <textarea name="q7"></textarea>
+          </div>
+
+          <div class="q short" data-title="错误诊断：把用户某次临时要求永久写进长期记忆，会带来什么问题？">
+            <div class="q-meta"><span class="pill">错误诊断</span></div>
+            <h3>错误诊断：把用户某次临时要求永久写进长期记忆，会带来什么问题？</h3>
+            
+            <textarea name="q8"></textarea>
+          </div>
+</div>
+      </div>
+
+
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、Middleware 与生命周期</h3><p>检查你能不能分清临时裁剪和持久总结。</p></div>
+          <div class="quick-review"><b>作答提示</b>如果改动会影响未来回合，它就是 persistent 维护。</div>
+        </div>
+        <div class="drill-grid">
+          <div class="q short" data-title="SummarizationMiddleware 和简单删除旧消息的差别是什么？">
+            <div class="q-meta"><span class="pill">比较</span></div>
+            <h3>SummarizationMiddleware 和简单删除旧消息的差别是什么？</h3>
+            
+            <textarea name="q9"></textarea>
+          </div>
+
+          <div class="q short" data-title="什么时候应该保留最近消息，而不是只保留摘要？">
+            <div class="q-meta"><span class="pill">边界</span></div>
+            <h3>什么时候应该保留最近消息，而不是只保留摘要？</h3>
+            
+            <textarea name="q10"></textarea>
+          </div>
+
+          <div class="q short" data-title="工具结果很长但后续只需要结论，你会在哪个生命周期点处理？">
+            <div class="q-meta"><span class="pill">场景</span></div>
+            <h3>工具结果很长但后续只需要结论，你会在哪个生命周期点处理？</h3>
+            
+            <textarea name="q11"></textarea>
+          </div>
+
+          <div class="q short" data-title="列出 4 个 model context 控制项。">
+            <div class="q-meta"><span class="pill">列举</span></div>
+            <h3>列出 4 个 model context 控制项。</h3>
+            
+            <textarea name="q12"></textarea>
+          </div>
+</div>
+      </div>
+
+
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、工程设计</h3><p>把控制面组合成一个 Agent 设计。</p></div>
+          <div class="quick-review"><b>作答提示</b>答案要出现来源、进入窗口条件、保存位置、过期规则。</div>
+        </div>
+        <div class="drill-grid">
+          <div class="q full short" data-title="为客服 Agent 设计 4 类上下文，并说明分别来自哪里。">
+            <div class="q-meta"><span class="pill">设计</span></div>
+            <h3>为客服 Agent 设计 4 类上下文，并说明分别来自哪里。</h3>
+            
+            <textarea name="q13"></textarea>
+          </div>
+
+          <div class="q full short" data-title="错误说法：工具只需要模型传参，不需要上下文。错在哪里？">
+            <div class="q-meta"><span class="pill">诊断</span></div>
+            <h3>错误说法：工具只需要模型传参，不需要上下文。错在哪里？</h3>
+            
+            <textarea name="q14"></textarea>
+          </div>
+
+          <div class="q short" data-title="面试短答：LangChain middleware 在上下文工程里解决什么问题？">
+            <div class="q-meta"><span class="pill">面试</span></div>
+            <h3>面试短答：LangChain middleware 在上下文工程里解决什么问题？</h3>
+            
+            <textarea name="q15"></textarea>
+          </div>
+
+          <div class="q full short" data-title="为“用户未登录时不能调用支付工具”设计一个上下文控制方案。">
+            <div class="q-meta"><span class="pill">应用</span></div>
+            <h3>为“用户未登录时不能调用支付工具”设计一个上下文控制方案。</h3>
+            
+            <textarea name="q16"></textarea>
+          </div>
+
+          <div class="q short" data-title="选择题：下面哪项属于 life-cycle context？">
+            <div class="q-meta"><span class="pill">选择</span></div>
+            <h3>选择题：下面哪项属于 life-cycle context？</h3>
+            
+            <div class="choices"><label><input type="radio" name="q17" value="根据 token 阈值把旧消息总结进 state">根据 token 阈值把旧消息总结进 state</label><label><input type="radio" name="q17" value="把回答改得更礼貌">把回答改得更礼貌</label><label><input type="radio" name="q17" value="把标题改短">把标题改短</label></div>
+          </div>
+
+          <div class="q full" data-title="用 6-9 句话解释：State、Store、Runtime Context 如何一起支撑一个可靠 Agent。">
+            <div class="q-meta"><span class="pill">费曼解释</span></div>
+            <h3>用 6-9 句话解释：State、Store、Runtime Context 如何一起支撑一个可靠 Agent。</h3>
+            
+            <textarea name="q18"></textarea>
+          </div>
+</div>
+      </div>
+
+    </section>
+
+    <script src="../../../assets/study-page.js"></script>
+<script>const questions = [{"id": "q1", "prompt": "Agent loop 通常包含哪两个核心步骤？", "type": "textarea", "group": "一、控制面基础"}, {"id": "q2", "prompt": "Transient context 和 persistent context 的区别是什么？", "type": "textarea", "group": "一、控制面基础"}, {"id": "q3", "prompt": "一条当前任务 TODO 更适合放 State 还是 Store？为什么？", "type": "textarea", "group": "一、控制面基础"}, {"id": "q4", "prompt": "用户长期偏好更适合放哪里？", "type": "radio", "group": "一、控制面基础"}, {"id": "q5", "prompt": "user_id、region、权限等级属于哪类上下文？", "type": "text", "group": "二、State / Store / Runtime"}, {"id": "q6", "prompt": "为什么 API key 不应该直接放进模型消息？", "type": "textarea", "group": "二、State / Store / Runtime"}, {"id": "q7", "prompt": "上传文件元数据在当前任务内反复用，适合放哪里？", "type": "textarea", "group": "二、State / Store / Runtime"}, {"id": "q8", "prompt": "错误诊断：把用户某次临时要求永久写进长期记忆，会带来什么问题？", "type": "textarea", "group": "二、State / Store / Runtime"}, {"id": "q9", "prompt": "SummarizationMiddleware 和简单删除旧消息的差别是什么？", "type": "textarea", "group": "三、Middleware 与生命周期"}, {"id": "q10", "prompt": "什么时候应该保留最近消息，而不是只保留摘要？", "type": "textarea", "group": "三、Middleware 与生命周期"}, {"id": "q11", "prompt": "工具结果很长但后续只需要结论，你会在哪个生命周期点处理？", "type": "textarea", "group": "三、Middleware 与生命周期"}, {"id": "q12", "prompt": "列出 4 个 model context 控制项。", "type": "textarea", "group": "三、Middleware 与生命周期"}, {"id": "q13", "prompt": "为客服 Agent 设计 4 类上下文，并说明分别来自哪里。", "type": "textarea", "group": "四、工程设计"}, {"id": "q14", "prompt": "错误说法：工具只需要模型传参，不需要上下文。错在哪里？", "type": "textarea", "group": "四、工程设计"}, {"id": "q15", "prompt": "面试短答：LangChain middleware 在上下文工程里解决什么问题？", "type": "textarea", "group": "四、工程设计"}, {"id": "q16", "prompt": "为“用户未登录时不能调用支付工具”设计一个上下文控制方案。", "type": "textarea", "group": "四、工程设计"}, {"id": "q17", "prompt": "选择题：下面哪项属于 life-cycle context？", "type": "radio", "group": "四、工程设计"}, {"id": "q18", "prompt": "用 6-9 句话解释：State、Store、Runtime Context 如何一起支撑一个可靠 Agent。", "type": "textarea", "group": "四、工程设计"}];</script>
+    
+    
+    <section id="export">
+      <div class="head"><h2>导出练习记录</h2><span class="tag">自学闭环</span></div>
+      <p class="muted">完成练习后生成一份可复制的学习记录，用来回看答案、补齐遗漏并继续提问。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+    <script>
+    const recordTitle = '02_上下文控制面：State、Store、Runtime 与 Middleware';
+    const navLinks = [...document.querySelectorAll("nav a[href^='#']")];
+    const sections = navLinks.map(a => document.querySelector(a.getAttribute("href"))).filter(Boolean);
+    const progress = document.getElementById("progress");
+    function updateReadingState(){
+      const max = document.documentElement.scrollHeight - innerHeight;
+      progress.style.width = max > 0 ? `${Math.min(100, scrollY / max * 100)}%` : "0";
+      let current = sections[0]?.id;
+      for (const section of sections) {
+        const rect = section.getBoundingClientRect();
+        if (rect.top < innerHeight * 0.36) current = section.id;
+        section.classList.toggle("in-view", Math.abs(rect.top) < innerHeight * 0.55);
+      }
+      navLinks.forEach(a => a.classList.toggle("active", a.getAttribute("href") === `#${current}`));
+    }
+    addEventListener("scroll", updateReadingState, {passive:true});
+    addEventListener("resize", updateReadingState);
+    updateReadingState();
+    function writeClipboard(text){
+      if(navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+      return new Promise((resolve, reject) => {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand("copy") ? resolve() : reject(new Error("copy failed"));
+        } catch (err) {
+          reject(err);
+        } finally {
+          document.body.removeChild(ta);
+        }
+      });
+    }
+    document.querySelectorAll(".codebar").forEach(bar => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "copy-code";
+      btn.textContent = "复制";
+      btn.addEventListener("click", () => {
+        const code = bar.nextElementSibling?.innerText || "";
+        writeClipboard(code).then(() => {
+          btn.textContent = "已复制";
+          setTimeout(() => btn.textContent = "复制", 1200);
+        }).catch(() => {
+          btn.textContent = "失败";
+          setTimeout(() => btn.textContent = "复制", 1200);
+        });
+      });
+      bar.appendChild(btn);
+    });
+    function val(q){
+      if(q.type === "radio"){
+        const el = document.querySelector(`input[name="${q.id}"]:checked`);
+        return el ? el.value : "";
+      }
+      const el = document.querySelector(`[name="${q.id}"]`);
+      return el ? el.value.trim() : "";
+    }
+    function generateRecord(){
+      const groups = {};
+      const missing = [];
+      questions.forEach(q => {
+        const v = val(q);
+        if(!v) missing.push(q.prompt);
+        if(!groups[q.group]) groups[q.group] = [];
+        groups[q.group].push({t:q.prompt, a:v || "（未填写）"});
+      });
+      let out = `# ${recordTitle}｜练习记录\n\n`;
+      Object.keys(groups).forEach(g => {
+        out += `## ${g}\n\n`;
+        groups[g].forEach(item => {
+          out += `### ${item.t}\n${item.a}\n\n`;
+        });
+      });
+      document.getElementById("record").textContent = out;
+      const warnings = [];
+      if(missing.length) warnings.push(`还有 ${missing.length} 题未填写。`);
+      const finalQ = questions[questions.length - 1];
+      const f = finalQ ? val(finalQ) : "";
+      if(f && f.length < 120) warnings.push("最后的综合解释偏短，建议讲成 6-9 句话。");
+      const quality = document.getElementById("quality");
+      quality.style.display = "block";
+      quality.textContent = warnings.length ? warnings.join("\n") : "练习记录完整，可以用于自查。";
+    }
+    function copyRecord(){
+      const record = document.getElementById("record");
+      writeClipboard(record.textContent).catch(() => {
+        const range = document.createRange();
+        range.selectNodeContents(record);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        alert("复制失败，已选中记录，请手动复制。");
+      });
+    }
+    </script>
+
+  </main>
+</div>
+</body>
+</html>
+
+

@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>03 最小 Transformer LM 训练闭环｜CS336 从零训练语言模型</title>
+  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body data-course="CS336 从零训练语言模型" data-unit="03 最小 Transformer LM 训练闭环">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand"><strong>CS336 从零训练语言模型</strong><span>03｜最小 Transformer LM 训练闭环</span></div>
+      <nav>
+        <!-- learning-kit:nav:start -->
+        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
+        <a href="#goals"><span class="dot"></span>读代码先看什么</a>
+        <a href="#loop"><span class="dot"></span>走一轮训练</a>
+        <a href="#model"><span class="dot"></span>模型与 mask</a>
+        <a href="#loss"><span class="dot"></span>logits 对齐</a>
+        <a href="#optimizer"><span class="dot"></span>optimizer</a>
+        <a href="#assignment"><span class="dot"></span>接上作业</a>
+        <a href="#boundary"><span class="dot"></span>先知道但不展开</a>
+        <a href="#mistakes"><span class="dot"></span>常见误区</a>
+        <a href="#practice"><span class="dot"></span>练习</a>
+        <a href="#export"><span class="dot"></span>导出</a>
+        <a href="#sources"><span class="dot"></span>参考资料</a>
+        <!-- learning-kit:nav:end -->
+      </nav>
+      <div class="side-note">本页对应 CS336 Assignment 1 中的 Transformer LM、cross entropy、AdamW 和 training loop。读完后就应该能打开测试入口开始定位。</div>
+    </aside>
+    <main>
+      <header class="hero">
+        <div>
+          <div class="kicker">TRAINING LOOP</div>
+          <h1>最小 Transformer LM 训练闭环</h1>
+          <p>从一小段 token 开始：<code>[101, 203, 44, 19, 8]</code>。训练时先把它拆成 <code>x=[101,203,44,19]</code> 和 <code>y=[203,44,19,8]</code>。模型读 <code>x</code>，在每个位置给整个词表打分；loss 检查正确的下一个 token 有没有被打到足够高。</p>
+          <p>这一页只讲一件事：一批 token 怎样经过 embedding、最小 Transformer LM、logits、cross entropy、backward 和 AdamW，变成一次参数更新。完整 Transformer block 以后再拆；这里先把最容易写错的几处讲清：<code>x/y</code> 怎么错开，causal mask 怎么挡未来，<code>[B,T,V]</code> 怎么喂给 loss，<code>optimizer.step()</code> 到底改了什么。</p>
+          <div class="course-links">
+            <a href="../02_Tokenizer与数据表示/学习页.html">← 02 Tokenizer 与数据表示</a>
+            <a href="../index.html">课程地图</a>
+            <a href="#assignment">接上 Assignment 1 →</a>
+          </div>
+        </div>
+        <div class="box soft">
+          <b>读完先能做三件事</b>
+          <ul>
+            <li>解释 <code>x/y</code> shift 为什么决定了 next-token 训练目标。</li>
+            <li>沿着 hidden state 到 vocab logits 的形状变化查问题。</li>
+            <li>把本页内容对应到 CS336 Assignment 1 的测试入口。</li>
+          </ul>
+        </div>
+      </header>
+
+      <section id="goals">
+        <div class="head"><h2>读训练代码先看什么</h2><span class="tag">loop</span></div>
+        <p>第一次读训练循环，不要从 API 名字开始背。先问三件事：这个张量是什么形状？这一行在预测什么？这一行有没有改模型状态？这三个问题答清楚，后面的 PyTorch 调用才有位置。</p>
+        <div class="grid">
+          <div class="card"><h3>形状</h3><p>batch、sequence length、vocab size、hidden size 会出现在不同位置。很多报错看似来自 API，实际是把形状和含义接错了。</p></div>
+          <div class="card"><h3>目标</h3><p>训练时每个位置都在预测下一个 token。生成文本发生在训练之后，不能反过来理解 loss。</p></div>
+          <div class="card"><h3>状态</h3><p><code>loss.backward()</code> 写梯度，<code>optimizer.step()</code> 改参数。参数没变，下一轮 forward 就没有学习结果可用。</p></div>
+        </div>
+      </section>
+
+      <section id="loop">
+        <div class="head"><h2>走一轮最小训练</h2><span class="tag">six steps</span></div>
+        <p>先把它当成一条流水线：拿到 token id，错开一位构造输入和目标；模型给每个位置打分；loss 检查正确 token 的分数；反向传播把这次错误写到梯度里；optimizer 再用梯度改参数。</p>
+        <div class="flow">
+          <div class="step"><b>1 DATA</b><p>采样 token 序列，切成 x/y。</p></div>
+          <div class="step"><b>2 EMBED</b><p>token id 查表成向量。</p></div>
+          <div class="step"><b>3 MODEL</b><p>Transformer 处理上下文。</p></div>
+          <div class="step"><b>4 LOGITS</b><p>每个位置输出 vocab 分数。</p></div>
+          <div class="step"><b>5 LOSS</b><p>和 y 做 cross entropy。</p></div>
+          <div class="step"><b>6 UPDATE</b><p>反传并更新参数。</p></div>
+        </div>
+        <div class="codebar"><span>最小 PyTorch 风格训练循环</span><button class="copy" data-copy="train-code">复制</button></div>
+        <pre class="line-numbers"><code id="train-code" class="language-python" data-export-context="最小 PyTorch 风格训练循环" data-export-lang="python">for x, y in train_loader:        # train_loader/get_batch 已经返回右移后的 x/y
+    logits = model(x)              # [batch, seq, vocab]
+    loss = cross_entropy(
+        logits.reshape(-1, vocab_size),
+        y.reshape(-1),
+    )
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()</code></pre>
+        <p>这里假设 <code>train_loader</code> 或 <code>get_batch</code> 已经把原始 token 切成了 <code>x/y</code>。如果你手里拿到的是一整段 <code>tokens</code>，切片通常放在数据加载函数里：<code>x = tokens[:, :-1]</code>，<code>y = tokens[:, 1:]</code>。训练循环只接收切好的 batch，这样后面读代码时不会一会儿在 loader 里切、一会儿在 loss 前切。</p>
+        <div class="table-wrap" data-export-context="训练循环读写表" data-export-lang="table">
+          <table>
+            <thead><tr><th>代码行</th><th>读什么</th><th>写出什么</th><th>删错会怎样</th></tr></thead>
+            <tbody>
+              <tr><td><code>logits = model(x)</code></td><td><code>x</code> 的 token id</td><td><code>[B,T,V]</code> 的词表分数</td><td>没有每个位置的预测，loss 无从计算。</td></tr>
+              <tr><td><code>cross_entropy(...)</code></td><td>logits 和目标 <code>y</code></td><td>一个标量 loss</td><td>目标接错时，模型会把错误任务学得很认真。</td></tr>
+              <tr><td><code>zero_grad()</code></td><td>参数上的旧梯度</td><td>清空后的梯度槽</td><td>旧梯度混进新 batch，更新方向会失真。</td></tr>
+              <tr><td><code>backward()</code></td><td>loss 的计算图</td><td>每个参数的梯度</td><td><code>step()</code> 没有可用梯度。</td></tr>
+              <tr><td><code>step()</code></td><td>参数、梯度、optimizer 状态</td><td>更新后的参数</td><td>loss 只是算出来，模型本身没有变。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="shape-tracer" data-shape-tracer>
+          <div class="trace-lines" aria-label="训练循环形状追踪">
+            <button class="trace-line active" type="button" data-trace-step="batch"><code>x, y = batch</code><span>[B,T] / [B,T]</span></button>
+            <button class="trace-line" type="button" data-trace-step="model"><code>logits = model(x)</code><span>[B,T,V]</span></button>
+            <button class="trace-line" type="button" data-trace-step="flat"><code>logits.reshape(-1, V)</code><span>[B*T,V]</span></button>
+            <button class="trace-line" type="button" data-trace-step="loss"><code>cross_entropy(...)</code><span>scalar loss</span></button>
+            <button class="trace-line" type="button" data-trace-step="update"><code>optimizer.step()</code><span>参数被改写</span></button>
+          </div>
+          <div class="trace-canvas">
+            <div class="tensor-card active" data-trace-target="batch"><b>batch</b><span><code>x:[B,T]</code><br><code>y:[B,T]</code></span><p>整数 token id 和右移后的目标。</p></div>
+            <div class="tensor-card" data-trace-target="model"><b>model</b><span><code>[B,T,V]</code></span><p>每个位置对词表里每个 token 打分。</p></div>
+            <div class="tensor-card" data-trace-target="flat"><b>flatten</b><span><code>[B*T,V]</code></span><p>把所有位置摊成一张分类表。</p></div>
+            <div class="tensor-card" data-trace-target="loss"><b>loss</b><span><code>[]</code></span><p>所有位置的预测误差汇成一个标量。</p></div>
+            <div class="tensor-card" data-trace-target="update"><b>params</b><span><code>theta'</code></span><p>梯度和 optimizer 状态写回参数。</p></div>
+          </div>
+        </div>
+        <p>这几行代码已经够你定位大部分早期问题：输入是 token id，输出是每个位置对词表的预测；loss 把预测和下一个 token 配对；optimizer 改参数。调试时先按这张读写表走一遍，再去看生成样例。</p>
+        <div class="inline-note"><b>读代码时先看对象</b><span>先追踪每一行读了什么、写了什么，再去看函数名。这样 debug 时不会只剩“能跑/不能跑”。</span></div>
+      </section>
+
+      <section id="model">
+        <div class="head"><h2>Transformer 在训练里负责什么</h2><span class="tag">model</span></div>
+        <p>这里先不拆完整多头注意力、残差和 LayerNorm。先看一个必须写对的约束：decoder-only 语言模型在位置 <code>t</code> 预测下一个 token 时，不能读取 <code>t+1</code> 之后的信息。这个约束错了，训练 loss 可能很好看，生成时会马上暴露。</p>
+        <p>拿三个位置 <code>t0,t1,t2</code>。<code>t0</code> 只能看自己，<code>t1</code> 可以看 <code>t0,t1</code>，<code>t2</code> 可以看 <code>t0,t1,t2</code>。causal mask 做的事很朴素：把每一行右侧的未来位置挡掉。</p>
+        <div class="table-wrap" data-export-context="Causal mask 三位置读法" data-export-lang="table">
+          <table>
+            <thead><tr><th>Query 位置</th><th>可读取 Key 位置</th><th>causal mask 行</th><th>读法</th></tr></thead>
+            <tbody>
+              <tr><td><code>t0</code></td><td><code>t0</code></td><td><code>[0, -inf, -inf]</code></td><td>开头 token 不能偷看后面。</td></tr>
+              <tr><td><code>t1</code></td><td><code>t0, t1</code></td><td><code>[0, 0, -inf]</code></td><td>第二个位置能看过去和自己。</td></tr>
+              <tr><td><code>t2</code></td><td><code>t0, t1, t2</code></td><td><code>[0, 0, 0]</code></td><td>最后一个位置在这个窗口里没有未来。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="codebar"><span>causal mask 的最小形状</span><button class="copy" data-copy="mask-code">复制</button></div>
+<pre class="line-numbers"><code id="mask-code" class="language-python" data-export-context="Causal mask 最小实现" data-export-lang="python">scores = q @ k.transpose(-2, -1) / sqrt(d_k)  # [B, heads, T, T]
+T = scores.size(-1)  # 当前输入序列的真实长度，别用模型最大上下文长度
+mask = torch.triu(torch.ones(T, T, dtype=torch.bool, device=scores.device), diagonal=1)
+scores = scores.masked_fill(mask, float("-inf"))
+attn = scores.softmax(dim=-1)</code></pre>
+        <div class="math-block" data-detail-level="detail">\[
+\operatorname{Attention}(Q,K,V)=\operatorname{softmax}\left(\frac{QK^T + M}{\sqrt{d_k}}\right)V
+\]
+          <p>这里的 <code>M</code> 是 causal mask：能看的位置加 0，不能看的未来位置加 <code>-\infty</code>。代码里的等效操作就是把未来位置 <code>masked_fill</code> 成 <code>-inf</code>；因为 <code>e^{-inf}</code> 约等于 0，softmax 后这些位置的权重就会归零。</p>
+        </div>
+        <p>代码里要盯住 <code>masked_fill</code>：softmax 之前把未来位置写成 <code>-inf</code>，softmax 之后这些位置的概率就是 0。这里的 <code>T</code> 要取当前 batch 的真实序列长度，例如 <code>scores.size(-1)</code>；不要直接拿配置里的最大上下文长度。测试里经常会喂很短的截断输入，mask 如果还按最大长度生成，就会和 <code>[B,heads,T,T]</code> 的 scores 对不上。这里 <code>[T,T]</code> 的 mask 通常会广播到 scores 上；如果实现没有自动广播，就要手动补 batch/head 维度。</p>
+        <p>把最小 Transformer LM 放回训练过程里看，形状大致是这样走的：token id 先查表变成 hidden vector；每个 block 都在 <code>[B,T,d_model]</code> 上加工；最后 LM head 才把最后一维投到词表大小 <code>V</code>，得到 <code>[B,T,V]</code>。</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>训练中的位置</th><th>典型形状</th><th>做什么</th><th>训练中容易看错的点</th></tr></thead>
+            <tbody>
+              <tr><td>Token Embedding</td><td><code>[B,T] -> [B,T,d_model]</code></td><td>把 token id 查成可训练向量。</td><td>它是参数，会被 optimizer 更新。</td></tr>
+              <tr><td>Position / RoPE</td><td><code>[B,T,d_model]</code></td><td>给注意力提供位置信息，Assignment 1 的 LM 路径会用 RoPE。</td><td>没有位置，模型难以区分同一 token 出现在不同位置。</td></tr>
+              <tr><td>Causal Self-Attention</td><td><code>[B,T,d_model] -> [B,T,d_model]</code></td><td>每个位置只读取自己和过去位置。</td><td>mask 错了会偷看未来，loss 会误导你。</td></tr>
+              <tr><td>MLP / SwiGLU</td><td><code>[B,T,d_model] -> [B,T,d_model]</code></td><td>逐位置做非线性变换，增强表示能力。</td><td>它不负责跨位置通信，跨位置通信主要在 attention。</td></tr>
+              <tr><td>RMSNorm / Residual</td><td><code>[B,T,d_model]</code></td><td>稳定层间信号，并保留原路径信息。</td><td>顺序错会让测试和参考实现对不上。</td></tr>
+              <tr><td>LM Head</td><td><code>[B,T,d_model] -> [B,T,V]</code></td><td>把 hidden state 投到词表，得到 logits。</td><td>这里的 <code>V</code> 表示 vocab size，别当 hidden size。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>这张表够你读懂本页，也够你开始看 Assignment 1 的语言模型测试。多头拆分、RoPE 公式、RMSNorm 和 SwiGLU 的实现细节，后面应该作为模型结构单元单独学。</p>
+      </section>
+
+      <section id="loss">
+        <div class="head"><h2>logits、softmax 与 cross entropy</h2><span class="tag">loss</span></div>
+        <p><code>logits</code> 是还没归一化的分数。softmax 把分数变成概率分布。cross entropy 只看目标 token 的概率：概率越高，这个位置的 loss 越低。比如目标 token 是 <code>203</code>，模型给它的概率从 <code>0.02</code> 提到 <code>0.40</code>，这一位的 loss 就会下降。</p>
+        <div class="grid2">
+          <div class="box info"><h3>形状先对上</h3><p><code>logits</code> 常见形状是 <code>[B, T, V]</code>，目标 <code>y</code> 是 <code>[B, T]</code>。算 loss 前通常把前两维摊平。</p></div>
+          <div class="box warn"><h3>shift 不能错</h3><p><code>x</code> 和 <code>y</code> 必须错开一位。这里错了，后面所有 loss 都在训练另一个任务。</p></div>
+        </div>
+        <div class="codebar"><span>x/y shift 示例</span><button class="copy" data-copy="shift-code">复制</button></div>
+        <pre class="line-numbers"><code id="shift-code" class="language-python" data-export-context="x/y shift 与 next-token 目标" data-export-lang="python">tokens = [101, 203, 44, 19, 8]
+x = tokens[:-1]  # [101, 203, 44, 19]
+y = tokens[1:]   # [203, 44, 19, 8]
+
+# position 0: 看见 101，预测 203
+# position 1: 看见 101,203，预测 44</code></pre>
+        <div class="shift-demo" data-shift-demo>
+          <label>换一串 token 试试 <input type="text" value="101, 203, 44, 19, 8" aria-label="token ids"></label>
+          <div class="shift-rows" aria-live="polite">
+            <div class="shift-row x"><b>x 输入</b><div class="shift-cells"><span class="shift-cell">101</span><span class="shift-cell">203</span><span class="shift-cell">44</span><span class="shift-cell">19</span></div></div>
+            <div class="shift-row y"><b>y 目标</b><div class="shift-cells"><span class="shift-cell">203</span><span class="shift-cell">44</span><span class="shift-cell">19</span><span class="shift-cell">8</span></div></div>
+          </div>
+          <p class="hint">这里不模拟模型，只模拟训练样本构造：<code>x</code> 丢掉最后一位，<code>y</code> 丢掉第一位，所以同一列永远表示“看见左边，预测右边”。</p>
+        </div>
+        <p>再看 batch。模型输出 <code>logits: [B,T,V]</code>，目标是 <code>y: [B,T]</code>。cross entropy 要把每个位置当成一次词表分类，所以常把前两维摊平：</p>
+        <div class="table-wrap" data-export-context="logits 摊平索引表" data-export-lang="table">
+          <table>
+            <thead><tr><th>对象</th><th>原始形状</th><th>摊平后</th><th>含义</th></tr></thead>
+            <tbody>
+              <tr><td><code>logits</code></td><td><code>[B,T,V]</code></td><td><code>[B*T,V]</code></td><td>每一行是一个位置对整个词表的打分。</td></tr>
+              <tr><td><code>y</code></td><td><code>[B,T]</code></td><td><code>[B*T]</code></td><td>每一项是对应位置的正确下一个 token id。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>用一个小 batch 看会更直观。假设 <code>B=2,T=3,V=5</code>，两条样本的目标是 <code>y=[[9,5,1],[4,4,8]]</code>。摊平以后，<code>logits[0,0,:]</code> 对应目标 <code>9</code>，<code>logits[0,1,:]</code> 对应目标 <code>5</code>，一直排到 <code>logits[1,2,:]</code> 对应目标 <code>8</code>。摊平没有丢掉时间信息，只是把“第几条样本、第几个位置”排成了 <code>B*T</code> 行。</p>
+        <div class="table-wrap" data-export-context="logits 摊平逐行映射表" data-export-lang="table">
+          <table>
+            <thead><tr><th>摊平后的行</th><th>来自哪个 logits 位置</th><th>对应 <code>y.reshape(-1)</code></th><th>这行 cross entropy 在问什么</th></tr></thead>
+            <tbody>
+              <tr><td>0</td><td><code>logits[0,0,:]</code></td><td><code>9</code></td><td>样本 0 的位置 0，正确下一个 token 是 9。</td></tr>
+              <tr><td>1</td><td><code>logits[0,1,:]</code></td><td><code>5</code></td><td>样本 0 的位置 1，正确下一个 token 是 5。</td></tr>
+              <tr><td>2</td><td><code>logits[0,2,:]</code></td><td><code>1</code></td><td>样本 0 的位置 2，正确下一个 token 是 1。</td></tr>
+              <tr><td>3</td><td><code>logits[1,0,:]</code></td><td><code>4</code></td><td>样本 1 的位置 0，正确下一个 token 是 4。</td></tr>
+              <tr><td>4</td><td><code>logits[1,1,:]</code></td><td><code>4</code></td><td>样本 1 的位置 1，正确下一个 token 是 4。</td></tr>
+              <tr><td>5</td><td><code>logits[1,2,:]</code></td><td><code>8</code></td><td>样本 1 的位置 2，正确下一个 token 是 8。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="codebar"><span>cross entropy 前的安全摊平</span><button class="copy" data-copy="loss-code">复制</button></div>
+        <pre class="line-numbers"><code id="loss-code" class="language-python" data-export-context="cross entropy 前的安全摊平" data-export-lang="python">B, T, V = logits.shape
+loss = cross_entropy(
+    logits.reshape(B * T, V),
+    y.reshape(B * T),
+)</code></pre>
+        <p>调试时按这个顺序查：先确认 <code>x/y</code> 右移，再确认 <code>logits</code> 最后一维是词表大小，再确认 <code>logits.reshape(B*T,V)</code> 和 <code>y.reshape(B*T)</code> 行数相同，最后才看 loss 数值。推荐先用 <code>reshape</code>，不要急着写 <code>view</code>：注意力里常见 <code>transpose</code>，张量可能变成 non-contiguous，直接 <code>view</code> 会报 stride 相关错误；真要用 <code>view</code>，先确认 <code>contiguous()</code>。</p>
+        <div class="inline-note"><b>摊平不会丢位置信息</b><span><code>[B,T,V]</code> 到 <code>[B*T,V]</code> 只是把 batch 和 time 两个索引排成一列。每一行仍然对应一个明确位置。</span></div>
+      </section>
+
+      <section id="optimizer">
+        <div class="head"><h2>optimizer 改了哪些状态</h2><span class="tag">update</span></div>
+        <p>反向传播告诉每个参数：如果想让这次 loss 变小，大致应该往哪个方向改。optimizer 决定怎么改。可以把一次更新读成一句话：这个 batch 暴露了预测错误，梯度写下改动方向，optimizer 按自己的规则把参数挪一步。下一次 forward 时，logits 才可能变化。</p>
+        <p>CS336 Assignment 1 会让你实现 AdamW。这里先不推完整公式，只看实现时最容易漏的状态：当前 batch 给出梯度 <code>g</code>；Adam 保存一阶/二阶动量 <code>m/v</code>；AdamW 把 weight decay 直接作用在参数上，不把它塞进梯度再交给动量更新。</p>
+        <p>先粗略区分三种更新：SGD 直接按当前梯度走；Adam 用 <code>m/v</code> 调整每个参数的步幅；AdamW 在 Adam 更新之外衰减参数，所以 weight decay 不会混进动量状态。</p>
+        <div class="codebar"><span>AdamW step 的最小伪代码</span><button class="copy" data-copy="adamw-code">复制</button></div>
+        <div class="math-block" data-detail-level="detail">\[
+\begin{aligned}
+m_t &= \beta_1 m_{t-1} + (1-\beta_1)g_t \\
+v_t &= \beta_2 v_{t-1} + (1-\beta_2)g_t^2 \\
+\hat m_t &= \frac{m_t}{1-\beta_1^t},\quad
+\hat v_t = \frac{v_t}{1-\beta_2^t} \\
+\theta_t &= \theta_{t-1} - \eta\left(\frac{\hat m_t}{\sqrt{\hat v_t}+\epsilon}+\lambda\theta_{t-1}\right)
+\end{aligned}
+\]
+          <p>这块公式只用来查结构：<code>m</code> 记方向，<code>v</code> 记规模，<code>hat m/hat v</code> 是 bias correction，最后一项是 AdamW 的解耦 weight decay。实现时尤其注意 <code>t</code> 是 optimizer step，从 1 开始参与 <code>1 - beta**t</code>。</p>
+        </div>
+        <pre class="line-numbers"><code id="adamw-code" class="language-python" data-export-context="AdamW step 最小伪代码" data-export-lang="python"># 对每个参数 theta，在第 t 步拿到当前梯度 g
+m = beta1 * m + (1 - beta1) * g
+v = beta2 * v + (1 - beta2) * (g * g)
+m_hat = m / (1 - beta1 ** t)
+v_hat = v / (1 - beta2 ** t)
+
+# AdamW 的 weight decay 不塞进梯度，直接按旧参数衰减
+theta = theta - lr * (m_hat / (sqrt(v_hat) + eps) + weight_decay * theta)</code></pre>
+        <div class="table-wrap" data-export-context="AdamW 状态检查表" data-export-lang="table">
+          <table>
+            <thead><tr><th>状态/超参数</th><th>它记录什么</th><th>实现时先检查什么</th></tr></thead>
+            <tbody>
+              <tr><td><code>m</code></td><td>一阶动量，近似“最近梯度的平均方向”。</td><td>每个参数都要有自己的 <code>m</code>，形状和参数相同。</td></tr>
+              <tr><td><code>v</code></td><td>二阶动量，近似“最近梯度平方的平均大小”。</td><td>更新时用 <code>g * g</code> 按元素平方，别写成矩阵乘法。</td></tr>
+              <tr><td><code>t</code></td><td>当前 optimizer step 计数，用来做 bias correction。</td><td>从 1 开始参与 <code>1 - beta**t</code>，不要和 batch index 混淆。</td></tr>
+              <tr><td><code>weight_decay</code></td><td>把参数往 0 拉，控制权重规模。</td><td>AdamW 的衰减直接作用在参数上，别先加进梯度再交给 Adam。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>实现 AdamW 时，常见错误不在公式大方向，而在状态有没有按参数保存、step 计数有没有从 1 开始、weight decay 有没有按 AdamW 语义处理。看一个单参数的小 trace：如果某个参数连续几个 batch 的梯度都为正，<code>m</code> 会积累出稳定方向；如果梯度一会儿正一会儿负，<code>m</code> 会互相抵消，更新会保守一些。<code>v</code> 记录梯度平方的规模，梯度波动大时会压住步幅，避免一次异常梯度把参数推太远。</p>
+        <div class="table-wrap" data-export-context="AdamW 单参数梯度直觉表" data-export-lang="table">
+          <table>
+            <thead><tr><th>连续 batch 的梯度</th><th><code>m</code> 的直觉</th><th><code>v</code> 的直觉</th><th>你在实现里该查什么</th></tr></thead>
+            <tbody>
+              <tr><td><code>+0.8, +0.7, +0.9</code></td><td>方向稳定，动量会积累出更明确的更新方向。</td><td>梯度规模持续偏大，分母也会随之变大，步幅不会无限放大。</td><td><code>m</code>/<code>v</code> 是否按参数分别保存，step 是否递增。</td></tr>
+              <tr><td><code>+0.8, -0.7, +0.6</code></td><td>方向互相抵消，更新会比当前梯度更保守。</td><td>虽然方向抵消，平方仍记录“这个参数梯度不小”。</td><td>不要把 <code>g*g</code> 写成矩阵乘法，也不要共享状态张量。</td></tr>
+              <tr><td><code>0.0, 0.0, +3.0</code></td><td>突然的大梯度会进入动量，但不会立刻等同于完整更新方向。</td><td>二阶矩会显著变大，抑制这一轮过激步幅。</td><td>检查 bias correction、<code>eps</code> 和 weight decay 是否按 AdamW 语义处理。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="inline-note"><b>AdamW 先查三件事</b><span><code>m</code> 记录方向，<code>v</code> 记录尺度，weight decay 不混进梯度动量。测试差一点时，通常先查这三处。</span></div>
+      </section>
+
+      <section id="assignment">
+        <div class="head"><h2>从本页走到 Assignment 1</h2><span class="tag">bridge</span></div>
+        <p>读到这里就可以打开官方仓库。第一次跑测试失败是正常的：Assignment 1 README 说明初始状态会因为 <code>NotImplementedError</code> 失败。下一步先别继续堆概念，打开 <code>tests/adapters.py</code>，把测试函数接到你的实现上。</p>
+        <div class="codebar"><span>官方仓库里的第一步</span><button class="copy" data-copy="assignment-code">复制</button></div>
+        <pre class="line-numbers command-block"><code id="assignment-code" class="language-bash" data-export-context="Assignment 1 操作入口" data-export-lang="bash"># 在 stanford-cs336/assignment1-basics 仓库根目录
+uv run pytest
+
+# 然后打开 tests/adapters.py
+# 把 run_transformer_lm / run_cross_entropy / get_adamw_cls
+# 等适配函数连接到你的实现。</code></pre>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>本页概念</th><th>Assignment 1 入口</th><th>先检查什么</th><th>常见失败怎么回查</th></tr></thead>
+            <tbody>
+              <tr><td>token id 到 hidden state</td><td><code>run_embedding</code>、<code>run_transformer_lm</code></td><td>输入是否是 <code>[batch, sequence]</code> 的整数 token id。</td><td>如果输出最后一维没对上 vocab size，回到“模型与 mask”的 LM Head 行。</td></tr>
+              <tr><td>causal mask</td><td><code>run_scaled_dot_product_attention</code>、<code>run_multihead_self_attention</code></td><td>mask 是否只挡未来位置，softmax 前是否把未来分数压掉。</td><td>如果测试提示 attention 输出不一致，先回查三行 mask 表和 <code>masked_fill</code>。</td></tr>
+              <tr><td>logits 与目标对齐</td><td><code>run_cross_entropy</code></td><td>输入是否是 <code>[batch_size, vocab_size]</code>，targets 是否是 <code>[batch_size]</code>。</td><td>如果 shape mismatch，回到“logits 对齐”的 <code>[B,T,V] -> [B*T,V]</code> 表。</td></tr>
+              <tr><td>AdamW 更新</td><td><code>get_adamw_cls</code>、learning rate schedule、gradient clipping</td><td>optimizer 是否维护状态，weight decay 是否按 AdamW 语义处理。</td><td>如果参数没有变化或变化过大，回到 optimizer 的 zero_grad/backward/step 读写关系。</td></tr>
+              <tr><td>checkpoint 与训练状态</td><td><code>run_save_checkpoint</code>、<code>run_load_checkpoint</code></td><td>是否同时保存 model、optimizer 和 iteration。</td><td>本页只给保存对象清单；完整恢复策略留到后续训练工程单元。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="grid2">
+          <div class="box soft"><h3>现在可以动手</h3><p>先跑 <code>uv run pytest</code>，再打开 <code>tests/adapters.py</code>。把 <code>run_transformer_lm</code>、<code>run_cross_entropy</code>、<code>get_adamw_cls</code> 对到本页对应的小节。</p></div>
+          <div class="box warn"><h3>先别在这里展开</h3><p>RoPE、RMSNorm、SwiGLU、多头注意力权重排列和 BPE tokenizer 都需要单独学。遇到相关测试，先把它们归到模型结构或 tokenizer 单元，不要把所有细节塞进这一页。</p></div>
+        </div>
+      </section>
+
+      <section id="boundary">
+        <div class="head"><h2>先知道，但本页不展开</h2><span class="tag">scope</span></div>
+        <p>下面这些点做作业时很快会遇到，但它们不适合塞进这一页展开。先把它们当成排错索引：看到某种症状时，知道应该去查哪一类代码。</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>工程点</th><th>在代码里通常长什么样</th><th>在 Assignment 1 里先查哪里</th><th>出错时的具体症状</th></tr></thead>
+            <tbody>
+              <tr><td>train / eval mode</td><td><code>model.train()</code>、<code>model.eval()</code></td><td>后续做验证或生成时再重点查。</td><td>训练和评测行为不一致，dropout 存在时尤其明显。</td></tr>
+              <tr><td>learning rate schedule</td><td>warmup、cosine decay、step counter</td><td>AdamW 和 schedule 相关测试。</td><td>loss 剧烈震荡、几步后参数更新过猛或几乎不动。</td></tr>
+              <tr><td>gradient clipping</td><td>更新前限制梯度范数</td><td>gradient clipping 相关入口。</td><td>偶发大梯度把参数推坏；clip 写错又会让更新幅度长期偏小。</td></tr>
+              <tr><td>checkpoint</td><td>保存 model、optimizer、iteration</td><td><code>run_save_checkpoint</code>、<code>run_load_checkpoint</code></td><td>恢复训练后 loss 曲线接不上，optimizer 像从头开始。</td></tr>
+              <tr><td>validation</td><td>不反传、不更新参数地计算 loss</td><td>后续训练循环单元展开。</td><td>验证过程污染训练状态，日志看起来比真实能力乐观。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="mistakes">
+        <div class="head"><h2>常见误区</h2><span class="tag">debug</span></div>
+        <p>这里只列会影响测试和日志的错误。每一行都配一个回查位置：看到现象后，先按表查，不要凭感觉乱改。</p>
+        <div class="terminal-lab" data-terminal-lab>
+          <div class="terminal-controls">
+            <button class="ghost active" type="button" data-terminal-case="mask">忘记 causal mask</button>
+            <button class="ghost" type="button" data-terminal-case="shape">logits/y 摊平错位</button>
+            <button class="ghost" type="button" data-terminal-case="adamw">AdamW step 计数错</button>
+          </div>
+          <pre class="terminal-output" aria-live="polite">$ uv run pytest tests/test_model.py -k attention
+FAILED test_causal_attention_no_future_leak
+expected attention weights above diagonal to be 0
+got non-zero probability at query t1 -> key t2
+诊断: 回到 causal mask 表，确认 softmax 前把未来位置填成 -inf。</pre>
+          <template data-terminal-output="mask">$ uv run pytest tests/test_model.py -k attention
+FAILED test_causal_attention_no_future_leak
+expected attention weights above diagonal to be 0
+got non-zero probability at query t1 -> key t2
+诊断: 回到 causal mask 表，确认 softmax 前把未来位置填成 -inf。</template>
+          <template data-terminal-output="shape">$ uv run pytest tests/test_nn.py -k cross_entropy
+RuntimeError: Expected input batch_size (6) to match target batch_size (5)
+logits.reshape(-1, vocab_size) rows != y.reshape(-1) length
+诊断: 回到 [B,T,V] -> [B*T,V] 映射表，逐行检查 y 的摊平顺序。</template>
+          <template data-terminal-output="adamw">$ uv run pytest tests/test_optimizer.py -k adamw
+AssertionError: parameter update differs from reference
+first mismatch near bias correction / weight decay branch
+诊断: 用单参数三步 trace 检查 m、v、t 和 AdamW 解耦衰减。</template>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>你看到的现象</th><th>先怀疑什么</th><th>回到本页哪里</th><th>马上做的检查</th></tr></thead>
+            <tbody>
+              <tr><td>模型输出最后一维对不上测试期待</td><td>把 hidden size 当成 vocab size，或 LM head 接错。</td><td>“模型与 mask”的 LM Head 行。</td><td>打印 <code>logits.shape</code>，确认最后一维是 <code>V</code>。</td></tr>
+              <tr><td>loss 很低，生成却离谱</td><td>causal mask 泄漏、x/y shift 错、训练/生成格式不一致。</td><td>mask 表、x/y shift 示例。</td><td>用三 token 小例子检查每个位置能看谁、预测谁。</td></tr>
+              <tr><td><code>cross_entropy</code> 报 shape mismatch</td><td><code>[B,T,V]</code> 和 <code>[B,T]</code> 没按同一顺序摊平。</td><td>logits 摊平映射表。</td><td>打印 <code>logits.reshape(-1,V).shape</code> 与 <code>y.reshape(-1).shape</code>。</td></tr>
+              <tr><td>AdamW 测试差一点但总不对</td><td>bias correction、<code>eps</code>、weight decay 解耦或 step 计数错。</td><td>AdamW 伪代码和小 trace。</td><td>用单参数、三步梯度手算 <code>m/v/t</code>。</td></tr>
+              <tr><td>恢复 checkpoint 后训练曲线断掉</td><td>只保存了模型权重，漏了 optimizer 或 iteration。</td><td>checkpoint 行。</td><td>检查保存对象里是否包含 optimizer state 和 step。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="practice">
+        <div class="head"><h2>练习</h2><span class="tag">Practice</span></div>
+        <div class="practice-intro">
+          <div class="card">
+            <h3>怎么答才算会</h3>
+            <p>不要只写名词。每题都要交代输入、输出、形状或状态变化。你能说出“这一行读了什么、写了什么、写错会怎样”，才算过关。</p>
+          </div>
+          <div class="card">
+            <h3>做完以后检查</h3>
+            <p>看自己能不能把 <code>x/y</code> shift、logits、目标 id、causal mask、<code>loss.backward()</code>、<code>optimizer.step()</code> 连成一条可调试的路径。</p>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div><h3>一、形状与目标</h3><p>先确认模型到底在预测什么，再看 shape 是否能接上。</p></div>
+            <div class="quick-review"><b>提示</b><span>logits 是 [B,T,V]，目标 y 是 [B,T]。</span></div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q1" data-group="一、形状与目标" data-title="Q1. logits=[B,T,V] 中 B/T/V 分别是什么？" data-answer="B. B=batch size，T=sequence length，V=vocab size" data-explain="B 是 batch 里的样本数，T 是每条样本的序列长度，V 是词表大小。中文里可以理解为：批大小、序列长度、词表大小。">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">shape</span></div>
+              <h3>Q1. <code>logits=[B,T,V]</code> 中 B/T/V 分别是什么？</h3>
+              <label><input type="radio" name="q1" value="A. B=hidden size，T=batch size，V=sequence length">A. B=hidden size，T=batch size，V=sequence length</label>
+              <label><input type="radio" name="q1" value="B. B=batch size，T=sequence length，V=vocab size">B. B=batch size，T=sequence length，V=vocab size</label>
+              <label><input type="radio" name="q1" value="C. B=vocab size，T=hidden size，V=batch size">C. B=vocab size，T=hidden size，V=batch size</label>
+              <p class="hint"><code>V</code> 是词表大小；hidden size 出现在模型内部表示里，不在 logits 的最后一步分类含义里。</p>
+              <button class="ghost check" type="button">检查</button><p class="feedback"></p>
+            </div>
+            <div class="q" data-question="q2" data-group="一、形状与目标" data-title="Q2. cross entropy 通常接收什么？" data-answer="A. logits 和目标 token id" data-explain="训练时 cross entropy 接收 logits 和目标 token id；采样文本是推理/生成阶段才发生的事情。">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">loss</span></div>
+              <h3>Q2. cross entropy 通常接收什么？</h3>
+              <label><input type="radio" name="q2" value="A. logits 和目标 token id">A. logits 和目标 token id</label>
+              <label><input type="radio" name="q2" value="B. 已经采样出的文本">B. 已经采样出的文本</label>
+              <label><input type="radio" name="q2" value="C. optimizer 状态">C. optimizer 状态</label>
+              <p class="hint">训练时还没有采样文本，模型只是给每个候选 token 打分。</p>
+              <button class="ghost check" type="button">检查</button><p class="feedback"></p>
+            </div>
+            <div class="q full" data-question="q3" data-group="一、形状与目标" data-title="Q3. tokens=[2,9,5,1]，x/y 应该是什么？">
+              <div class="q-meta"><span class="pill">代码阅读</span><span class="pill">x/y shift</span></div>
+              <h3>Q3. <code>tokens=[2,9,5,1]</code>，<code>x/y</code> 应该是什么？</h3>
+              <textarea name="q3" placeholder="写出 x、y，并说明第 0 个位置看见什么、预测什么。"></textarea>
+              <p class="solve-note">先别急着算 loss。这里一错，后面只是在认真训练错误目标。</p>
+              <button class="ghost reveal" type="button">展开反馈</button>
+              <details><summary>参考答案</summary><p><code>x=[2,9,5]</code>，<code>y=[9,5,1]</code>。第 0 个位置看到 token 2，目标是预测 token 9；第 1 个位置看到 2,9，目标是预测 5。检查重点是：<code>y</code> 相对 <code>x</code> 右移一位。</p></details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div><h3>二、训练循环读写状态</h3><p>把一轮更新拆成几步能检查的状态变化。</p></div>
+            <div class="quick-review"><b>提示</b><span>zero_grad 清状态，backward 写梯度，step 改参数。</span></div>
+          </div>
+          <div class="drill-grid">
+            <div class="q full" data-question="q4" data-group="二、训练循环读写状态" data-title="Q4. 逐行解释最小训练循环。">
+              <div class="q-meta"><span class="pill">代码阅读</span><span class="pill">read/write</span></div>
+              <h3>Q4. 逐行解释本页最小训练循环。</h3>
+              <textarea name="q4" placeholder="按 logits=model(x)、loss=...、zero_grad、backward、step 五行分别写：读什么、写什么、如果删掉会怎样。"></textarea>
+              <p class="solve-note">不要把答案写成函数名翻译。重点是每一行读了什么、写了什么。</p>
+              <button class="ghost reveal" type="button">展开反馈</button>
+              <details><summary>评分要点</summary><p>答案至少要覆盖：<code>model(x)</code> 读 token id 并写出 logits；<code>cross_entropy</code> 读 logits/y 并写出标量 loss；<code>zero_grad</code> 清旧梯度；<code>backward</code> 写入参数梯度；<code>step</code> 根据梯度和 optimizer 状态更新参数。</p></details>
+            </div>
+            <div class="q" data-question="q5" data-group="二、训练循环读写状态" data-title="Q5. 判断：embedding table 只是固定查字典，不会随训练改变。" data-answer="false" data-explain="embedding table 是可训练参数。它执行查表动作，但表里的向量会被 optimizer 更新。">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">embedding</span></div>
+              <h3>Q5. 判断：embedding table 只是固定查字典，不会随训练改变。</h3>
+              <label><input type="radio" name="q5" value="true">对</label>
+              <label><input type="radio" name="q5" value="false">错</label>
+              <p class="hint">查表是 forward 动作；表里的向量会不会被训练，要看 optimizer 会不会更新它。</p>
+              <button class="ghost check" type="button">检查</button><p class="feedback"></p>
+            </div>
+            <div class="q" data-question="q6" data-group="二、训练循环读写状态" data-title="Q6. logits.reshape(-1, vocab_size) 的目的是什么？">
+              <div class="q-meta"><span class="pill">shape 变换</span><span class="pill">loss 输入</span></div>
+              <h3>Q6. <code>logits.reshape(-1, vocab_size)</code> 的目的是什么？</h3>
+              <textarea name="q6" placeholder="解释为什么要把 [B,T,V] 变成 [B*T,V]，以及 y.reshape(-1) 对应什么。"></textarea>
+              <button class="ghost reveal" type="button">展开反馈</button>
+              <details><summary>参考答案</summary><p>cross entropy 要把每个位置看成一次词表分类。<code>[B,T,V]</code> 摊平成 <code>[B*T,V]</code> 后，每一行对应某条样本某个位置的 vocab logits；<code>y.reshape(-1)</code> 变成 <code>[B*T]</code>，每一项就是那一行的正确 token id。用 <code>reshape</code> 比直接用 <code>view</code> 更稳，因为前面经过 <code>transpose</code> 的张量可能处在非连续内存布局。</p></details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div><h3>三、错误诊断与综合解释</h3><p>遇到“loss 低但生成差”，先排除训练条件和生成条件不一致。</p></div>
+            <div class="quick-review"><b>提示</b><span>优先查目标错位、mask 泄漏、数据切分和评测方式。</span></div>
+          </div>
+          <div class="drill-grid">
+            <div class="q full" data-question="q7" data-group="三、错误诊断与综合解释" data-title="Q7. causal mask 忘了会造成什么训练/生成不一致？">
+              <div class="q-meta"><span class="pill">错误诊断</span><span class="pill">mask</span></div>
+              <h3>Q7. causal mask 忘了会造成什么训练/生成不一致？</h3>
+              <textarea name="q7" placeholder="先说训练时模型偷看了什么，再说生成时为什么拿不到这些信息，最后说 loss 可能怎样误导你。"></textarea>
+              <p class="solve-note">这题要说清训练和生成的差异：训练时偷看未来，生成时没有未来可偷看。</p>
+              <button class="ghost reveal" type="button">展开反馈</button>
+              <details><summary>参考答案</summary><p>没有 causal mask 时，位置 <code>t</code> 可以读取 <code>t+1</code> 之后的 token。模型预测下一个 token 时已经看到了答案附近的信息，loss 可能异常好看。生成时只能从左到右产生 token，没有未来 token 可读，所以训练时学到的捷径用不上，生成质量会崩。</p></details>
+            </div>
+            <div class="q" data-question="q8" data-group="三、错误诊断与综合解释" data-title="Q8. loss 下降时，哪些判断仍然需要保留？">
+              <div class="q-meta"><span class="pill">边界</span><span class="pill">evaluation</span></div>
+              <h3>Q8. loss 下降时，哪些判断仍然需要保留？</h3>
+              <label><input type="checkbox" name="q8" value="loss 只衡量 next-token 预测">loss 只衡量 next-token 预测</label>
+              <label><input type="checkbox" name="q8" value="验证集分布可能太窄">验证集分布可能太窄</label>
+              <label><input type="checkbox" name="q8" value="生成质量还受解码策略和格式影响">生成质量还受解码策略和格式影响</label>
+              <label><input type="checkbox" name="q8" value="loss 下降就说明所有能力都变好">loss 下降就说明所有能力都变好</label>
+              <button class="ghost reveal" type="button">展开反馈</button>
+              <details><summary>参考判断</summary><p>前三项都应该保留。loss 下降只说明 next-token 预测在当前数据和评测方式下变好；生成质量还会受验证集分布、解码策略、上下文长度、任务格式和数据质量影响。最后一项不能选。</p></details>
+            </div>
+            <div class="q" data-question="q9" data-group="三、错误诊断与综合解释" data-title="Q9. 训练 loss 异常低但生成很差，先查哪些地方？">
+              <div class="q-meta"><span class="pill">场景诊断</span><span class="pill">debug</span></div>
+              <h3>Q9. 训练 loss 异常低但生成很差，先查哪些地方？</h3>
+              <label><input type="checkbox" name="q9" value="causal mask 是否允许偷看未来">causal mask 是否允许偷看未来</label>
+              <label><input type="checkbox" name="q9" value="x/y 是否错位">x/y 是否错位</label>
+              <label><input type="checkbox" name="q9" value="训练/验证数据是否泄漏或过于相似">训练/验证数据是否泄漏或过于相似</label>
+              <label><input type="checkbox" name="q9" value="生成时的解码设置和特殊 token 格式">生成时的解码设置和特殊 token 格式</label>
+              <label><input type="checkbox" name="q9" value="优先把模型层数加深">优先把模型层数加深</label>
+              <button class="ghost reveal" type="button">展开反馈</button>
+              <details><summary>参考方向</summary><p>前四项都值得先查。先排除目标构造、mask、数据泄漏和生成格式问题，再考虑模型容量。优先加深模型通常会把诊断变得更难。</p></details>
+            </div>
+            <div class="q full" data-question="q10" data-group="三、错误诊断与综合解释" data-title="Q10. 用 8-10 句话解释一次参数更新如何发生。">
+              <div class="q-meta"><span class="pill">综合解释</span><span class="pill">Feynman</span></div>
+              <h3>Q10. 用 8-10 句话解释一次参数更新如何发生。</h3>
+              <textarea name="q10" placeholder="要求包含：x/y、logits、cross entropy、梯度、zero_grad、backward、optimizer.step、下一轮 forward。"></textarea>
+              <p class="solve-note">这题能讲顺，就说明你已经能读一轮训练代码，不只是在记几个函数名。</p>
+              <button class="ghost reveal" type="button">展开反馈</button>
+              <details><summary>评分要点</summary><p>答案要从 <code>x/y</code> 开始，说明模型输出 logits，cross entropy 用目标 token 计算 loss，<code>zero_grad</code> 清旧梯度，<code>backward</code> 沿计算图写入梯度，AdamW/optimizer 根据梯度和状态更新参数，下一轮 forward 的 logits 因参数变化而可能改变。</p></details>
+            </div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head">
+            <div><h3>四、接上 Assignment 1</h3><p>把刚才学到的形状、mask、loss 和 optimizer 对到官方测试入口。</p></div>
+            <div class="quick-review"><b>提示</b><span>先跑 <code>uv run pytest</code>，再读 <code>tests/adapters.py</code>。</span></div>
+          </div>
+          <div class="drill-grid">
+            <div class="q" data-question="q11" data-group="四、接上 Assignment 1" data-title="Q11. 第一次跑 uv run pytest 主要看到 NotImplementedError，说明什么？" data-answer="B. 适配函数还没有连接到你的实现" data-explain="README 说明初始测试会因为 NotImplementedError 失败；下一步是完成 tests/adapters.py 里的适配函数。">
+              <div class="q-meta"><span class="pill">选择</span><span class="pill">pytest</span></div>
+              <h3>Q11. 第一次跑 <code>uv run pytest</code> 主要看到 <code>NotImplementedError</code>，说明什么？</h3>
+              <label><input type="radio" name="q11" value="A. 官方测试坏了">A. 官方测试坏了</label>
+              <label><input type="radio" name="q11" value="B. 适配函数还没有连接到你的实现">B. 适配函数还没有连接到你的实现</label>
+              <label><input type="radio" name="q11" value="C. 需要先训练完整大模型">C. 需要先训练完整大模型</label>
+              <p class="hint">README 已经把这个失败状态写成正常起点，不要把它当成环境坏了。</p>
+              <button class="ghost check" type="button">检查</button><p class="feedback"></p>
+            </div>
+            <div class="q" data-question="q12" data-group="四、接上 Assignment 1" data-title="Q12. 判断：run_cross_entropy 应该直接接收 [B,T,V] 和 [B,T]。" data-answer="false" data-explain="adapters.py 里的 run_cross_entropy 输入约定是 inputs=[batch_size,vocab_size]，targets=[batch_size]。语言模型训练时通常先把 [B,T,V] 和 [B,T] 摊平。">
+              <div class="q-meta"><span class="pill">判断</span><span class="pill">shape</span></div>
+              <h3>Q12. 判断：<code>run_cross_entropy</code> 应该直接接收 <code>[B,T,V]</code> 和 <code>[B,T]</code>。</h3>
+              <label><input type="radio" name="q12" value="true">对</label>
+              <label><input type="radio" name="q12" value="false">错</label>
+              <p class="hint">先区分语言模型输出的自然形状，和 <code>cross_entropy</code> 这个函数期待的输入形状。</p>
+              <button class="ghost check" type="button">检查</button><p class="feedback"></p>
+            </div>
+            <div class="q full" data-question="q13" data-group="四、接上 Assignment 1" data-title="Q13. tests/adapters.py 在这份作业里扮演什么角色？">
+              <div class="q-meta"><span class="pill">解释</span><span class="pill">adapter</span></div>
+              <h3>Q13. <code>tests/adapters.py</code> 在这份作业里扮演什么角色？</h3>
+              <textarea name="q13" placeholder="说明它和模型本体的关系；它如何把官方测试和你的实现接起来；为什么先看这里能减少迷路。"></textarea>
+              <button class="ghost reveal" type="button">展开反馈</button>
+              <details><summary>参考答案</summary><p><code>tests/adapters.py</code> 是测试适配层。官方测试会调用里面的 <code>run_embedding</code>、<code>run_transformer_lm</code>、<code>run_cross_entropy</code>、<code>get_adamw_cls</code> 等函数；你要把这些函数连接到自己的实现。模型本体仍由你实现，adapter 负责写明测试期待的输入、输出和形状。</p></details>
+            </div>
+            <div class="q full" data-question="q14" data-group="四、接上 Assignment 1" data-title="Q14. 看到 shape mismatch 时如何定位？">
+              <div class="q-meta"><span class="pill">错误诊断</span><span class="pill">assignment</span></div>
+              <h3>Q14. 如果测试里出现 shape mismatch，你会按什么顺序定位？</h3>
+              <textarea name="q14" placeholder="从输入 token id、hidden state、vocab logits、flatten 后 cross entropy 输入这四层说。"></textarea>
+              <button class="ghost reveal" type="button">展开反馈</button>
+              <details><summary>评分要点</summary><p>先确认输入 token id 是 <code>[B,T]</code>；再确认模型内部是 <code>[B,T,d_model]</code>；然后确认 LM head 输出 <code>[B,T,V]</code>；最后确认喂给 cross entropy 前变成 <code>[B*T,V]</code>，targets 变成 <code>[B*T]</code>。不要一上来就改摊平代码，先确认每一层的含义；如果张量经过 <code>transpose</code>，优先用 <code>reshape</code>，避免 non-contiguous 张量触发 <code>view</code> 的 stride 报错。</p></details>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head"><h2>导出练习记录</h2><span class="tag">Markdown</span></div>
+        <p class="muted">生成一份可复制的练习记录，保留题组、题型和题目。它是复盘记录，不替代上面的即时检查和参考答案。</p>
+        <div class="quality" id="quality"></div>
+        <div class="export" id="record">还没有生成练习记录。</div>
+        <div class="actions"><button class="ghost" type="button" onclick="generateRecord()">生成练习记录</button><button class="action" type="button" onclick="copyRecord()">复制 Markdown</button></div>
+      </section>
+
+      <section id="sources">
+        <div class="head"><h2>参考资料</h2><span class="tag">Sources</span></div>
+        <p>本页依据 CS336 官方课程页、Assignment 1 Basics handout/repo 和 <code>tests/adapters.py</code> 的公开接口整理。读完以后，下一步应该进入 Assignment 1 的 Transformer LM、cross-entropy、AdamW 和 training loop 任务；官方仓库通过 <code>tests/adapters.py</code> 连接你的实现，并用 <code>uv run pytest</code> 跑测试。仓库入口、函数名、命令和初始 <code>NotImplementedError</code> 状态，已按 2026-06-18 可访问的公开 README 与 adapters 文件核验。</p>
+        <ul class="source-list">
+          <li><strong>Assignment 1: Basics</strong><br><a href="https://github.com/stanford-cs336/assignment1-basics">https://github.com/stanford-cs336/assignment1-basics</a></li>
+          <li><strong>Assignment 1 adapters.py</strong><br><a href="https://github.com/stanford-cs336/assignment1-basics/blob/main/tests/adapters.py">https://github.com/stanford-cs336/assignment1-basics/blob/main/tests/adapters.py</a></li>
+          <li><strong>CS336 官方课程页</strong><br><a href="https://cs336.stanford.edu/">https://cs336.stanford.edu/</a></li>
+          <li><strong>Lecture materials repository</strong><br><a href="https://github.com/stanford-cs336/lectures">https://github.com/stanford-cs336/lectures</a></li>
+          <li><strong>上游版本锚点</strong><br>本页按 2026-06-18 可访问的公开快照整理：<code>stanford-cs336/assignment1-basics</code> HEAD 为 <code>a158843b20107949f1a8d7df1b05cd33b9166712</code>，<code>stanford-cs336/lectures</code> HEAD 为 <code>8b59b50730766695c2ffedd1a79c50cd09b9eb91</code>。如果上游仓库更新，请重新核验 <code>tests/adapters.py</code>、README 命令、函数名和预期初始失败。</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+  <script src="../assets/vendor/katex/katex.min.js"></script>
+  <script src="../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../assets/study-page.js"></script>
+</body>
+</html>

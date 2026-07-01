@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>P9｜图像与声音生成策略：Diffusion / Flow Matching 与自回归的交汇</title>
+  <link rel="stylesheet" href="../../../../assets/study-page.css">
+</head>
+<body data-study-kind="media" data-feynman-keywords="tokenization,autoregressive,diffusion,flow matching,continuous token,discrete token,generation head,MaskGIT,RVQ,FID,MSE">
+  <div class="progress" id="progress"></div>
+  <div class="layout">
+    <aside>
+      <div class="brand">08_P09<small>第9讲：图像与声音生成策略</small><small>核心：两条生成路线如何汇合</small></div>
+      <div class="navline"></div>
+      <nav>
+        <a href="#goal"><span class="dot"></span>学习目标</a>
+        <a href="#skeleton"><span class="dot"></span>概念骨架</a>
+        <a href="#terms"><span class="dot"></span>关键术语</a>
+        <a href="#lecture"><span class="dot"></span>完整讲义</a>
+        <a href="#source"><span class="dot"></span>字幕来源</a>
+        <a href="#example"><span class="dot"></span>例题讲解</a>
+        <a href="#viz"><span class="dot"></span>可视化观察</a>
+        <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
+        <a href="#practice"><span class="dot"></span>综合练习</a>
+        <a href="#export"><span class="dot"></span>导出练习记录</a>
+      </nav>
+      <div class="side-note">学完本页，你应该能读懂近期图像、声音、视频生成论文里最常见的一组词：tokenizer、autoregressive、diffusion、flow matching、continuous token、generation head。</div>
+    </aside>
+
+    <main>
+      <section class="hero" id="goal">
+        <div>
+          <div class="kicker">LEE HUNG-YI LLM 2026 · P9</div>
+          <h1>图像与声音生成：从接龙到 Diffusion / Flow Matching</h1>
+          <p>这一讲不是重新细讲 diffusion，而是回答一个更大的问题：文字模型靠“接下一个 token”做得很好，图片、声音、视频能不能也这样做？如果能，为什么后来又要把 diffusion、flow matching 这条路线接回来？</p>
+          <p>直觉先放在这里：多媒体生成最开始要解决的是“生成单位是什么”。离散 token 让图片和声音可以像文字一样接龙；连续 token 提高了还原品质，却把“一个输入对应多个正确答案”的问题暴露出来，于是需要生成模型来输出分布，而不是只输出一个平均向量。</p>
+        </div>
+        <div class="goal-card">
+          <h3>本块学完能做什么</h3>
+          <ol>
+            <li>解释为什么像素、采样点直接接龙可行但低效。</li>
+            <li>区分语音、图片、视频 token 化的形式和损失。</li>
+            <li>说明 MaskGIT、MUSE、VAR 解决的是“生成顺序/层级”的问题。</li>
+            <li>说清离散 token 和连续 token 的取舍。</li>
+            <li>用自己的话讲出 generation head 为什么是两条路线的交汇点。</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="skeleton">
+        <div class="head"><h2>概念骨架：本讲的主线</h2><span class="tag">SKELETON</span></div>
+        <p>这节课的主线可以压成一句话：先把图像、声音、视频变成 token，让它们可以被语言模型式的接龙模型处理；再发现离散 token 会限制品质，于是改用连续 token；连续 token 又不能直接用 MSE 接龙，因为它会学到多个正确答案的平均值；最后用 diffusion / flow matching 这类生成模型做 generation head，让每一步接龙都能从一个分布中采样。</p>
+        <div class="map">
+          <span class="node">文字接龙</span><span class="arrow">→</span>
+          <span class="node">图片/声音 token</span><span class="arrow">→</span>
+          <span class="node">自回归生成</span><span class="arrow">→</span>
+          <span class="node">生成顺序优化</span><span class="arrow">→</span>
+          <span class="node">离散 token 瓶颈</span><span class="arrow">→</span>
+          <span class="node">连续 token</span><span class="arrow">→</span>
+          <span class="node">分布生成</span><span class="arrow">→</span>
+          <span class="node">generation head</span>
+        </div>
+        <div class="grid3">
+          <div class="box soft"><h3>第一层问题：单位</h3><p>文字天然有 token。图像可以按像素、patch 或语义 token 切；声音可以按采样点或语音 codec token 切；视频还要加上时间维度。</p></div>
+          <div class="box warn"><h3>第二层问题：顺序</h3><p>文字从左到右很自然，图片不一定。模型可以按 raster order 生成，也可以像 MaskGIT 那样先猜全部，再逐步保留少量较可靠的位置。</p></div>
+          <div class="box greenbox"><h3>第三层问题：分布</h3><p>连续 token 的目标不是唯一向量，而是一片可能答案。diffusion / flow matching 的价值，就是把“输出一个点”改成“通过采样输出一个分布中的点”。</p></div>
+        </div>
+      </section>
+
+      <section id="terms">
+        <div class="head"><h2>关键术语：先把词表稳住</h2><span class="tag">TERMS</span></div>
+        <p>这节课的术语很多，但它们不是散的。先记住一条线：media token 负责把图片、声音、视频变成模型能接龙的单位；autoregressive model 负责按条件继续生成；diffusion / flow matching 负责从连续分布里采样；generation head 把“接龙”和“采样”放在同一个系统里。</p>
+        <table class="term-table">
+          <thead><tr><th>术语</th><th>直觉解释</th><th>精确定义或边界</th><th>常见误解</th></tr></thead>
+          <tbody>
+            <tr><td>Tokenizer</td><td>把原始图片、声音或视频压成 token 的模型。</td><td>通常是训练出来的压缩器，不是简单切块规则。</td><td>以为 tokenization 一定无损。</td></tr>
+            <tr><td>Detokenizer</td><td>把 token 还原成可听、可看的信号。</td><td>还原质量受 token 信息量和训练损失共同限制。</td><td>以为 detokenizer 可以凭空补回所有丢失细节。</td></tr>
+            <tr><td>Discrete token</td><td>用编号表示一个媒体片段。</td><td>模型输出的是有限类别的概率分布。</td><td>只看训练方便，忽略码本瓶颈。</td></tr>
+            <tr><td>Continuous token</td><td>用实数向量表示一个媒体片段。</td><td>表达力更强，但目标空间是连续分布。</td><td>直接用 MSE 当成唯一正确答案来学。</td></tr>
+            <tr><td>RVQ</td><td>多组 token 分层补残差，提高语音表示力。</td><td>Residual vector quantization，每一组补前一组没表达好的部分。</td><td>以为 200 + 200 只是 400 种表达，忘了组合数会相乘。</td></tr>
+            <tr><td>VQ-VAE</td><td>把 autoencoder 中间表示量化成码本编号。</td><td>常用于学离散 latent token。</td><td>把它当普通 autoencoder，忽略中间离散化。</td></tr>
+            <tr><td>MaskGIT</td><td>先猜很多位置，再保留少量可靠 token。</td><td>用 mask-and-predict 的迭代方式生成图像 token。</td><td>以为它不是自回归路线的一部分。</td></tr>
+            <tr><td>Flow matching</td><td>学习一个方向场，把简单分布推向数据分布。</td><td>模型看到中间状态和时间，输出移动方向。</td><td>把它和 diffusion 当成完全无关的两件事。</td></tr>
+            <tr><td>Generation head</td><td>接在大 Transformer 后面的小型生成模型。</td><td>用上下文向量作条件，多步生成下一个连续 token。</td><td>以为整个大模型每一步都要反复跑完整 diffusion。</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="lecture">
+        <div class="head"><h2>完整讲义：两条生成路线为什么会合流</h2><span class="tag">LECTURE</span></div>
+        <h3>1. 从文字接龙走到图像、声音和视频</h3>
+        <p>课程开头展示了几类现在已经常见的生成能力：文字生成图片、在原图上改出新内容、跨语言复制说话人的音色、歌词生成音乐、从图片生成带声音的视频。这些例子共同说明一件事：模型输出已经不只是一串文字，而是各种连续信号。图片是二维像素，声音是一维波形，视频是一串带时间轴的图片。</p>
+        <p>如果完全照搬语言模型的直觉，图片也可以“接龙”。PixelRNN / PixelCNN 曾经逐像素生成图片；声音也可以“接龙”，WaveNet 可以逐采样点生成语音。问题是单位太细。16 kHz 的声音一秒有 16000 个采样点，一张图片也有成千上万像素；每生成一个最小单位都要调用模型，序列太长就会拖垮训练和推理。</p>
+        <p>所以这节课不是问“图片、声音能不能接龙”，答案是可以；真正的问题是“用什么单位接龙”。像素和采样点是原始单位，表达完整但太长；token 是压缩后的单位，表达会损失一部分细节，但更适合被 Transformer 处理。看到一个模型说用语言模型生成图片或声音时，先判断它生成的是像素、波形，还是 tokenizer 产生的媒体 token。</p>
+
+        <h3>2. Tokenization：把连续信号变成可接龙单位</h3>
+        <p>图片和声音的 token 化不像文字切词。文字 tokenization 通常可以相对稳定地还原原文；媒体 tokenization 更像有损压缩。你把原始信号交给 tokenizer，得到一串或一组 token；再把 token 交给 detokenizer，希望还原结果和原信号足够像。这里的“像”不是单一标准，后面会分成数值像、感知像和分布像。</p>
+        <p>语音常见做法是 codec token。课程提到 RVQ，也就是 residual vector quantization：一组 token 不够表示复杂语音，就用多组 token 叠起来。第一组表示主要信息，第二组补第一组没表达好的残差，后面继续补。它像进位制：每组只有 200 种选择，两组组合起来不是 400 种，而是 200 × 200 种。</p>
+        <p>图片 token 通常是二维网格。早期 DALL-E 式做法可以把每个 8 × 8 小块映射到一个离散 token，例如在 8192 个可能 token 中选一个。视频 token 再多一个时间维度，一个 token 可能同时代表一小块空间和几个 frame 的片段。判断一个媒体 tokenizer 时，不只看 token 数量，还要看它覆盖的是空间、时间还是语义摘要。</p>
+
+        <h3>3. 自回归路线：把图片和声音也当成 token 接龙</h3>
+        <p>一旦有了 token，图片、声音、视频生成就可以使用语言模型的办法：根据 prompt 和已经生成的 token，预测下一个 token。差别只在 token 的定义从文字变成图片小块、语音片段或视频片段。课程提到一些论文标题直接写着 “language model beats diffusion” 或 “autoregressive model beats diffusion”，就是为了强调这种路线不只是玩具，确实能生成高质量图像或视频。</p>
+        <p>这条路线的吸引力很直接：Transformer 处理序列很成熟，扩模型、扩数据、扩上下文的方法都有现成经验。P9 里提到某些工作甚至不再为图像特制架构，只把 LLaMA 式结构拿来生成图像 token，也能得到竞争力很强的结果。</p>
+        <div class="grid3">
+          <div class="box"><h3>图片</h3><p>把图片压成二维 token，再拉直成序列。模型可以从左到右、从上到下生成，也可以用更灵活的顺序。</p></div>
+          <div class="box"><h3>视频</h3><p>把空间加时间一起压缩，一个 token 可能覆盖一个小区域和若干 frame。VideoGPT 早期就用 discrete latent + Transformer 做视频生成。</p></div>
+          <div class="box"><h3>声音</h3><p>把声音变成一维 token 序列，文字后面可以接语音 token。第十讲和作业会进一步处理语音 token。</p></div>
+        </div>
+        <p>不过，自回归路线也有两类压力。第一是长序列：图片、视频、声音 token 数量仍然可能很大。第二是 token 瓶颈：如果 tokenizer 压缩太狠，detokenizer 再强也只能根据残缺信息还原，画质、音质或细节会被上限锁住。</p>
+
+        <h3>4. 生成顺序：图片不一定要从左上角画到右下角</h3>
+        <p>文字从左到右有天然顺序，图片没有。最朴素的做法叫 raster order：按行扫描，从左到右、从上到下生成 token。但人画图常常先画主体，再补背景和细节。模型也可以不固定顺序。</p>
+        <p>MaskGIT 的想法是：训练时随机 mask 掉一些图片 token，让模型根据文字和剩下的 token 还原被遮住的位置。推理时先放一整排 mask，让模型一次猜所有位置；但第一次全部同时生成会缺少协调，可能到处都想画同一个头。于是只保留少量较可靠的 token，其他盖回去再猜。反复几轮后，图片逐渐完整。</p>
+        <div class="formula">
+          一般自回归：一次产生 1 个 token，顺序固定。<br>
+          MaskGIT 式生成：一次尝试产生所有 token，但每轮只保留 K 个，再继续修正。<br>
+          <small>关键不是“每轮谁被保留一定要最优”，而是让少量已确定内容约束后续内容，避免所有位置各画各的。</small>
+        </div>
+        <div class="grid2">
+          <div class="box soft">
+            <h3>层级生成：先草稿，再细节</h3>
+            <p>MUSE 先生成较低分辨率图片，再把小图扩展成高清图；VAR / visual autoregressive model 则把从小图到大图也看成一种接龙。视频生成也可以先生成粗糙、低帧率或低分辨率版本，再逐步细化。</p>
+          </div>
+          <div class="box warn">
+            <h3>容易混淆的点</h3>
+            <p>MaskGIT 不是传统“左到右接龙”，但它仍常被放在自回归大家族里，因为它仍然是逐步决定 token，只是每一步可以决定多个位置，顺序由模型和当前置信度共同塑造。</p>
+          </div>
+        </div>
+
+        <h3>5. 训练 tokenizer 时，什么叫“还原得像”</h3>
+        <p>Tokenizer 和 detokenizer 的训练核心是：原始信号经过压缩再还原后，要和原始信号像。但“像”有三种层次，课程用声音举例，图像也一样适用。</p>
+        <table class="metric-table">
+          <thead><tr><th>相似度</th><th>怎么量</th><th>优点</th><th>问题</th></tr></thead>
+          <tbody>
+            <tr><td>表面上的像</td><td>直接比较采样点、像素或向量距离，例如 MSE。</td><td>简单、可微、容易训练。</td><td>和人类感知可能差很远。声音平移一个采样点，人听不出，MSE 可能很大。</td></tr>
+            <tr><td>感知上的像</td><td>用识别模型的 hidden representation 比距离。</td><td>更接近人听起来、看起来是否相似。</td><td>依赖代理模型，代理模型不一定覆盖全部感知。</td></tr>
+            <tr><td>模型难以分辨的像</td><td>训练 discriminator 区分真信号和还原信号。</td><td>能逼还原结果更像真实分布。</td><td>训练更复杂，类似 GAN 式博弈。</td></tr>
+          </tbody>
+        </table>
+        <p>课程里的答案很朴素：小孩子才问选哪一种，大人全都要。现实系统常常把 regression loss、perceptual loss、adversarial loss 混合起来，让还原同时满足低层数值、感知语义和真实感。</p>
+
+        <h3>6. 连续 token：更强的表达力，也带来新的训练难题</h3>
+        <p>离散 token 会限制画质和音质。比如一小块图像只用 8192 个编号之一表示，细节一定会被压掉。模型再大、数据再多，如果 detokenizer 拿到的 token 本身信息不足，上限仍然被 tokenizer 卡住。连续 token 的想法是：一个 token 不再是整数编号，而是一个向量，向量每个维度是实数。这样表达力大得多，还原结果可以更接近原图或原声。</p>
+        <p>但连续 token 不能直接照搬文字模型的训练。文字模型输出的是一个离散 token 的概率分布：看到“李宏毅是”，后面既可以接“教授”，也可以接“演员”，模型可以给两个词不同概率，然后采样其中一个。连续 token 如果用 MSE 训练，麻烦来了：同一个文字“奔跑的狗”可以对应草地上的狗，也可以对应城市里的狗。两个目标向量都对，但它们的平均值往往不是一张合理的图。</p>
+        <div class="formula">
+          MSE 训练连续 token 的典型问题：<br>
+          若正确答案可能是 z<sub>A</sub> 或 z<sub>B</sub>，模型用一个向量 ẑ 同时靠近两者，最优解可能接近平均值 (z<sub>A</sub> + z<sub>B</sub>) / 2。<br>
+          <small>在离散 token 中，平均体现为概率分布；在连续向量中，平均可能变成不自然的混合样本。</small>
+        </div>
+
+        <h3>7. 生成模型与 Flow Matching：让模型输出分布</h3>
+        <p>diffusion、GAN、VAE、normalizing flow、flow matching 这些方法外表不同，深层目标相似：从一个容易采样的 source distribution，例如高斯分布，变成真实数据所在的 target distribution。也就是说，它们不是只输出一个向量，而是通过“采样 + 变换”产生一整片可能样本。</p>
+        <p>Flow matching 的直觉尤其适合本讲：从 source 分布中采样一个点 <code>x0</code>，模型在每个时间 <code>t</code> 告诉它应该往哪个方向走。走很多小步后，原本简单分布里的点会被移动到目标分布附近。这个“方向场”就是 vector field。</p>
+        <div class="formula">
+          训练 flow matching 的核心样本：<br>
+          x<sub>t</sub> = (1 - t) x<sub>0</sub> + t x<sub>1</sub><br>
+          模型看到 (x<sub>t</sub>, t)，学习输出方向 v = x<sub>1</sub> - x<sub>0</sub>。<br>
+          <small>x<sub>0</sub> 来自 source distribution，x<sub>1</sub> 来自 target distribution。</small>
+        </div>
+
+        <h3>8. 两条路线交汇：generation head</h3>
+        <p>现在可以把两条路线接起来了。自回归模型负责“根据文字和已经生成的内容，决定下一步应该生成什么条件”；生成模型负责“在这个条件下，从可能答案分布中采样出一个连续 token”。这就是 generation head 的核心。</p>
+        <p>如果直接把整个巨大 Transformer 当作 flow matching 或 diffusion 的网络，每生成一个连续 token 都要跑很多 iteration，成本会很可怕。generation head 的改法是：大 Transformer 只跑一次，输出一个上下文向量；后面的小模型接收这个上下文向量和从高斯分布采样的噪声，迭代多次，把噪声变成最终连续 token。多轮迭代只发生在小 head 上，而不是反复跑大 Transformer。</p>
+        <div class="grid2">
+          <div class="box greenbox">
+            <h3>为什么说是交汇</h3>
+            <p>接龙模型解决序列条件：第几个 token、前面生成了什么、文字 prompt 是什么。生成模型解决连续分布：同一个条件下有许多合理答案，不能用一个平均向量糊过去。generation head 把两者各自擅长的部分拆开。</p>
+          </div>
+          <div class="box warn">
+            <h3>仍然存在的成本问题</h3>
+            <p>即便 head 很小，每个连续 token 也可能需要多轮迭代。如果一张图有很多 continuous token，总成本仍然高。因此 2025 年附近很多研究会追问：能不能减少 iteration，甚至一步生成？课程提到 rectified flow、energy model 等方向。</p>
+          </div>
+        </div>
+        <p>这个结构还可以和 MaskGIT、VAR 等自回归技巧叠加。被 mask 的位置不再预测离散编号，而是预测连续向量；每个连续向量再交给 diffusion head 或 flow matching head 生成。于是你会看到各种标题：autoregressive image generation with continuous tokens、video generation with continuous tokens、text-to-audio with generation head。</p>
+      </section>
+
+      <section id="source">
+        <div class="head"><h2>字幕来源与材料边界</h2><span class="tag">SOURCE</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>本页依据</h3>
+            <p>材料依据：P9《图像与声音生成策略：Diffusion / Flow Matching 与自回归的交汇》课程字幕与讲义内容。</p>
+            <p>视频主题从图像、声音、视频生成的现象进入，再讲媒体 tokenization、自回归生成、MaskGIT / MUSE / VAR、离散 token 的瓶颈、连续 token、flow matching，以及 generation head。</p>
+          </div>
+          <div class="box soft">
+            <h3>处理方式</h3>
+            <p>课程里的展示案例、口语重复和模型名称口误已整理成讲义语言。页面不堆叠逐字稿。涉及论文名和术语时保留英文，方便你以后读论文标题时能对应上。</p>
+            <p>课程没有展开数学推导的地方，本页只补到能判断机制和误区的程度；更完整的 diffusion / flow matching 推导可放到后续专门章节。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="example">
+        <div class="head"><h2>例题讲解：把机制落到最小流程</h2><span class="tag">EXAMPLE</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>例题 1：一张图片如何走完整个生成流程</h3>
+            <p>问题：给模型一句 prompt “一只奔跑的狗”，它不是直接把每个像素都吐出来，而是先在 token 空间里生成。最常见的流程是：训练 tokenizer 把目标图片压成 token；训练生成模型预测这些 token；推理时生成新 token；最后 detokenizer 把 token 还原成图片。</p>
+            <p>判断重点：如果 token 是离散编号，模型输出的是每个编号的概率；如果 token 是连续向量，模型要处理的是一片可能向量，而不是一个固定答案。</p>
+          </div>
+          <div class="box greenbox">
+            <h3>例题 2：为什么 MaskGIT 不一次保留全部结果</h3>
+            <p>第一次把所有 mask 都填掉时，每个位置都只看到文字条件，彼此之间还没有足够约束。左边 token 可能想画头，右边 token 也可能想画头，结果就会出现多个局部都合理、整体不协调的图片。每轮只保留少量结果，是为了让后续位置能被已经确定的结构约束。</p>
+            <p>判断重点：MaskGIT 的关键不是“并行生成一定更好”，而是“先给全局一个猜测，再用少量可靠 token 建立上下文”。</p>
+          </div>
+        </div>
+        <div class="codebar"><span class="label">伪代码：先压缩，再接龙，再还原</span><span class="kind">pipeline</span><button class="copy-code">复制</button></div>
+        <pre><code><span class="cm"># 训练 tokenizer / detokenizer</span>
+tokens = tokenizer(raw_image_or_audio)
+recovered = detokenizer(tokens)
+loss = similarity(raw_image_or_audio, recovered)
+
+<span class="cm"># 训练生成模型</span>
+prompt = <span class="str">"一只奔跑的狗"</span>
+target_tokens = tokenizer(target_image)
+model.learn_to_predict(prompt, target_tokens)
+
+<span class="cm"># 推理</span>
+new_tokens = model.generate(prompt)
+new_media = detokenizer(new_tokens)</code></pre>
+        <div class="codebar"><span class="label">伪代码：自回归骨架 + 小型生成头</span><span class="kind">generation head</span><button class="copy-code">复制</button></div>
+        <pre><code>context = transformer(prompt, previous_continuous_tokens)
+noise = sample_normal_vector()
+
+<span class="kw">for</span> t <span class="kw">in</span> generation_steps:
+    direction = generation_head(noise, context, t)
+    noise = update(noise, direction)
+
+next_token = noise
+previous_continuous_tokens.append(next_token)</code></pre>
+        <p>这段伪代码里，大 Transformer 负责读 prompt 和已经生成的 token，输出上下文；小型 generation head 负责多步更新噪声。删掉 generation head，就只剩“输出一个向量”的回归问题；把 head 扩成整个大模型，又会让每个 token 的多步采样成本变得很高。</p>
+        <div class="grid3" style="margin-top:14px">
+          <div class="box greenbox">
+            <h3>核心直觉</h3>
+            <p>文字生成的难点是“下一个符号是什么”；图像和声音还多一个难点：一个位置可能有很多合理的连续答案。离散 token 把问题变回分类，连续 token 则需要 diffusion / flow matching 这类生成模型来表达分布。</p>
+          </div>
+          <div class="box">
+            <h3>易混点</h3>
+            <p><b>tokenizer</b> 负责压缩媒体，<b>detokenizer</b> 负责还原；<b>autoregressive</b> 说明按已生成内容预测下一步；<b>diffusion / flow matching</b> 说明如何从噪声走向目标分布；<b>generation head</b> 是把分布生成放进每个 token 步的小模块。</p>
+          </div>
+          <div class="box soft">
+            <h3>Worked example：为什么 MSE 会平均出怪结果</h3>
+            <p>同一个文字 prompt 下，下一块图像既可能是“狗头朝左”，也可能是“狗头朝右”。如果连续 token 直接用 MSE 回归唯一向量，模型可能学到两者平均，结果像模糊的中间状态。flow matching 的目标是从噪声采样出其中一个合理答案，而不是输出平均值。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="viz">
+        <div class="head"><h2>可视化观察：表达力、分布和成本</h2><span class="tag">VIZ</span></div>
+        <div class="viz-panel">
+          <div class="viz-grid">
+            <div>
+              <h3>观察 1：token 表达力和生成难度的拉扯</h3>
+              <p class="muted">切换 token 类型，观察它对还原品质、接龙难度和是否需要生成模型的影响。</p>
+              <div class="btns">
+                <button class="active" data-token-mode="discrete">离散 token</button>
+                <button class="ghost" data-token-mode="continuous">连续 token</button>
+              </div>
+              <div class="barrow"><span>还原上限</span><div class="bar"><div class="fill" id="qualityBar"></div></div><b id="qualityText">中</b></div>
+              <div class="barrow"><span>接龙容易度</span><div class="bar"><div class="fill gold" id="easeBar"></div></div><b id="easeText">高</b></div>
+              <div class="barrow"><span>分布需求</span><div class="bar"><div class="fill red" id="distBar"></div></div><b id="distText">低</b></div>
+            </div>
+            <div class="box soft" id="tokenNote">
+              <h3>离散 token</h3>
+              <p>容易套用语言模型训练，因为输出可以解释成 token 概率分布；代价是压缩损失可能限制最终品质。</p>
+            </div>
+          </div>
+        </div>
+        <div class="viz-panel">
+          <h3>观察 2：flow matching 的方向场</h3>
+          <svg class="flow-svg" viewBox="0 0 760 260" role="img" aria-label="flow matching 示意图">
+            <rect x="1" y="1" width="758" height="258" fill="#fbfdff" stroke="rgba(36,34,31,.18)"/>
+            <circle cx="105" cy="130" r="52" fill="#eef8fc" stroke="#216d5d" stroke-width="3"/>
+            <text x="105" y="134" text-anchor="middle" font-size="18" fill="#232320">source</text>
+            <path d="M180 130 C260 40, 350 215, 430 118 S590 70, 650 130" fill="none" stroke="#1f7a5f" stroke-width="5"/>
+            <polygon points="650,130 632,120 634,141" fill="#1f7a5f"/>
+            <path d="M595 96 C635 75, 696 93, 706 130 C716 176, 650 205, 596 174 C558 153, 558 117, 595 96" fill="#edf8f3" stroke="#1f7a5f" stroke-width="3"/>
+            <text x="635" y="138" text-anchor="middle" font-size="18" fill="#232320">target</text>
+            <text x="377" y="35" text-anchor="middle" font-size="15" fill="#5f6875">每一步：询问模型当前位置和时间，得到下一步方向</text>
+            <text x="377" y="236" text-anchor="middle" font-size="14" fill="#5f6875">步数越多，通常越接近目标分布，但计算越贵</text>
+          </svg>
+          <div class="slider-row">
+            <label for="stepSlider">生成步数</label>
+            <input id="stepSlider" type="range" min="1" max="100" value="30">
+            <strong id="stepValue">30</strong>
+          </div>
+          <div class="barrow"><span>分布贴近度</span><div class="bar"><div class="fill" id="matchBar"></div></div><b id="matchText">较好</b></div>
+          <div class="barrow"><span>推理成本</span><div class="bar"><div class="fill red" id="costBar"></div></div><b id="costText">中</b></div>
+          <p class="caption">观察重点：步数提高时，样本更接近目标分布，但每个 token 的推理成本也跟着增加。</p>
+        </div>
+      </section>
+
+      <section id="diagnosis">
+        <div class="head"><h2>误区诊断：读论文时先问四件事</h2><span class="tag">DIAGNOSIS</span></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>先问生成单位</h3>
+            <p>它生成的是像素、波形、离散 token、连续 token，还是 latent 表示？单位决定序列长度、还原上限和训练目标。</p>
+            <h3>再问生成顺序</h3>
+            <p>它是 raster order、random order、MaskGIT 式迭代、从低分辨率到高分辨率，还是多种顺序叠加？这决定推理步数和全局协调能力。</p>
+            <h3>最后问分布怎么处理</h3>
+            <p>如果目标是连续向量，它如何避免 MSE 平均问题？是 diffusion head、flow matching head，还是其他生成头？</p>
+          </div>
+          <div class="box redsoft">
+            <h3>常见误区、后果和修法</h3>
+            <ul>
+              <li>把 tokenizer 当成无损切分，会高估 detokenizer 的补细节能力；修法是先看重建质量和 token 数量。</li>
+              <li>以为自回归只能从左到右，会看不懂 MaskGIT 和层级生成；修法是把“顺序”单独拿出来问。</li>
+              <li>看到 continuous token 就直接用 MSE，会得到多个正确答案的平均样本；修法是检查是否用了生成头。</li>
+              <li>把 diffusion 和 flow matching 当成完全无关，会错过它们都在做分布变换的共同点；修法是从 source 到 target 的角度看。</li>
+              <li>只比较生成效果不看 iteration，会忽略真实推理成本；修法是问每个 token、每张图、每秒声音要跑几次模型。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="codebar"><span class="label">错误示例：把连续 token 当成唯一答案回归</span><span class="kind">diagnosis</span><button class="copy-code">复制</button></div>
+        <pre><code><span class="cm"># 错误思路：同一个 prompt 只回归一个平均向量</span>
+target = average(all_valid_continuous_tokens_for_prompt)
+pred = transformer(prompt)
+loss = mse(pred, target)
+
+<span class="cm"># 后果：多个合理样本被压成一个不自然的混合点</span></code></pre>
+        <p>读到新的图像、声音或视频生成论文时，把它拆成“表示单位、生成顺序、分布生成、推理成本”四个问题。只要这四个问题问清楚，论文标题里再多新名词，也能知道自己该往哪一层追问。</p>
+      </section>
+
+      <section id="practice">
+        <div class="head"><h2>综合练习：把路线讲清楚，而不是背术语</h2><span class="tag">22 QUESTIONS</span></div>
+        <div class="practice-intro">
+          <div class="review-card">
+            <strong>答题建议</strong>
+            <p>先用自己的话回答，再回讲义查漏。诊断题按“错因 / 后果 / 修法”写，费曼题要串起完整主线。</p>
+          </div>
+          <div class="review-card">
+            <strong>核心验收</strong>
+            <p>你应该能解释：为什么离散 token 让图片/声音可以接龙，为什么连续 token 又需要生成模型，以及 generation head 如何把两条路线合并。</p>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head"><div><h3>A. 基础概念</h3><p>检查你是否掌握本讲最小词表。</p></div><div class="quick-review"><b>快速复盘</b>tokenizer 压缩，detokenizer 还原，自回归负责接下一个单位，生成模型负责输出分布。</div></div>
+          <div class="drill-grid">
+            <div class="q" data-role="homework" data-title="1. 判断：图片和声音不能用自回归生成，因为它们没有文字 token。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. 判断：图片和声音不能用自回归生成，因为它们没有文字 token。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
+            <div class="q" data-role="homework" data-title="2. 为什么逐像素或逐采样点生成虽然可行，却通常不理想？"><div class="q-meta"><span class="pill">简答</span></div><h3>2. 为什么逐像素或逐采样点生成虽然可行，却通常不理想？</h3><textarea name="q2"></textarea></div>
+            <div class="q" data-role="homework" data-title="3. Tokenizer 和 detokenizer 分别做什么？"><div class="q-meta"><span class="pill">解释</span></div><h3>3. Tokenizer 和 detokenizer 分别做什么？</h3><textarea name="q3"></textarea></div>
+            <div class="q" data-role="homework" data-title="4. RVQ 为什么像进位制？"><div class="q-meta"><span class="pill">类比解释</span></div><h3>4. RVQ 为什么像进位制？</h3><textarea name="q4"></textarea></div>
+            <div class="q" data-role="homework" data-title="5. 图片 token 和语音 token 在形状上通常有什么差别？"><div class="q-meta"><span class="pill">对照</span></div><h3>5. 图片 token 和语音 token 在形状上通常有什么差别？</h3><textarea name="q5"></textarea></div>
+            <div class="q" data-role="homework" data-title="6. “视频 token 只是图片 token 的重复”这句话哪里不准确？"><div class="q-meta"><span class="pill">诊断</span></div><h3>6. “视频 token 只是图片 token 的重复”这句话哪里不准确？</h3><div class="solve-note">提示：回答空间维度和时间维度。</div><textarea name="q6"></textarea></div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head"><div><h3>B. 自回归、顺序与层级</h3><p>检查你是否能解释图片生成为什么不必按固定顺序。</p></div><div class="quick-review"><b>快速复盘</b>Raster order 是一种选择，不是自然法则。MaskGIT 每轮保留少量 token，层级生成先粗后细。</div></div>
+          <div class="drill-grid">
+            <div class="q" data-role="homework" data-title="7. Raster order 是什么？它为什么不是图片生成的唯一顺序？"><div class="q-meta"><span class="pill">解释</span></div><h3>7. Raster order 是什么？它为什么不是图片生成的唯一顺序？</h3><textarea name="q7"></textarea></div>
+            <div class="q" data-role="homework" data-title="8. MaskGIT 第一次全部 token 同时生成为什么容易出问题？"><div class="q-meta"><span class="pill">诊断</span></div><h3>8. MaskGIT 第一次全部 token 同时生成为什么容易出问题？</h3><textarea name="q8"></textarea></div>
+            <div class="q" data-role="homework" data-title="9. MaskGIT 为什么要只保留一部分 token，再把其他位置盖回去？"><div class="q-meta"><span class="pill">机制</span></div><h3>9. MaskGIT 为什么要只保留一部分 token，再把其他位置盖回去？</h3><textarea name="q9"></textarea></div>
+            <div class="q" data-role="homework" data-title="10. MUSE 或 VAR 式“先小图后大图”解决了什么问题？"><div class="q-meta"><span class="pill">应用</span></div><h3>10. MUSE 或 VAR 式“先小图后大图”解决了什么问题？</h3><textarea name="q10"></textarea></div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head"><div><h3>C. 相似度、离散瓶颈与连续 token</h3><p>检查你是否能说清“像”和“高品质”的训练代价。</p></div><div class="quick-review"><b>快速复盘</b>表面像、感知像、模型分不出来的像都重要；离散 token 易训练但会限制还原，连续 token 表达强但训练更难。</div></div>
+          <div class="drill-grid">
+            <div class="q" data-role="homework" data-title="11. 表面上的像、感知上的像、模型难以分辨的像分别是什么？"><div class="q-meta"><span class="pill">三分法</span></div><h3>11. 表面上的像、感知上的像、模型难以分辨的像分别是什么？</h3><textarea name="q11"></textarea></div>
+            <div class="q" data-role="homework" data-title="12. 为什么声音平移一个采样点，人听不出，MSE 却可能很大？"><div class="q-meta"><span class="pill">解释</span></div><h3>12. 为什么声音平移一个采样点，人听不出，MSE 却可能很大？</h3><textarea name="q12"></textarea></div>
+            <div class="q" data-role="homework" data-title="13. 离散 token 为什么会限制图像或声音生成的上限？"><div class="q-meta"><span class="pill">解释</span></div><h3>13. 离散 token 为什么会限制图像或声音生成的上限？</h3><textarea name="q13"></textarea></div>
+            <div class="q" data-role="homework" data-title="14. 连续 token 比离散 token 强在哪里？又带来什么新问题？"><div class="q-meta"><span class="pill">对照</span></div><h3>14. 连续 token 比离散 token 强在哪里？又带来什么新问题？</h3><textarea name="q14"></textarea></div>
+            <div class="q" data-role="homework" data-title="15. 为什么用 MSE 训练连续 token 可能得到“两个正确答案的平均怪物”？"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 为什么用 MSE 训练连续 token 可能得到“两个正确答案的平均怪物”？</h3><textarea name="q15"></textarea></div>
+          </div>
+        </div>
+
+        <div class="practice-group">
+          <div class="group-head"><div><h3>D. Flow matching 与路线交汇</h3><p>检查你是否能把生成模型的角色讲出来。</p></div><div class="quick-review"><b>快速复盘</b>Flow matching 学一个方向场，把 source 分布移动到 target 分布；generation head 把这个能力放进每一步接龙里。</div></div>
+          <div class="drill-grid">
+            <div class="q" data-role="homework" data-title="16. Generative model 这条路线想解决的核心问题是什么？"><div class="q-meta"><span class="pill">解释</span></div><h3>16. Generative model 这条路线想解决的核心问题是什么？</h3><textarea name="q16"></textarea></div>
+            <div class="q" data-role="homework" data-title="17. 用 3 句话解释 source distribution 和 target distribution。"><div class="q-meta"><span class="pill">简答</span></div><h3>17. 用 3 句话解释 source distribution 和 target distribution。</h3><textarea name="q17"></textarea></div>
+            <div class="q" data-role="homework" data-title="18. Flow matching 中模型输出的 vector field 是什么？"><div class="q-meta"><span class="pill">解释</span></div><h3>18. Flow matching 中模型输出的 vector field 是什么？</h3><textarea name="q18"></textarea></div>
+            <div class="q" data-role="homework" data-title="19. 为什么 flow matching 的生成步数越多通常越准，但也越贵？"><div class="q-meta"><span class="pill">成本分析</span></div><h3>19. 为什么 flow matching 的生成步数越多通常越准，但也越贵？</h3><textarea name="q19"></textarea></div>
+            <div class="q" data-role="homework" data-title="20. Generation head 为什么能减少反复跑大 Transformer 的成本？"><div class="q-meta"><span class="pill">机制</span></div><h3>20. Generation head 为什么能减少反复跑大 Transformer 的成本？</h3><textarea name="q20"></textarea></div>
+            <div class="q" data-role="homework" data-title="21. 如果一个模型说“autoregressive video generation with continuous tokens”，你会按哪四个问题拆解它？"><div class="q-meta"><span class="pill">应用</span></div><h3>21. 如果一个模型说“autoregressive video generation with continuous tokens”，你会按哪四个问题拆解它？</h3><textarea name="q21"></textarea></div>
+            <div class="q full" data-role="homework" data-title="22. 费曼题：用 8-10 句话讲清楚本讲两条技术路线如何交汇。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>22. 费曼题：用 8-10 句话讲清楚本讲两条技术路线如何交汇。</h3><div class="solve-note">至少提到 tokenization、discrete token、continuous token、MSE 平均问题、generative model、flow matching、generation head、推理成本。</div><textarea name="q22"></textarea></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="export">
+        <div class="head"><h2>导出练习记录</h2><span class="tag">EXPORT</span></div>
+        <div class="export-box">
+          <p>写完后点生成练习记录。页面会保留题干摘要和你的回答，方便回看和订正。</p>
+          <div class="export-actions">
+            <button id="buildAnswer">生成练习记录</button>
+            <button id="copyAnswer" class="ghost">复制记录</button>
+            <button id="downloadAnswer" class="ghost">下载 .md</button>
+          </div>
+          <div id="qualityBox" class="quality"></div>
+          <textarea id="exportText" placeholder="这里会生成 Markdown 练习记录。"></textarea>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="../../../../assets/study-page.js"></script>
+<script>
+    const $ = (sel, root=document) => root.querySelector(sel);
+    const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
+
+    function updateProgress(){
+      const h = document.documentElement;
+      const total = h.scrollHeight - h.clientHeight;
+      const pct = total ? (h.scrollTop / total) * 100 : 0;
+      $('#progress').style.width = pct + '%';
+    }
+    window.addEventListener('scroll', updateProgress, {passive:true});
+    updateProgress();
+
+    const links = $$('nav a');
+    const sections = links.map(a => $(a.getAttribute('href'))).filter(Boolean);
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if(!entry.isIntersecting) return;
+        links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id));
+      });
+    }, {rootMargin:'-45% 0px -48% 0px', threshold:0.01});
+    sections.forEach(sec => observer.observe(sec));
+
+    $$('.copy-code').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const pre = btn.closest('.codebar').nextElementSibling;
+        const text = pre ? pre.innerText : '';
+        navigator.clipboard?.writeText(text).then(() => {
+          const old = btn.textContent;
+          btn.textContent = '已复制';
+          setTimeout(() => btn.textContent = old, 1200);
+        });
+      });
+    });
+
+    function setBar(id, pct){
+      const el = $('#' + id);
+      if(el) el.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    }
+
+    function setTokenMode(mode){
+      const discrete = mode === 'discrete';
+      setBar('qualityBar', discrete ? 58 : 92);
+      setBar('easeBar', discrete ? 88 : 45);
+      setBar('distBar', discrete ? 35 : 86);
+      $('#qualityText').textContent = discrete ? '中' : '高';
+      $('#easeText').textContent = discrete ? '高' : '中低';
+      $('#distText').textContent = discrete ? '低' : '高';
+      $('#tokenNote').innerHTML = discrete
+        ? '<h3>离散 token</h3><p>容易套用语言模型训练，因为输出可以解释成 token 概率分布；代价是压缩损失可能限制最终品质。</p>'
+        : '<h3>连续 token</h3><p>表达力强，还原品质上限更高；但输出目标是一片连续分布，直接用 MSE 容易学到多个答案的平均。</p>';
+      $$('[data-token-mode]').forEach(btn => {
+        const active = btn.dataset.tokenMode === mode;
+        btn.classList.toggle('active', active);
+        btn.classList.toggle('ghost', !active);
+      });
+    }
+    $$('[data-token-mode]').forEach(btn => btn.addEventListener('click', () => setTokenMode(btn.dataset.tokenMode)));
+    setTokenMode('discrete');
+
+    function updateSteps(){
+      const v = Number($('#stepSlider').value);
+      $('#stepValue').textContent = v;
+      const match = Math.round(100 * (1 - Math.exp(-v / 24)));
+      const cost = v;
+      setBar('matchBar', match);
+      setBar('costBar', cost);
+      $('#matchText').textContent = match > 85 ? '很好' : match > 65 ? '较好' : match > 35 ? '一般' : '差';
+      $('#costText').textContent = cost > 70 ? '高' : cost > 35 ? '中' : '低';
+    }
+    $('#stepSlider').addEventListener('input', updateSteps);
+    updateSteps();
+
+    function readAnswer(q){
+      const checked = q.querySelector('input[type="radio"]:checked');
+      if(checked) return checked.value;
+      const text = q.querySelector('textarea,input[type="text"]');
+      return text ? text.value.trim() : '';
+    }
+
+    function collectAnswers(){
+      const qs = $$('[data-role=homework]');
+      const lines = [
+        '# P9 图像与声音生成策略练习记录',
+        '',
+        '- 课程：李宏毅 LLM 大模型 第9讲',
+        '- 主题：Diffusion / Flow Matching 与自回归的交汇',
+        '- 生成时间：' + new Date().toLocaleString('zh-CN'),
+        ''
+      ];
+      const missing = [];
+      qs.forEach((q, idx) => {
+        const title = q.dataset.title || q.querySelector('h3')?.innerText || ('第 ' + (idx + 1) + ' 题');
+        const ans = readAnswer(q);
+        if(!ans) missing.push(idx + 1);
+        lines.push('## ' + title);
+        lines.push(ans || '（未作答）');
+        lines.push('');
+      });
+      const keywordText = document.body.dataset.feynmanKeywords || '';
+      const last = qs[qs.length - 1];
+      const feynman = last ? readAnswer(last) : '';
+      const missed = keywordText.split(',').map(s => s.trim()).filter(Boolean).filter(k => !feynman.toLowerCase().includes(k.toLowerCase()));
+      const warnings = [];
+      if(missing.length) warnings.push('未作答题号：' + missing.join('、'));
+      if(feynman && missed.length) warnings.push('费曼题可能遗漏关键词：' + missed.join('、'));
+      const box = $('#qualityBox');
+      if(warnings.length){
+        box.style.display = 'block';
+        box.textContent = warnings.join('\n');
+      }else{
+        box.style.display = 'block';
+        box.textContent = '自检通过：没有发现空题，费曼题覆盖了主要关键词。';
+      }
+      return lines.join('\n');
+    }
+
+    $('#buildAnswer').addEventListener('click', () => {
+      $('#exportText').value = collectAnswers();
+    });
+    $('#copyAnswer').addEventListener('click', () => {
+      const text = $('#exportText').value || collectAnswers();
+      $('#exportText').value = text;
+      navigator.clipboard?.writeText(text);
+    });
+    $('#downloadAnswer').addEventListener('click', () => {
+      const text = $('#exportText').value || collectAnswers();
+      $('#exportText').value = text;
+      const blob = new Blob([text], {type:'text/markdown;charset=utf-8'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'P9-图像与声音生成策略-练习记录.md';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+  </script>
+</body>
+</html>

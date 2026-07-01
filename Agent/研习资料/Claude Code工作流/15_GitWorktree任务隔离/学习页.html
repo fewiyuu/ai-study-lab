@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN" data-page-shell="study-page-v2">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>15 Git Worktree任务隔离｜Claude Code 工作流</title>
+  <link rel="stylesheet" href="../assets/study-page.css">
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside>
+    <div class="brand"><strong>Claude Code 工作流</strong><span>15｜Git Worktree任务隔离</span></div>
+    <nav>
+      <a href="#goal"><span class="dot"></span>目标与主线</a>
+      <a href="#why"><span class="dot"></span>为什么要隔离</a>
+      <a href="#concept"><span class="dot"></span>worktree概念</a>
+      <a href="#commands"><span class="dot"></span>命令流程</a>
+      <a href="#agent"><span class="dot"></span>Agent协作价值</a>
+      <a href="#pitfall"><span class="dot"></span>常见误区</a>
+      <a href="#practice"><span class="dot"></span>综合练习</a>
+      <a href="#export"><span class="dot"></span>导出学习记录</a>
+    </nav>
+    <div class="side-note">Worktree 的价值不是“多一个 Git 命令”，而是把分支隔离升级成目录隔离，让多个任务可以同时展开。</div>
+  </aside>
+  <main>
+    <header class="hero" id="goal">
+      <div>
+        <div class="kicker">Git worktree</div>
+        <h1>Git Worktree任务隔离</h1>
+        <p class="muted">本节学习 Git Worktree：在同一个 Git 仓库下创建多个工作目录，每个目录可以 checkout 不同分支。普通分支切换只能让你在一个目录里交替做任务；worktree 则让 `repo/`、`dev-branch-3/`、`dev-branch-4/` 同时存在，每个目录绑定自己的分支，适合人类或 AI coding agent 并行推进多个任务。</p>
+        <div class="map">
+          <span class="node">一个仓库</span><span class="arrow">→</span>
+          <span class="node">多个工作目录</span><span class="arrow">→</span>
+          <span class="node">不同分支</span><span class="arrow">→</span>
+          <span class="node">任务互不干扰</span>
+        </div>
+        <p>学完本页，你应该能创建、查看、删除和恢复 worktree，并解释为什么删除 worktree 目录不等于删除分支。</p>
+      </div>
+      <div class="box soft">
+        <h3>来源材料</h3>
+        <p>视频：《Learn Claude Code 源码详解》任务隔离（上）- Git Worktree，开发实战分享屋，2026-04-04。</p>
+        <p>参考：Git 官方文档 `git worktree`。本页聚焦任务隔离，不展开 Git 内部对象数据库。</p>
+      </div>
+    </header>
+
+    <section id="why">
+      <div class="head"><h2>1. 普通分支切换只能“轮流做”</h2><span class="tag">checkout pain</span></div>
+      <p>传统开发里，你通常在一个仓库目录中使用 `git switch -c dev-branch-1` 开始任务一。新任务来了，你再切回 `main`，基于主分支创建 `dev-branch-2`。这当然能工作，但同一时刻这个目录只能处在一个分支上。</p>
+      <p>问题出现在任务交错时：任务一改了一半，任务二突然很急；你要么提交半成品，要么 stash 临时改动，要么冒着脏工作区切分支的风险。对于 AI coding agent，这个问题更明显：多个 agent 如果共用同一个目录，它们会互相踩文件、互相改变分支、互相污染状态。</p>
+      <div class="grid2">
+        <div class="box warn">
+          <h3>普通 checkout</h3>
+          <ul>
+            <li>一个工作目录只能对应一个当前分支。</li>
+            <li>多任务需要频繁切换分支。</li>
+            <li>未提交改动容易阻塞或污染切换。</li>
+          </ul>
+        </div>
+        <div class="box ok">
+          <h3>Git Worktree</h3>
+          <ul>
+            <li>一个仓库可以挂出多个工作目录。</li>
+            <li>每个目录绑定不同分支。</li>
+            <li>不同任务可以在不同目录同时推进。</li>
+          </ul>
+        </div>
+      </div>
+      <p>你现在应该能做什么：识别“分支切换”解决的是版本线问题，而 worktree 进一步解决“工作目录隔离”问题。</p>
+    </section>
+
+    <section id="concept">
+      <div class="head"><h2>2. Worktree 是“共享 Git 数据的独立工作目录”</h2><span class="tag">one repo many trees</span></div>
+      <p>`git worktree` 允许同一个仓库创建多个工作目录。每个工作目录看起来像一个独立项目目录，可以打开、编辑、运行、测试，也可以处在自己的分支上。但它们背后仍然共享同一个 Git 对象数据，不需要完整克隆多份仓库。</p>
+      <p>一个实用直觉是：普通 clone 像复制一整套仓库；worktree 像从同一个仓库“挂出”多个工作台。每个工作台上可以摆不同任务的文件状态，但提交历史、对象数据和分支信息仍由同一个 Git 仓库管理。</p>
+      <div class="grid2">
+        <div class="box soft">
+          <h3>流程图式文字</h3>
+          <p>已有仓库 → 选择起点分支 `main` → 为任务创建新分支 → 用 `git worktree add` 挂出新目录 → 在新目录运行编辑和测试 → 任务合并后 `git worktree remove` 清理目录 → 如需继续查看，用已有分支重新挂载。</p>
+        </div>
+        <div class="box ok">
+          <h3>隔离是否成立</h3>
+          <ul>
+            <li>每个任务有独立工作目录。</li>
+            <li>每个工作目录绑定明确分支。</li>
+            <li>命令在对应目录中运行。</li>
+            <li>删除 worktree 前确认改动已提交或不再需要。</li>
+            <li>清理目录不误删远程分支或本地分支。</li>
+          </ul>
+        </div>
+      </div>
+      <div class="viz-panel">
+        <div class="viz-grid">
+          <div class="viz-cell">
+            <div class="viz-actions">
+              <button data-worktree="single" class="active">单目录切分支</button>
+              <button data-worktree="multi">多个 worktree</button>
+              <button data-worktree="remove">remove 后</button>
+              <button data-worktree="restore">恢复目录</button>
+            </div>
+            <div class="tree" id="treeText"></div>
+          </div>
+          <div class="viz-cell">
+            <h3 id="treeTitle">单目录切分支</h3>
+            <p id="treeExplain">说明会显示在这里。</p>
+            <div class="branch-card"><strong id="branchA">repo/</strong><br><span id="branchAText">当前分支随 checkout 变化。</span></div>
+            <div class="branch-card"><strong id="branchB">dev-branch-3/</strong><br><span id="branchBText">尚未创建。</span></div>
+            <div class="viz-note">观察重点：worktree remove 删除的是工作目录，不是分支本身。只要分支还在，就可以重新 add 一个 worktree 恢复目录。</div>
+          </div>
+        </div>
+      </div>
+      <p>你现在应该能做什么：用自己的话说清“多个工作目录”和“多个仓库克隆”的区别。</p>
+    </section>
+
+    <section id="commands">
+      <div class="head"><h2>3. 最小命令流程：add、list、remove、恢复</h2><span class="tag">commands</span></div>
+      <p>视频里先初始化一个仓库，创建 `README.md` 并提交到主分支。日常真实开发中，你更多是从远程 clone 一个现成 repo。无论是 `git init` 还是 `git clone`，只要你在一个 Git 仓库里，就可以使用 worktree。</p>
+      <div class="codebar"><span class="label">基础准备：仓库里有一个提交</span><span>Shell</span></div>
+      <pre><code>mkdir repo
+cd repo
+git init
+git branch -M main
+echo "hi readme" > README.md
+git add README.md
+git commit -m "init readme"</code></pre>
+      <p>有了基线提交后，你可以创建一个新 worktree。命令一般写成：`git worktree add <目录路径> -b <新分支名> <起点分支>`。这里的目录路径是新工作目录的位置，分支名是这个目录要绑定的新分支，起点分支通常是 `main`。</p>
+      <div class="codebar"><span class="label">正确示例：为新任务创建独立目录和分支</span><span>Shell</span></div>
+      <pre><code># 在 repo/ 目录中执行
+git worktree add ../dev-branch-3 -b dev-branch-3 main
+
+# 进入新目录后，当前分支就是 dev-branch-3
+cd ../dev-branch-3
+git branch --show-current</code></pre>
+      <p>如果你再创建 `dev-branch-4`，旁边就会多出另一个目录。此时你可以在 `repo/` 里看主分支，在 `dev-branch-3/` 里做任务三，在 `dev-branch-4/` 里做任务四。它们不是在同一个目录里轮流切换，而是真的有不同文件树。</p>
+      <div class="codebar"><span class="label">查看当前有哪些 worktree</span><span>Shell</span></div>
+      <pre><code>git worktree list
+
+# 可能看到：
+# /path/to/repo           abc1234 [main]
+# /path/to/dev-branch-3  def5678 [dev-branch-3]
+# /path/to/dev-branch-4  901abcd [dev-branch-4]</code></pre>
+      <p>任务完成、PR 合并后，可以删除本地 worktree 目录。注意：`git worktree remove` 主要移除工作目录登记和目录本身，不等于自动删除这个分支。视频里 remove 后再看 branch，分支仍然保留，这就是“删除目录不影响分支，可随时恢复”的意思。</p>
+      <div class="codebar"><span class="label">删除 worktree 目录，但分支仍在</span><span>Shell</span></div>
+      <pre><code>git worktree remove ../dev-branch-3
+git branch
+
+# dev-branch-3 分支仍然可以存在。</code></pre>
+      <p>如果误删或想重新打开这个分支，不需要 `-b` 创建新分支。因为分支已经存在，只需要把现有分支重新挂成一个 worktree。</p>
+      <div class="codebar"><span class="label">恢复已有分支对应的工作目录</span><span>Shell</span></div>
+      <pre><code>git worktree add ../dev-branch-3 dev-branch-3
+
+cd ../dev-branch-3
+git branch --show-current
+# dev-branch-3</code></pre>
+      <p>你现在应该能做什么：为一个新任务创建 worktree，为已有分支恢复 worktree，并用 `git worktree list` 检查当前隔离目录。</p>
+    </section>
+
+    <section id="agent">
+      <div class="head"><h2>4. 为什么 AI coding agent 特别需要 worktree</h2><span class="tag">agent isolation</span></div>
+      <p>人类开发者也会受益于 worktree，但 AI coding agent 的收益更直接。因为 agent 可以同时接多个任务、执行多个命令、修改多个文件。如果它们共用一个目录，任务之间很容易相互污染：一个 agent 切了分支，另一个 agent 的上下文就错了；一个 agent 改了文件，另一个 agent 的测试结果就不可靠。</p>
+      <p>Worktree 给每个任务一个独立物理目录。Agent A 在 `task-login/` 修改登录逻辑，Agent B 在 `task-report/` 修改报表导出。它们共享仓库历史，但工作区互不干扰。调试失败时，也能直接看某个目录里的改动、日志和状态。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>场景</th><th>不用 worktree 的风险</th><th>使用 worktree 的好处</th></tr></thead>
+          <tbody>
+            <tr><td>两个任务并行</td><td>频繁 checkout，脏工作区冲突。</td><td>每个任务一个目录，互不覆盖。</td></tr>
+            <tr><td>多个 Agent 协作</td><td>Agent 之间切分支、改文件互相影响。</td><td>每个 Agent 在自己的工作目录运行。</td></tr>
+            <tr><td>任务完成清理</td><td>不清楚哪些临时文件属于哪个任务。</td><td>remove 对应 worktree 即可清理目录。</td></tr>
+            <tr><td>审计任务结果</td><td>多个任务改动混在一个工作区。</td><td>按目录查看 diff、测试和提交。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>这里也能看出本节和前面任务看板的连接：看板负责“有哪些任务”，worktree 负责“每个任务在哪个隔离环境里执行”。一个成熟的 agent harness 往往会把任务分配、工作目录、分支、提交和审计记录串起来。</p>
+    </section>
+
+    <section id="pitfall">
+      <div class="head"><h2>5. 常见误区：目录、分支和仓库不是一回事</h2><span class="tag">pitfalls</span></div>
+      <p>学习 worktree 最容易混淆三个层次：工作目录、Git 分支、仓库数据。工作目录是你能打开和编辑文件的地方；分支是 Git 中的一条提交指针；仓库数据是 Git 保存对象、提交和引用的底层数据。</p>
+      <div class="grid3">
+        <div class="box soft"><h3>工作目录</h3><p>例如 `dev-branch-3/`。你在里面改文件、运行测试。</p></div>
+        <div class="box soft"><h3>分支</h3><p>例如 `dev-branch-3`。它指向一串提交，可以被重新挂载。</p></div>
+        <div class="box soft"><h3>仓库数据</h3><p>多个 worktree 共享同一套 Git 对象数据，不需要完整复制。</p></div>
+      </div>
+      <p>因此，`git worktree remove ../dev-branch-3` 删除的是工作目录，不是自动把 `dev-branch-3` 分支也删掉。反过来，如果你想创建全新的任务分支，用 `-b`；如果分支已经存在，就不要再 `-b`，直接指定已有分支。</p>
+      <div class="codebar error"><span class="label">错误示例：恢复已有分支时还使用 -b</span><span>分支已存在</span></div>
+      <pre><code># dev-branch-4 已经存在时，这样会失败或造成误解
+git worktree add ../dev-branch-4 -b dev-branch-4 main
+
+# 正确：直接挂载已有分支
+git worktree add ../dev-branch-4 dev-branch-4</code></pre>
+      <p>另一个误区是把 worktree 当作“多 clone 几份仓库”。多 clone 当然也能隔离目录，但每份 clone 都有自己的远程、配置和对象数据，管理成本更高。worktree 更适合从同一个本地仓库派生多个任务工作台。</p>
+      <div class="box soft">
+        <h3>Worked example：恢复已删除目录</h3>
+        <p>你完成 `dev-branch-3` 后执行了 `git worktree remove ../dev-branch-3`。第二天需要重新查看这条分支，不要再写 `-b dev-branch-3`，因为分支已经存在。正确做法是 `git worktree add ../dev-branch-3 dev-branch-3`。这一步重新创建工作目录，但复用原来的分支指针。</p>
+      </div>
+    </section>
+
+    <section id="practice">
+      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>一、基础概念</h3><p>先分清 worktree、分支和普通 checkout。</p></div><div class="box soft">提示：worktree = 多工作目录；branch = 提交指针。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="1. worktree核心"><div class="q-meta"><span class="pill">选择</span></div><h3>1. Git Worktree 的核心作用是什么？</h3><label><input type="radio" name="q1" value="A">A. 同一仓库创建多个工作目录</label><br><label><input type="radio" name="q1" value="B">B. 删除所有分支</label><br><label><input type="radio" name="q1" value="C">C. 替代所有提交</label></div>
+          <div class="q" data-title="2. 分支切换限制"><div class="q-meta"><span class="pill">短答</span></div><h3>2. 普通 `git switch -c` 后在单目录开发多个任务时，最大限制是什么？</h3><textarea name="q2"></textarea></div>
+          <div class="q" data-title="3. 目录与分支"><div class="q-meta"><span class="pill">解释</span></div><h3>3. 用一句话区分“工作目录”和“分支”。</h3><textarea name="q3"></textarea></div>
+          <div class="q" data-title="4. 共享数据"><div class="q-meta"><span class="pill">判断</span></div><h3>4. 多个 worktree 背后完全是互不相关的多个 Git 仓库。</h3><label><input type="radio" name="q4" value="对">对</label><br><label><input type="radio" name="q4" value="错">错</label></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>二、命令流程</h3><p>能不能写出最小可用命令。</p></div><div class="box warn">新分支用 `-b`，已有分支恢复时不用 `-b`。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="5. 创建命令"><div class="q-meta"><span class="pill">填空</span></div><h3>5. 为新任务创建目录 `../dev-branch-3` 和新分支 `dev-branch-3`，命令应写什么？</h3><textarea name="q5"></textarea></div>
+          <div class="q" data-title="6. 查看命令"><div class="q-meta"><span class="pill">填空</span></div><h3>6. 查看当前所有 worktree 的命令是 ______。</h3><input type="text" name="q6"></div>
+          <div class="q" data-title="7. 删除目录"><div class="q-meta"><span class="pill">短答</span></div><h3>7. `git worktree remove ../dev-branch-3` 删除了什么？没有自动删除什么？</h3><textarea name="q7"></textarea></div>
+          <div class="q" data-title="8. 恢复目录"><div class="q-meta"><span class="pill">命令</span></div><h3>8. `dev-branch-4` 分支已存在，如何重新创建对应工作目录？</h3><textarea name="q8"></textarea></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>三、任务隔离</h3><p>把命令迁移到 AI coding agent 场景。</p></div><div class="box soft">隔离的对象包括分支、文件树、命令运行上下文。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="9. Agent价值"><div class="q-meta"><span class="pill">解释</span></div><h3>9. 为什么 AI coding agent 比人类更需要 worktree 隔离？</h3><textarea name="q9"></textarea></div>
+          <div class="q" data-title="10. 污染场景"><div class="q-meta"><span class="pill">场景</span></div><h3>10. 举一个两个 Agent 共用同一目录可能互相污染的例子。</h3><textarea name="q10"></textarea></div>
+          <div class="q" data-title="11. 任务看板连接"><div class="q-meta"><span class="pill">关联</span></div><h3>11. 前一节 `.tasks` 看板和本节 worktree 隔离分别解决什么问题？</h3><textarea name="q11"></textarea></div>
+          <div class="q" data-title="12. 清理时机"><div class="q-meta"><span class="pill">判断</span></div><h3>12. 任务完成、PR 已合并后，可以考虑 remove 对应 worktree 目录。</h3><label><input type="radio" name="q12" value="对">对</label><br><label><input type="radio" name="q12" value="错">错</label></div>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head"><div><h3>四、诊断与迁移</h3><p>检查你能不能判断错误命令和边界。</p></div><div class="box soft">表达重点：新分支、已有分支、目录删除、分支保留。</div></div>
+        <div class="drill-grid">
+          <div class="q" data-title="13. 错误恢复"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 已有 `dev-branch-4`，却执行 `git worktree add ../dev-branch-4 -b dev-branch-4 main`，问题是什么？</h3><textarea name="q13"></textarea></div>
+          <div class="q" data-title="14. remove误解"><div class="q-meta"><span class="pill">纠错</span></div><h3>14. “remove worktree 会删除分支，所以不能用。”这句话哪里错？</h3><textarea name="q14"></textarea></div>
+          <div class="q" data-title="15. 多clone对比"><div class="q-meta"><span class="pill">比较</span></div><h3>15. worktree 和多 clone 仓库相比，管理上有什么差别？</h3><textarea name="q15"></textarea></div>
+          <div class="q" data-title="16. 最小流程"><div class="q-meta"><span class="pill">流程</span></div><h3>16. 写出一个从创建 worktree、进入目录、完成后删除目录的最小流程。</h3><textarea name="q16"></textarea></div>
+          <div class="q full" data-title="17. 面试表达"><div class="q-meta"><span class="pill">表达</span></div><h3>17. 面试中如何解释 Git Worktree 对 Agent Harness 的价值？</h3><textarea name="q17"></textarea></div>
+          <div class="q full" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：Git Worktree 如何实现任务隔离。</h3><div class="solve-note">请串联一个仓库、多个目录、不同分支、`add/list/remove`、删除目录不删分支、AI coding agent。</div><textarea name="q18"></textarea></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="export">
+      <div class="head"><h2>导出学习记录</h2><span class="tag">self-check</span></div>
+      <p class="muted">完成练习后生成 Markdown 记录，方便保存或提交给同伴检查。</p>
+      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
+      <div id="quality" class="quality"></div>
+      <div id="record" class="answer">练习记录会显示在这里。</div>
+    </section>
+  </main>
+</div>
+<script>
+const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
+const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const progress=document.getElementById("progress");
+function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
+addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
+const trees={
+  single:["单目录切分支","repo/\n  README.md\n  当前分支: main 或 dev-branch-1 或 dev-branch-2\n\n说明：同一时刻只能在一个分支工作。","repo/","当前分支随 switch 变化。","dev-branch-3/","尚未创建。","你可以有很多分支，但只有一个当前工作目录。"],
+  multi:["多个 worktree","repo/              [main]\n../dev-branch-3/  [dev-branch-3]\n../dev-branch-4/  [dev-branch-4]\n\n说明：三个目录可以同时打开、编辑、测试。","repo/","保留主分支或原工作区。","dev-branch-3/","独立目录，绑定 dev-branch-3。","每个任务可以分配自己的目录，减少互相污染。"],
+  remove:["remove 后","repo/              [main]\n../dev-branch-4/  [dev-branch-4]\n\n分支列表仍可能包含：\n  dev-branch-3\n  dev-branch-4","repo/","主目录仍在。","dev-branch-3/","目录被删除，但分支仍可存在。","删除 worktree 主要删除目录，不等于自动删除分支。"],
+  restore:["恢复目录","git worktree add ../dev-branch-3 dev-branch-3\n\nrepo/              [main]\n../dev-branch-3/  [dev-branch-3]\n../dev-branch-4/  [dev-branch-4]","repo/","仍然是原仓库入口。","dev-branch-3/","用已有分支重新挂载。","已有分支恢复时不要用 -b 创建新分支。"]
+};
+function renderTree(name){const d=trees[name]||trees.single;document.querySelectorAll("[data-worktree]").forEach(b=>b.classList.toggle("active",b.dataset.worktree===name));document.getElementById("treeTitle").textContent=d[0];document.getElementById("treeText").textContent=d[1];document.getElementById("branchA").textContent=d[2];document.getElementById("branchAText").textContent=d[3];document.getElementById("branchB").textContent=d[4];document.getElementById("branchBText").textContent=d[5];document.getElementById("treeExplain").textContent=d[6]}
+document.querySelectorAll("[data-worktree]").forEach(btn=>btn.addEventListener("click",()=>renderTree(btn.dataset.worktree)));renderTree("single");
+document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
+const questions=[
+  ["基础概念","1. Git Worktree 核心作用。","q1","radio"],["基础概念","2. 普通 checkout 的限制。","q2","text"],["基础概念","3. 工作目录和分支区别。","q3","text"],["基础概念","4. 多个 worktree 是否是不相关仓库。","q4","radio"],["命令流程","5. 新任务创建 worktree 命令。","q5","text"],["命令流程","6. 查看 worktree 命令。","q6","text"],["命令流程","7. remove 删除什么、保留什么。","q7","text"],["命令流程","8. 恢复已有分支目录命令。","q8","text"],["任务隔离","9. Agent 为什么需要隔离。","q9","text"],["任务隔离","10. 共用目录污染例子。","q10","text"],["任务隔离","11. .tasks 和 worktree 分别解决什么。","q11","text"],["任务隔离","12. PR 合并后是否可 remove。","q12","radio"],["诊断迁移","13. 已有分支却 -b 的问题。","q13","text"],["诊断迁移","14. remove worktree 删除分支误解。","q14","text"],["诊断迁移","15. worktree 与多 clone 对比。","q15","text"],["诊断迁移","16. 最小流程。","q16","text"],["诊断迁移","17. Agent Harness 价值。","q17","text"],["费曼解释","18. Git Worktree 如何任务隔离。","q18","text"]
+];
+function val(q){if(q[3]==="radio"){const el=document.querySelector(`input[name="${q[2]}"]:checked`);return el?el.value:""}const el=document.querySelector(`[name="${q[2]}"]`);return el?el.value.trim():""}
+function generateRecord(){const groups={};const missing=[];questions.forEach(q=>{const v=val(q);if(!v)missing.push(q[1]);if(!groups[q[0]])groups[q[0]]=[];groups[q[0]].push({t:q[1],a:v||"（未填写）"})});let out="# 15 Git Worktree任务隔离｜练习记录\n\n";Object.keys(groups).forEach(g=>{out+=`## ${g}\n\n`;groups[g].forEach(item=>{out+=`### ${item.t}\n${item.a}\n\n`})});document.getElementById("record").textContent=out;const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=val(["","","q18","text"]);const keys=["worktree","目录","分支","add","list","remove","Agent"];const lack=keys.filter(k=>!f.includes(k));if(f&&f.length<120)warnings.push("费曼解释偏短，建议讲成 6-9 句话。");if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join("、")}。`);const q=document.getElementById("quality");q.style.display="block";q.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以保存或提交检查。"}
+function copyRecord(){navigator.clipboard.writeText(document.getElementById("record").textContent).catch(()=>alert("复制失败，请手动复制。"))}
+</script>
+<script src="../assets/study-page.js"></script>
+</body>
+</html>

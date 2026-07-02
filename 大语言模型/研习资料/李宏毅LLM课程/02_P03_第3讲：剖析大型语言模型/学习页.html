@@ -4,250 +4,218 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>第3讲：剖析大型语言模型</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="李宏毅 LLM 课程" data-unit="02 P03 第3讲：剖析大型语言模型">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>李宏毅 LLM 课程</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅 LLM 课程</a>
+        <span class="sep">/</span>
         <span>02 P03 第3讲：剖析大型语言模型</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#map"><span class="dot"></span>全流程地图</a>
-        <a href="#terms"><span class="dot"></span>术语边界</a>
-        <a href="#representation"><span class="dot"></span>表示漂移</a>
-        <a href="#viz"><span class="dot"></span>attention matrix</a>
-        <a href="#ffn"><span class="dot"></span>FFN</a>
-        <a href="#example"><span class="dot"></span>Hugging Face 路线</a>
-        <a href="#lens"><span class="dot"></span>logit lens</a>
-        <a href="#bridge"><span class="dot"></span>操作桥</a>
-        <a href="#diagnosis"><span class="dot"></span>诊断工作坊</a>
-        <a href="#boundary"><span class="dot"></span>学习边界</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">这一讲把 LLM 拆成内部部件：输入先变成 embedding，层与层之间的表示怎么漂移，attention 和 FFN 各自做什么，再用 Hugging Face 观察路线把概念落到可打印对象。</div>
-    </aside>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">P3 核心讲义</div>
-          <h1>第3讲：剖析大型语言模型</h1>
-          <p>这一讲的重点不是继续讲“LLM 会回答”，而是把回答拆进内部：token 先变成 embedding，再经过多层 Transformer 变成 contextualized representation，最后通过 LM head 和 softmax 回到 token 分布。你读完后，应该能把一段输出异常先定位到表示层、attention 层、FFN，还是最后的解码层。</p>
-<p>请一直盯着同一个锚点例子看：一小段包含 <code>apple</code> 的上下文怎样在不同层里逐渐分化，为什么 <code>logit lens</code> 能把中间表示投回词表，为什么 <code>attention matrix</code> 不是整个故事。</p>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">P3 核心讲义</div>
+      <div class="hero-meta">
+        <span class="hero-badge">02 P03 第3讲：剖析大型语言模型</span>
+      </div>
+      <h1 class="hero-title">第3讲：剖析大型语言模型</h1>
+      <p class="hero-desc">这一讲的重点不是继续讲“LLM 会回答”，而是把回答拆进内部：token 先变成 embedding，再经过多层 Transformer 变成 contextualized representation，最后通过 LM head 和 softmax 回到 token 分布。你读完后，应该能把一段输出异常先定位到表示层、attention 层、FFN，还是最后的解码层。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../01_P01_第1讲：一堂课搞懂LLM大模型的原理/学习页.html">上一节：一堂课搞懂 LLM 大模型的原理</a>
+            <a href="../03_P04_第4讲：评估生成式人工智能能力时可能遇到的各种陷阱/学习页.html">下一步：评估生成式 AI 的陷阱</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>按“token -> embedding -> Transformer layer -> LM head -> logits -> softmax -> next token”讲清一轮前向过程。</li>
+            <li>区分 token、token id、representation、logits、attention matrix、FFN 和 logit lens，不把它们混成一类。</li>
+            <li>用 Hugging Face 的 <code>output_hidden_states</code> / <code>output_attentions</code> / <code>lm_head</code> 路线，观察中间层到底发生了什么。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
 
-          <div class="course-links">
-            <a href="../index.html">课程地图</a><a href="../01_P01_第1讲：一堂课搞懂LLM大模型的原理/学习页.html">上一节：一堂课搞懂 LLM 大模型的原理</a><a href="../03_P04_第4讲：评估生成式人工智能能力时可能遇到的各种陷阱/学习页.html">下一步：评估生成式 AI 的陷阱</a>
-          </div>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">先定检查点</a>
+      <a href="#map">全流程地图</a>
+      <a href="#terms">术语边界</a>
+      <a href="#representation">表示怎样漂移</a>
+      <a href="#viz">attention matrix 怎么读</a>
+      <a href="#ffn">FFN 在做什么</a>
+      <a href="#example">Hugging Face 路线</a>
+      <a href="#lens">logit lens 和 patch scope</a>
+      <a href="#bridge">操作桥</a>
+      <a href="#diagnosis">诊断工作坊</a>
+      <a href="#boundary">这里先不追</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>先定检查点</h2>
+          <span class="tag">goal</span>
         </div>
+      <div class="grid2">
         <div class="box soft">
-          <h3>读完本页你应该能做什么</h3>
-          <ul>
-  <li>按“token -> embedding -> Transformer layer -> LM head -> logits -> softmax -> next token”讲清一轮前向过程。</li>
-  <li>区分 token、token id、representation、logits、attention matrix、FFN 和 logit lens，不把它们混成一类。</li>
-  <li>用 Hugging Face 的 `output_hidden_states` / `output_attentions` / `lm_head` 路线，观察中间层到底发生了什么。</li>
+<h3>P03 这讲到底在做什么</h3>
+<p>这讲把前一节已经“会说话”的 LLM 往内部拆：输入如何进入模型、每层表示怎样改变、最后怎么回到词表分数。它的价值在于给后面讲可解释性、实验观察和故障排查铺一张地图。</p>
+<p>如果只记住“attention 很重要”会不够。你需要知道它在一层里读什么、写什么，FFN 负责什么，LM head 为什么又把隐藏状态投回词表。</p>
+        </div>
+        <div class="box">
+<h3>本页只要求你掌握这些</h3>
+<ul>
+<li>把一个 token 序列追到 embedding、hidden state、logits 和 next token。</li>
+<li>说明 representation 为什么会随层数变化，尤其是同形词在不同上下文里会分开。</li>
+<li>知道 attention、FFN、LM head 各自在哪一步读写信息。</li>
 </ul>
-
+<p>现在你应该能做什么：看到一个中间层张量时，先问它是“表示”、还是“候选分数”，而不是先背术语。</p>
         </div>
       </div>
-
-      <section id="goals">
-  <div class="head"><h2>先定检查点</h2><span class="tag">goal</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>P03 这讲到底在做什么</h3>
-      <p>这讲把前一节已经“会说话”的 LLM 往内部拆：输入如何进入模型、每层表示怎样改变、最后怎么回到词表分数。它的价值在于给后面讲可解释性、实验观察和故障排查铺一张地图。</p>
-      <p>如果只记住“attention 很重要”会不够。你需要知道它在一层里读什么、写什么，FFN 负责什么，LM head 为什么又把隐藏状态投回词表。</p>
-    </div>
-    <div class="box">
-      <h3>本页只要求你掌握这些</h3>
-      <ul>
-        <li>把一个 token 序列追到 embedding、hidden state、logits 和 next token。</li>
-        <li>说明 representation 为什么会随层数变化，尤其是同形词在不同上下文里会分开。</li>
-        <li>知道 attention、FFN、LM head 各自在哪一步读写信息。</li>
-      </ul>
-      <p class="checkpoint">现在你应该能做什么：看到一个中间层张量时，先问它是“表示”、还是“候选分数”，而不是先背术语。</p>
-    </div>
-  </div>
-</section>
-
-<section id="map">
-  <div class="head"><h2>全流程地图</h2><span class="tag">trace</span></div>
-  <p>先把一轮前向写成同一条链。它的骨架很简单：token 先变成 embedding，Transformer 层一层层改写表示，最后 LM head 把最终表示映射到词表分数，softmax 之后才是可以采样的概率。</p>
-  <div class="table-wrap">
-    <table data-export-context="P03 前向全流程地图" data-export-lang="table">
-      <thead>
-        <tr><th>步骤</th><th>对象</th><th>读什么</th><th>写什么</th><th>错了会怎样</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>1</td><td>token / token id</td><td>输入文本与词表映射</td><td>input_ids</td><td>切词错位，后面全错。</td></tr>
-        <tr><td>2</td><td>embedding table</td><td>token id</td><td>初始 hidden state</td><td>模型看到的起点偏了，representation 从一开始就失真。</td></tr>
-        <tr><td>3</td><td>attention</td><td>当前层 hidden state</td><td>上下文混合后的表示</td><td>该对齐的 token 没对齐，长程依赖断掉。</td></tr>
-        <tr><td>4</td><td>FFN</td><td>每个位置的当前表示</td><td>非线性变换后的表示</td><td>局部特征没被提炼，表示会停在“像字面值”的层面。</td></tr>
-        <tr><td>5</td><td>LM head</td><td>最终 hidden state</td><td>logits</td><td>分数投影错了，候选词表排序会怪。</td></tr>
-        <tr><td>6</td><td>softmax / sampling</td><td>logits</td><td>next token</td><td>输出看起来像知识问题，实际可能是解码参数问题。</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="shape-tracer" data-shape-tracer data-export-context="P03 核心对象追踪" data-export-lang="table">
-    <div class="trace-lines">
-      <button class="trace-line active" data-trace-step="token"><code>token / ids</code><span>输入表示</span></button>
-      <button class="trace-line" data-trace-step="embed"><code>embedding</code><span>[batch, seq, d]</span></button>
-      <button class="trace-line" data-trace-step="layer"><code>hidden_state</code><span>层间表示</span></button>
-      <button class="trace-line" data-trace-step="head"><code>lm_head</code><span>[batch, seq, vocab]</span></button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="token"><b>token ids</b><span>离散编号</span><p>先把文字映射成词表里的编号，模型才有可计算的输入。</p></div>
-      <div class="tensor-card" data-trace-target="embed"><b>embedding</b><span>连续向量</span><p>编号查表后得到初始表示，同一个 token 在不同上下文之前还没有分化。</p></div>
-      <div class="tensor-card" data-trace-target="layer"><b>hidden state</b><span>逐层改写</span><p>attention 和 FFN 共同把表示往上下文里推，representation 开始变成“有语境”的向量。</p></div>
-      <div class="tensor-card" data-trace-target="head"><b>logits</b><span>词表分数</span><p>最后一层 hidden state 被投影回词表，softmax 之前只是分数，不是概率。</p></div>
-    </div>
-  </div>
-</section>
-
-<section id="terms">
-  <div class="head"><h2>术语边界</h2><span class="tag">terms</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>这几个词先分开</h3>
-      <table data-export-context="P03 术语边界表" data-export-lang="table">
-        <thead>
-          <tr><th>术语</th><th>这一讲怎么用</th><th>别误会成</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>representation</td><td>某一层里 token 的连续向量表示。</td><td>词义标签本身。</td></tr>
-          <tr><td>contextualized representation</td><td>带上下文的表示，能分化同词异义。</td><td>固定不变的词向量。</td></tr>
-          <tr><td>logits</td><td>词表里各 token 的原始分数。</td><td>概率。</td></tr>
-          <tr><td>logit lens</td><td>把中间层表示投回词表，看它像什么候选 token。</td><td>真正的最终答案。</td></tr>
-          <tr><td>patch scope</td><td>在某个层或某个位置上替换 / 观察表示。</td><td>已经完整解释模型全局行为。</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="box soft">
-      <h3>先知道，先别钻</h3>
-      <p>这一页会碰到 residual、layer norm、multi-head、causal mask，但先不要把注意力分头、KV cache、训练目标和长上下文优化一起追进去。它们都重要，只是这一讲先要把“表示怎样被逐层改写”讲清楚。</p>
-      <p>等你能把一条前向链和一张 attention matrix 读顺，再回头看这些细节，理解会稳很多。</p>
-    </div>
-  </div>
-</section>
-
-<section id="representation">
-  <div class="head"><h2>表示怎样漂移</h2><span class="tag">representation</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>同一个 token，先相同后分化</h3>
-      <p>一开始，模型只拿到 token id，所以同一个 token 在不同句子里会先走到同一个 embedding 附近。真正开始分化的是后面的层：attention 会把别的位置的信息拉进来，FFN 会把当前位置的特征重新组合，于是 contextualized representation 逐层变得更像“此时此地的 apple”，而不是词典里孤立的 apple。</p>
-      <p>这也是为什么你不能只看第一层就判断模型懂不懂。早层更像把词放进坐标系，后层才是在坐标系里把词变成语境对象。</p>
-    </div>
-    <div class="box soft">
-      <h3>一张 state / read / write 表</h3>
-      <table data-export-context="P03 表示漂移读写表" data-export-lang="table">
-        <thead>
-          <tr><th>位置</th><th>读什么</th><th>写什么</th><th>常见症状</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>embedding</td><td>token id</td><td>初始向量</td><td>切词错时，从起点就歪。</td></tr>
-          <tr><td>attention</td><td>别的位置表示</td><td>混合后的上下文表示</td><td>长距离依赖没接上。</td></tr>
-          <tr><td>FFN</td><td>当前位置表示</td><td>局部特征变换后的表示</td><td>特征没被提炼，层间变化太平。</td></tr>
-          <tr><td>LM head</td><td>最终表示</td><td>logits</td><td>候选 token 排序错。</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <div class="math-block" data-export-context="P03 表示和投影关系" data-export-lang="math">
-    $$
-    z = W_{\text{lm}} h + b
-    $$
-    <p>这里 <code>h</code> 是某一层的 hidden state，<code>W_{\text{lm}}</code> 是 LM head 的投影矩阵，<code>z</code> 是 logits。这个式子告诉你：中间表示要先经过线性投影，才会回到词表空间。</p>
-  </div>
-</section>
-
-<section id="viz">
-  <div class="head"><h2>attention matrix 怎么读</h2><span class="tag">matrix</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>先看方向，再看强度</h3>
-      <p>attention matrix 的一个格子表示“当前位置会从哪个位置读多少信息”。对角线附近常常很强，因为当前位置通常会保留自己的信息；往左看时，模型在因果 mask 下只能读前文，不能偷看未来。</p>
-      <p>这张图不是解释器本身，它只是告诉你信息从哪里被拉进来。真正发生了什么，还要看 Q、K、V 各自带了什么，以及 residual 把什么保留下来。</p>
-    </div>
-    <div class="box soft">
-      <h3>可读的矩阵样本</h3>
-      <table data-export-context="P03 attention matrix 样本" data-export-lang="table">
-        <thead>
-          <tr><th></th><th>the</th><th>apple</th><th>is</th><th>green</th></tr>
-        </thead>
-        <tbody>
-          <tr><th>the</th><td>1.00</td><td>0.00</td><td>0.00</td><td>0.00</td></tr>
-          <tr><th>apple</th><td>0.42</td><td>0.58</td><td>0.00</td><td>0.00</td></tr>
-          <tr><th>is</th><td>0.25</td><td>0.35</td><td>0.40</td><td>0.00</td></tr>
-          <tr><th>green</th><td>0.10</td><td>0.48</td><td>0.12</td><td>0.30</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="P03 QKV 读写分工表" data-export-lang="table">
-      <thead>
-        <tr><th>部件</th><th>读什么</th><th>写什么</th><th>排错时看点</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>Q</td><td>当前位置的查询需求</td><td>用于匹配的向量</td><td>模型现在想从哪里找信息。</td></tr>
-        <tr><td>K</td><td>每个位置的可匹配特征</td><td>供别人来搜的向量</td><td>哪些位置容易被选中。</td></tr>
-        <tr><td>V</td><td>真正要汇入的内容</td><td>被加权汇总的信息</td><td>最后被搬回来的到底是什么。</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="ffn">
-  <div class="head"><h2>FFN 在做什么</h2><span class="tag">ffn</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>attention 负责“读”，FFN 负责“改写”</h3>
-      <p>可以先把 attention 理解成跨位置的信息搬运，把别的 token 读进来；FFN 更像在每个位置内部做特征重组和非线性变换。两者串起来，模型才既能看上下文，又能把读到的信息加工成更适合下一层使用的表示。</p>
-      <p>所以如果某一层 attention 已经对齐到“apple”，FFN 可能会进一步把它推向“水果”或“公司”这类更有任务意义的表示。它不是附属层，是表示分化里真正干活的一半。</p>
-    </div>
-    <div class="box soft">
-      <h3>一眼看顺序</h3>
-      <table data-export-context="P03 attention 与 FFN 的分工表" data-export-lang="table">
-        <thead>
-          <tr><th>模块</th><th>主要作用</th><th>错位症状</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>attention</td><td>在 token 间搬运信息</td><td>该看的前文没进来。</td></tr>
-          <tr><td>residual</td><td>保留原始表示</td><td>信息被覆盖得太狠。</td></tr>
-          <tr><td>FFN</td><td>对单点表示做非线性加工</td><td>表示没有变得更可分。</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <div class="math-block" data-export-context="P03 FFN 直觉公式" data-export-lang="math">
-    $$
-    h' = W_2 \, \sigma(W_1 h + b_1) + b_2
-    $$
-    <p><code>h</code> 是当前位置表示，<code>W_1</code> 和 <code>W_2</code> 是两层线性变换，<code>\sigma</code> 是非线性。这个式子先不要求你背推导，只要记住：FFN 会把当前位置的特征重新拉伸、压缩和分隔。</p>
-  </div>
-</section>
-
-<section id="example">
-  <div class="head"><h2>Hugging Face 路线</h2><span class="tag">example</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>先拿可打印对象</h3>
-      <p>这一页的最小实作路线不追求训练，而是追求观察：先打印 hidden states，看不同层的表示如何变化；再打印 attentions，看谁在读谁；最后把中间层表示投到词表，看它更像什么 token。</p>
-      <div class="codebar"><span>观察 hidden states / attentions</span><button class="copy" data-copy="hf-observe">复制</button></div>
-      <pre id="hf-observe" data-export-context="Hugging Face 观察路线" data-export-lang="python"><code class="language-python">from transformers import AutoModelForCausalLM, AutoTokenizer
+      </section>
+      <section id="map">
+        <div class="head">
+          <h2>全流程地图</h2>
+          <span class="tag">trace</span>
+        </div>
+<p>先把一轮前向写成同一条链。它的骨架很简单：token 先变成 embedding，Transformer 层一层层改写表示，最后 LM head 把最终表示映射到词表分数，softmax 之后才是可以采样的概率。</p>
+<p>1token / token id输入文本与词表映射input_ids切词错位，后面全错。</p>
+<p>2embedding tabletoken id初始 hidden state模型看到的起点偏了，representation 从一开始就失真。</p>
+<p>3attention当前层 hidden state上下文混合后的表示该对齐的 token 没对齐，长程依赖断掉。</p>
+<p>4FFN每个位置的当前表示非线性变换后的表示局部特征没被提炼，表示会停在“像字面值”的层面。</p>
+<p>5LM head最终 hidden statelogits分数投影错了，候选词表排序会怪。</p>
+<p>6softmax / samplinglogitsnext token输出看起来像知识问题，实际可能是解码参数问题。</p>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语边界</h2>
+          <span class="tag">terms</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>这几个词先分开</h3>
+<p>术语这一讲怎么用别误会成</p>
+<p>representation某一层里 token 的连续向量表示。词义标签本身。</p>
+<p>contextualized representation带上下文的表示，能分化同词异义。固定不变的词向量。</p>
+<p>logits词表里各 token 的原始分数。概率。</p>
+<p>logit lens把中间层表示投回词表，看它像什么候选 token。真正的最终答案。</p>
+<p>patch scope在某个层或某个位置上替换 / 观察表示。已经完整解释模型全局行为。</p>
+        </div>
+        <div class="box soft">
+<h3>先知道，先别钻</h3>
+<p>这一页会碰到 residual、layer norm、multi-head、causal mask，但先不要把注意力分头、KV cache、训练目标和长上下文优化一起追进去。它们都重要，只是这一讲先要把“表示怎样被逐层改写”讲清楚。</p>
+<p>等你能把一条前向链和一张 attention matrix 读顺，再回头看这些细节，理解会稳很多。</p>
+        </div>
+      </div>
+      </section>
+      <section id="representation">
+        <div class="head">
+          <h2>表示怎样漂移</h2>
+          <span class="tag">representation</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>同一个 token，先相同后分化</h3>
+<p>一开始，模型只拿到 token id，所以同一个 token 在不同句子里会先走到同一个 embedding 附近。真正开始分化的是后面的层：attention 会把别的位置的信息拉进来，FFN 会把当前位置的特征重新组合，于是 contextualized representation 逐层变得更像“此时此地的 apple”，而不是词典里孤立的 apple。</p>
+<p>这也是为什么你不能只看第一层就判断模型懂不懂。早层更像把词放进坐标系，后层才是在坐标系里把词变成语境对象。</p>
+        </div>
+        <div class="box soft">
+<h3>一张 state / read / write 表</h3>
+<p>位置读什么写什么常见症状</p>
+<p>embeddingtoken id初始向量切词错时，从起点就歪。</p>
+<p>attention别的位置表示混合后的上下文表示长距离依赖没接上。</p>
+<p>FFN当前位置表示局部特征变换后的表示特征没被提炼，层间变化太平。</p>
+<p>LM head最终表示logits候选 token 排序错。</p>
+<p>$$</p>
+<p>z = W_{\text{lm}} h + b</p>
+<p>$$</p>
+<p>这里 <code>h</code> 是某一层的 hidden state，<code>W_{\text{lm}}</code> 是 LM head 的投影矩阵，<code>z</code> 是 logits。这个式子告诉你：中间表示要先经过线性投影，才会回到词表空间。</p>
+        </div>
+      </div>
+      </section>
+      <section id="viz">
+        <div class="head">
+          <h2>attention matrix 怎么读</h2>
+          <span class="tag">matrix</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先看方向，再看强度</h3>
+<p>attention matrix 的一个格子表示“当前位置会从哪个位置读多少信息”。对角线附近常常很强，因为当前位置通常会保留自己的信息；往左看时，模型在因果 mask 下只能读前文，不能偷看未来。</p>
+<p>这张图不是解释器本身，它只是告诉你信息从哪里被拉进来。真正发生了什么，还要看 Q、K、V 各自带了什么，以及 residual 把什么保留下来。</p>
+        </div>
+        <div class="box soft">
+<h3>可读的矩阵样本</h3>
+<p>theappleisgreen</p>
+<p>the1.000.000.000.00</p>
+<p>apple0.420.580.000.00</p>
+<p>is0.250.350.400.00</p>
+<p>green0.100.480.120.30</p>
+<p>部件读什么写什么排错时看点</p>
+<p>Q当前位置的查询需求用于匹配的向量模型现在想从哪里找信息。</p>
+<p>K每个位置的可匹配特征供别人来搜的向量哪些位置容易被选中。</p>
+<p>V真正要汇入的内容被加权汇总的信息最后被搬回来的到底是什么。</p>
+        </div>
+      </div>
+      </section>
+      <section id="ffn">
+        <div class="head">
+          <h2>FFN 在做什么</h2>
+          <span class="tag">ffn</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>attention 负责“读”，FFN 负责“改写”</h3>
+<p>可以先把 attention 理解成跨位置的信息搬运，把别的 token 读进来；FFN 更像在每个位置内部做特征重组和非线性变换。两者串起来，模型才既能看上下文，又能把读到的信息加工成更适合下一层使用的表示。</p>
+<p>所以如果某一层 attention 已经对齐到“apple”，FFN 可能会进一步把它推向“水果”或“公司”这类更有任务意义的表示。它不是附属层，是表示分化里真正干活的一半。</p>
+        </div>
+        <div class="box soft">
+<h3>一眼看顺序</h3>
+<p>模块主要作用错位症状</p>
+<p>attention在 token 间搬运信息该看的前文没进来。</p>
+<p>residual保留原始表示信息被覆盖得太狠。</p>
+<p>FFN对单点表示做非线性加工表示没有变得更可分。</p>
+<p>$$</p>
+<p>h' = W_2 \, \sigma(W_1 h + b_1) + b_2</p>
+<p>$$</p>
+<p><code>h</code> 是当前位置表示，<code>W_1</code> 和 <code>W_2</code> 是两层线性变换，<code>\sigma</code> 是非线性。这个式子先不要求你背推导，只要记住：FFN 会把当前位置的特征重新拉伸、压缩和分隔。</p>
+        </div>
+      </div>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>Hugging Face 路线</h2>
+          <span class="tag">example</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先拿可打印对象</h3>
+<p>这一页的最小实作路线不追求训练，而是追求观察：先打印 hidden states，看不同层的表示如何变化；再打印 attentions，看谁在读谁；最后把中间层表示投到词表，看它更像什么 token。</p>
+<p>观察 hidden states / attentions复制</p>
+<pre><code class="language-python">from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model_name = "Qwen/Qwen2.5-0.5B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -260,358 +228,402 @@ outputs = model(**inputs, output_hidden_states=True, output_attentions=True)
 print(len(outputs.hidden_states))
 print(outputs.hidden_states[-1].shape)
 print(outputs.attentions[-1].shape)</code></pre>
-    </div>
-    <div class="box soft">
-      <h3>这段代码怎么看</h3>
-      <table data-export-context="P03 Hugging Face 对象分工表" data-export-lang="table">
-        <thead>
-          <tr><th>对象</th><th>它负责什么</th><th>先看哪里</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>tokenizer</td><td>把文字变成 input_ids，再把 id 还原回 token。</td><td>切词和长度。</td></tr>
-          <tr><td>model</td><td>根据 input_ids 计算 hidden_states / attentions / logits。</td><td>最后一层表示和形状。</td></tr>
-          <tr><td>lm_head</td><td>把 hidden state 投到词表空间。</td><td>logits 排序和 top token。</td></tr>
-        </tbody>
-      </table>
-      <p>如果这一步打印出来的 hidden state 形状和你想的不同，先不要怀疑“模型坏了”，先确认 batch、seq 和层数。很多问题只是输入维度没有对齐。</p>
-    </div>
-  </div>
-</section>
-
-<section id="lens">
-  <div class="head"><h2>logit lens 和 patch scope</h2><span class="tag">lens</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>先读曲线，再读结论</h3>
-      <p>logit lens 的核心动作很简单：拿某一层的 hidden state，直接接到 LM head 上，看这一层如果提前承担输出职责，它会更像哪些 token。这个动作的价值不是“提前猜答案”，而是把中间表示变成一条可读的变化曲线。你可以看到层数越深，表示是怎样从一个比较散的词面状态，慢慢收敛成更明确的候选分布。</p>
-      <p>用 <code>apple</code> 做例子最顺手。浅层时，logit lens 常会看到一些很通用的 token：<code>the</code>、<code>is</code>、<code>fruit</code>、<code>apple</code> 本身，或者和上下文还没有完全区分开的词。到了更深层，同一个 token 在水果语境里会更偏向食物相关分布，在公司语境里会更偏向品牌或组织相关分布。这个变化说明 representation 不是静态标签，而是在层间被逐步重写的对象。</p>
-      <p>这也解释了为什么只看最后输出不够。最后一层当然能告诉你模型选了什么，但 logit lens 能告诉你它从哪一层开始像这样想了。对学习来说，这比单点答案更有用，因为你可以顺着层数追到“什么时候开始分叉”。</p>
-    </div>
-    <div class="box soft">
-      <h3>patch scope 把观察变成测试</h3>
-      <p>如果 logit lens 是“读”，patch scope 就是“测”。做法是拿另一条样本在某个层、某个位置的表示，替换当前样本对应的位置，再看最终 logits 会不会跟着变化。这样你就不只是在看模型像什么，而是在问：这个位置的表示，是不是后续决策真的依赖的证据。</p>
-      <p>例如，先准备一句水果语境里的 <code>apple</code>，再准备一句公司语境里的 <code>Apple</code>。如果把水果句子的某层表示 patch 到公司句子的对应位置，最后分布明显往水果词汇倾斜，说明那一层表示确实参与了后面的决策；如果几乎没变，就说明信息可能还没有被写进关键路径，或者真正起作用的是别的层、别的位置。</p>
-      <p>这个方法很适合排查误判。很多人看到某层 attention 很强，就直接说“模型在这里想到了答案”；但真正的因果测试要看 patch 之后输出变不变。可解释性不是看起来合理就够了，关键是局部改动能不能带来稳定的输出变化。</p>
-      <p>所以这两种方法应该一起看：logit lens 负责给你方向感，patch scope 负责给你证据感。前者告诉你表示正在往哪里走，后者告诉你这条路有没有真的被后层使用。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="P03 logit lens 与 patch scope 表" data-export-lang="table">
-      <thead>
-        <tr><th>方法</th><th>读什么</th><th>写什么</th><th>看见什么</th><th>常见误判</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>logit lens</td><td>某层 hidden state</td><td>投到词表空间</td><td>这一层当前更像哪些 token</td><td>把中间投影当成最终答案</td></tr>
-        <tr><td>patch scope</td><td>另一条样本的局部表示</td><td>替换目标层 / 位置</td><td>最终 logits 是否被推着改</td><td>把一个位置的影响夸大成全局解释</td></tr>
-        <tr><td>layer compare</td><td>不同层的 top-k 变化</td><td>跟踪分布收敛</td><td>representation 何时开始稳定</td><td>只看一层，把动态过程看成静态结果</td></tr>
-        <tr><td>causal test</td><td>被 patch 之前的路径</td><td>观察后续输出变化</td><td>哪些表示真的被后层用到了</td><td>只看相似度，不看因果效应</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar"><span>logit lens 伪代码</span><button class="copy" data-copy="lens-code">复制</button></div>
-  <pre id="lens-code" data-export-context="P03 logit lens 伪代码" data-export-lang="python"><code class="language-python">def probe_layer(model, input_ids, layer_idx, top_k=5):
-    outputs = model(
-        input_ids=input_ids,
-        output_hidden_states=True,
-        output_attentions=False,
-    )
-    hidden = outputs.hidden_states[layer_idx]
-    logits = model.lm_head(hidden)
-    probs = logits.softmax(dim=-1)
-    top = probs[:, -1, :].topk(top_k, dim=-1)
-    return top.indices, top.values</code></pre>
-  <p>这段伪代码做的事很朴素：选一层，取它的 hidden state，接上 LM head，看最后一个位置最像哪些 token。它不是最终推理流程，但足够让你看到中间表示向词表空间投影后的样子。</p>
-  <p>如果层间 top-k 变化很快，说明表示还在重组；如果到了后几层 top-k 已经稳定下来，说明模型离输出结论更近了。这个变化曲线比单点判断更有信息量。</p>
-  <p>实操时，先在两个上下文里各跑一次，再只改一个层位去 patch。你会看到：同一个 token 的表示在不同层里既有相似处，也有决定性的差异。可解释性真正有用的地方，就是把这些差异变成可验证的实验。</p>
-</section>
-
-<section id="bridge">
-  <div class="head"><h2>操作桥</h2><span class="tag">bridge</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>下一步怎么动手</h3>
-      <p>如果你已经能把这一讲讲清楚，下一步最值得打开的是一个能导出 hidden states 和 attentions 的最小模型脚本。先选一个小模型，打印一条短句的层间输出，再把最后一层和中间层都接到 LM head 上看 top-k 变化。这个练习会把“我大概懂了”变成“我真的看见了”。</p>
-      <p>操作顺序建议很固定：先只跑 tokenizer，确认切词和长度；再跑 model 的前向，拿到 hidden states 和 attentions；接着只对某一层做 logit lens；最后再尝试 patch scope。一次只改一个变量，你才能知道变化到底从哪儿来。</p>
-    </div>
-    <div class="box soft">
-      <h3>失败时先看什么</h3>
-      <table data-export-context="P03 操作桥排查表" data-export-lang="table">
-        <thead>
-          <tr><th>现象</th><th>先查哪里</th><th>为什么</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>hidden state 形状不对</td><td>batch / seq / hidden_size</td><td>输入维度没对齐，后面都不准。</td></tr>
-          <tr><td>attention 看起来全空</td><td>是否真拿到了 output_attentions</td><td>有时只是没有打开输出开关。</td></tr>
-          <tr><td>logit lens 没变化</td><td>层号和最后一位是否取对</td><td>错层或错位置会直接把曲线看平。</td></tr>
-          <tr><td>patch 以后输出不动</td><td>patch 的位置是否和目标样本对齐</td><td>错位比无效更常见。</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <div class="box">
-    <h3>一个完整的错位样本</h3>
-    <p>假设你跑的是 <code>The apple is green</code>，却发现模型最后偏向的是“company”而不是“fruit”。先不要把这件事直接解释成“模型把 apple 认错了”，而是按层看：切词是否把 <code>apple</code> 拆散了，embedding 是否和你想的一样，前面几层的 representation 是否已经开始向水果或公司语境分叉，LM head 读出的 logits 是否真的把水果词汇压低了。</p>
-    <p>如果 logit lens 在中间层已经能看到水果词汇，但最终输出还是公司词汇，问题更可能在后面几层、残差路径或解码参数。如果中间层从头到尾都像公司语境，那就说明错误更早，可能是上下文、数据提示或 attention 没把语境拉进来。这个判断很重要，因为它决定你下一步该改 prompt、改层，还是改解码。</p>
-    <p>这就是这页真正想训练你的动作：不是问“模型为什么错”，而是问“错是在哪一步被写进去的”。只要你能把这一步说清楚，后面的可解释性方法、调试方法和实验方法就都接得上。</p>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="P03 错位样本分层回放" data-export-lang="table">
-      <thead>
-        <tr><th>层位</th><th>你会看到什么</th><th>怎么解释</th><th>下一步</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>tokenizer</td><td><code>apple</code> 没被拆散</td><td>输入表示先没问题。</td><td>继续看 embedding。</td></tr>
-        <tr><td>中间层</td><td>logit lens 已经偏向 <code>fruit</code></td><td>表示在朝水果语境收敛。</td><td>继续看更深层。</td></tr>
-        <tr><td>更深层</td><td>top-k 又偏向 <code>company</code></td><td>后层把表示改写到别的方向。</td><td>看 residual、FFN 和 lm_head。</td></tr>
-        <tr><td>最终输出</td><td>采样结果选了 <code>company</code></td><td>解码和最终分数把前面的趋势放大了。</td><td>调 temperature / top-p，再复跑一次。</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>这个回放的关键，不是记住某个固定答案，而是训练你把一条输出轨迹拆成可追踪的局部事实。等你能把“水果语境先出现、公司语境后覆盖”这类变化说清楚，后面看可解释性论文时，你会知道作者到底是在读表示，还是在做因果测试。</p>
-  <div class="box">
-    <h3>最小实验记录</h3>
-    <p>如果你准备真的跑一遍，只要记四件事：输入句子、取的是哪一层、logit lens 的 top-k 里先出现了什么、最终输出是什么。再补一句话说明中间层和最终层是否朝同一个方向收敛。这个记录足够让你复盘一次实验，而不用回头翻整段输出日志。</p>
-    <table data-export-context="P03 最小实验记录模板" data-export-lang="table">
-      <thead>
-        <tr><th>字段</th><th>写什么</th><th>为什么</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>输入句子</td><td>例如 <code>The apple is green</code></td><td>固定锚点，方便比较。</td></tr>
-        <tr><td>观察层</td><td>layer 3 / layer 8 / layer 12</td><td>知道变化从哪里开始。</td></tr>
-        <tr><td>top-k</td><td>先出现的 3 到 5 个 token</td><td>看分布往哪边收敛。</td></tr>
-        <tr><td>最终输出</td><td>最后采样到的 token</td><td>把中间趋势和结果对起来。</td></tr>
-      </tbody>
-    </table>
-    <p>写完这四项，你就能把一次实验从“跑过了”变成“看懂了”。后面无论是换层、换样本还是换解码参数，都可以继续沿着这张记录表做对照。</p>
-  </div>
-</section>
-
-<section id="diagnosis">
-  <div class="head"><h2>诊断工作坊</h2><span class="tag">diagnosis</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>把症状翻译成位置</h3>
-      <p>这讲最有用的不是“背出术语”，而是能把症状定位到一层：切词错位通常看 tokenizer；同词异义没有分开，先看表示层；该读的前文没被读进来，先看 attention；局部特征没被提炼，先看 FFN；候选词表排序怪，再看 LM head 和解码。</p>
-      <p>下面这张表就是给排错用的。</p>
-      <table data-export-context="P03 症状到层位映射表" data-export-lang="table">
-        <thead>
-          <tr><th>症状</th><th>先怀疑哪一层</th><th>下一步检查</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>同一个词在不同句子里都差不多</td><td>representation 太早，还没分化</td><td>看更深层 hidden state。</td></tr>
-          <tr><td>前文明明给了证据，模型还是忽略</td><td>attention / context 没接住</td><td>看 attention matrix 和输入长度。</td></tr>
-          <tr><td>中间层看起来有语义，最后答案却偏了</td><td>LM head / sampling</td><td>看 logits 排序和 temperature。</td></tr>
-          <tr><td>每层变化都很小，表示像没动过</td><td>FFN 或残差路径弱</td><td>看 layer 输出与输入差值。</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="box soft">
-      <h3>写给自己的一句排查顺序</h3>
-      <p>先看输入是不是对，再看表示有没有变，再看谁在读谁，最后才看解码。这个顺序会省很多时间，因为它把“模型不会”拆成了可以逐层验证的对象。</p>
-      <p class="checkpoint">现在你应该能做什么：拿到一个怪输出时，不先下结论，而是先说出“我现在要看哪一层的证据”。</p>
-    </div>
-  </div>
-</section>
-
-<section id="boundary">
-  <div class="head"><h2>这里先不追</h2><span class="tag">boundary</span></div>
-  <div class="box info">
-    <p>这页已经碰到 multi-head、causal mask、residual、layer norm 和 logit lens，但它们在这里都只算背景。下一步真正去追时，你会在 Transformer 讲里看 head 怎么分工，在可解释性讲里看 representation 怎么被投影和干预，在训练与评估讲里看这些表示怎样影响任务表现。</p>
-    <p>现在先把这页的中心抓住：token 进模型以后，不是直接变答案，而是先经过一串可观察的表示改写，最后才回到 token 分数。</p>
-  </div>
-</section>
-
-
+        </div>
+        <div class="box soft">
+<h3>这段代码怎么看</h3>
+<p>对象它负责什么先看哪里</p>
+<p>tokenizer把文字变成 input_ids，再把 id 还原回 token。切词和长度。</p>
+<p>model根据 input_ids 计算 hidden_states / attentions / logits。最后一层表示和形状。</p>
+<p>lm_head把 hidden state 投到词表空间。logits 排序和 top token。</p>
+<p>如果这一步打印出来的 hidden state 形状和你想的不同，先不要怀疑“模型坏了”，先确认 batch、seq 和层数。很多问题只是输入维度没有对齐。</p>
+        </div>
+      </div>
+      </section>
+      <section id="lens">
+        <div class="head">
+          <h2>logit lens 和 patch scope</h2>
+          <span class="tag">lens</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先读曲线，再读结论</h3>
+<p>logit lens 的核心动作很简单：拿某一层的 hidden state，直接接到 LM head 上，看这一层如果提前承担输出职责，它会更像哪些 token。这个动作的价值把中间表示变成一条可读的变化曲线。你可以看到层数越深，表示是怎样从一个比较散的词面状态，慢慢收敛成更明确的候选分布。</p>
+<p>用 <code>apple</code> 做例子最顺手。浅层时，logit lens 常会看到一些很通用的 token：<code>the</code>、<code>is</code>、<code>fruit</code>、<code>apple</code> 本身，或者和上下文还没有完全区分开的词。到了更深层，同一个 token 在水果语境里会更偏向食物相关分布，在公司语境里会更偏向品牌或组织相关分布。这个变化说明 representation 在层间被逐步重写的对象。</p>
+<p>这也解释了为什么只看最后输出不够。最后一层当然能告诉你模型选了什么，但 logit lens 能告诉你它从哪一层开始像这样想了。对学习来说，这比单点答案更有用，因为你可以顺着层数追到“什么时候开始分叉”。</p>
+        </div>
+        <div class="box soft">
+<h3>patch scope 把观察变成测试</h3>
+<p>如果 logit lens 是“读”，patch scope 就是“测”。做法是拿另一条样本在某个层、某个位置的表示，替换当前样本对应的位置，再看最终 logits 会不会跟着变化。这样你就不只是在看模型像什么，而是在问：这个位置的表示，是不是后续决策真的依赖的证据。</p>
+<p>例如，先准备一句水果语境里的 <code>apple</code>，再准备一句公司语境里的 <code>Apple</code>。如果把水果句子的某层表示 patch 到公司句子的对应位置，最后分布明显往水果词汇倾斜，说明那一层表示确实参与了后面的决策；如果几乎没变，就说明信息可能还没有被写进关键路径，或者真正起作用的是别的层、别的位置。</p>
+<p>这个方法很适合排查误判。很多人看到某层 attention 很强，就直接说“模型在这里想到了答案”；但真正的因果测试要看 patch 之后输出变不变。可解释性不是看起来合理就够了，关键是局部改动能不能带来稳定的输出变化。</p>
+<p>所以这两种方法应该一起看：logit lens 负责给你方向感，patch scope 负责给你证据感。前者告诉你表示正在往哪里走，后者告诉你这条路有没有真的被后层使用。</p>
+<p>方法读什么写什么看见什么常见误判</p>
+<p>logit lens某层 hidden state投到词表空间这一层当前更像哪些 token把中间投影当成最终答案</p>
+<p>patch scope另一条样本的局部表示替换目标层 / 位置最终 logits 是否被推着改把一个位置的影响夸大成全局解释</p>
+<p>layer compare不同层的 top-k 变化跟踪分布收敛representation 何时开始稳定只看一层，把动态过程看成静态结果</p>
+<p>causal test被 patch 之前的路径观察后续输出变化哪些表示真的被后层用到了只看相似度，不看因果效应</p>
+<p>logit lens 伪代码复制</p>
+<pre><code class="language-python">def probe_layer(model, input_ids, layer_idx, top_k=5):
+ outputs = model(
+ input_ids=input_ids,
+ output_hidden_states=True,
+ output_attentions=False,
+ )
+ hidden = outputs.hidden_states[layer_idx]
+ logits = model.lm_head(hidden)
+ probs = logits.softmax(dim=-1)
+ top = probs[:, -1, :].topk(top_k, dim=-1)
+ return top.indices, top.values</code></pre>
+<p>这段伪代码做的事很朴素：选一层，取它的 hidden state，接上 LM head，看最后一个位置最像哪些 token。它不是最终推理流程，但足够让你看到中间表示向词表空间投影后的样子。</p>
+<p>如果层间 top-k 变化很快，说明表示还在重组；如果到了后几层 top-k 已经稳定下来，说明模型离输出结论更近了。这个变化曲线比单点判断更有信息量。</p>
+<p>实操时，先在两个上下文里各跑一次，再只改一个层位去 patch。你会看到：同一个 token 的表示在不同层里既有相似处，也有决定性的差异。可解释性真正有用的地方，就是把这些差异变成可验证的实验。</p>
+        </div>
+      </div>
+      </section>
+      <section id="bridge">
+        <div class="head">
+          <h2>操作桥</h2>
+          <span class="tag">bridge</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>下一步怎么动手</h3>
+<p>如果你已经能把这一讲讲清楚，下一步最值得打开的是一个能导出 hidden states 和 attentions 的最小模型脚本。先选一个小模型，打印一条短句的层间输出，再把最后一层和中间层都接到 LM head 上看 top-k 变化。这个练习会把“我大概懂了”变成“我真的看见了”。</p>
+<p>操作顺序建议很固定：先只跑 tokenizer，确认切词和长度；再跑 model 的前向，拿到 hidden states 和 attentions；接着只对某一层做 logit lens；最后再尝试 patch scope。一次只改一个变量，你才能知道变化到底从哪儿来。</p>
+        </div>
+        <div class="box soft">
+<h3>失败时先看什么</h3>
+<p>现象先查哪里为什么</p>
+<p>hidden state 形状不对batch / seq / hidden_size输入维度没对齐，后面都不准。</p>
+<p>attention 看起来全空是否真拿到了 output_attentions有时只是没有打开输出开关。</p>
+<p>logit lens 没变化层号和最后一位是否取对错层或错位置会直接把曲线看平。</p>
+<p>patch 以后输出不动patch 的位置是否和目标样本对齐错位比无效更常见。</p>
+        </div>
+        <div class="box">
+<h3>一个完整的错位样本</h3>
+<p>假设你跑的是 <code>The apple is green</code>，却发现模型最后偏向的是“company”而不是“fruit”。先不要把这件事直接解释成“模型把 apple 认错了”，而是按层看：切词是否把 <code>apple</code> 拆散了，embedding 是否和你想的一样，前面几层的 representation 是否已经开始向水果或公司语境分叉，LM head 读出的 logits 是否真的把水果词汇压低了。</p>
+<p>如果 logit lens 在中间层已经能看到水果词汇，但最终输出还是公司词汇，问题更可能在后面几层、残差路径或解码参数。如果中间层从头到尾都像公司语境，那就说明错误更早，可能是上下文、数据提示或 attention 没把语境拉进来。这个判断很重要，因为它决定你下一步该改 prompt、改层，还是改解码。</p>
+<p>这就是这页真正想训练你的动作：问“错是在哪一步被写进去的”。只要你能把这一步说清楚，后面的可解释性方法、调试方法和实验方法就都接得上。</p>
+<p>层位你会看到什么怎么解释下一步</p>
+<p>tokenizer<code>apple</code> 没被拆散输入表示先没问题。继续看 embedding。</p>
+<p>中间层logit lens 已经偏向 <code>fruit</code>表示在朝水果语境收敛。继续看更深层。</p>
+<p>更深层top-k 又偏向 <code>company</code>后层把表示改写到别的方向。看 residual、FFN 和 lm_head。</p>
+<p>最终输出采样结果选了 <code>company</code>解码和最终分数把前面的趋势放大了。调 temperature / top-p，再复跑一次。</p>
+<p>这个回放的关键，训练你把一条输出轨迹拆成可追踪的局部事实。等你能把“水果语境先出现、公司语境后覆盖”这类变化说清楚，后面看可解释性论文时，你会知道作者到底是在读表示，还是在做因果测试。</p>
+        </div>
+        <div class="box">
+<h3>最小实验记录</h3>
+<p>如果你准备真的跑一遍，只要记四件事：输入句子、取的是哪一层、logit lens 的 top-k 里先出现了什么、最终输出是什么。再补一句话说明中间层和最终层是否朝同一个方向收敛。这个记录足够让你复盘一次实验，而不用回头翻整段输出日志。</p>
+<p>字段写什么为什么</p>
+<p>输入句子例如 <code>The apple is green</code>固定锚点，方便比较。</p>
+<p>观察层layer 3 / layer 8 / layer 12知道变化从哪里开始。</p>
+<p>top-k先出现的 3 到 5 个 token看分布往哪边收敛。</p>
+<p>最终输出最后采样到的 token把中间趋势和结果对起来。</p>
+<p>写完这四项，你就能把一次实验从“跑过了”变成“看懂了”。后面无论是换层、换样本还是换解码参数，都可以继续沿着这张记录表做对照。</p>
+        </div>
+      </div>
+      </section>
+      <section id="diagnosis">
+        <div class="head">
+          <h2>诊断工作坊</h2>
+          <span class="tag">diagnosis</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>把症状翻译成位置</h3>
+<p>这讲最有用的能把症状定位到一层：切词错位通常看 tokenizer；同词异义没有分开，先看表示层；该读的前文没被读进来，先看 attention；局部特征没被提炼，先看 FFN；候选词表排序怪，再看 LM head 和解码。</p>
+<p>下面这张表就是给排错用的。</p>
+<p>症状先怀疑哪一层下一步检查</p>
+<p>同一个词在不同句子里都差不多representation 太早，还没分化看更深层 hidden state。</p>
+<p>前文明明给了证据，模型还是忽略attention / context 没接住看 attention matrix 和输入长度。</p>
+<p>中间层看起来有语义，最后答案却偏了LM head / sampling看 logits 排序和 temperature。</p>
+<p>每层变化都很小，表示像没动过FFN 或残差路径弱看 layer 输出与输入差值。</p>
+        </div>
+        <div class="box soft">
+<h3>写给自己的一句排查顺序</h3>
+<p>先看输入是不是对，再看表示有没有变，再看谁在读谁，最后才看解码。这个顺序会省很多时间，因为它把“模型不会”拆成了可以逐层验证的对象。</p>
+<p>现在你应该能做什么：拿到一个怪输出时，不先下结论，而是先说出“我现在要看哪一层的证据”。</p>
+        </div>
+      </div>
+      </section>
+      <section id="boundary">
+        <div class="head">
+          <h2>这里先不追</h2>
+          <span class="tag">boundary</span>
+        </div>
+        <div class="box info">
+<p>这页已经碰到 multi-head、causal mask、residual、layer norm 和 logit lens，但它们在这里都只算背景。下一步真正去追时，你会在 Transformer 讲里看 head 怎么分工，在可解释性讲里看 representation 怎么被投影和干预，在训练与评估讲里看这些表示怎样影响任务表现。</p>
+<p>现在先把这页的中心抓住：token 进模型以后，先经过一串可观察的表示改写，最后才回到 token 分数。</p>
+        </div>
+      </section>
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-intro">
-  <div class="box soft">
-    <h3>怎么答才算会</h3>
-    <p>这组练习不是让你复述定义，而是让你把“表示、读写、投影、诊断”四条线分开。先做选择和填空，再做诊断和综合表达。</p>
-  </div>
-  <div class="box info">
-    <h3>检查重点</h3>
-    <p>答题时先说对象，再说变化，再说症状。不要把 attention、FFN、LM head、logit lens 混成一个东西。</p>
-  </div>
-</div>
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>一、术语与前向顺序</h3><p>这一组检查你能不能把流程说对。</p></div>
-    <div class="quick-review"><b>REMIND</b>输入先变表示，最后才变 logits；token id 不是语义大小。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="p3-q1" data-group="术语与前向顺序" data-title="LM head 输出什么？" data-answer="B">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">顺序</span></div>
-      <h3>LM head 输出什么？</h3>
-      <label><input type="radio" name="p3-q1" value="A"> A. 直接输出下一个 token 文本</label>
-      <label><input type="radio" name="p3-q1" value="B"> B. 词表上的 logits</label>
-      <label><input type="radio" name="p3-q1" value="C"> C. attention matrix</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="p3-q2" data-group="术语与前向顺序" data-title="representation 的中文含义" data-answer="表示">
-      <div class="q-meta"><span class="pill">fill</span><span class="pill">术语</span></div>
-      <h3>representation 的中文含义是什么？</h3>
-      <input type="text" data-answer="表示" placeholder="例如：表示">
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q full" data-question="p3-q3" data-group="术语与前向顺序" data-title="前向顺序" data-type="ordering">
-      <div class="q-meta"><span class="pill">ordering</span><span class="pill">流程</span></div>
-      <h3>按顺序排一轮前向</h3>
-      <p>把这几个对象排成一条最合理的链：<code>token id</code>、<code>embedding</code>、<code>hidden state</code>、<code>lm_head</code>、<code>logits</code>、<code>softmax</code>。</p>
-      <textarea name="p3-q3"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>合理顺序是：token id -> embedding -> hidden state -> lm_head -> logits -> softmax。答案只要体现“先表示，后分数，再概率”即可。</p></details>
-    </div>
-  </div>
-</div>
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>二、表示与解释</h3><p>这一组检查你能不能区分层间变化。</p></div>
-    <div class="quick-review"><b>REMIND</b>同一个 token 在浅层可能还像自己，在深层才会被上下文推开。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="p3-q4" data-group="表示与解释" data-title="logit lens 的作用" data-answer="B">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">解释</span></div>
-      <h3>logit lens 的作用是什么？</h3>
-      <label><input type="radio" name="p3-q4" value="A"> A. 把 attention matrix 变成图片</label>
-      <label><input type="radio" name="p3-q4" value="B"> B. 把中间层表示投回词表，看它像什么 token</label>
-      <label><input type="radio" name="p3-q4" value="C"> C. 直接替换模型参数</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="p3-q5" data-group="表示与解释" data-title="contextualized embedding" data-answer="contextualized embedding">
-      <div class="q-meta"><span class="pill">fill</span><span class="pill">术语</span></div>
-      <h3>“带上下文的表示”常对应哪个英文词组？</h3>
-      <input type="text" data-answer="contextualized embedding" placeholder="例如：contextualized embedding">
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q full" data-question="p3-q6" data-group="表示与解释" data-title="apple 分化" data-type="synthesis">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">解释</span></div>
-      <h3>用 apple 解释表示为什么会分化</h3>
-      <p>用“水果 apple / Apple 公司”这个例子，说明为什么同一个 token 到了更深层，representation 会越来越分开。答案要包含“上下文”这个词。</p>
-      <p class="solve-note">目标：先讲现象，再讲原因，最后讲结果。</p>
-      <textarea name="p3-q6"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>要点：浅层表示更接近词面，深层表示会吸收上下文；“apple” 在水果语境里会靠近食物相关表示，在公司语境里会靠近品牌、企业或科技相关表示；分化来自上下文信息被逐层混入表示。</p></details>
-    </div>
-  </div>
-</div>
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>三、attention 与 FFN</h3><p>这一组检查你能不能拆开读写职责。</p></div>
-    <div class="quick-review"><b>REMIND</b>attention 搬信息，FFN 改写表示，residual 保留底稿。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="p3-q7" data-group="attention 与 FFN" data-title="Q/K/V 分工" data-answer="C">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">QKV</span></div>
-      <h3>哪句话最接近 Q/K/V 的分工？</h3>
-      <label><input type="radio" name="p3-q7" value="A"> A. Q 是被加权汇总的信息，V 是搜索条件</label>
-      <label><input type="radio" name="p3-q7" value="B"> B. K 负责最终分类，Q 负责切词</label>
-      <label><input type="radio" name="p3-q7" value="C"> C. Q 表达当前位置想找什么，K 表达可被匹配的特征，V 提供真正要汇入的内容</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="p3-q8" data-group="attention 与 FFN" data-title="attention 的输入输出" data-answer="B">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">读写</span></div>
-      <h3>attention 最直接是在做什么？</h3>
-      <label><input type="radio" name="p3-q8" value="A"> A. 只改写当前位置，不读别的位置</label>
-      <label><input type="radio" name="p3-q8" value="B"> B. 让当前位置按权重读别的位置的信息</label>
-      <label><input type="radio" name="p3-q8" value="C"> C. 直接生成最终 token</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q full" data-question="p3-q9" data-group="attention 与 FFN" data-title="FFN 的位置" data-type="diagnosis">
-      <div class="q-meta"><span class="pill">diagnosis</span><span class="pill">FFN</span></div>
-      <h3>为什么 FFN 不能随便忽略？</h3>
-      <p>如果某层 attention 已经把“apple”相关信息读进来，FFN 还会继续做什么？请用一句话说出它对表示的作用，再补一个如果没有 FFN 可能出现的症状。</p>
-      <p class="solve-note">目标：把“它只是个中间层”改成“它在改写特征”。</p>
-      <textarea name="p3-q9"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>FFN 会在当前位置上做非线性特征变换，把已经读进来的上下文信息重新组织成更可分、更适合下一层使用的表示；如果没有它，表示可能停在“只会搬运信息”而不够成型的状态。</p></details>
-    </div>
-  </div>
-</div>
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>四、代码阅读与综合表达</h3><p>这一组检查你能不能把代码和概念对回去。</p></div>
-    <div class="quick-review"><b>REMIND</b>先看对象，再看形状，再看错位症状。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="p3-q10" data-group="代码阅读与综合表达" data-title="hidden state 的 shape" data-answer="A">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">code reading</span></div>
-      <h3><code>hidden_states[-1].shape</code> 常见会长成什么？</h3>
-      <label><input type="radio" name="p3-q10" value="A"> A. <code>[batch, seq, hidden_size]</code></label>
-      <label><input type="radio" name="p3-q10" value="B"> B. <code>[vocab, batch]</code></label>
-      <label><input type="radio" name="p3-q10" value="C"> C. <code>[head, vocab, layer]</code></label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="p3-q11" data-group="代码阅读与综合表达" data-title="attention 的 shape" data-answer="B">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">shape</span></div>
-      <h3><code>attentions[-1].shape</code> 通常表示什么？</h3>
-      <label><input type="radio" name="p3-q11" value="A"> A. <code>[batch, seq, hidden_size]</code></label>
-      <label><input type="radio" name="p3-q11" value="B"> B. <code>[batch, heads, seq, seq]</code></label>
-      <label><input type="radio" name="p3-q11" value="C"> C. <code>[batch, vocab]</code></label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q full" data-question="p3-q12" data-group="代码阅读与综合表达" data-title="费曼解释" data-type="synthesis">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">总结</span></div>
-      <h3>把整讲讲给同学听</h3>
-      <p>用 8 到 12 句话解释：一个 token 进入 LLM 之后，representation 怎样逐层变化，attention / FFN / LM head 各自做什么，logit lens 为什么能提供观察角度。</p>
-      <p class="solve-note">目标：讲全链路，不漏掉“表示”和“分数”的区别。</p>
-      <textarea name="p3-q12"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>优秀答案会把 token id、embedding、hidden state、attention、FFN、LM head、logits、softmax 和 logit lens 串成一条链，并指出：中间层是可观察的表示，不是最终答案本身。也要说明同一个 token 在不同上下文里会随着层数加深而分化。</p></details>
-    </div>
-  </div>
-</div>
-
-      </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
+      <div class="practice-intro">
+      <div class="box soft">
+<h3>怎么答才算会</h3>
+<p>这组练习让你把“表示、读写、投影、诊断”四条线分开。先做选择和填空，再做诊断和综合表达。</p>
+      </div>
+      <div class="box info">
+<h3>检查重点</h3>
+<p>答题时先说对象，再说变化，再说症状。不要把 attention、FFN、LM head、logit lens 混成一个东西。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、术语与前向顺序</h3></div>
+          <div class="quick-review">REMIND 输入先变表示，最后才变 logits；token id 不是语义大小。 --></div>
         </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
+        <div class="drill-grid">
+      <article class="q" data-question="qp3q1" data-group="" data-title="" data-answer="词表上的 logits">
+        <div class="q-meta"><span class="pill">p3-q1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> LM head 输出什么？</h3>
 
-      <section id="sources">
+      <div class="choices">
+      <label><input type="radio" name="qp3-q1" value="直接输出下一个 token 文本">直接输出下一个 token 文本</label>
+      <label><input type="radio" name="qp3-q1" value="词表上的 logits">词表上的 logits</label>
+      <label><input type="radio" name="qp3-q1" value="attention matrix">attention matrix</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>词表上的 logits</p>
+        </details>
+      </article>
+      <article class="q" data-question="qp3q2" data-group="" data-title="" data-answer="表示">
+        <div class="q-meta"><span class="pill">p3-q2</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> representation 的中文含义是什么？</h3>
+
+
+      <textarea name="qp3-q2"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>表示</p>
+        </details>
+      </article>
+      <article class="q" data-question="qp3q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">p3-q3</span><span class="pill">ordering</span></div>
+        <h3><b>Q:</b> 按顺序排一轮前向</h3>
+
+
+      <textarea name="qp3-q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。合理顺序是：token id -> embedding -> hidden state -> lm_head -> logits -> softmax。答案只要体现“先表示，后分数，再概率”即可。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、表示与解释</h3></div>
+          <div class="quick-review">REMIND 同一个 token 在浅层可能还像自己，在深层才会被上下文推开。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="qp3q4" data-group="" data-title="" data-answer="把中间层表示投回词表，看它像什么 token">
+        <div class="q-meta"><span class="pill">p3-q4</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> logit lens 的作用是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qp3-q4" value="把 attention matrix 变成图片">把 attention matrix 变成图片</label>
+      <label><input type="radio" name="qp3-q4" value="把中间层表示投回词表，看它像什么 token">把中间层表示投回词表，看它像什么 token</label>
+      <label><input type="radio" name="qp3-q4" value="直接替换模型参数">直接替换模型参数</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>把中间层表示投回词表，看它像什么 token</p>
+        </details>
+      </article>
+      <article class="q" data-question="qp3q5" data-group="" data-title="" data-answer="contextualized embedding">
+        <div class="q-meta"><span class="pill">p3-q5</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> “带上下文的表示”常对应哪个英文词组？</h3>
+
+
+      <textarea name="qp3-q5"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>contextualized embedding</p>
+        </details>
+      </article>
+      <article class="q" data-question="qp3q6" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">p3-q6</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 用 apple 解释表示为什么会分化</h3>
+
+
+      <textarea name="qp3-q6"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。要点：浅层表示更接近词面，深层表示会吸收上下文；“apple” 在水果语境里会靠近食物相关表示，在公司语境里会靠近品牌、企业或科技相关表示；分化来自上下文信息被逐层混入表示。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、attention 与 FFN</h3></div>
+          <div class="quick-review">REMIND attention 搬信息，FFN 改写表示，residual 保留底稿。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="qp3q7" data-group="" data-title="" data-answer="Q 表达当前位置想找什么，K 表达可被匹配的特征，V 提供真正要汇入的内容">
+        <div class="q-meta"><span class="pill">p3-q7</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 哪句话最接近 Q/K/V 的分工？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qp3-q7" value="Q 是被加权汇总的信息，V 是搜索条件">Q 是被加权汇总的信息，V 是搜索条件</label>
+      <label><input type="radio" name="qp3-q7" value="K 负责最终分类，Q 负责切词">K 负责最终分类，Q 负责切词</label>
+      <label><input type="radio" name="qp3-q7" value="Q 表达当前位置想找什么，K 表达可被匹配的特征，V 提供真正要汇入的内容">Q 表达当前位置想找什么，K 表达可被匹配的特征，V 提供真正要汇入的内容</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>Q 表达当前位置想找什么，K 表达可被匹配的特征，V 提供真正要汇入的内容</p>
+        </details>
+      </article>
+      <article class="q" data-question="qp3q8" data-group="" data-title="" data-answer="让当前位置按权重读别的位置的信息">
+        <div class="q-meta"><span class="pill">p3-q8</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> attention 最直接是在做什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qp3-q8" value="只改写当前位置，不读别的位置">只改写当前位置，不读别的位置</label>
+      <label><input type="radio" name="qp3-q8" value="让当前位置按权重读别的位置的信息">让当前位置按权重读别的位置的信息</label>
+      <label><input type="radio" name="qp3-q8" value="直接生成最终 token">直接生成最终 token</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>让当前位置按权重读别的位置的信息</p>
+        </details>
+      </article>
+      <article class="q" data-question="qp3q9" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">p3-q9</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> 为什么 FFN 不能随便忽略？</h3>
+
+
+      <textarea name="qp3-q9"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。FFN 会在当前位置上做非线性特征变换，把已经读进来的上下文信息重新组织成更可分、更适合下一层使用的表示；如果没有它，表示可能停在“只会搬运信息”而不够成型的状态。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、代码阅读与综合表达</h3></div>
+          <div class="quick-review">REMIND 先看对象，再看形状，再看错位症状。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="qp3q10" data-group="" data-title="" data-answer="[batch, seq, hidden_size]">
+        <div class="q-meta"><span class="pill">p3-q10</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> <code>hidden_states[-1].shape</code> 常见会长成什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qp3-q10" value="[batch, seq, hidden_size]">[batch, seq, hidden_size]</label>
+      <label><input type="radio" name="qp3-q10" value="[vocab, batch]">[vocab, batch]</label>
+      <label><input type="radio" name="qp3-q10" value="[head, vocab, layer]">[head, vocab, layer]</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>[batch, seq, hidden_size]</p>
+        </details>
+      </article>
+      <article class="q" data-question="qp3q11" data-group="" data-title="" data-answer="[batch, heads, seq, seq]">
+        <div class="q-meta"><span class="pill">p3-q11</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> <code>attentions[-1].shape</code> 通常表示什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qp3-q11" value="[batch, seq, hidden_size]">[batch, seq, hidden_size]</label>
+      <label><input type="radio" name="qp3-q11" value="[batch, heads, seq, seq]">[batch, heads, seq, seq]</label>
+      <label><input type="radio" name="qp3-q11" value="[batch, vocab]">[batch, vocab]</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>[batch, heads, seq, seq]</p>
+        </details>
+      </article>
+      <article class="q" data-question="qp3q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">p3-q12</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 把整讲讲给同学听</h3>
+
+
+      <textarea name="qp3-q12"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。优秀答案会把 token id、embedding、hidden state、attention、FFN、LM head、logits、softmax 和 logit lens 串成一条链，并指出：中间层是可观察的表示，不是最终答案本身。也要说明同一个 token 在不同上下文里会随着层数加深而分化。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-  <li>课程地图 <code>index.html</code>：确认 P03 在课程前期的核心位置，并明确后续会继续进入评估、训练、RAG、Transformer、安全和多模态。</li>
-  <li>课程根 <code>README.md</code>：确认整套资料的组织方式和长期研习结构。</li>
-  <li>旧版 <code>02_P03_第3讲：剖析大型语言模型/学习页.html</code>：作为本地事实边界，保留 LM head、logits、softmax、representation、logit lens、patch scope、Q/K/V、attention matrix 和 FFN 这些核心内容。</li>
+<ul>
+<li>课程地图 <code>index.html</code>：确认 P03 在课程前期的核心位置，并明确后续会继续进入评估、训练、RAG、Transformer、安全和多模态。</li>
+<li>课程根 <code>README.md</code>：确认整套资料的组织方式和长期研习结构。</li>
+<li>旧版 <code>02_P03_第3讲：剖析大型语言模型/学习页.html</code>：作为本地事实边界，保留 LM head、logits、softmax、representation、logit lens、patch scope、Q/K/V、attention matrix 和 FFN 这些核心内容。</li>
 </ul>
-<p>当前单元目录没有独立字幕正文文件。本页只迁移旧学习页中已经整理出的课堂内容，不新增课堂原话式引用；如果后续补齐字幕正文，可以继续校对具体模型名称、课堂示例和代码细节。</p>
-
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

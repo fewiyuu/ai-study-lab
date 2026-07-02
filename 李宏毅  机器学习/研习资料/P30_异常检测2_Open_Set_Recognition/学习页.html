@@ -4,418 +4,693 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P30｜异常检测 2：Open Set Recognition</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="open set recognition,classifier,confidence score,max probability,entropy,softmax,threshold,unknown,development set,Simpsons">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Open Set Recognition</strong><span>P30。用已知类别分类器的信心分数，判断新样本是不是 unknown。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#setting"><span class="dot"></span>有标签设定</a>
-      <a href="#confidence"><span class="dot"></span>信心分数</a>
-      <a href="#maxprob"><span class="dot"></span>Max Probability</a>
-      <a href="#entropy"><span class="dot"></span>Entropy</a>
-      <a href="#threshold"><span class="dot"></span>阈值与验证集</a>
-      <a href="#experiment"><span class="dot"></span>实验观察</a>
-      <a href="#baseline"><span class="dot"></span>简单 baseline</a>
-      <a href="#share"><span class="dot"></span>速查例题</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：open set recognition 不只问“这是哪一类”，还要问“它是不是根本不属于任何已知类”。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P30</div>
-        <h1>分类器也可以先学会说 unknown</h1>
-        <p>P30 处理的是有标签的异常检测设定。训练资料有已知类别标签，例如辛普森家庭里每张图片都标了具体人物。我们可以先训练一个分类器，让它判断输入图片是 Bart、Lisa、Homer 还是其他已知角色。问题是：测试时如果给它一张训练世界之外的图片，它能不能不要硬分到某个已知角色，而是说 unknown？</p>
-        <p>一个直接做法是看分类器的 confidence score。若 softmax 分布非常尖，最高类别分数很高，模型可能比较有把握；若分布平均，模型可能不确定。设一个阈值：信心分数高于阈值就接受为已知类，低于阈值就拒绝为 unknown。这是简单 baseline，但在很多任务里并不弱。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释 open set recognition 和普通分类的差别。</li>
-          <li>用 softmax 最大值构造 confidence score。</li>
-          <li>用 entropy 判断分布是否平均。</li>
-          <li>说明阈值如何决定 known/unknown。</li>
-          <li>解释为什么简单信心分数 baseline 可以先试。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
-      <p>open set recognition 的训练阶段像普通分类：训练资料里只有已知类，而且每个样本都有标签。模型学会在这些已知类之间分类。测试阶段不同：输入可能来自训练时没有出现过的 unknown 类。此时模型不能只输出一个已知标签，还要给出“我是否有足够信心”的判断。</p>
-      <p>这一节用辛普森家庭角色分类器做例子。若输入是已知角色，softmax 可能给某个角色很高分，例如 0.97。若输入是其他动画人物，分数可能更平均，最高分也较低。于是我们可以把最高 softmax 分数当作 confidence score，也可以用 entropy 衡量分布平均程度。分数再和阈值比较，得到 known 或 unknown 的决策。</p>
-      <div class="map">
-        <span class="node">已知类训练资料</span>
-        <span class="node">训练分类器</span>
-        <span class="node">softmax 分布</span>
-        <span class="node">confidence score</span>
-        <span class="node">known / unknown</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P30</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把 open set recognition 解释成“分类 + 拒绝未知输入”。</p></div>
-    </section>
-
-    <section id="setting">
-      <div class="head"><h2>有标签设定：已知类内部可以正常训练分类器</h2><span class="tag">SETTING</span></div>
-      <p>在 P29 的分类中，P30 属于“训练资料有标签”的 case。每张训练图片属于某个已知类别。以辛普森家庭为例，训练集中有 Bart、Lisa、Homer、Marge 等角色，并且每张图都标明是谁。用这些资料训练一个普通分类器没有问题，它可以在已知角色之间做多分类。</p>
-      <p>open set 的额外要求发生在测试时。测试样本可能是辛普森角色，也可能是其他动画人物、真人照片或完全不同的图。普通分类器的 softmax 一定会在已知类别中选一个最大值；open set recognition 要多加一步：如果信心不足，就拒绝把它分到任何已知类，输出 unknown。</p>
-      <div class="grid2">
-        <div class="box info"><h3>Closed set classification</h3><p>假设测试样本一定属于训练见过的类别。模型只需要在已知类中选一个。</p></div>
-        <div class="box warn"><h3>Open set recognition</h3><p>测试样本可能来自未知类别。模型除了分类，还要判断是否拒绝。</p></div>
+      <h1 class="hero-title">P30｜异常检测 2：Open Set Recognition</h1>
+      <p class="hero-desc">P30 处理的是有标签的异常检测设定。训练资料有已知类别标签，例如辛普森家庭里每张图片都标了具体人物。我们可以先训练一个分类器，让它判断输入图片是 Bart、Lisa、Homer 还是其他已知角色。问题是：测试时如果给它一张训练世界之外的图片，它能不能不要硬分到某个已知角色，而是说 unknown？</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P29_异常检测1_问题定义/学习页.html">上一节</a>
+            <a href="../P31_异常检测3_评估指标/学习页.html">下一节</a>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说明为什么 open set 比普通分类多了 unknown 判断。</p></div>
-    </section>
-
-    <section id="confidence">
-      <div class="head"><h2>信心分数：分类器输出不只拿来选类</h2><span class="tag">CONFIDENCE</span></div>
-      <p>分类器通常输出一个 softmax 分布。这个分布给每个已知类别一个分数，所有分数加起来为 1。普通分类只关心分数最高的类别；open set recognition 还关心这个最高分到底有多高。如果最高分很高，模型可能比较肯定；如果最高分不高，模型可能只是被迫在已知类里选一个。</p>
-      <p>“比较肯定”不等于“一定正确”。softmax 分数不是完美概率，神经网络可能对未知输入过度自信。课程里的例子就出现过：某些非辛普森角色会被分类器以很高信心归到某个辛普森角色。这正是后续研究要改进的地方。但作为第一步，max softmax probability 是一个简单、便宜、常常值得先试的 baseline。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：softmax 分布与 unknown 决策</h3>
-            <div class="tabs">
-              <button type="button" data-profile="known" class="active">已知角色</button>
-              <button type="button" data-profile="unknown">未知人物</button>
-              <button type="button" data-profile="overconfident">过度自信</button>
-            </div>
-            <div class="slider-row"><label for="confThreshold">阈值</label><input id="confThreshold" type="range" min="20" max="95" value="70"><strong id="confThresholdOut">0.70</strong></div>
-            <div class="distbox" id="distBox"></div>
-          </div>
-          <div class="viz-note">
-            <h3 id="decisionTitle">判为 known</h3>
-            <p id="decisionText">最高分超过阈值，模型接受这个样本属于某个已知类。</p>
-          </div>
-        </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>读 softmax 输出时，不只看 argmax 类别，也看最高分是否足够高。</p></div>
-    </section>
-
-    <section id="maxprob">
-      <div class="head"><h2>方法一：Max Softmax Probability</h2><span class="tag">MAX SCORE</span></div>
-      <p>最直觉的 confidence score 是 <code>max p(y|x)</code>，也就是 softmax 分布里最大的值。如果模型看到 Homer 的图片，输出 Homer=0.97，其他类别接近 0，那么 max score 是 0.97。若阈值是 0.7，就接受为 known，并把类别设为 Homer。</p>
-      <p>如果输入是未知人物，softmax 可能比较平均，例如最高分只有 0.26。此时 max score 小于阈值，就输出 unknown。这套做法不需要改训练流程，也不需要额外模型，只要已有分类器就能试。它特别适合做第一版系统或 sanity check：如果这个 baseline 都没有跑，直接上复杂方法容易失去参照。</p>
-      <div class="formula">
-        confidence(x) = max_k p(y = k | x)<br>
-        if confidence(x) ≥ λ → known class argmax_k p(y=k|x)<br>
-        otherwise → unknown
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>给一组 softmax 分数，算出 max score，并按阈值判断 known/unknown。</p></div>
-    </section>
-
-    <section id="entropy">
-      <div class="head"><h2>方法二：Entropy 看分布是否平均</h2><span class="tag">ENTROPY</span></div>
-      <p>另一个思路是看 entropy。entropy 衡量分布的平均程度。若某个类别分数接近 1，其他类别接近 0，entropy 低，表示分布尖锐；若各类别分数差不多，entropy 高，表示模型没有明显偏好。open set 中，可以把高 entropy 看作低信心。</p>
-      <p>max score 和 entropy 往往会给相近直觉：最高分高时，entropy 通常低；最高分低且分布平均时，entropy 通常高。但它们不是完全等价。max score 只看最大值，entropy 会看整个分布。实际使用时，文献里有多种 confidence 设计，课程强调这些简单方法的差异不一定特别大，关键是先有可解释的分数和阈值。</p>
-      <table class="metric-table">
-        <tr><th>分布形状</th><th>Max score</th><th>Entropy</th><th>直觉</th></tr>
-        <tr><td>0.97, 0.01, 0.01, 0.01</td><td>高</td><td>低</td><td>像已知类</td></tr>
-        <tr><td>0.26, 0.24, 0.23, 0.27</td><td>低</td><td>高</td><td>模型犹豫</td></tr>
-        <tr><td>0.63, 0.08, 0.07, ...</td><td>中高</td><td>中</td><td>可能过度自信，要小心</td></tr>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>用“尖锐/平均”描述 softmax 分布，并说明 entropy 和信心的关系。</p></div>
-    </section>
-
-    <section id="threshold">
-      <div class="head"><h2>阈值与 development set：λ 不是凭空来的</h2><span class="tag">THRESHOLD</span></div>
-      <p>课程里把阈值写成 <code>λ</code>。如果 confidence score 大于 <code>λ</code>，就认为输入来自已知类；若小于 <code>λ</code>，就拒绝为 unknown。阈值不能随便拍脑袋，它通常要根据 development set 调整。development set 应该模拟你关心的测试情况：既有已知类样本，也尽量有一些可代表未知情况的样本。</p>
-      <p>阈值越高，模型越谨慎，更多样本会被拒绝为 unknown。这会减少把未知样本误收为已知类的风险，但也可能把真正已知类误拒。阈值越低，模型更容易接受样本为已知类，误拒会少一些，但未知样本更容易混进来。open set recognition 的实际表现常常取决于这个取舍。</p>
-      <div class="grid2">
-        <div class="box warn"><h3>阈值太高</h3><p>known 样本也可能被拒绝，使用体验会变保守。</p></div>
-        <div class="box redsoft"><h3>阈值太低</h3><p>unknown 样本更容易被硬塞进已知类，安全或质量风险升高。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说明为什么 open set 需要 development set 来选阈值。</p></div>
-    </section>
-
-    <section id="experiment">
-      <div class="head"><h2>实验观察：已知类通常高分，但会有例外</h2><span class="tag">OBSERVATION</span></div>
-      <p>辛普森家庭例子里，分类器在已知角色测试集上准确率很高，且多数样本的 confidence score 接近 1。把其他动画人物丢进去时，多数未知样本的信心分数会低一些，于是 max score 的分布和已知类分布有明显差异。这说明简单信心分数确实能捕捉一部分 known/unknown 差异。</p>
-      <p>但也有例外。有些未知角色会被模型非常自信地归到某个已知角色，课程里提到某些非辛普森人物被高分判成 Carl。这通常与训练资料里的视觉偏差有关，例如某个角色肤色或发色不像典型黄色脸，导致未知人物容易被吸过去。这提醒我们：confidence score 有用，但不能迷信。</p>
-      <div class="grid3">
-        <div class="box soft"><h3>已知角色</h3><p>分数常集中在高信心区域，分类器比较确定。</p></div>
-        <div class="box info"><h3>多数未知</h3><p>分布更平均，最高分较低，容易被阈值拒绝。</p></div>
-        <div class="box warn"><h3>例外未知</h3><p>有些未知样本会触发过度自信，成为 open set 的难点。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么 max score baseline 有效果，也为什么它会失败。</p></div>
-    </section>
-
-    <section id="baseline">
-      <div class="head"><h2>简单 baseline 不等于弱方法</h2><span class="tag">BASELINE</span></div>
-      <p>课程特别提醒：如果手上已经有分类器，先用 confidence score 做异常检测是很合理的第一步。它实现简单、解释清楚、成本低，而且在不少场景表现不差。工程上，简单方法可以帮你快速建立参照：后续复杂方法如果不能明显超过它，就未必值得引入。</p>
-      <p>当然，也有更专门的方法。比如训练分类器时就让它直接输出更可靠的 confidence，或者加入额外目标校准已知/未知边界。这类工作属于活跃研究方向。入门时先掌握本节的 baseline，再读更复杂论文会更稳，因为你知道复杂方法到底想改进什么。</p>
-      <div class="grid2">
-        <div class="box info"><h3>先试 baseline</h3><p>max score、entropy、阈值，能快速得到可解释系统。</p></div>
-        <div class="box soft"><h3>再看进阶方法</h3><p>若 baseline 失败，再考虑专门训练 confidence 或其他 open set 方法。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>遇到有分类器的 unknown 检测任务，先写出一个 max score baseline。</p></div>
-    </section>
-
-    <section id="share">
-      <div class="head"><h2>公开分享速查：分类器加一道拒绝门</h2><span class="tag">quick reference</span></div>
-      <div class="grid2">
-        <div class="box soft">
-          <h3>核心直觉</h3>
-          <p>普通分类器永远会给出一个已知类；open set recognition 多问一步：这个最高分是否足够可信？不够可信，就不要硬分，输出 unknown。</p>
-          <p>因此流程是先分类，再拒绝。拒绝规则可以用 max softmax probability，也可以用 entropy。</p>
-        </div>
-        <div class="box warn">
-          <h3>Worked example</h3>
-          <p>Softmax 输出 Bart 0.91、Lisa 0.04、Homer 0.05。若阈值是 0.80，系统接受 Bart；若最高分只有 0.42，系统拒绝为 unknown。</p>
-          <p>Entropy 视角则相反：分布越平均，entropy 越高，不确定性越强，越可能拒绝。</p>
-        </div>
-      </div>
-      <table class="metric-table">
-        <tr><th>术语</th><th>精确定义</th><th>易混点</th></tr>
-        <tr><td>Known class</td><td>训练时出现过且有标签的类别。</td><td>不是“世界上所有合法类别”。</td></tr>
-        <tr><td>Unknown</td><td>测试时不属于任何已知类的样本。</td><td>分类器不会自然有 unknown 类，必须设计拒绝机制。</td></tr>
-        <tr><td>Max softmax probability</td><td>softmax 分布中最大的类别概率。</td><td>数值高不保证真的对，只是模型自信。</td></tr>
-        <tr><td>Entropy</td><td>衡量分布平均程度，不确定越高 entropy 越高。</td><td>用 entropy 时阈值方向和 max probability 常相反。</td></tr>
-        <tr><td>Development set</td><td>用来调阈值的验证资料，最好同时含 known 和 unknown。</td><td>不要用最终测试集反复调阈值。</td></tr>
-      </table>
-      <div class="box info">
-        <h3>上线检查表</h3>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
         <ul>
-          <li>分类器输出类别和信心分数必须分开记录。</li>
-          <li>阈值要在 development set 上调，不凭感觉选。</li>
-          <li>报告时同时写 known accuracy、unknown reject rate 和误拒情况。</li>
+
         </ul>
       </div>
-    </section>
+    </div>
+  </header>
 
-    <section id="code">
-      <div class="head"><h2>最小代码：从 softmax 到 unknown</h2><span class="tag">MINIMAL CODE</span></div>
-      <p>下面伪代码展示 open set recognition 的基本数据流。重点是：先分类，再用信心分数决定是否拒绝。</p>
-      <div class="codebar"><span class="label">正确示例：max probability 作为信心分数</span><span class="kind">pseudo python</span></div>
-      <pre><code>probs = softmax(classifier(image))
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#setting">有标签设定：已知类内部可以正常训练分类器</a>
+      <a href="#confidence">信心分数：分类器输出不只拿来选类</a>
+      <a href="#maxprob">方法一：Max Softmax Probability</a>
+      <a href="#entropy">方法二：Entropy 看分布是否平均</a>
+      <a href="#threshold">阈值与 development set：λ 不是凭空来的</a>
+      <a href="#experiment">实验观察：已知类通常高分，但会有例外</a>
+      <a href="#baseline">简单 baseline 不等于弱方法</a>
+      <a href="#share">公开分享速查：分类器加一道拒绝门</a>
+      <a href="#code">最小代码：从 softmax 到 unknown</a>
+      <a href="#mistakes">常见误区与修正</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">MAP</span>
+        </div>
+<p>open set recognition 的训练阶段像普通分类：训练资料里只有已知类，而且每个样本都有标签。模型学会在这些已知类之间分类。测试阶段不同：输入可能来自训练时没有出现过的 unknown 类。此时模型不能只输出一个已知标签，还要给出“我是否有足够信心”的判断。</p>
+<p>已知类训练资料</p>
+<p>训练分类器</p>
+<p>softmax 分布</p>
+<p>confidence score</p>
+<p>known / unknown</p>
+      </section>
+      <section id="setting">
+        <div class="head">
+          <h2>有标签设定：已知类内部可以正常训练分类器</h2>
+          <span class="tag">SETTING</span>
+        </div>
+<p>在 P29 的分类中，P30 属于“训练资料有标签”的 case。每张训练图片属于某个已知类别。以辛普森家庭为例，训练集中有 Bart、Lisa、Homer、Marge 等角色，并且每张图都标明是谁。用这些资料训练一个普通分类器没有问题，它可以在已知角色之间做多分类。</p>
+        <div class="box info">
+<h3>Closed set classification</h3>
+<p>假设测试样本一定属于训练见过的类别。模型只需要在已知类中选一个。</p>
+        </div>
+        <div class="box warn">
+<h3>Open set recognition</h3>
+<p>测试样本可能来自未知类别。模型除了分类，还要判断是否拒绝。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>说明为什么 open set 比普通分类多了 unknown 判断。</p>
+        </div>
+      </section>
+      <section id="confidence">
+        <div class="head">
+          <h2>信心分数：分类器输出不只拿来选类</h2>
+          <span class="tag">CONFIDENCE</span>
+        </div>
+<p>分类器通常输出一个 softmax 分布。这个分布给每个已知类别一个分数，所有分数加起来为 1。普通分类只关心分数最高的类别；open set recognition 还关心这个最高分到底有多高。如果最高分很高，模型可能比较肯定；如果最高分不高，模型可能只是被迫在已知类里选一个。</p>
+<p>小交互：softmax 分布与 unknown 决策</p>
+<p>阈值<b>0.70</b></p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>读 softmax 输出时，不只看 argmax 类别，也看最高分是否足够高。</p>
+        </div>
+      </section>
+      <section id="maxprob">
+        <div class="head">
+          <h2>方法一：Max Softmax Probability</h2>
+          <span class="tag">MAX</span>
+        </div>
+<p>最直觉的 confidence score 是 <code>max p(y|x)</code>，也就是 softmax 分布里最大的值。如果模型看到 Homer 的图片，输出 Homer=0.97，其他类别接近 0，那么 max score 是 0.97。若阈值是 0.7，就接受为 known，并把类别设为 Homer。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+confidence(x) = max_k p(y = k | x)
+ if confidence(x) ≥ λ → known class argmax_k p(y=k|x)
+ otherwise → unknown
+$$
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>给一组 softmax 分数，算出 max score，并按阈值判断 known/unknown。</p>
+        </div>
+      </section>
+      <section id="entropy">
+        <div class="head">
+          <h2>方法二：Entropy 看分布是否平均</h2>
+          <span class="tag">ENTROPY</span>
+        </div>
+<p>另一个思路是看 entropy。entropy 衡量分布的平均程度。若某个类别分数接近 1，其他类别接近 0，entropy 低，表示分布尖锐；若各类别分数差不多，entropy 高，表示模型没有明显偏好。open set 中，可以把高 entropy 看作低信心。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>分布形状</th><th>Max score</th><th>Entropy</th><th>直觉</th></tr>
+<tr><td>0.97, 0.01, 0.01, 0.01</td><td>高</td><td>低</td><td>像已知类</td></tr><tr><td>0.26, 0.24, 0.23, 0.27</td><td>低</td><td>高</td><td>模型犹豫</td></tr><tr><td>0.63, 0.08, 0.07, ...</td><td>中高</td><td>中</td><td>可能过度自信，要小心</td></tr>
+        </table></div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>用“尖锐/平均”描述 softmax 分布，并说明 entropy 和信心的关系。</p>
+        </div>
+      </section>
+      <section id="threshold">
+        <div class="head">
+          <h2>阈值与 development set：λ 不是凭空来的</h2>
+          <span class="tag">THRESHOLD</span>
+        </div>
+<p>课程里把阈值写成 <code>λ</code>。如果 confidence score 大于 <code>λ</code>，就认为输入来自已知类；若小于 <code>λ</code>，就拒绝为 unknown。阈值不能随便拍脑袋，它通常要根据 development set 调整。development set 应该模拟你关心的测试情况：既有已知类样本，也尽量有一些可代表未知情况的样本。</p>
+        <div class="box warn">
+<h3>阈值太高</h3>
+<p>known 样本也可能被拒绝，使用体验会变保守。</p>
+        </div>
+        <div class="box redsoft">
+<h3>阈值太低</h3>
+<p>unknown 样本更容易被硬塞进已知类，安全或质量风险升高。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>说明为什么 open set 需要 development set 来选阈值。</p>
+        </div>
+      </section>
+      <section id="experiment">
+        <div class="head">
+          <h2>实验观察：已知类通常高分，但会有例外</h2>
+          <span class="tag">OBSERVATION</span>
+        </div>
+<p>辛普森家庭例子里，分类器在已知角色测试集上准确率很高，且多数样本的 confidence score 接近 1。把其他动画人物丢进去时，多数未知样本的信心分数会低一些，于是 max score 的分布和已知类分布有明显差异。这说明简单信心分数确实能捕捉一部分 known/unknown 差异。</p>
+<p>已知角色分数常集中在高信心区域，分类器比较确定。</p>
+<p>多数未知分布更平均，最高分较低，容易被阈值拒绝。</p>
+<p>例外未知有些未知样本会触发过度自信，成为 open set 的难点。</p>
+      </section>
+      <section id="baseline">
+        <div class="head">
+          <h2>简单 baseline 不等于弱方法</h2>
+          <span class="tag">BASELINE</span>
+        </div>
+<p>课程特别提醒：如果手上已经有分类器，先用 confidence score 做异常检测是很合理的第一步。它实现简单、解释清楚、成本低，而且在不少场景表现不差。工程上，简单方法可以帮你快速建立参照：后续复杂方法如果不能明显超过它，就未必值得引入。</p>
+        <div class="box info">
+<h3>先试 baseline</h3>
+<p>max score、entropy、阈值，能快速得到可解释系统。</p>
+        </div>
+        <div class="box soft">
+<h3>再看进阶方法</h3>
+<p>若 baseline 失败，再考虑专门训练 confidence 或其他 open set 方法。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>遇到有分类器的 unknown 检测任务，先写出一个 max score baseline。</p>
+        </div>
+      </section>
+      <section id="share">
+        <div class="head">
+          <h2>公开分享速查：分类器加一道拒绝门</h2>
+          <span class="tag">quick</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>核心直觉</h3>
+<p>普通分类器永远会给出一个已知类；open set recognition 多问一步：这个最高分是否足够可信？不够可信，就不要硬分，输出 unknown。</p>
+<p>因此流程是先分类，再拒绝。拒绝规则可以用 max softmax probability，也可以用 entropy。</p>
+        </div>
+        <div class="box warn">
+<h3>Worked example</h3>
+<p>Softmax 输出 Bart 0.91、Lisa 0.04、Homer 0.05。若阈值是 0.80，系统接受 Bart；若最高分只有 0.42，系统拒绝为 unknown。</p>
+<p>Entropy 视角则相反：分布越平均，entropy 越高，不确定性越强，越可能拒绝。</p>
+<table class="metric-table">
+<tr><th>术语</th><th>精确定义</th><th>易混点</th></tr>
+<tr><td>Known class</td><td>训练时出现过且有标签的类别。</td><td>不是“世界上所有合法类别”。</td></tr>
+<tr><td>Unknown</td><td>测试时不属于任何已知类的样本。</td><td>分类器不会自然有 unknown 类，必须设计拒绝机制。</td></tr>
+<tr><td>Max softmax probability</td><td>softmax 分布中最大的类别概率。</td><td>数值高不保证真的对，只是模型自信。</td></tr>
+<tr><td>Entropy</td><td>衡量分布平均程度，不确定越高 entropy 越高。</td><td>用 entropy 时阈值方向和 max probability 常相反。</td></tr>
+<tr><td>Development set</td><td>用来调阈值的验证资料，最好同时含 known 和 unknown。</td><td>不要用最终测试集反复调阈值。</td></tr>
+</table>
+        </div>
+        <div class="box info">
+<h3>上线检查表</h3>
+<ul>
+<li>分类器输出类别和信心分数必须分开记录。</li>
+<li>阈值要在 development set 上调，不凭感觉选。</li>
+<li>报告时同时写 known accuracy、unknown reject rate 和误拒情况。</li>
+</ul>
+        </div>
+      </div>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：从 softmax 到 unknown</h2>
+          <span class="tag">MINIMAL</span>
+        </div>
+<p>下面伪代码展示 open set recognition 的基本数据流。重点是：先分类，再用信心分数决定是否拒绝。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">probs = softmax(classifier(image))
 confidence = max(probs)
 predicted_class = argmax(probs)
 
-if confidence >= threshold:
-    label = predicted_class
+if confidence &gt;= threshold:
+ label = predicted_class
 else:
-    label = <span class="str">"unknown"</span></code></pre>
-      <div class="codebar"><span class="label">正确示例：entropy 作为不确定性</span><span class="kind">pseudo python</span></div>
-      <pre><code>entropy = -sum(p * log(p) for p in probs)
-if entropy <= entropy_threshold:
-    label = argmax(probs)
+ label = "unknown"</code></pre>
+<p>正确示例：entropy 作为不确定性pseudo python</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text">entropy = -sum(p * log(p) for p in probs)
+if entropy &lt;= entropy_threshold:
+ label = argmax(probs)
 else:
-    label = <span class="str">"unknown"</span></code></pre>
-      <div class="codebar error"><span class="label">错误示例：永远强迫输出已知类</span><span class="kind">pseudo</span></div>
-      <pre><code><span class="cmt"># 错误：测试样本可能来自未知类，但模型没有拒绝机制。</span>
+ label = "unknown"</code></pre>
+<p>错误示例：永远强迫输出已知类pseudo</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-3">复制</button></div>
+        <pre id="code-code-3" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误：测试样本可能来自未知类，但模型没有拒绝机制。
 probs = softmax(classifier(image))
 label = argmax(probs)
 
-<span class="cmt"># 修正：加入 confidence score 和 threshold。</span></code></pre>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把任意 softmax 分类器改成带 unknown 输出的简单 open set detector。</p></div>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区与修正</h2><span class="tag">PITFALLS</span></div>
+# 修正：加入 confidence score 和 threshold。</code></pre>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与修正</h2>
+          <span class="tag">PITFALLS</span>
+        </div>
       <div class="grid2">
-        <div class="box redsoft"><h3>误区 1：分类器最高分就是可靠概率</h3><p>错因：把 softmax 分数当校准过的真实概率。后果：未知样本可能被高信心误收。修法：把它当 baseline 分数，并用验证集评估。</p></div>
-        <div class="box redsoft"><h3>误区 2：open set 只要 argmax 就够</h3><p>错因：沿用 closed set 分类习惯。后果：未知样本被强塞到已知类。修法：加入拒绝阈值。</p></div>
-        <div class="box redsoft"><h3>误区 3：阈值可以随便定</h3><p>错因：忽略 known/unknown 代价。后果：误拒或误收不可控。修法：用 development set 调整。</p></div>
-        <div class="box redsoft"><h3>误区 4：unknown 分数低说明模型一定错</h3><p>错因：混淆分类正确性和开放集拒绝。后果：把低信心已知样本都当异常。修法：看阈值取舍和验证结果。</p></div>
-        <div class="box redsoft"><h3>误区 5：entropy 和 max score 完全一样</h3><p>错因：都反映信心。后果：忽略 entropy 看整个分布。修法：理解一个看最大值，一个看分布形状。</p></div>
-        <div class="box redsoft"><h3>误区 6：简单 baseline 没必要做</h3><p>错因：以为简单就弱。后果：复杂方法缺少参照。修法：先跑 max score/entropy，再谈改进。</p></div>
+        <div class="box redsoft">
+<h3>误区 1：分类器最高分就是可靠概率</h3>
+<p>错因：把 softmax 分数当校准过的真实概率。后果：未知样本可能被高信心误收。修法：把它当 baseline 分数，并用验证集评估。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 2：open set 只要 argmax 就够</h3>
+<p>错因：沿用 closed set 分类习惯。后果：未知样本被强塞到已知类。修法：加入拒绝阈值。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 3：阈值可以随便定</h3>
+<p>错因：忽略 known/unknown 代价。后果：误拒或误收不可控。修法：用 development set 调整。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 4：unknown 分数低说明模型一定错</h3>
+<p>错因：混淆分类正确性和开放集拒绝。后果：把低信心已知样本都当异常。修法：看阈值取舍和验证结果。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 5：entropy 和 max score 完全一样</h3>
+<p>错因：都反映信心。后果：忽略 entropy 看整个分布。修法：理解一个看最大值，一个看分布形状。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 6：简单 baseline 没必要做</h3>
+<p>错因：以为简单就弱。后果：复杂方法缺少参照。修法：先跑 max score/entropy，再谈改进。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>用“softmax 分布、信心分数、阈值、拒绝机制”四点检查 open set 方案。</p>
+        </div>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>用“softmax 分布、信心分数、阈值、拒绝机制”四点检查 open set 方案。</p></div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>做题前先抓主线</strong><p>P30 的核心是：已知类别分类器可以通过 confidence score 和 threshold 变成简单的 unknown 检测器。</p></div>
-        <div class="review-card"><strong>自检重点</strong><ul><li>能不能区分 closed set 和 open set？</li><li>能不能从 softmax 算 max score 和 entropy 直觉？</li><li>能不能解释阈值取舍和 baseline 价值？</li></ul></div>
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          <div class="quick-review">作答提示 回答时明确训练类别和测试 unknown。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. open set recognition 相比 closed set classification 多了什么要求？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="必须输出更多已知类别">必须输出更多已知类别</label>
+      <label><input type="radio" name="q?" value="遇到未知类时可以拒绝并输出 unknown">遇到未知类时可以拒绝并输出 unknown</label>
+      <label><input type="radio" name="q?" value="训练时不能有标签">训练时不能有标签</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、基础概念</h3><p>先检查 open set 的设定是否清楚。</p></div><div class="quick-review"><b>作答提示</b><span>回答时明确训练类别和测试 unknown。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q01" data-role="homework"><div class="q-meta"><span class="pill">选择</span></div><h3>1. open set recognition 相比 closed set classification 多了什么要求？</h3><div class="choices"><label><input type="radio" name="q01" value="必须输出更多已知类别">必须输出更多已知类别</label><label><input type="radio" name="q01" value="遇到未知类时可以拒绝并输出 unknown">遇到未知类时可以拒绝并输出 unknown</label><label><input type="radio" name="q01" value="训练时不能有标签">训练时不能有标签</label></div></div>
-          <div class="q" id="q02" data-role="homework"><div class="q-meta"><span class="pill">判断</span></div><h3>2. P30 的设定中，训练资料有已知类别标签，所以可以先训练普通分类器。</h3><div class="choices"><label><input type="radio" name="q02" value="对">对</label><label><input type="radio" name="q02" value="错">错</label></div></div>
-          <div class="q" id="q03" data-role="homework"><div class="q-meta"><span class="pill">填空</span></div><h3>3. 若 softmax 输出为 [0.1, 0.7, 0.2]，max probability confidence 是 ______。</h3><input type="text" id="ans03" placeholder="写数字"></div>
-          <div class="q" id="q04" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>4. 为什么 softmax 分布很平均时，模型信心通常较低？</h3><textarea id="ans04" placeholder="从各类别分数接近、模型没有明显偏好回答。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 2. P30 的设定中，训练资料有已知类别标签，所以可以先训练普通分类器。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 3. 若 softmax 输出为 [0.1, 0.7, 0.2]，max probability confidence 是 ______。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 4. 为什么 softmax 分布很平均时，模型信心通常较低？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、分数与阈值</h3><p>这组题检查你能否把分数转成决策。</p></div><div class="quick-review"><b>作答提示</b><span>先算 score，再和 threshold 比。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q05" data-role="homework"><div class="q-meta"><span class="pill">计算</span></div><h3>5. 阈值 λ=0.8。softmax=[0.76,0.12,0.08,0.04]，应该判为已知类还是 unknown？为什么？</h3><textarea id="ans05" placeholder="写出 max score 和比较结果。"></textarea></div>
-          <div class="q" id="q06" data-role="homework"><div class="q-meta"><span class="pill">选择</span></div><h3>6. entropy 较高通常表示什么？</h3><div class="choices"><label><input type="radio" name="q06" value="分布更平均，模型更不确定">分布更平均，模型更不确定</label><label><input type="radio" name="q06" value="模型一定分类正确">模型一定分类正确</label><label><input type="radio" name="q06" value="最高分一定是 1">最高分一定是 1</label></div></div>
-          <div class="q" id="q07" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>7. 阈值太高和太低分别会带来什么风险？</h3><textarea id="ans07" placeholder="分别说误拒 known 和误收 unknown。"></textarea></div>
-          <div class="q" id="q08" data-role="homework"><div class="q-meta"><span class="pill">场景</span></div><h3>8. 你有一个动物分类器，只认识猫狗马。测试时可能出现飞机。请写出 open set 决策流程。</h3><textarea id="ans08" placeholder="从 softmax、confidence、threshold、unknown 输出回答。"></textarea></div>
+        <div class="group-head">
+          <div><h3>二、分数与阈值</h3></div>
+          <div class="quick-review">作答提示 先算 score，再和 threshold 比。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">计算</span></div>
+        <h3><b>Q:</b> 5. 阈值 λ=0.8。softmax=[0.76,0.12,0.08,0.04]，应该判为已知类还是 unknown？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 6. entropy 较高通常表示什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="分布更平均，模型更不确定">分布更平均，模型更不确定</label>
+      <label><input type="radio" name="q?" value="模型一定分类正确">模型一定分类正确</label>
+      <label><input type="radio" name="q?" value="最高分一定是 1">最高分一定是 1</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、实验观察与 baseline</h3><p>这组题检查你是否理解简单方法的价值和限制。</p></div><div class="quick-review"><b>作答提示</b><span>不要把 baseline 写成“完美方法”。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q09" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>9. 辛普森家庭实验中，为什么已知角色的 confidence score 往往接近 1？</h3><textarea id="ans09" placeholder="从训练类别、分类器熟悉、softmax 尖锐回答。"></textarea></div>
-          <div class="q" id="q10" data-role="homework"><div class="q-meta"><span class="pill">判断</span></div><h3>10. 如果未知样本 max score 很高，说明 max score baseline 永远没用。</h3><div class="choices"><label><input type="radio" name="q10" value="对">对</label><label><input type="radio" name="q10" value="错">错</label></div></div>
-          <div class="q" id="q11" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>11. 为什么课程建议有现成分类器时先试 confidence score baseline？</h3><textarea id="ans11" placeholder="从简单、低成本、可解释、给复杂方法做参照回答。"></textarea></div>
-          <div class="q" id="q12" data-role="homework"><div class="q-meta"><span class="pill">对照</span></div><h3>12. 用两句话区分 max probability 和 entropy 作为信心指标。</h3><textarea id="ans12" placeholder="一句说 max probability；一句说 entropy。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 7. 阈值太高和太低分别会带来什么风险？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景</span></div>
+        <h3><b>Q:</b> 8. 你有一个动物分类器，只认识猫狗马。测试时可能出现飞机。请写出 open set 决策流程。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>四、错误诊断与迁移</h3><p>这组题要求定位错因、后果和修法。</p></div><div class="quick-review"><b>作答提示</b><span>错误示例题按“错在哪 / 后果 / 修法”写。</span></div></div>
-        <div class="drill-grid">
-          <div class="q full" id="q13" data-role="homework"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>13. 错误示例：有人说“softmax 最大值是 0.99，所以这个未知样本一定属于该类”。请诊断。</h3><textarea id="ans13" placeholder="从过度自信、未校准、open set 风险回答。"></textarea></div>
-          <div class="q" id="q14" data-role="homework"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>14. 错误示例：有人做 open set，但代码永远 label=argmax(probs)。请诊断。</h3><textarea id="ans14" placeholder="说明缺少拒绝机制和阈值。"></textarea></div>
-          <div class="q" id="q15" data-role="homework"><div class="q-meta"><span class="pill">场景应用</span></div><h3>15. 你在工厂缺陷检测中有 5 类已知正常零件状态，测试可能出现新缺陷。请设计 confidence score 方案。</h3><textarea id="ans15" placeholder="说明训练分类器、算 max score 或 entropy、用开发集调阈值。"></textarea></div>
-          <div class="q" id="q16" data-role="homework"><div class="q-meta"><span class="pill">面试短答</span></div><h3>16. 用 2-3 句话回答：为什么 development set 对 open set recognition 很重要？</h3><textarea id="ans16" placeholder="提到阈值选择、known/unknown 分布、误收误拒取舍。"></textarea></div>
+        <div class="group-head">
+          <div><h3>三、实验观察与 baseline</h3></div>
+          <div class="quick-review">作答提示 不要把 baseline 写成“完美方法”。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 9. 辛普森家庭实验中，为什么已知角色的 confidence score 往往接近 1？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 10. 如果未知样本 max score 很高，说明 max score baseline 永远没用。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>五、表达输出</h3><p>最后两题检查你能否把整节课讲成一条主线。</p></div><div class="quick-review"><b>作答提示</b><span>关键词：classifier、softmax、confidence、max probability、entropy、threshold、unknown、baseline。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q17" data-role="homework"><div class="q-meta"><span class="pill">综合短答</span></div><h3>17. 请说明“简单 baseline 不等于弱方法”在 P30 中指什么。</h3><textarea id="ans17" placeholder="从已有分类器、confidence score、实际效果和参照价值回答。"></textarea></div>
-          <div class="q full" id="q18" data-role="homework"><div class="q-meta"><span class="pill">费曼题</span></div><h3>18. 费曼题：请用 5-7 句话向会训练分类器的人解释，如何把已知类分类器改造成 open set detector。</h3><textarea id="ans18" placeholder="必须串联：softmax 分布、argmax 类别、confidence score、max probability/entropy、threshold、unknown、失败风险。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 11. 为什么课程建议有现成分类器时先试 confidence score baseline？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 12. 用两句话区分 max probability 和 entropy 作为信心指标。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>六、低摩擦核对与迁移</h3><p>把拒绝门逻辑写成可执行判断。</p></div><div class="quick-review"><b>作答提示</b><span>看清分数方向：max 越低越拒绝，entropy 越高越拒绝。</span></div></div>
+        <div class="group-head">
+          <div><h3>四、错误诊断与迁移</h3></div>
+          <div class="quick-review">作答提示 错误示例题按“错在哪 / 后果 / 修法”写。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" id="q19" data-role="homework"><div class="q-meta"><span class="pill">计算</span><span class="pill">低摩擦</span></div><h3>19. 最高 softmax 是 0.58，阈值是 0.70。应输出已知类还是 unknown？</h3><div class="choices"><label><input type="radio" name="q19" value="unknown，因为最高分低于阈值。">unknown，因为最高分低于阈值。</label><label><input type="radio" name="q19" value="已知类，因为 argmax 总能给类别。">已知类，因为 argmax 总能给类别。</label></div></div>
-          <div class="q" id="q20" data-role="homework"><div class="q-meta"><span class="pill">判断</span><span class="pill">低摩擦</span></div><h3>20. 如果用 entropy 做 unknown 分数，entropy 越高通常表示越确定吗？</h3><input type="text" placeholder="用一句话回答。"></div>
-          <div class="q" id="q21" data-role="homework"><div class="q-meta"><span class="pill">迁移</span><span class="pill">产品分类</span></div><h3>21. 电商模型只认识 12 个商品类，但会遇到新类目。请设计一个 max probability baseline。</h3><textarea placeholder="写出训练、分数、阈值、输出格式和人工复查。"></textarea></div>
-          <div class="q" id="q22" data-role="homework"><div class="q-meta"><span class="pill">迁移</span><span class="pill">评估</span></div><h3>22. 这个 baseline 的 development set 应该包含哪些样本？为什么？</h3><textarea placeholder="说明 known、模拟 unknown、边界样本和阈值取舍。"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 13. 错误示例：有人说“softmax 最大值是 0.99，所以这个未知样本一定属于该类”。请诊断。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 14. 错误示例：有人做 open set，但代码永远 label=argmax(probs)。请诊断。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景应用</span></div>
+        <h3><b>Q:</b> 15. 你在工厂缺陷检测中有 5 类已知正常零件状态，测试可能出现新缺陷。请设计 confidence score 方案。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 16. 用 2-3 句话回答：为什么 development set 对 open set recognition 很重要？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、表达输出</h3></div>
+          <div class="quick-review">作答提示 关键词：classifier、softmax、confidence、max probability、entropy、threshold、unknown、baseline。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">综合短答</span></div>
+        <h3><b>Q:</b> 17. 请说明“简单 baseline 不等于弱方法”在 P30 中指什么。</h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼题</span></div>
+        <h3><b>Q:</b> 18. 费曼题：请用 5-7 句话向会训练分类器的人解释，如何把已知类分类器改造成 open set detector。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>六、低摩擦核对与迁移</h3></div>
+          <div class="quick-review">作答提示 看清分数方向：max 越低越拒绝，entropy 越高越拒绝。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">计算</span></div>
+        <h3><b>Q:</b> 19. 最高 softmax 是 0.58，阈值是 0.70。应输出已知类还是 unknown？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="unknown，因为最高分低于阈值。">unknown，因为最高分低于阈值。</label>
+      <label><input type="radio" name="q?" value="已知类，因为 argmax 总能给类别。">已知类，因为 argmax 总能给类别。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 20. 如果用 entropy 做 unknown 分数，entropy 越高通常表示越确定吗？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 21. 电商模型只认识 12 个商品类，但会遇到新类目。请设计一个 max probability baseline。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 22. 这个 baseline 的 development set 应该包含哪些样本？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
-      <p>完成练习后生成记录，方便你回看自己的判断链路。若有遗漏，页面会先提示哪些题还没写。</p>
-      <div class="quality" id="qualityBox"></div>
-      <div class="answer" id="answerBox">还没有生成记录。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" class="ghost" onclick="generateRecord()">生成记录</button>
-        <button type="button" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-const progress = document.getElementById('readProgress');
-window.addEventListener('scroll', () => {
-  const h = document.documentElement;
-  const max = h.scrollHeight - h.clientHeight;
-  progress.style.width = max > 0 ? (h.scrollTop / max * 100) + '%' : '0%';
-});
+      </ul>
+    </section>
+  </article>
 
-const profiles = {
-  known: {name:'已知角色', probs:[0.94,0.03,0.02,0.01], labels:['Homer','Lisa','Bart','Marge']},
-  unknown: {name:'未知人物', probs:[0.31,0.26,0.23,0.20], labels:['Homer','Lisa','Bart','Marge']},
-  overconfident: {name:'过度自信未知', probs:[0.88,0.06,0.04,0.02], labels:['Carl','Lisa','Bart','Marge']}
-};
-let currentProfile = 'known';
-function entropy(probs){
-  return -probs.reduce((s,p)=>s + p * Math.log(p), 0);
-}
-function updateDist(){
-  const threshold = Number(document.getElementById('confThreshold').value) / 100;
-  document.getElementById('confThresholdOut').textContent = threshold.toFixed(2);
-  const item = profiles[currentProfile];
-  const maxProb = Math.max(...item.probs);
-  const maxIdx = item.probs.indexOf(maxProb);
-  const ent = entropy(item.probs);
-  const box = document.getElementById('distBox');
-  box.innerHTML = '';
-  item.probs.forEach((p,i)=>{
-    const row = document.createElement('div');
-    row.className = 'barrow';
-    row.innerHTML = '<span>' + item.labels[i] + '</span><div class="bar"><div class="fill" style="width:' + Math.round(p*100) + '%"></div></div><strong>' + p.toFixed(2) + '</strong>';
-    box.appendChild(row);
-  });
-  const summary = document.createElement('p');
-  summary.innerHTML = '<strong>max score:</strong> ' + maxProb.toFixed(2) + '；<strong>entropy:</strong> ' + ent.toFixed(2);
-  box.appendChild(summary);
-  const known = maxProb >= threshold;
-  document.getElementById('decisionTitle').textContent = known ? '判为 known：' + item.labels[maxIdx] : '判为 unknown';
-  document.getElementById('decisionText').textContent = known ? '最高分超过阈值，模型接受这个样本属于某个已知类。但如果它其实来自未知分布，这就是过度自信风险。' : '最高分低于阈值，模型拒绝把它硬分到已知类。阈值越高，拒绝会越多。';
-}
-document.querySelectorAll('[data-profile]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    currentProfile = btn.dataset.profile;
-    document.querySelectorAll('[data-profile]').forEach(x => x.classList.toggle('active', x === btn));
-    updateDist();
-  });
-});
-document.getElementById('confThreshold').addEventListener('input', updateDist);
-updateDist();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-function readQuestion(q){
-  const title = q.querySelector('h3')?.innerText.trim() || q.id;
-  const checked = Array.from(q.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(x => x.value);
-  const fields = Array.from(q.querySelectorAll('textarea,input[type="text"],select')).map(x => x.value.trim()).filter(Boolean);
-  const answer = checked.concat(fields).join('；');
-  return {title, answer};
-}
-function generateRecord(){
-  const qs = Array.from(document.querySelectorAll(".q[data-role='homework']"));
-  const rows = qs.map(readQuestion);
-  const missing = rows.filter(x => !x.answer);
-  const now = new Date();
-  const lines = [];
-  lines.push('# P30 异常检测 2：Open Set Recognition｜练习记录');
-  lines.push('');
-  lines.push('- 生成时间：' + now.toLocaleString());
-  lines.push('- 题目数量：' + qs.length);
-  lines.push('');
-  rows.forEach((row, i) => {
-    lines.push('## ' + String(i + 1).padStart(2, '0') + ' ' + row.title);
-    lines.push(row.answer ? row.answer : '（未填写）');
-    lines.push('');
-  });
-  document.getElementById('answerBox').textContent = lines.join('\n');
-  const quality = document.getElementById('qualityBox');
-  quality.style.display = 'block';
-  if(missing.length){
-    quality.textContent = '还有 ' + missing.length + ' 题没有填写：' + missing.map(x => x.title.replace(/^\d+\.\s*/, '')).join('；');
-  }else{
-    quality.textContent = '已生成完整记录。复盘时重点看：是否说清 open set 比 closed set 多了拒绝机制，是否把 softmax 分数误当可靠概率，是否解释了阈值取舍。';
-  }
-}
-function copyRecord(){
-  const text = document.getElementById('answerBox').textContent;
-  if(!text || text.includes('还没有生成')) generateRecord();
-  const finalText = document.getElementById('answerBox').textContent;
-  if(navigator.clipboard){
-    navigator.clipboard.writeText(finalText).then(() => {
-      document.getElementById('qualityBox').style.display = 'block';
-      document.getElementById('qualityBox').textContent = '记录已复制。';
-    }).catch(() => fallbackCopy(finalText));
-  }else{
-    fallbackCopy(finalText);
-  }
-}
-function fallbackCopy(text){
-  const area = document.createElement('textarea');
-  area.value = text;
-  document.body.appendChild(area);
-  area.select();
-  document.execCommand('copy');
-  area.remove();
-  document.getElementById('qualityBox').style.display = 'block';
-  document.getElementById('qualityBox').textContent = '记录已复制。';
-}
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

@@ -4,837 +4,670 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Transformer 论文精读 02｜多头注意力</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body data-course="Transformer 论文精读" data-unit="02 多头注意力" data-feynman-keywords="多头,head,d_model,d_head,concat,W^O,reshape,transpose,mask">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>Transformer 论文精读</strong>
+<body data-course="Transformer 论文精读" data-unit="02 多头注意力">
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">Transformer 论文精读</a>
+        <span class="sep">/</span>
         <span>02 多头注意力</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#why"><span class="dot"></span>为什么要分头</a>
-        <a href="#formula"><span class="dot"></span>公式读法</a>
-        <a href="#shape"><span class="dot"></span>形状跟踪</a>
-        <a href="#output"><span class="dot"></span>输出投影</a>
-        <a href="#implementation"><span class="dot"></span>最小实现</a>
-        <a href="#mask-debug"><span class="dot"></span>Mask 与故障</a>
-        <a href="#ledger"><span class="dot"></span>状态账本</a>
-        <a href="#pitfalls"><span class="dot"></span>常见误区</a>
-        <a href="#bridge"><span class="dot"></span>下一步</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">
-        这一页只解决多头注意力：同一批 token 为什么要拆成多个 head，各 head 怎么算 attention，最后如何拼回 <code>d_model</code>。
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
-    </aside>
+    </div>
+  </nav>
 
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">Attention Is All You Need · arXiv:1706.03762</div>
-          <h1>Transformer 论文精读 02｜多头注意力</h1>
-          <p>
-            上一页已经把 scaled dot-product attention 读顺：<code>Q</code> 和 <code>K</code> 打分，softmax 得到权重，再用权重汇总 <code>V</code>。
-            多头注意力沿用这条链：先把同一批 token 投影到多个较小子空间，让每个 head 各自读一遍，再把结果拼接并用 <code>W^O</code> 混合。
-          </p>
-          <div class="course-links">
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Attention Is All You Need · arXiv:1706.03762</div>
+      <div class="hero-meta">
+        <span class="hero-badge">02 多头注意力</span>
+      </div>
+      <h1 class="hero-title">Transformer 论文精读 02｜多头注意力</h1>
+      <p class="hero-desc">"上一页已经把 scaled dot-product attention 读顺： Q 和 K 打分，softmax 得到权重，再用权重汇总 V 。</p>
+      <div class="course-links">
             <a href="../index.html">课程地图</a>
             <a href="../01_自注意力与QKV/学习页.html">上一节：自注意力与 QKV</a>
             <a href="../03_Encoder与Decoder结构/学习页.html">下一节：Encoder 与 Decoder</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>读完本页应该能做什么</h3>
-          <ul>
-            <li>解释多头如何把同一输入分成多组投影和注意力表。</li>
-            <li>从 <code>[B, N, D]</code> 推到 <code>[B, h, N, d_head]</code>、<code>[B, h, N, N]</code>，再回到 <code>[B, N, D]</code>。</li>
-            <li>检查实现里的 <code>view</code>、<code>permute</code>、<code>transpose</code>、mask 广播和 <code>W^O</code> 是否对齐论文公式。</li>
-          </ul>
-        </div>
       </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>解释多头如何把同一输入分成多组投影和注意力表。</li>
+            <li>从 [B, N, D] 推到 [B, h, N, d_head] 、 [B, h, N, N] ，再回到 [B, N, D] 。</li>
+            <li>检查实现里的 view 、 permute 、 transpose 、mask 广播和 W^O 是否对齐论文公式。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
 
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#why">为什么要分头</a>
+      <a href="#formula">论文公式怎么读</a>
+      <a href="#shape">形状跟踪</a>
+      <a href="#output">为什么 concat 后还要 W^O</a>
+      <a href="#implementation">最小 PyTorch 实现</a>
+      <a href="#mask-debug">Mask 与故障定位</a>
+      <a href="#ledger">状态账本</a>
+      <a href="#pitfalls">常见误区和修法</a>
+      <a href="#bridge">下一步怎么读</a>
+      <a href="#practice">综合练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
         <div class="head">
           <h2>学习目标</h2>
           <span class="tag">goal</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>先抓住主线</h3>
-            <p>
-              多头注意力的主线是：先线性投影出多组 <code>Q/K/V</code>，再把每组投影当成一个 head，各 head 独立执行 attention，最后把各 head 的输出沿特征维拼接。
-              拼接后的向量再经过 <code>W^O</code>，让不同 head 的结果在当前位置重新混合。
-            </p>
-            <p>
-              学这页时把 head 当作可学习通道来看。训练后某些 head 可能偏向局部搭配、长距离依赖或分隔符，这些偏好来自学习过程，页面里先按可观察现象来理解。
-            </p>
-          </div>
-          <div class="box info">
-            <h3>这页先不追什么</h3>
-            <p>
-              先不展开 FlashAttention、KV cache、MQA/GQA、head 剪枝、RoPE 或长上下文优化。
-              这些机制都和 attention 有关，但会分散当前任务。这里先把原论文的 multi-head attention 公式、形状和最小实现读顺。
-            </p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先抓住主线</h3>
+<p>多头注意力的主线是：先线性投影出多组 <code>Q/K/V</code>，再把每组投影当成一个 head，各 head 独立执行 attention，最后把各 head 的输出沿特征维拼接。</p>
+<p>拼接后的向量再经过 <code>W^O</code>，让不同 head 的结果在当前位置重新混合。</p>
+<p>学这页时把 head 当作可学习通道来看。训练后某些 head 可能偏向局部搭配、长距离依赖或分隔符，这些偏好来自学习过程，页面里先按可观察现象来理解。</p>
         </div>
-        <div class="inline-note">
-          <b>现在能做的事</b>
-          如果看到一段实现只给出最终 <code>[B, N, D]</code> 输出，你应该能要求它打印中间的 <code>[B, h, N, d_head]</code> 和 <code>[B, h, N, N]</code>，因为这两个形状最能暴露多头是否真的分开计算。
+        <div class="box info">
+<h3>这页先不追什么</h3>
+<p>先不展开 FlashAttention、KV cache、MQA/GQA、head 剪枝、RoPE 或长上下文优化。</p>
+<p>这些机制都和 attention 有关，但会分散当前任务。这里先把原论文的 multi-head attention 公式、形状和最小实现读顺。</p>
+<p>> <b>现在能做的事</b> 如果看到一段实现只给出最终 [B, N, D] 输出，你应该能要求它打印中间的 [B, h, N, d_head] 和 [B, h, N, N]，因为这两个形状最能暴露多头是否真的分开计算。</p>
         </div>
+      </div>
       </section>
-
       <section id="why">
         <div class="head">
           <h2>为什么要分头</h2>
           <span class="tag">motivation</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>单头会把多种关系压进一套读法</h3>
-            <p>
-              单头 attention 对每个 query 位置生成一行权重。这行权重可以同时分给多个 token，但它仍然来自同一套投影和同一个分数空间。
-              一个词在同一句里可能要看主语、宾语、介词短语、时态线索和长距离指代。所有关系都挤进同一套相似度计算时，模型仍能学习，只是表达空间更紧。
-            </p>
-            <p>
-              多头的做法是先把输入投影到多个子空间。每个 head 在自己的 <code>d_head</code> 维空间里算 <code>QK^T</code>，得到自己的注意力表。
-              这些表由训练过程学到，页面里先按不同读取通道来理解。
-            </p>
-            <p>
-              代码上可以这样检查：如果输入是 <code>[B, N, 512]</code>，标准多头先做 8 组投影，再分别计算 attention。
-              它通常先投影到 <code>[B, N, 3D]</code>，再拆成 <code>[B, N, 3, 8, 64]</code>，最后转成每个 Q/K/V 都是 <code>[B, 8, N, 64]</code>。
-            </p>
-          </div>
-          <div class="table-wrap">
-            <table data-export-context="单头与多头的对照" data-export-lang="table">
-              <thead>
-                <tr><th>对象</th><th>准确读法</th><th>常见误解</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>单头</td><td>一套 Q/K/V 投影，一张权重表，一次汇总。</td><td>以为它只能看一个 token；实际上权重可以分配给多个位置。</td></tr>
-                <tr><td>多头</td><td>多套投影，多张权重表，多路汇总后拼接。</td><td>以为每个 head 都有固定语言学功能。</td></tr>
-                <tr><td>并行</td><td>各 head 可以合在同一批矩阵运算中完成。</td><td>以为必须按 head 一个个循环。</td></tr>
-                <tr><td>表达</td><td>让不同子空间学习不同关系，再由输出投影混合。</td><td>只把它看成参数数量增加。</td></tr>
-              </tbody>
-            </table>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>单头会把多种关系压进一套读法</h3>
+<p>单头 attention 对每个 query 位置生成一行权重。这行权重可以同时分给多个 token，但它仍然来自同一套投影和同一个分数空间。</p>
+<p>一个词在同一句里可能要看主语、宾语、介词短语、时态线索和长距离指代。所有关系都挤进同一套相似度计算时，模型仍能学习，只是表达空间更紧。</p>
+<p>多头的做法是先把输入投影到多个子空间。每个 head 在自己的 <code>d_head</code> 维空间里算 <code>QK^T</code>，得到自己的注意力表。</p>
+<p>这些表由训练过程学到，页面里先按不同读取通道来理解。</p>
+<p>代码上可以这样检查：如果输入是 <code>[B, N, 512]</code>，标准多头先做 8 组投影，再分别计算 attention。</p>
+<p>它通常先投影到 <code>[B, N, 3D]</code>，再拆成 <code>[B, N, 3, 8, 64]</code>，最后转成每个 Q/K/V 都是 <code>[B, 8, N, 64]</code>。</p>
+<p>对象准确读法常见误解</p>
+<p>单头一套 Q/K/V 投影，一张权重表，一次汇总。以为它只能看一个 token；实际上权重可以分配给多个位置。</p>
+<p>多头多套投影，多张权重表，多路汇总后拼接。以为每个 head 都有固定语言学功能。</p>
+<p>并行各 head 可以合在同一批矩阵运算中完成。以为必须按 head 一个个循环。</p>
+<p>表达让不同子空间学习不同关系，再由输出投影混合。只把它看成参数数量增加。</p>
         </div>
+      </div>
       </section>
-
       <section id="formula">
         <div class="head">
           <h2>论文公式怎么读</h2>
           <span class="tag">formula</span>
         </div>
-        <p>
-          论文把 multi-head attention 写成两行。读这两行时，按“各 head 投影、各 head 算 attention、拼接后输出投影”三步拆开。
-        </p>
-        <div class="math-block" data-export-context="Multi-Head Attention 公式" data-export-lang="math">
-          $$
-          \operatorname{MultiHead}(Q,K,V)
-          = \operatorname{Concat}(\operatorname{head}_1,\ldots,\operatorname{head}_h)W^O
-          $$
-          $$
-          \operatorname{head}_i
-          = \operatorname{Attention}(QW_i^Q, KW_i^K, VW_i^V)
-          $$
-          <p>
-            <code>W_i^Q</code>、<code>W_i^K</code>、<code>W_i^V</code> 是第 <code>i</code> 个 head 的投影矩阵。
-            <code>W^O</code> 处理 concat 后的通道混合，作用在输出投影层。
-          </p>
+<p>论文把 multi-head attention 写成两行。读这两行时，按“各 head 投影、各 head 算 attention、拼接后输出投影”三步拆开。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+\operatorname{head}_i
+ = \operatorname{Attention}(QW_i^Q, KW_i^K, VW_i^V)
+$$
         </div>
-        <div class="grid">
-          <div class="box">
-            <h3>1. 每个 head 有自己的视角</h3>
-            <p>
-              同一个 token 向量进入不同 head 前，会乘不同的投影矩阵。投影决定了这个 head 在什么特征空间里计算相似度。
-              如果实现里所有 head 直接共享同一份 Q/K/V，且没有 head 维度上的参数差异，就偏离了原论文的 multi-head 结构。
-            </p>
-          </div>
-          <div class="box">
-            <h3>2. 每个 head 内部仍是 scaled dot-product attention</h3>
-            <p>
-              head 内部仍然计算 <code>softmax(QK^T / sqrt(d_k))V</code>。
-              这里的 <code>d_k</code> 取每个 head 的 key/query 维度，base 配置里是 64。
-              原论文 base 配置里 <code>d_k=64</code>，缩放就是除以 <code>sqrt(64)</code>。
-            </p>
-          </div>
-          <div class="box">
-            <h3>3. 拼接后还要混合</h3>
-            <p>
-              每个 head 输出 <code>[B, N, d_head]</code>。把 8 个 head 拼起来得到 <code>[B, N, 8*d_head]</code>，形状回到 <code>[B, N, d_model]</code>。
-              拼接只把结果并排放到特征维，<code>W^O</code> 才负责把这些通道重新混合。
-            </p>
-          </div>
+<p><code>W_i^Q</code>、<code>W_i^K</code>、<code>W_i^V</code> 是第 <code>i</code> 个 head 的投影矩阵。</p>
+<p><code>W^O</code> 处理 concat 后的通道混合，作用在输出投影层。</p>
+        <div class="box">
+<h3>2. 每个 head 内部仍是 scaled dot-product attention</h3>
+<p>head 内部仍然计算 <code>softmax(QK^T / sqrt(d_k))V</code>。</p>
+<p>这里的 <code>d_k</code> 取每个 head 的 key/query 维度，base 配置里是 64。</p>
+<p>原论文 base 配置里 <code>d_k=64</code>，缩放就是除以 <code>sqrt(64)</code>。</p>
+        </div>
+        <div class="box">
+<h3>3. 拼接后还要混合</h3>
+<p>每个 head 输出 <code>[B, N, d_head]</code>。把 8 个 head 拼起来得到 <code>[B, N, 8*d_head]</code>，形状回到 <code>[B, N, d_model]</code>。</p>
+<p>拼接只把结果并排放到特征维，<code>W^O</code> 才负责把这些通道重新混合。</p>
         </div>
       </section>
-
       <section id="shape">
         <div class="head">
           <h2>形状跟踪</h2>
           <span class="tag">shape</span>
         </div>
-        <p>
-          多头实现最容易错在张量形状。把“特征维 D”切成“head 数 h × 每头维度 d_head”之后，还要把 head 维移动到 batch 后面，方便每个 head 都得到自己的 <code>N × N</code> 分数表。
-        </p>
-        <div class="shape-tracer" data-shape-tracer>
-          <div class="trace-lines">
-            <button class="trace-line active" type="button" data-trace-step="input">
-              输入表示 <span>[B, N, D]</span>
-            </button>
-            <button class="trace-line" type="button" data-trace-step="qkv">
-              一次线性层投影 QKV <span>[B, N, 3D]</span>
-            </button>
-            <button class="trace-line" type="button" data-trace-step="split">
-              拆出 Q/K/V 与 head <span>[B, N, 3, h, d]</span>
-            </button>
-            <button class="trace-line" type="button" data-trace-step="attention">
-              转成各 head 独立计算 <span>[B, h, N, d]</span>
-            </button>
-            <button class="trace-line" type="button" data-trace-step="score">
-              形成注意力分数表 <span>[B, h, N, N]</span>
-            </button>
-            <button class="trace-line" type="button" data-trace-step="output">
-              拼接并输出投影 <span>[B, N, D]</span>
-            </button>
-          </div>
-          <div class="trace-canvas">
-            <div class="tensor-card active" data-trace-target="input">
-              <b>input</b>
-              <span><code>[B,N,D]</code></span>
-              <p>每个 token 一行隐藏向量。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="qkv">
-              <b>qkv</b>
-              <span><code>[B,N,3D]</code></span>
-              <p>工程上常把三次线性层合成一次大投影。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="split">
-              <b>split</b>
-              <span><code>[B,N,3,h,d]</code></span>
-              <p>这里同时拆出 Q/K/V 维和 head 维。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="attention">
-              <b>head</b>
-              <span><code>[B,h,N,d]</code></span>
-              <p>head 放到 batch 后面，矩阵乘法可以并行。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="score">
-              <b>score</b>
-              <span><code>[B,h,N,N]</code></span>
-              <p>每个 head 都有自己的 query-key 表。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="output">
-              <b>output</b>
-              <span><code>[B,N,D]</code></span>
-              <p>先转回 token 维，再 concat heads，再过 <code>W^O</code>。</p>
-            </div>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table data-export-context="多头注意力形状读写表" data-export-lang="table">
-            <thead>
-              <tr><th>步骤</th><th>之前</th><th>之后</th><th>读取 / 依赖</th><th>写错时的症状</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>QKV 投影</td><td><code>[B,N,D]</code></td><td><code>[B,N,3D]</code></td><td><code>Linear(D,3D)</code></td><td>Q/K/V 没有独立投影，或者输出维度无法拆成三份。</td></tr>
-              <tr><td>拆 head</td><td><code>[B,N,3D]</code></td><td><code>[B,N,3,h,d]</code></td><td><code>D = h*d</code></td><td><code>d_model % num_heads != 0</code> 时无法整除。</td></tr>
-              <tr><td>转置</td><td><code>[B,N,3,h,d]</code></td><td><code>[3,B,h,N,d]</code></td><td>Q/K/V 维、head 维、token 维</td><td>矩阵乘法混掉 token 维和 head 维。</td></tr>
-              <tr><td>打分</td><td><code>q,k: [B,h,N,d]</code></td><td><code>[B,h,N,N]</code></td><td><code>k.transpose(-2,-1)</code></td><td>score 没有保持在 <code>[B,h,N,N]</code>，mask 也无法按 head 广播。</td></tr>
-              <tr><td>拼接</td><td><code>[B,h,N,d]</code></td><td><code>[B,N,D]</code></td><td><code>transpose(1,2).contiguous().view(B,N,D)</code></td><td>漏转置会把序列位置和 head 顺序揉在一起。</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="inline-note">
-          <b>一个具体数值</b>
-          设 <code>B=2</code>、<code>N=4</code>、<code>d_model=512</code>、<code>h=8</code>。每头维度是 <code>64</code>。score 的形状应为 <code>[2,8,4,4]</code>，最后一个 <code>4</code> 是 key 位置，softmax 通常沿它归一化。
-        </div>
+<p>多头实现最容易错在张量形状。把“特征维 D”切成“head 数 h × 每头维度 d_head”之后，还要把 head 维移动到 batch 后面，方便每个 head 都得到自己的 <code>N × N</code> 分数表。</p>
+<p>QKV 投影<code>[B,N,D]</code><code>[B,N,3D]</code><code>Linear(D,3D)</code>Q/K/V 没有独立投影，或者输出维度无法拆成三份。</p>
+<p>拆 head<code>[B,N,3D]</code><code>[B,N,3,h,d]</code><code>D = h*d</code><code>d_model % num_heads != 0</code> 时无法整除。</p>
+<p>转置<code>[B,N,3,h,d]</code><code>[3,B,h,N,d]</code>Q/K/V 维、head 维、token 维矩阵乘法混掉 token 维和 head 维。</p>
+<p>打分<code>q,k: [B,h,N,d]</code><code>[B,h,N,N]</code><code>k.transpose(-2,-1)</code>score 没有保持在 <code>[B,h,N,N]</code>，mask 也无法按 head 广播。</p>
+<p>拼接<code>[B,h,N,d]</code><code>[B,N,D]</code><code>transpose(1,2).contiguous().view(B,N,D)</code>漏转置会把序列位置和 head 顺序揉在一起。</p>
       </section>
-
       <section id="output">
         <div class="head">
           <h2>为什么 concat 后还要 W^O</h2>
           <span class="tag">output</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>concat 只把通道并排放好</h3>
-            <p>
-              假设 8 个 head 每个输出 64 维，concat 后就是 512 维。这个 512 维已经回到 <code>d_model</code>，但它仍带着分块结构：前 64 维来自 head 1，接着 64 维来自 head 2，以此类推。
-            </p>
-            <p>
-              <code>W^O</code> 是每个 token 位置上的线性层。它把这些 head 通道混合成下一层更容易接着处理的表示。
-              如果只 concat 不做输出投影，形状可能对，但少了论文公式中的一个可学习混合步骤。
-            </p>
-          </div>
-          <div class="table-wrap">
-            <table data-export-context="多头关键术语对照" data-export-lang="table">
-              <thead>
-                <tr><th>术语</th><th>直觉解释</th><th>精确定义</th><th>常见误读</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>head</code></td><td>一套读取通道。</td><td>在 <code>d_head</code> 维子空间里独立计算 attention。</td><td>把它当成固定语法槽。</td></tr>
-                <tr><td><code>d_model</code></td><td>token 表示总宽度。</td><td>Transformer 层输入输出隐藏维度。</td><td>拿它当每个 head 的维度。</td></tr>
-                <tr><td><code>d_head</code></td><td>每个 head 分到的宽度。</td><td>标准写法里 <code>d_model / h</code>。</td><td>缩放时误用 <code>sqrt(d_model)</code>。</td></tr>
-                <tr><td>concat</td><td>沿特征维拼接。</td><td>把多个 <code>[B,N,d_head]</code> 合成 <code>[B,N,D]</code>。</td><td>当成求和或平均。</td></tr>
-                <tr><td><code>W^O</code></td><td>输出通道混合。</td><td>concat 后的线性投影矩阵。</td><td>当成 mask 或第二次 attention。</td></tr>
-              </tbody>
-            </table>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>concat 只把通道并排放好</h3>
+<p>假设 8 个 head 每个输出 64 维，concat 后就是 512 维。这个 512 维已经回到 <code>d_model</code>，但它仍带着分块结构：前 64 维来自 head 1，接着 64 维来自 head 2，以此类推。</p>
+<p><code>W^O</code> 是每个 token 位置上的线性层。它把这些 head 通道混合成下一层更容易接着处理的表示。</p>
+<p>如果只 concat 不做输出投影，形状可能对，但少了论文公式中的一个可学习混合步骤。</p>
+<p>术语直觉解释精确定义常见误读</p>
+<p><code>head</code>一套读取通道。在 <code>d_head</code> 维子空间里独立计算 attention。把它当成固定语法槽。</p>
+<p><code>d_model</code>token 表示总宽度。Transformer 层输入输出隐藏维度。拿它当每个 head 的维度。</p>
+<p><code>d_head</code>每个 head 分到的宽度。标准写法里 <code>d_model / h</code>。缩放时误用 <code>sqrt(d_model)</code>。</p>
+<p>concat沿特征维拼接。把多个 <code>[B,N,d_head]</code> 合成 <code>[B,N,D]</code>。当成求和或平均。</p>
+<p><code>W^O</code>输出通道混合。concat 后的线性投影矩阵。当成 mask 或第二次 attention。</p>
+<p>> <b>用一个小例子看错位</b> 假设只有 2 个 token、2 个 head，每个 head 输出 2 维。正确拼接前，张量应从 [B,h,N,d] 转成 [B,N,h,d]：第 1 个 token 拿到的是 head1(token1) 和 head2(token1)，第 2 个 token 拿到的是 head1(token2) 和 head2(token2)。</p>
+<p>如果直接把 [B,h,N,d] view 成 [B,N,D]，形状仍可能是对的，但第 1 个 token 可能混进 head1(token2) 的内容。这个错误不会总是报 shape mismatch，所以验收时要打印拼接前后的局部索引，而不是只看最终输出维度。</p>
         </div>
-        <div class="inline-note">
-          <b>用一个小例子看错位</b>
-          假设只有 2 个 token、2 个 head，每个 head 输出 2 维。正确拼接前，张量应从 <code>[B,h,N,d]</code> 转成 <code>[B,N,h,d]</code>：第 1 个 token 拿到的是 <code>head1(token1)</code> 和 <code>head2(token1)</code>，第 2 个 token 拿到的是 <code>head1(token2)</code> 和 <code>head2(token2)</code>。
-          如果直接把 <code>[B,h,N,d]</code> view 成 <code>[B,N,D]</code>，形状仍可能是对的，但第 1 个 token 可能混进 <code>head1(token2)</code> 的内容。这个错误不会总是报 shape mismatch，所以验收时要打印拼接前后的局部索引，而不是只看最终输出维度。
-        </div>
+      </div>
       </section>
-
       <section id="implementation">
         <div class="head">
           <h2>最小 PyTorch 实现</h2>
           <span class="tag">code</span>
         </div>
-        <p>
-          下面代码保留了多头注意力最关键的形状变化。它只保留关键读写链条，足够检查 QKV 投影、拆 head、注意力计算、拼接和输出投影。
-        </p>
-        <div class="codebar"><span>正确示例：从 [B, N, D] 到多头输出</span><button class="copy" type="button" data-copy="mha-code">复制</button></div>
-        <pre id="mha-code" data-export-context="最小 Multi-Head Self-Attention 实现" data-export-lang="python"><code class="language-python">import math
+<p>下面代码保留了多头注意力最关键的形状变化。它只保留关键读写链条，足够检查 QKV 投影、拆 head、注意力计算、拼接和输出投影。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-implementation-1">复制</button></div>
+        <pre id="code-implementation-1" data-export-context="代码" data-export-lang="python"><code class="language-python">import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 class MultiHeadSelfAttention(nn.Module):
-    def __init__(self, d_model=512, num_heads=8):
-        super().__init__()
-        assert d_model % num_heads == 0
-        self.num_heads = num_heads
-        self.d_head = d_model // num_heads
-        self.qkv = nn.Linear(d_model, 3 * d_model)
-        self.out = nn.Linear(d_model, d_model)
+ def __init__(self, d_model=512, num_heads=8):
+ super().__init__()
+ assert d_model % num_heads == 0
+ self.num_heads = num_heads
+ self.d_head = d_model // num_heads
+ self.qkv = nn.Linear(d_model, 3 * d_model)
+ self.out = nn.Linear(d_model, d_model)
 
-    def forward(self, x, mask=None):
-        B, N, D = x.shape
-        qkv = self.qkv(x)                         # [B, N, 3D]
-        qkv = qkv.view(B, N, 3, self.num_heads, self.d_head)
-        qkv = qkv.permute(2, 0, 3, 1, 4)          # [3, B, h, N, d]
-        q, k, v = qkv[0], qkv[1], qkv[2]          # each [B, h, N, d]
+ def forward(self, x, mask=None):
+ B, N, D = x.shape
+ qkv = self.qkv(x) # [B, N, 3D]
+ qkv = qkv.view(B, N, 3, self.num_heads, self.d_head)
+ qkv = qkv.permute(2, 0, 3, 1, 4) # [3, B, h, N, d]
+ q, k, v = qkv[0], qkv[1], qkv[2] # each [B, h, N, d]
 
-        scores = q @ k.transpose(-2, -1)          # [B, h, N, N]
-        scores = scores / math.sqrt(self.d_head)
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, float("-inf"))
+ scores = q @ k.transpose(-2, -1) # [B, h, N, N]
+ scores = scores / math.sqrt(self.d_head)
+ if mask is not None:
+ scores = scores.masked_fill(mask == 0, float("-inf"))
 
-        weights = F.softmax(scores, dim=-1)
-        context = weights @ v                     # [B, h, N, d]
-        context = context.transpose(1, 2).contiguous()
-        context = context.view(B, N, D)           # concat heads
-        return self.out(context)                  # W^O</code></pre>
-        <div class="grid2">
-          <div class="box">
-            <h3>关键行逐行读</h3>
-            <p>
-              <code>self.qkv(x)</code> 一次线性层输出三份向量。它不表示 Q/K/V 完全相同，只是把三次线性投影合成一次大矩阵乘法。
-              <code>view(B, N, 3, h, d)</code> 把三份投影和 head 维拆出来。
-            </p>
-            <p>
-              <code>permute(2, 0, 3, 1, 4)</code> 把 Q/K/V 维放到最前面，方便用 <code>qkv[0]</code> 取 Q；同时把 head 放到 batch 后面，得到 <code>[B,h,N,d]</code>。
-              这一步顺序错了，后面的矩阵乘法很容易混掉 token 维、head 维或特征维。
-            </p>
-          </div>
-          <div class="box warn">
-            <h3>拼接前的内存布局</h3>
-            <p>
-              <code>context.transpose(1, 2).contiguous().view(B, N, D)</code> 是拼接 head 的关键。
-              先把形状从 <code>[B,h,N,d]</code> 转回 <code>[B,N,h,d]</code>，再把 <code>h*d</code> 合成 <code>D</code>。
-              直接 <code>view(B,N,D)</code> 会按当前内存顺序硬揉，语义会错。
-            </p>
-          </div>
+ weights = F.softmax(scores, dim=-1)
+ context = weights @ v # [B, h, N, d]
+ context = context.transpose(1, 2).contiguous()
+ context = context.view(B, N, D) # concat heads
+ return self.out(context) # W^O</code></pre>
+        </div>
+        <div class="box warn">
+<h3>拼接前的内存布局</h3>
+<p><code>context.transpose(1, 2).contiguous().view(B, N, D)</code> 是拼接 head 的关键。</p>
+<p>先把形状从 <code>[B,h,N,d]</code> 转回 <code>[B,N,h,d]</code>，再把 <code>h*d</code> 合成 <code>D</code>。</p>
+<p>直接 <code>view(B,N,D)</code> 会按当前内存顺序硬揉，语义会错。</p>
         </div>
       </section>
-
       <section id="mask-debug">
         <div class="head">
           <h2>Mask 与故障定位</h2>
           <span class="tag">debug</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>mask 要对齐 score</h3>
-            <p>
-              多头 score 的形状是 <code>[B,h,N,N]</code>。padding mask 常见写法是 <code>[B,1,1,N]</code>，挡住无效 key；
-              causal mask 常见写法是 <code>[1,1,N,N]</code>，挡住未来位置。两者都应在 softmax 前作用到 score 上。
-            </p>
-            <div class="codebar"><span>正确示例：padding mask 与 causal mask 广播</span><button class="copy" type="button" data-copy="mask-code">复制</button></div>
-            <pre id="mask-code" data-export-context="多头 attention 的 mask 广播写法" data-export-lang="python"><code class="language-python"># scores: [B, h, N, N]
-padding_mask = padding_mask[:, None, None, :]  # [B, 1, 1, N]
+      <div class="grid2">
+        <div class="box">
+<h3>mask 要对齐 score</h3>
+<p>多头 score 的形状是 <code>[B,h,N,N]</code>。padding mask 常见写法是 <code>[B,1,1,N]</code>，挡住无效 key；</p>
+<p>causal mask 常见写法是 <code>[1,1,N,N]</code>，挡住未来位置。两者都应在 softmax 前作用到 score 上。</p>
+<p>正确示例：padding mask 与 causal mask 广播复制</p>
+<pre><code class="language-python"># scores: [B, h, N, N]
+padding_mask = padding_mask[:, None, None, :] # [B, 1, 1, N]
 scores = scores.masked_fill(padding_mask == 0, float("-inf"))
 
 causal = torch.tril(torch.ones(N, N, device=x.device))
-causal = causal[None, None, :, :]              # [1, 1, N, N]
+causal = causal[None, None, :, :] # [1, 1, N, N]
 scores = scores.masked_fill(causal == 0, float("-inf"))</code></pre>
-          </div>
-          <div class="terminal-lab" data-terminal-lab>
-            <div class="terminal-controls">
-              <button class="ghost" type="button" data-terminal-case="ok">正确链路</button>
-              <button class="ghost" type="button" data-terminal-case="scale">缩放维度错</button>
-              <button class="ghost" type="button" data-terminal-case="mask">mask 形状错</button>
-            </div>
-            <pre class="terminal-output"></pre>
-            <template data-terminal-output="ok">score: [2, 8, 4, 4]
-mask:  [1, 1, 4, 4] or [2, 1, 1, 4]
-softmax dim: -1
-status: <span class="ok">shape and broadcast align</span></template>
-            <template data-terminal-output="scale">score: [2, 8, 4, 4]
-scale: sqrt(512)
-expected: sqrt(64)
-status: <span class="err">scores are over-compressed; use d_head</span></template>
-            <template data-terminal-output="mask">score: [2, 8, 4, 4]
-mask:  [2, 4]
-expected: [2, 1, 1, 4] for padding
-status: <span class="err">broadcast target is unclear; reshape explicitly</span></template>
-          </div>
+<p>症状先查哪里常见原因修法</p>
+<p>score 没有保持在 <code>[B,h,N,N]</code><code>qkv.view</code> 和 <code>permute</code>head 维或 Q/K/V 维顺序错。先打印 q、k、v 形状，再做矩阵乘法。</p>
+<p>训练能跑但输出怪拼接前的 <code>transpose(1,2)</code>把 head 维和 token 维按内存顺序揉在一起。用 <code>transpose(1,2).contiguous().view(B,N,D)</code>。</p>
+<p>注意力分布过平缩放因子用 <code>sqrt(d_model)</code> 代替 <code>sqrt(d_head)</code>。缩放跟点积维度一致。</p>
+<p>decoder 泄漏未来 tokencausal mask 方向上三角/下三角方向写反。确认第 i 行只能读到不晚于 i 的 key。</p>
+<p>padding 位置仍被读取mask 广播到 head 维<code>[B,N]</code> 没显式扩成四维。改成 <code>[B,1,1,N]</code>。</p>
         </div>
-        <div class="table-wrap">
-          <table data-export-context="多头注意力故障诊断表" data-export-lang="table">
-            <thead>
-              <tr><th>症状</th><th>先查哪里</th><th>常见原因</th><th>修法</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>score 没有保持在 <code>[B,h,N,N]</code></td><td><code>qkv.view</code> 和 <code>permute</code></td><td>head 维或 Q/K/V 维顺序错。</td><td>先打印 q、k、v 形状，再做矩阵乘法。</td></tr>
-              <tr><td>训练能跑但输出怪</td><td>拼接前的 <code>transpose(1,2)</code></td><td>把 head 维和 token 维按内存顺序揉在一起。</td><td>用 <code>transpose(1,2).contiguous().view(B,N,D)</code>。</td></tr>
-              <tr><td>注意力分布过平</td><td>缩放因子</td><td>用 <code>sqrt(d_model)</code> 代替 <code>sqrt(d_head)</code>。</td><td>缩放跟点积维度一致。</td></tr>
-              <tr><td>decoder 泄漏未来 token</td><td>causal mask 方向</td><td>上三角/下三角方向写反。</td><td>确认第 i 行只能读到不晚于 i 的 key。</td></tr>
-              <tr><td>padding 位置仍被读取</td><td>mask 广播到 head 维</td><td><code>[B,N]</code> 没显式扩成四维。</td><td>改成 <code>[B,1,1,N]</code>。</td></tr>
-            </tbody>
-          </table>
+        <div class="box">
+<h3>最小定位流程</h3>
+<p>遇到 multi-head attention “能跑但不对”时，先不要改学习率或训练轮数。第一步打印 <code>q.shape</code>、<code>k.shape</code>、<code>v.shape</code>，确认都是 <code>[B,h,N,d]</code>。</p>
+<p>第二步打印 <code>scores.shape</code>，确认是 <code>[B,h,N,N]</code>。第三步单独检查 mask reshape 后的形状，看它是挡 key 位置还是挡 query-key 位置对。最后再看拼接前的 <code>context.transpose(1,2)</code> 是否存在。</p>
+<p>这套流程的好处是能把“值不对”拆成几个可观察对象：投影错、score 错、mask 错、concat 错。每一步都对应上面的表格和练习区的诊断题，排查时不需要靠猜。</p>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>最小定位流程</h3>
-            <p>
-              遇到 multi-head attention “能跑但不对”时，先不要改学习率或训练轮数。第一步打印 <code>q.shape</code>、<code>k.shape</code>、<code>v.shape</code>，确认都是 <code>[B,h,N,d]</code>。
-              第二步打印 <code>scores.shape</code>，确认是 <code>[B,h,N,N]</code>。第三步单独检查 mask reshape 后的形状，看它是挡 key 位置还是挡 query-key 位置对。最后再看拼接前的 <code>context.transpose(1,2)</code> 是否存在。
-            </p>
-            <p>
-              这套流程的好处是能把“值不对”拆成几个可观察对象：投影错、score 错、mask 错、concat 错。每一步都对应上面的表格和练习区的诊断题，排查时不需要靠猜。
-            </p>
-          </div>
-          <div class="box soft">
-            <h3>把症状连回概念</h3>
-            <p>
-              如果 score 形状不对，回看“形状跟踪”；如果缩放维度不对，回看“公式读法”；如果最终输出形状对但结果不稳定，优先查“输出投影”和拼接顺序；如果 decoder 训练指标异常好但生成很差，优先查 causal mask 方向。
-              练习题里的开放诊断题也按这个顺序写：先定位对象，再说后果，最后给修法。
-            </p>
-          </div>
+        <div class="box soft">
+<h3>把症状连回概念</h3>
+<p>如果 score 形状不对，回看“形状跟踪”；如果缩放维度不对，回看“公式读法”；如果最终输出形状对但结果不稳定，优先查“输出投影”和拼接顺序；如果 decoder 训练指标异常好但生成很差，优先查 causal mask 方向。</p>
+<p>练习题里的开放诊断题也按这个顺序写：先定位对象，再说后果，最后给修法。</p>
         </div>
+      </div>
       </section>
-
       <section id="ledger">
         <div class="head">
           <h2>状态账本</h2>
           <span class="tag">ledger</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>这一层先看读写关系</h3>
-            <p>
-              多头注意力看起来是几步矩阵乘法，实际是一次状态转换：输入被读入后，Q/K/V、head、score、mask、context 会按顺序写出。
-              只要某一步的读写边界错了，后面形状再对，语义也会偏。
-            </p>
-            <p>
-              这个表的作用是让排错时能快速回到“这里读了什么、写了什么、什么时候有效”。
-            </p>
-          </div>
-          <div class="box soft">
-            <h3>先查哪一层</h3>
-            <p>
-              如果输出形状对但内容怪，先看 concat 和 <code>W^O</code>；如果 score 一直不稳，先看 Q/K 的拆分和缩放；如果 decoder 的结果泄漏未来，先看 causal mask。
-            </p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>这一层先看读写关系</h3>
+<p>多头注意力看起来是几步矩阵乘法，实际是一次状态转换：输入被读入后，Q/K/V、head、score、mask、context 会按顺序写出。</p>
+<p>只要某一步的读写边界错了，后面形状再对，语义也会偏。</p>
+<p>这个表的作用是让排错时能快速回到“这里读了什么、写了什么、什么时候有效”。</p>
         </div>
-        <div class="table-wrap">
-          <table data-export-context="多头注意力状态账本" data-export-lang="table">
-            <thead>
-              <tr><th>阶段</th><th>读什么</th><th>写什么</th><th>什么时候有效</th><th>错了会怎样</th><th>下一步看哪里</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>QKV 投影</td><td><code>x</code> 和三组权重</td><td><code>[B,N,3D]</code></td><td>输入宽度和模型配置一致时</td><td>Q/K/V 读到同一组内容，后面 attention 分不开。</td><td><code>Linear(D,3D)</code> 与三路拆分。</td></tr>
-              <tr><td>head 拆分</td><td><code>D</code>、<code>h</code>、<code>d_head</code></td><td><code>[B,N,3,h,d]</code></td><td><code>D</code> 可被 <code>h</code> 整除时</td><td><code>view</code> 后的通道边界错位。</td><td><code>view</code> 和 <code>permute</code> 的顺序。</td></tr>
-              <tr><td>score</td><td><code>q</code>、<code>k</code></td><td><code>[B,h,N,N]</code></td><td>两个张量在同一个 head 内时</td><td>mask 无法按 head 广播，或者注意力表少了一维。</td><td><code>k.transpose(-2,-1)</code> 与 <code>scores.shape</code>。</td></tr>
-              <tr><td>mask</td><td>padding / causal 约束</td><td>把无效位置压成 <code>-inf</code></td><td>softmax 之前</td><td>未来 token 或 padding 被读进来。</td><td>先确认广播目标，再看 <code>masked_fill</code>。</td></tr>
-              <tr><td>concat + W^O</td><td><code>[B,h,N,d]</code> 的 head 输出</td><td><code>[B,N,D]</code> 的混合表示</td><td>已经转回 token 维之后</td><td>head 顺序被揉乱，最终输出看着对，语义却错了。</td><td><code>transpose(1,2).contiguous().view(B,N,D)</code>。</td></tr>
-            </tbody>
-          </table>
+        <div class="box soft">
+<h3>先查哪一层</h3>
+<p>如果输出形状对但内容怪，先看 concat 和 <code>W^O</code>；如果 score 一直不稳，先看 Q/K 的拆分和缩放；如果 decoder 的结果泄漏未来，先看 causal mask。</p>
+<p>阶段读什么写什么什么时候有效错了会怎样下一步看哪里</p>
+<p>QKV 投影<code>x</code> 和三组权重<code>[B,N,3D]</code>输入宽度和模型配置一致时Q/K/V 读到同一组内容，后面 attention 分不开。<code>Linear(D,3D)</code> 与三路拆分。</p>
+<p>head 拆分<code>D</code>、<code>h</code>、<code>d_head</code><code>[B,N,3,h,d]</code><code>D</code> 可被 <code>h</code> 整除时<code>view</code> 后的通道边界错位。<code>view</code> 和 <code>permute</code> 的顺序。</p>
+<p>score<code>q</code>、<code>k</code><code>[B,h,N,N]</code>两个张量在同一个 head 内时mask 无法按 head 广播，或者注意力表少了一维。<code>k.transpose(-2,-1)</code> 与 <code>scores.shape</code>。</p>
+<p>maskpadding / causal 约束把无效位置压成 <code>-inf</code>softmax 之前未来 token 或 padding 被读进来。先确认广播目标，再看 <code>masked_fill</code>。</p>
+<p>concat + W^O<code>[B,h,N,d]</code> 的 head 输出<code>[B,N,D]</code> 的混合表示已经转回 token 维之后head 顺序被揉乱，最终输出看着对，语义却错了。<code>transpose(1,2).contiguous().view(B,N,D)</code>。</p>
         </div>
+      </div>
       </section>
-
       <section id="pitfalls">
         <div class="head">
           <h2>常见误区和修法</h2>
           <span class="tag">pitfalls</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>把 head 当成人工指定的语法槽</h3>
-            <p>
-              有些可视化会显示某些 head 关注局部词、分隔符或长距离关系，于是容易得出“head 1 负责主谓一致、head 2 负责指代”的说法。
-              页面里先把它们当作可观察的偏好，不提前给固定标签。
-            </p>
-          </div>
-          <div class="box">
-            <h3>忘记 <code>d_model % num_heads == 0</code></h3>
-            <p>
-              标准实现要把总维度平均拆成 <code>h</code> 个 <code>d_head</code>。
-              如果不能整除，就无法直接 reshape 成 <code>[B,N,h,d_head]</code>。初始化时先加断言，错误会早很多暴露。
-            </p>
-          </div>
-          <div class="box">
-            <h3>缩放因子用错</h3>
-            <p>
-              多头里每个 attention 的点积发生在 <code>d_head</code> 维。用 <code>sqrt(d_model)</code> 会把分数压得更小，softmax 变得更平。
-              只要 score 来自 <code>[..., d_head]</code> 的点积，就按 <code>d_head</code> 缩放。
-            </p>
-          </div>
-          <div class="box">
-            <h3>把多头说成长上下文优化</h3>
-            <p>
-              多头改善的是表达通道和矩阵计算组织方式。标准 attention 的 <code>N^2</code> 序列长度代价仍然在。
-              长上下文优化要看稀疏注意力、FlashAttention、KV cache 等后续机制，不能把它们混到这页。
-            </p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>把 head 当成人工指定的语法槽</h3>
+<p>有些可视化会显示某些 head 关注局部词、分隔符或长距离关系，于是容易得出“head 1 负责主谓一致、head 2 负责指代”的说法。</p>
+<p>页面里先把它们当作可观察的偏好，不提前给固定标签。</p>
         </div>
+        <div class="box">
+<h3>忘记 <code>d_model % num_heads == 0</code></h3>
+<p>标准实现要把总维度平均拆成 <code>h</code> 个 <code>d_head</code>。</p>
+<p>如果不能整除，就无法直接 reshape 成 <code>[B,N,h,d_head]</code>。初始化时先加断言，错误会早很多暴露。</p>
+        </div>
+        <div class="box">
+<h3>缩放因子用错</h3>
+<p>多头里每个 attention 的点积发生在 <code>d_head</code> 维。用 <code>sqrt(d_model)</code> 会把分数压得更小，softmax 变得更平。</p>
+<p>只要 score 来自 <code>[..., d_head]</code> 的点积，就按 <code>d_head</code> 缩放。</p>
+        </div>
+        <div class="box">
+<h3>把多头说成长上下文优化</h3>
+<p>多头改善的是表达通道和矩阵计算组织方式。标准 attention 的 <code>N^2</code> 序列长度代价仍然在。</p>
+<p>长上下文优化要看稀疏注意力、FlashAttention、KV cache 等后续机制，不能把它们混到这页。</p>
+        </div>
+      </div>
       </section>
-
       <section id="bridge">
         <div class="head">
           <h2>下一步怎么读</h2>
           <span class="tag">bridge</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>回到论文结构</h3>
-            <p>
-              这一页只把 multi-head attention 本身拆开。下一节要把它放回 Transformer 子层：Encoder 里是 self-attention，Decoder 里既有 masked self-attention，也有 encoder-decoder attention。
-              你需要带着两个检查点进入下一节：第一，attention 子层的输入输出都保持 <code>d_model</code>；第二，mask 类型会随子层位置改变。
-            </p>
-          </div>
-          <div class="box soft">
-            <h3>读代码时先查五个形状</h3>
-            <ol>
-              <li><code>x</code> 是否是 <code>[B,N,D]</code>。</li>
-              <li><code>qkv</code> 是否能拆成 <code>[B,N,3,h,d]</code>。</li>
-              <li><code>q/k/v</code> 是否都是 <code>[B,h,N,d]</code>。</li>
-              <li><code>scores</code> 是否是 <code>[B,h,N,N]</code>。</li>
-              <li>输出投影前是否已经回到 <code>[B,N,D]</code>。</li>
-            </ol>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>回到论文结构</h3>
+<p>这一页只把 multi-head attention 本身拆开。下一节要把它放回 Transformer 子层：Encoder 里是 self-attention，Decoder 里既有 masked self-attention，也有 encoder-decoder attention。</p>
+<p>你需要带着两个检查点进入下一节：第一，attention 子层的输入输出都保持 <code>d_model</code>；第二，mask 类型会随子层位置改变。</p>
         </div>
+        <div class="box soft">
+<h3>读代码时先查五个形状</h3>
+<ol>
+<li><code>x</code> 是否是 <code>[B,N,D]</code>。</li>
+<li><code>qkv</code> 是否能拆成 <code>[B,N,3,h,d]</code>。</li>
+<li><code>q/k/v</code> 是否都是 <code>[B,h,N,d]</code>。</li>
+<li><code>scores</code> 是否是 <code>[B,h,N,N]</code>。</li>
+<li>输出投影前是否已经回到 <code>[B,N,D]</code>。</li>
+</ol>
+        </div>
+      </div>
       </section>
-
       <section id="practice">
         <div class="head">
           <h2>综合练习</h2>
           <span class="tag">practice</span>
         </div>
-        <div class="practice-intro">
-          <div class="box">
-            <h3>答题目标</h3>
-            <p>
-              练习区按概念、公式形状、代码诊断和迁移表达分组。开放题不要写长散文，按“对象 / 形状 / 后果 / 修法”作答就够。
-            </p>
-          </div>
-          <div class="box soft">
-            <h3>检查重点</h3>
-            <p>
-              多头注意力的验收顺序是：投影是否独立，head 维是否拆对，score 是否四维，mask 是否广播，concat 是否转回 token 维，<code>W^O</code> 是否保留。
-            </p>
-          </div>
+      <div class="practice-intro">
+      <div class="box">
+<h3>答题目标</h3>
+<p>练习区按概念、公式形状、代码诊断和迁移表达分组。开放题不要写长散文，按“对象 / 形状 / 后果 / 修法”作答就够。</p>
+      </div>
+      <div class="box soft">
+<h3>检查重点</h3>
+<p>多头注意力的验收顺序是：投影是否独立，head 维是否拆对，score 是否四维，mask 是否广播，concat 是否转回 token 维，<code>W^O</code> 是否保留。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          <div class="quick-review">复盘提示：head 是可学习通道，可能学出不同关注模式，先按它们的行为来理解。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q1_role" data-group="" data-title="" data-answer="把同一输入投影到多个子空间，各自做 attention。">
+        <div class="q-meta"><span class="pill">1_role</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 多头的基本作用</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>一、基础概念</h3>
-              <p>先确认你是否把“多个 head”理解成多个投影子空间。</p>
-            </div>
-            <div class="quick-review">复盘提示：head 是可学习通道，可能学出不同关注模式，先按它们的行为来理解。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q1_role" data-group="基础概念" data-title="多头的基本作用" data-answer="A" data-explain="多头先把同一输入投影到多个子空间，再分别做 attention。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">concept</span></div>
-              <h3>多头的基本作用</h3>
-              <p>下面哪一句最准确？</p>
-              <label><input type="radio" name="q1_role" value="A"> 把同一输入投影到多个子空间，各自做 attention。</label>
-              <label><input type="radio" name="q1_role" value="B"> 让模型按 head 顺序逐词生成。</label>
-              <label><input type="radio" name="q1_role" value="C"> 把一个 attention 结果复制多份。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q1_role" value="把同一输入投影到多个子空间，各自做 attention。">把同一输入投影到多个子空间，各自做 attention。</label>
+      <label><input type="radio" name="q1_role" value="让模型按 head 顺序逐词生成。">让模型按 head 顺序逐词生成。</label>
+      <label><input type="radio" name="q1_role" value="把一个 attention 结果复制多份。">把一个 attention 结果复制多份。</label>
+      </div>
 
-            <div class="q" data-question="q2_head_semantics" data-group="基础概念" data-title="head 的语义" data-answer="B" data-explain="head 的模式来自训练过程。">
-              <div class="q-meta"><span class="pill">true/false</span><span class="pill">boundary</span></div>
-              <h3>head 的语义</h3>
-              <p>每个 head 都由人工规定一个固定语言学功能，例如 head 1 负责主语，head 2 负责宾语。</p>
-              <label><input type="radio" name="q2_head_semantics" value="A"> 对</label>
-              <label><input type="radio" name="q2_head_semantics" value="B"> 错</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>把同一输入投影到多个子空间，各自做 attention。。多头先把同一输入投影到多个子空间，再分别做 attention。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2_head_semantics" data-group="" data-title="" data-answer="错">
+        <div class="q-meta"><span class="pill">2_head_semantics</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> head 的语义</h3>
 
-            <div class="q" data-question="q3_dhead" data-group="基础概念" data-title="d_head 计算" data-answer="B" data-explain="512 / 8 = 64。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">shape</span></div>
-              <h3>d_head 计算</h3>
-              <p>当 <code>d_model=512</code>、<code>h=8</code> 时，每个 head 的 <code>d_head</code> 是多少？</p>
-              <label><input type="radio" name="q3_dhead" value="A"> 8</label>
-              <label><input type="radio" name="q3_dhead" value="B"> 64</label>
-              <label><input type="radio" name="q3_dhead" value="C"> 512</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q2_head_semantics" value="对">对</label>
+      <label><input type="radio" name="q2_head_semantics" value="错">错</label>
+      </div>
 
-            <div class="q" data-question="q4_single_vs_multi" data-group="基础概念" data-title="单头和多头区别">
-              <div class="q-meta"><span class="pill">short answer</span><span class="pill">contrast</span></div>
-              <h3>单头和多头区别</h3>
-              <p>用 1-2 句话区分单头 attention 和多头 attention。</p>
-              <p class="solve-note">答题目标：从“几套投影、几张权重表、如何合并”作答。</p>
-              <textarea name="q4_single_vs_multi" placeholder="单头……；多头……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-              <p>合格答案要说清：单头使用一套 Q/K/V 投影和一张权重表；多头使用多套投影，各自得到权重表，再 concat 并通过 <code>W^O</code> 混合。</p>
-              </details>
-            </div>
-          </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>错。head 的模式来自训练过程。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3_dhead" data-group="" data-title="" data-answer="64">
+        <div class="q-meta"><span class="pill">3_dhead</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> d_head 计算</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q3_dhead" value="8">8</label>
+      <label><input type="radio" name="q3_dhead" value="64">64</label>
+      <label><input type="radio" name="q3_dhead" value="512">512</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>64。512 / 8 = 64。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q4_single_vs_multi" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">4_single_vs_multi</span><span class="pill">short answer</span></div>
+        <h3><b>Q:</b> 单头和多头区别</h3>
+
+
+      <textarea name="q4_single_vs_multi"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。合格答案要说清：单头使用一套 Q/K/V 投影和一张权重表；多头使用多套投影，各自得到权重表，再 concat 并通过 W^O 混合。</p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>二、公式和形状</h3>
-              <p>这一组用形状验收理解，不要求背整段代码。</p>
-            </div>
-            <div class="quick-review">复盘提示：score 的标准形状是 <code>[B,h,N,N]</code>，最后一个 N 对应 key 位置。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q5_q_shape" data-group="公式和形状" data-title="拆 head 后 Q 的形状" data-answer="A" data-explain="head 维放到 batch 后面，Q 通常是 [B,h,N,d_head]。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">shape</span></div>
-              <h3>拆 head 后 Q 的形状</h3>
-              <p>输入 <code>x</code> 是 <code>[B,N,D]</code>，拆成 head 后 Q 的常见形状是什么？</p>
-              <label><input type="radio" name="q5_q_shape" value="A"> <code>[B,h,N,d_head]</code></label>
-              <label><input type="radio" name="q5_q_shape" value="B"> <code>[B,N,h,N]</code></label>
-              <label><input type="radio" name="q5_q_shape" value="C"> <code>[h,B,D,N]</code></label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-
-            <div class="q" data-question="q6_score_shape" data-group="公式和形状" data-title="score 形状" data-answer="B" data-explain="q 和 k 的最后两维相乘后，每个 head 得到一张 N×N 表。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">matrix</span></div>
-              <h3>score 形状</h3>
-              <p><code>q @ k.transpose(-2,-1)</code> 的结果通常是什么形状？</p>
-              <label><input type="radio" name="q6_score_shape" value="A"> <code>[B,N,h,d]</code></label>
-              <label><input type="radio" name="q6_score_shape" value="B"> <code>[B,h,N,N]</code></label>
-              <label><input type="radio" name="q6_score_shape" value="C"> <code>[B,D,D]</code></label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-
-            <div class="q" data-question="q7_scale" data-group="公式和形状" data-title="缩放维度" data-answer="A" data-explain="点积发生在每个 head 的 d_head 维，所以按 d_head 缩放。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">formula</span></div>
-              <h3>缩放维度</h3>
-              <p>多头 attention 里为什么缩放用 <code>sqrt(d_head)</code>？</p>
-              <label><input type="radio" name="q7_scale" value="A"> 因为每个 head 的点积发生在 <code>d_head</code> 维。</label>
-              <label><input type="radio" name="q7_scale" value="B"> 因为输出一定要变成 64 个 token。</label>
-              <label><input type="radio" name="q7_scale" value="C"> 因为 softmax 只能处理 64 维。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-
-            <div class="q" data-question="q8_formula_steps" data-group="公式和形状" data-title="公式三步">
-              <div class="q-meta"><span class="pill">short answer</span><span class="pill">formula</span></div>
-              <h3>公式三步</h3>
-              <p>写出或口头描述 <code>MultiHead(Q,K,V)</code> 的三步。</p>
-              <p class="solve-note">答题目标：投影、各 head attention、concat + <code>W^O</code> 都要出现。</p>
-              <textarea name="q8_formula_steps" placeholder="第一步……第二步……第三步……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>先用 <code>W_i^Q/W_i^K/W_i^V</code> 得到每个 head 的 Q/K/V；再在每个 head 内部执行 scaled dot-product attention；最后把所有 head 输出 concat，并乘 <code>W^O</code> 得到下一层需要的表示。</p>
-              </details>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、公式和形状</h3></div>
+          <div class="quick-review">复盘提示：score 的标准形状是 [B,h,N,N] ，最后一个 N 对应 key 位置。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5_q_shape" data-group="" data-title="" data-answer="[B,h,N,d_head]">
+        <div class="q-meta"><span class="pill">5_q_shape</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 拆 head 后 Q 的形状</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>三、代码阅读和错误诊断</h3>
-              <p>这一组要求你用代码语义定位问题，答案按错因、后果、修法写。</p>
-            </div>
-            <div class="quick-review">复盘提示：多头实现最常见的错在转置、缩放、mask、view。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q9_concat_order" data-group="代码阅读和错误诊断" data-title="拼接顺序" data-answer="A" data-explain="先把 head 维转回 token 后面，再连续化，再 view。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">ordering</span></div>
-              <h3>拼接顺序</h3>
-              <p>给多头输出拼接排序：A. <code>transpose(1,2)</code>；B. <code>contiguous()</code>；C. <code>view(B,N,D)</code>。正确顺序是什么？</p>
-              <label><input type="radio" name="q9_concat_order" value="A"> A → B → C</label>
-              <label><input type="radio" name="q9_concat_order" value="B"> C → A → B</label>
-              <label><input type="radio" name="q9_concat_order" value="C"> B → C → A</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q5_q_shape" value="[B,h,N,d_head]">[B,h,N,d_head]</label>
+      <label><input type="radio" name="q5_q_shape" value="[B,N,h,N]">[B,N,h,N]</label>
+      <label><input type="radio" name="q5_q_shape" value="[h,B,D,N]">[h,B,D,N]</label>
+      </div>
 
-            <div class="q" data-question="q10_softmax_axis" data-group="代码阅读和错误诊断" data-title="softmax 维度" data-answer="C" data-explain="最后一维是 key 位置，表示当前 query 对所有 key 的分布。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">axis</span></div>
-              <h3>softmax 维度</h3>
-              <p>在 <code>[B,h,N,N]</code> 的 score 上，softmax 通常沿哪一维做？</p>
-              <label><input type="radio" name="q10_softmax_axis" value="A"> batch 维。</label>
-              <label><input type="radio" name="q10_softmax_axis" value="B"> head 维。</label>
-              <label><input type="radio" name="q10_softmax_axis" value="C"> 最后一维，也就是 key 位置。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>[B,h,N,d_head]。head 维放到 batch 后面，Q 通常是 [B,h,N,d_head]。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6_score_shape" data-group="" data-title="" data-answer="[B,h,N,N]">
+        <div class="q-meta"><span class="pill">6_score_shape</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> score 形状</h3>
 
-            <div class="q full" data-question="q11_missing_transpose" data-group="代码阅读和错误诊断" data-title="漏转置诊断">
-              <div class="q-meta"><span class="pill">diagnosis</span><span class="pill">debug</span></div>
-              <h3>漏转置诊断</h3>
-              <p>错误代码：<code>context = context.contiguous().view(B,N,D)</code>，其中 <code>context</code> 仍是 <code>[B,h,N,d]</code>。错因、后果、修法是什么？</p>
-              <p class="solve-note">答题目标：必须点出 head 维和 token 维被揉错。</p>
-              <textarea name="q11_missing_transpose" placeholder="错因……后果……修法……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>错因：还没把 <code>[B,h,N,d]</code> 转成 <code>[B,N,h,d]</code> 就 view。后果：最终形状可能是 <code>[B,N,D]</code>，但 token 顺序和 head 通道语义混乱。修法：先 <code>context.transpose(1,2).contiguous()</code>，再 <code>view(B,N,D)</code>。</p>
-              </details>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q6_score_shape" value="[B,N,h,d]">[B,N,h,d]</label>
+      <label><input type="radio" name="q6_score_shape" value="[B,h,N,N]">[B,h,N,N]</label>
+      <label><input type="radio" name="q6_score_shape" value="[B,D,D]">[B,D,D]</label>
+      </div>
 
-            <div class="q full" data-question="q12_mask_shape" data-group="代码阅读和错误诊断" data-title="mask 形状诊断">
-              <div class="q-meta"><span class="pill">diagnosis</span><span class="pill">mask</span></div>
-              <h3>mask 形状诊断</h3>
-              <p>score 是 <code>[B,h,N,N]</code>，mask 只有 <code>[B,N]</code>。直接 <code>masked_fill</code> 可能有什么问题？怎么改更清楚？</p>
-              <p class="solve-note">答题目标：指出广播目标，并给出显式 reshape。</p>
-              <textarea name="q12_mask_shape" placeholder="问题……改成……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p><code>[B,N]</code> 通常是 padding 标记，直接用在四维 score 上不够清楚，容易对错维度广播。更清楚的写法是 <code>padding_mask[:, None, None, :]</code>，得到 <code>[B,1,1,N]</code>，让它广播到 batch 和 head。</p>
-              </details>
-            </div>
-          </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>[B,h,N,N]。q 和 k 的最后两维相乘后，每个 head 得到一张 N×N 表。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q7_scale" data-group="" data-title="" data-answer="因为每个 head 的点积发生在 d_head 维。">
+        <div class="q-meta"><span class="pill">7_scale</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 缩放维度</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q7_scale" value="因为每个 head 的点积发生在 d_head 维。">因为每个 head 的点积发生在 d_head 维。</label>
+      <label><input type="radio" name="q7_scale" value="因为输出一定要变成 64 个 token。">因为输出一定要变成 64 个 token。</label>
+      <label><input type="radio" name="q7_scale" value="因为 softmax 只能处理 64 维。">因为 softmax 只能处理 64 维。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>因为每个 head 的点积发生在 d_head 维。。点积发生在每个 head 的 d_head 维，所以按 d_head 缩放。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8_formula_steps" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">8_formula_steps</span><span class="pill">short answer</span></div>
+        <h3><b>Q:</b> 公式三步</h3>
+
+
+      <textarea name="q8_formula_steps"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先用 W_i^Q/W_i^K/W_i^V 得到每个 head 的 Q/K/V；再在每个 head 内部执行 scaled dot-product attention；最后把所有 head 输出 concat，并乘 W^O 得到下一层需要的表示。</p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>四、迁移和表达</h3>
-              <p>这一组把多头放回 Transformer 的设计动机里。</p>
-            </div>
-            <div class="quick-review">复盘提示：多头提高表达通道，但标准 attention 的 <code>N^2</code> 序列长度代价仍然在。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q full" data-question="q13_wo" data-group="迁移和表达" data-title="W^O 作用">
-              <div class="q-meta"><span class="pill">short answer</span><span class="pill">output</span></div>
-              <h3>W^O 作用</h3>
-              <p>concat 后为什么还要输出投影 <code>W^O</code>？</p>
-              <p class="solve-note">答题目标：说清 concat 和通道混合的区别。</p>
-              <textarea name="q13_wo" placeholder="concat 负责……；W^O 负责……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>concat 只把多个 head 的输出沿特征维并排放回 <code>d_model</code>。<code>W^O</code> 是可学习线性层，负责把这些 head 通道混合成下一层可用的表示。它不改变序列长度，只做通道混合。</p>
-              </details>
-            </div>
-
-            <div class="q" data-question="q14_complexity" data-group="迁移和表达" data-title="复杂度边界" data-answer="B" data-explain="多头没有消除标准 attention 对序列长度的 N² 分数表。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">boundary</span></div>
-              <h3>复杂度边界</h3>
-              <p>多头注意力是否解决了长序列 <code>N^2</code> 计算代价？</p>
-              <label><input type="radio" name="q14_complexity" value="A"> 是，多头会让 score 变成线性复杂度。</label>
-              <label><input type="radio" name="q14_complexity" value="B"> 否，标准多头仍然需要每个 head 的 <code>N × N</code> 分数表。</label>
-              <label><input type="radio" name="q14_complexity" value="C"> 是，因为 head 越多序列越短。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-
-            <div class="q full" data-question="q15_feynman" data-group="迁移和表达" data-title="费曼解释">
-              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">long answer</span></div>
-              <h3>费曼解释</h3>
-              <p>用 6-9 句话解释：多头注意力为什么要拆 head，又如何拼回 Transformer 的隐藏维度。</p>
-              <p class="solve-note">至少包含多头动机、每头维度、score 形状、concat、<code>W^O</code> 和一个实现坑。</p>
-              <textarea name="q15_feynman" placeholder="先说动机，再说公式和形状，最后说一个实现坑。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>合格答案要包含：1）多头把同一输入投影到多个子空间；2）每个 head 在 <code>d_head</code> 维内算 scaled dot-product attention；3）score 形状是 <code>[B,h,N,N]</code>；4）每个 head 输出 <code>[B,N,d_head]</code>；5）concat 后回到 <code>[B,N,D]</code>；6）<code>W^O</code> 混合 head 通道；7）实现坑可选 mask 广播、缩放维度或漏转置。</p>
-              </details>
-            </div>
-
-            <div class="q full" data-question="q16_acceptance" data-group="迁移和表达" data-title="实现验收清单">
-              <div class="q-meta"><span class="pill">checklist</span><span class="pill">debug</span></div>
-              <h3>实现验收清单</h3>
-              <p>写一份 6 条清单，用来验收一个 multi-head attention 实现是否可信。</p>
-              <p class="solve-note">可以覆盖整除断言、QKV 投影、head 维转置、score 形状、缩放、mask 广播、concat 顺序、输出投影。</p>
-              <textarea name="q16_acceptance" placeholder="1. …… 2. ……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>清单至少应覆盖：<code>d_model % num_heads == 0</code>；QKV 投影能拆成三份；Q/K/V 是 <code>[B,h,N,d]</code>；score 是 <code>[B,h,N,N]</code>；缩放用 <code>d_head</code>；mask 能广播到 head；concat 前先 <code>transpose(1,2)</code>；最后保留 <code>W^O</code>。</p>
-              </details>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、代码阅读和错误诊断</h3></div>
+          <div class="quick-review">复盘提示：多头实现最常见的错在转置、缩放、mask、view。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q9_concat_order" data-group="" data-title="" data-answer="→ B → C">
+        <div class="q-meta"><span class="pill">9_concat_order</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 拼接顺序</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q9_concat_order" value="→ B → C">→ B → C</label>
+      <label><input type="radio" name="q9_concat_order" value="C → A → B">C → A → B</label>
+      <label><input type="radio" name="q9_concat_order" value="B → C → A">B → C → A</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>→ B → C。先把 head 维转回 token 后面，再连续化，再 view。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q10_softmax_axis" data-group="" data-title="" data-answer="最后一维，也就是 key 位置。">
+        <div class="q-meta"><span class="pill">10_softmax_axis</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> softmax 维度</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q10_softmax_axis" value="batch 维。">batch 维。</label>
+      <label><input type="radio" name="q10_softmax_axis" value="head 维。">head 维。</label>
+      <label><input type="radio" name="q10_softmax_axis" value="最后一维，也就是 key 位置。">最后一维，也就是 key 位置。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>最后一维，也就是 key 位置。。最后一维是 key 位置，表示当前 query 对所有 key 的分布。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11_missing_transpose" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">11_missing_transpose</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> 漏转置诊断</h3>
+
+
+      <textarea name="q11_missing_transpose"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。错因：还没把 [B,h,N,d] 转成 [B,N,h,d] 就 view。后果：最终形状可能是 [B,N,D] ，但 token 顺序和 head 通道语义混乱。修法：先 context.transpose(1,2).contiguous() ，再 view(B,N,D) 。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q12_mask_shape" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12_mask_shape</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> mask 形状诊断</h3>
+
+
+      <textarea name="q12_mask_shape"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。[B,N] 通常是 padding 标记，直接用在四维 score 上不够清楚，容易对错维度广播。更清楚的写法是 padding_mask[:, None, None, :] ，得到 [B,1,1,N] ，让它广播到 batch 和 head。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、迁移和表达</h3></div>
+          <div class="quick-review">复盘提示：多头提高表达通道，但标准 attention 的 N^2 序列长度代价仍然在。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q13_wo" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">13_wo</span><span class="pill">short answer</span></div>
+        <h3><b>Q:</b> W^O 作用</h3>
+
+
+      <textarea name="q13_wo"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。concat 只把多个 head 的输出沿特征维并排放回 d_model 。 W^O 是可学习线性层，负责把这些 head 通道混合成下一层可用的表示。它不改变序列长度，只做通道混合。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q14_complexity" data-group="" data-title="" data-answer="否，标准多头仍然需要每个 head 的 N × N 分数表。">
+        <div class="q-meta"><span class="pill">14_complexity</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 复杂度边界</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q14_complexity" value="是，多头会让 score 变成线性复杂度。">是，多头会让 score 变成线性复杂度。</label>
+      <label><input type="radio" name="q14_complexity" value="否，标准多头仍然需要每个 head 的 N × N 分数表。">否，标准多头仍然需要每个 head 的 N × N 分数表。</label>
+      <label><input type="radio" name="q14_complexity" value="是，因为 head 越多序列越短。">是，因为 head 越多序列越短。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>否，标准多头仍然需要每个 head 的 N × N 分数表。。多头没有消除标准 attention 对序列长度的 N² 分数表。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q15_feynman" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">15_feynman</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 费曼解释</h3>
+
+
+      <textarea name="q15_feynman"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。合格答案要包含：1）多头把同一输入投影到多个子空间；2）每个 head 在 d_head 维内算 scaled dot-product attention；3）score 形状是 [B,h,N,N] ；4）每个 head 输出 [B,N,d_head] ；5）concat 后回到 [B,N,D] ；6） W^O 混合 head 通道；7）实现坑可选 mask 广播、缩放维度或漏转置。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q16_acceptance" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">16_acceptance</span><span class="pill">checklist</span></div>
+        <h3><b>Q:</b> 实现验收清单</h3>
+
+
+      <textarea name="q16_acceptance"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。清单至少应覆盖： d_model % num_heads == 0 ；QKV 投影能拆成三份；Q/K/V 是 [B,h,N,d] ；score 是 [B,h,N,N] ；缩放用 d_head ；mask 能广播到 head；concat 前先 transpose(1,2) ；最后保留 W^O 。</p>
+        </details>
+      </article>
+        </div>
+      </div>
       </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
-        </div>
-        <p class="muted">填写后可以生成一份练习记录，里面会保留题目、分组、作答状态和核心复盘上下文。</p>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" type="button" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" type="button" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
-
-      <section id="sources">
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-          <li><a href="https://arxiv.org/abs/1706.03762" target="_blank" rel="noreferrer">Vaswani et al., <em>Attention Is All You Need</em></a>。本页的 multi-head attention 公式、base 配置和结构边界以原论文为主。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.pytorch.org/docs/stable/generated/torch.nn.Linear.html" target="_blank" rel="noreferrer">PyTorch <code>torch.nn.Linear</code> 文档</a>。用于理解 QKV 合并投影和输出投影。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.pytorch.org/docs/stable/generated/torch.Tensor.view.html" target="_blank" rel="noreferrer">PyTorch <code>Tensor.view</code> 文档</a>、<a href="https://docs.pytorch.org/docs/stable/generated/torch.Tensor.reshape.html" target="_blank" rel="noreferrer"><code>Tensor.reshape</code></a>、<a href="https://docs.pytorch.org/docs/stable/generated/torch.Tensor.contiguous.html" target="_blank" rel="noreferrer"><code>Tensor.contiguous</code></a>。用于检查转置后的拼接和内存连续性。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.pytorch.org/docs/stable/generated/torch.permute.html" target="_blank" rel="noreferrer">PyTorch <code>torch.permute</code> 文档</a>与<a href="https://docs.pytorch.org/docs/stable/generated/torch.transpose.html" target="_blank" rel="noreferrer"><code>torch.transpose</code></a>。用于确认 head 维、token 维和 key 轴的移动。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.pytorch.org/docs/stable/generated/torch.Tensor.masked_fill.html" target="_blank" rel="noreferrer">PyTorch <code>Tensor.masked_fill</code> 文档</a>与<a href="https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.softmax.html" target="_blank" rel="noreferrer"><code>torch.nn.functional.softmax</code></a>。用于确认 mask 放在 softmax 前，以及 softmax 沿 key 轴归一化。访问日期：2026-06-21。</li>
-        </ul>
-        <p class="muted">这页的论文边界来自原论文，PyTorch 文档只负责把形状和最小实现落到可检查的代码上。</p>
+<ul>
+<li><a href="https://arxiv.org/abs/1706.03762">Vaswani et al., <i>Attention Is All You Need</i></a>。本页的 multi-head attention 公式、base 配置和结构边界以原论文为主。访问日期：2026-06-21。</li>
+<li><a href="https://docs.pytorch.org/docs/stable/generated/torch.nn.Linear.html">PyTorch <code>torch.nn.Linear</code> 文档</a>。用于理解 QKV 合并投影和输出投影。访问日期：2026-06-21。</li>
+<li><a href="https://docs.pytorch.org/docs/stable/generated/torch.Tensor.view.html">PyTorch <code>Tensor.view</code> 文档</a>、<a href="https://docs.pytorch.org/docs/stable/generated/torch.Tensor.reshape.html"><code>Tensor.reshape</code></a>、<a href="https://docs.pytorch.org/docs/stable/generated/torch.Tensor.contiguous.html"><code>Tensor.contiguous</code></a>。用于检查转置后的拼接和内存连续性。访问日期：2026-06-21。</li>
+<li><a href="https://docs.pytorch.org/docs/stable/generated/torch.permute.html">PyTorch <code>torch.permute</code> 文档</a>与<a href="https://docs.pytorch.org/docs/stable/generated/torch.transpose.html"><code>torch.transpose</code></a>。用于确认 head 维、token 维和 key 轴的移动。访问日期：2026-06-21。</li>
+<li><a href="https://docs.pytorch.org/docs/stable/generated/torch.Tensor.masked_fill.html">PyTorch <code>Tensor.masked_fill</code> 文档</a>与<a href="https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.softmax.html"><code>torch.nn.functional.softmax</code></a>。用于确认 mask 放在 softmax 前，以及 softmax 沿 key 轴归一化。访问日期：2026-06-21。</li>
+</ul>
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

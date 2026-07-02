@@ -4,251 +4,457 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>22 错误恢复｜Claude Code 工作流</title>
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body>
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Claude Code 工作流</strong><span>22｜错误恢复</span></div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>目标与主线</a>
-      <a href="#why"><span class="dot"></span>为什么恢复</a>
-      <a href="#strategies"><span class="dot"></span>三类策略</a>
-      <a href="#loop"><span class="dot"></span>Loop改造</a>
-      <a href="#compact"><span class="dot"></span>自动压缩</a>
-      <a href="#pitfall"><span class="dot"></span>常见误区</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>整理学习答案</a>
-    </nav>
-    <div class="side-note">错误恢复的关键是分类：有的要续写，有的要压缩，有的要等待重试。</div>
-  </aside>
-  <main>
-    <header class="hero" id="goal">
-      <div>
-        <div class="kicker">Error recovery</div>
-        <h1>错误恢复</h1>
-        <p class="muted">真实 Agent 一定会遇到错误：模型输出被 max tokens 截断、上下文太长、网络抖动、API 超时、限流。如果没有恢复机制，主循环会在第一个错误处崩溃；有恢复机制后，系统会先判断错误类型，再选择继续、压缩或退避重试。</p>
-        <div class="map">
-          <span class="node">错误发生</span><span class="arrow">→</span>
-          <span class="node">分类</span><span class="arrow">→</span>
-          <span class="node">续写 / 压缩 / 重试</span><span class="arrow">→</span>
-          <span class="node">继续loop</span>
-        </div>
-        <p>学完本页，你应该能把“Agent 不稳定”拆成具体错误类型，并为每类错误设计不同恢复路径。</p>
-      </div>
-      <div class="box soft">
-        <h3>来源材料</h3>
-        <p>视频：《Learn Claude Code 源码详解》让系统更健壮：错误恢复，开发实战分享屋，2026-04-25。</p>
-        <p>重点：`max_tokens` continuation、overlong prompt auto compact、connection/rate limit backoff、retry loop、token estimate。</p>
-      </div>
-    </header>
+<body data-course="Claude Code 工作流" data-unit="22">
 
-    <section id="why">
-      <div class="head"><h2>1. 错误不一定表示任务失败</h2><span class="tag">robustness</span></div>
-      <p>一个常见误解是：Agent 失败就是模型不行。视频强调，很多失败不是任务真的失败，而是这一轮需要换一种继续方式。输出被截断时可以让模型从停止处继续；上下文太长时可以先压缩；网络或限流时可以等一会儿再试。</p>
-      <p>所以错误恢复的目标不是掩盖错误，而是把“报错就崩溃”升级为“判断错误类型，再选择恢复路径”。这也是系统鲁棒性的一部分。鲁棒性指系统遇到异常输入、临时故障或边界情况时，仍能维持可接受行为。</p>
-      <p>恢复的边界是“尽量继续正确任务”，不是“任何错误都自动吞掉”。如果错误说明权限被拒绝、工具参数不合法或目标文件确实不存在，系统应把原因反馈给模型重新规划，而不是偷偷重试同一个动作。</p>
-      <div class="grid2">
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">Claude Code 工作流</a>
+        <span class="sep">/</span>
+        <span>22</span>
+      </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Error recovery</div>
+      <div class="hero-meta">
+        <span class="hero-badge">22</span>
+      </div>
+      <h1 class="hero-title">22 错误恢复｜Claude Code 工作流</h1>
+      <p class="hero-desc">真实 Agent 一定会遇到错误：模型输出被 max tokens 截断、上下文太长、网络抖动、API 超时、限流。如果没有恢复机制，主循环会在第一个错误处崩溃；有恢复机制后，系统会先判断错误类型，再选择继续、压缩或退避重试。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../21_记忆系统/学习页.html">上一节</a>
+            <a href="../23_定时调度/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#why">1. 错误不一定表示任务失败</a>
+      <a href="#strategies">2. 三类恢复策略</a>
+      <a href="#loop">3. Loop 改造：try/catch + retry attempt</a>
+      <a href="#compact">4. 自动压缩与一个设计疑点</a>
+      <a href="#pitfall">5. 常见误区：所有错误都重试</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="why">
+        <div class="head">
+          <h2>1. 错误不一定表示任务失败</h2>
+          <span class="tag">robustness</span>
+        </div>
+<p>一个常见误解是：Agent 失败就是模型不行。视频强调，很多失败这一轮需要换一种继续方式。输出被截断时可以让模型从停止处继续；上下文太长时可以先压缩；网络或限流时可以等一会儿再试。</p>
+<p>恢复的边界是“尽量继续正确任务”，不是“任何错误都自动吞掉”。如果错误说明权限被拒绝、工具参数不合法或目标文件确实不存在，系统应把原因反馈给模型重新规划，而不是偷偷重试同一个动作。</p>
+        <div class="box">
+<h3>有恢复</h3>
+<p>识别 max_tokens、overlong prompt、连接错误、限流，并尝试继续。</p>
+        </div>
+      </section>
+      <section id="strategies">
+        <div class="head">
+          <h2>2. 三类恢复策略</h2>
+          <span class="tag">strategy</span>
+        </div>
+<p>本节代码在 Agent loop 中加入三类策略。第一类是 <code>stop_reason == max_tokens</code>，说明模型输出到一半被截断，系统追加 continuation message，让模型从停止处继续。第二类是 API error 中包含 overlong prompt，说明上下文超限，系统自动压缩历史。第三类是 connection error 或 rate limit，系统使用带随机抖动的 backoff sleep 后重试。</p>
+<p>max_tokens 续写</p>
+<p>说明会显示在这里。</p>
+<ol>
+<li>detect</li>
+<li>recover</li>
+<li>limit</li>
+<li>continue loop</li>
+</ol>
+<p>恢复策略必须有上限，否则会变成无限重试或无限续写。</p>
+<p>输出截断<code>stop_reason == "max_tokens"</code>追加 continuation message，最多恢复若干次。</p>
+<p>上下文超限API error body 包含 overlong promptauto compact 历史，返回压缩后的 continuation。</p>
+<p>网络/限流connection error 或 rate limitbackoff + jitter，等待后重试。</p>
+      </section>
+      <section id="loop">
+        <div class="head">
+          <h2>3. Loop 改造：try/catch + retry attempt</h2>
+          <span class="tag">retry</span>
+        </div>
+<p>早期 Agent loop 直接请求模型。错误恢复版在请求外包了一层 <code>try/except</code>，并用 <code>for attempt in range(max_attempts)</code> 限制重试次数。每次错误根据类型走不同分支。这样有针对性地恢复。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-loop-1">复制</button></div>
+        <pre id="code-loop-1" data-export-context="代码" data-export-lang="text"><code class="language-text">for attempt in range(max_attempts):
+ try:
+ response = client.messages.create(messages=messages)
+ break
+ except APIError as e:
+ if is_overlong_prompt(e):
+ messages = auto_compact(messages)
+ continue
+ raise
+ except (ConnectionError, RateLimitError):
+ delay = backoff_delay(attempt) + random_jitter()
+ time.sleep(delay)
+ continue</code></pre>
+<p>请求成功后，还要检查 <code>response.stop_reason</code>。如果是 <code>max_tokens</code>，说明输出到达上限。这时追加一条用户消息，要求模型从停止处继续。</p>
+        </div>
+<p>max_tokens 续写消息Python</p>
+<p>Worked example：一次失败如何选择恢复路径Decision</p>
+      </section>
+      <section id="compact">
+        <div class="head">
+          <h2>4. 自动压缩与一个设计疑点</h2>
+          <span class="tag">auto</span>
+        </div>
+<p>overlong prompt 表示请求太长。代码里的 auto compact 会把 messages 中一段 conversation text 发给模型，让模型生成 summary，再把 summary 包进 continuation message 继续执行。这个思路和前面上下文压缩一致：把完整历史压成可继续工作的摘要。</p>
         <div class="box warn">
-          <h3>无恢复</h3>
-          <p>第一次 API 错误、超时或截断就退出，用户只能重来。</p>
+<h3>有疑问的做法</h3>
+<p>压缩最早 80000 字符，可能丢掉最近任务意图或最新错误现场。</p>
         </div>
-        <div class="box ok">
-          <h3>有恢复</h3>
-          <p>识别 max_tokens、overlong prompt、连接错误、限流，并尝试继续。</p>
-        </div>
-      </div>
-    </section>
-
-    <section id="strategies">
-      <div class="head"><h2>2. 三类恢复策略</h2><span class="tag">strategy</span></div>
-      <p>本节代码在 Agent loop 中加入三类策略。第一类是 `stop_reason == max_tokens`，说明模型输出到一半被截断，系统追加 continuation message，让模型从停止处继续。第二类是 API error 中包含 overlong prompt，说明上下文超限，系统自动压缩历史。第三类是 connection error 或 rate limit，系统使用带随机抖动的 backoff sleep 后重试。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <div class="viz-actions">
-              <button data-rec="max" class="active">max_tokens</button>
-              <button data-rec="overlong">overlong prompt</button>
-              <button data-rec="network">network/rate</button>
-              <button data-rec="estimate">token estimate</button>
-            </div>
-            <div class="recovery-view" id="recText"></div>
-          </div>
-          <div class="viz-cell">
-            <h3 id="recTitle">max_tokens 续写</h3>
-            <p id="recExplain">说明会显示在这里。</p>
-            <div class="rec-step" data-rec-step="detect">1. detect</div>
-            <div class="rec-step" data-rec-step="recover">2. recover</div>
-            <div class="rec-step" data-rec-step="limit">3. limit</div>
-            <div class="rec-step" data-rec-step="continue">4. continue loop</div>
-            <div class="viz-note">恢复策略必须有上限，否则会变成无限重试或无限续写。</div>
-          </div>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>错误类型</th><th>检测方式</th><th>恢复动作</th></tr></thead>
-          <tbody>
-            <tr><td>输出截断</td><td>`stop_reason == "max_tokens"`</td><td>追加 continuation message，最多恢复若干次。</td></tr>
-            <tr><td>上下文超限</td><td>API error body 包含 overlong prompt</td><td>auto compact 历史，返回压缩后的 continuation。</td></tr>
-            <tr><td>网络/限流</td><td>connection error 或 rate limit</td><td>backoff + jitter，等待后重试。</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p>backoff 是逐步拉长等待时间，jitter 是给等待时间加少量随机抖动。两者常一起用：前者避免持续打爆服务，后者避免很多 Agent 在同一秒同时重试。</p>
-    </section>
-
-    <section id="loop">
-      <div class="head"><h2>3. Loop 改造：try/catch + retry attempt</h2><span class="tag">retry loop</span></div>
-      <p>早期 Agent loop 直接请求模型。错误恢复版在请求外包了一层 `try/except`，并用 `for attempt in range(max_attempts)` 限制重试次数。每次错误根据类型走不同分支。这样不是所有错误都走同一个“重试”，而是有针对性地恢复。</p>
-      <div class="codebar"><span class="label">伪代码：分类恢复</span><span>Python</span></div>
-      <pre><code>for attempt in range(max_attempts):
-    try:
-        response = client.messages.create(messages=messages)
-        break
-    except APIError as e:
-        if is_overlong_prompt(e):
-            messages = auto_compact(messages)
-            continue
-        raise
-    except (ConnectionError, RateLimitError):
-        delay = backoff_delay(attempt) + random_jitter()
-        time.sleep(delay)
-        continue</code></pre>
-      <p>请求成功后，还要检查 `response.stop_reason`。如果是 `max_tokens`，说明不是 API 调用失败，而是输出到达上限。这时追加一条用户消息，要求模型从停止处继续。</p>
-      <div class="codebar"><span class="label">max_tokens 续写消息</span><span>Python</span></div>
-      <pre><code>if response.stop_reason == "max_tokens":
-    max_output_recovery_count += 1
-    if max_output_recovery_count <= 3:
-        messages.append({
-            "role": "user",
-            "content": "Continue from where you stopped. Do not repeat previous content."
-        })
-        continue
-    else:
-        break</code></pre>
-      <div class="codebar"><span class="label">Worked example：一次失败如何选择恢复路径</span><span>Decision</span></div>
-      <pre><code>现象 A：response.stop_reason = "max_tokens"
-  判断：模型输出被截断，但请求成功。
-  动作：追加 continuation message，最多续写 3 次。
-
-现象 B：API error = "prompt is too long"
-  判断：上下文超过服务端限制。
-  动作：保留近期任务状态，压缩较早历史，再重发。
-
-现象 C：tool_result = "Permission denied"
-  判断：不是临时网络错误。
-  动作：把拒绝原因给模型，让它改计划或请求用户授权。</code></pre>
-    </section>
-
-    <section id="compact">
-      <div class="head"><h2>4. 自动压缩与一个设计疑点</h2><span class="tag">auto compact</span></div>
-      <p>overlong prompt 表示请求太长。代码里的 auto compact 会把 messages 中一段 conversation text 发给模型，让模型生成 summary，再把 summary 包进 continuation message 继续执行。这个思路和前面上下文压缩一致：把完整历史压成可继续工作的摘要。</p>
-      <p>字幕里也指出一个值得注意的设计疑点：代码取的是前 80000 个字符，也就是较早的历史；但很多任务恢复更关心最近消息和用户最新要求。更稳的设计通常要保留最近上下文，压缩较早历史，或者按任务状态选择压缩范围。</p>
-      <div class="grid2">
-        <div class="box warn">
-          <h3>有疑问的做法</h3>
-          <p>压缩最早 80000 字符，可能丢掉最近任务意图或最新错误现场。</p>
-        </div>
-        <div class="box ok">
-          <h3>更稳做法</h3>
-          <p>保留最近消息和任务状态，把较早历史压缩成摘要。</p>
-        </div>
-      </div>
-      <div class="codebar error"><span class="label">设计风险：压缩错范围</span><span>Context</span></div>
-      <pre><code>conversation_text = serialize(messages)[:80000]
+        <div class="box">
+<h3>更稳做法</h3>
+<p>保留最近消息和任务状态，把较早历史压缩成摘要。</p>
+<p>设计风险：压缩错范围Context</p>
+<pre><code class="language-text">conversation_text = serialize(messages)[:80000]
 
 # 风险：截取的是最早部分。
 # 恢复时可能更需要最近的用户指令、工具错误和当前任务状态。</code></pre>
-      <p>更稳的 auto compact 输入通常至少保留四类信息：用户最新目标、当前计划或待办、最近工具结果、最近错误现场。较早闲聊和已经完成的中间过程可以压成摘要，但不能压掉“现在正在做什么”。</p>
-    </section>
+<p>更稳的 auto compact 输入通常至少保留四类信息：用户最新目标、当前计划或待办、最近工具结果、最近错误现场。较早闲聊和已经完成的中间过程可以压成摘要，但不能压掉“现在正在做什么”。</p>
+        </div>
+      </section>
+      <section id="pitfall">
+        <div class="head">
+          <h2>5. 常见误区：所有错误都重试</h2>
+          <span class="tag">pitfalls</span>
+        </div>
+<p>错误恢复不是无脑重试。可恢复错误可以恢复，不可恢复错误要明确停止并反馈原因。max_tokens 适合续写；overlong prompt 适合压缩；网络抖动适合退避重试；权限拒绝、工具参数错误、文件不存在等则可能需要反馈给模型改计划，而不是 sleep 后再试。</p>
+<p>一个成熟系统还应该记录恢复次数、错误类型、延迟时间、压缩摘要和最终是否成功。这些信息对调试和信任感都很重要。</p>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">检查理解</span>
+        </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、错误恢复直觉</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 1. 错误恢复要把“报错就崩溃”升级成什么？</h3>
 
-    <section id="pitfall">
-      <div class="head"><h2>5. 常见误区：所有错误都重试</h2><span class="tag">pitfalls</span></div>
-      <p>错误恢复不是无脑重试。可恢复错误可以恢复，不可恢复错误要明确停止并反馈原因。max_tokens 适合续写；overlong prompt 适合压缩；网络抖动适合退避重试；权限拒绝、工具参数错误、文件不存在等则可能需要反馈给模型改计划，而不是 sleep 后再试。</p>
-      <div class="grid3">
-        <div class="box warn"><h3>无限重试</h3><p>没有 attempt 上限，可能卡死。</p></div>
-        <div class="box warn"><h3>错误分类粗糙</h3><p>所有错误都 sleep，不解决根因。</p></div>
-        <div class="box warn"><h3>恢复无日志</h3><p>用户不知道系统恢复过什么。</p></div>
-      </div>
-      <p>一个成熟系统还应该记录恢复次数、错误类型、延迟时间、压缩摘要和最终是否成功。这些信息对调试和信任感都很重要。</p>
-      <p>用户体验上，恢复过程应可见但不打扰：例如显示“连接错误，10 秒后第 2 次重试”或“上下文过长，正在压缩历史”。这样用户知道系统在处理问题，而不是无响应。</p>
-    </section>
 
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、错误恢复直觉</h3><p>先分清“失败”和“需要恢复”。</p></div><div class="box soft">错误不一定表示任务失败。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="1. 核心目标"><div class="q-meta"><span class="pill">短答</span></div><h3>1. 错误恢复要把“报错就崩溃”升级成什么？</h3><textarea name="q1"></textarea></div>
-          <div class="q" data-title="2. 误解纠正"><div class="q-meta"><span class="pill">解释</span></div><h3>2. 为什么 Agent 出错不一定是模型能力问题？</h3><textarea name="q2"></textarea></div>
-          <div class="q" data-title="3. 鲁棒性"><div class="q-meta"><span class="pill">定义</span></div><h3>3. 用自己的话解释系统鲁棒性。</h3><textarea name="q3"></textarea></div>
-          <div class="q" data-title="4. 恢复上限"><div class="q-meta"><span class="pill">解释</span></div><h3>4. 为什么恢复策略必须有次数上限？</h3><textarea name="q4"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>二、三类策略</h3><p>能不能按错误类型选路径。</p></div><div class="box warn">max_tokens、overlong prompt、network/rate。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="5. max_tokens"><div class="q-meta"><span class="pill">流程</span></div><h3>5. `stop_reason == max_tokens` 时，系统如何恢复？</h3><textarea name="q5"></textarea></div>
-          <div class="q" data-title="6. overlong"><div class="q-meta"><span class="pill">流程</span></div><h3>6. overlong prompt 时，系统如何恢复？</h3><textarea name="q6"></textarea></div>
-          <div class="q" data-title="7. backoff"><div class="q-meta"><span class="pill">解释</span></div><h3>7. 网络错误或限流时为什么要 backoff + jitter？</h3><textarea name="q7"></textarea></div>
-          <div class="q" data-title="8. 分类"><div class="q-meta"><span class="pill">判断</span></div><h3>8. 所有错误都适合同样的 sleep retry。</h3><label><input type="radio" name="q8" value="对">对</label><br><label><input type="radio" name="q8" value="错">错</label></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、Loop 改造</h3><p>看懂代码结构。</p></div><div class="box soft">try/catch、attempt、response、stop_reason。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="9. trycatch"><div class="q-meta"><span class="pill">解释</span></div><h3>9. 为什么模型请求外要包 try/catch？</h3><textarea name="q9"></textarea></div>
-          <div class="q" data-title="10. attempt"><div class="q-meta"><span class="pill">解释</span></div><h3>10. `for attempt in range(max_attempts)` 解决什么问题？</h3><textarea name="q10"></textarea></div>
-          <div class="q" data-title="11. stopreason"><div class="q-meta"><span class="pill">比较</span></div><h3>11. API error 和 `response.stop_reason` 有什么区别？</h3><textarea name="q11"></textarea></div>
-          <div class="q" data-title="12. token估算"><div class="q-meta"><span class="pill">短答</span></div><h3>12. 为什么代码会粗略用字符数 / 4 估算 token？这种方法有什么局限？</h3><textarea name="q12"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、设计迁移</h3><p>为自己的 Agent 设计恢复机制。</p></div><div class="box soft">分类、上限、日志、恢复后继续。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="13. 压缩范围"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. auto compact 只取最早 80000 字符有什么风险？你会怎么改？</h3><textarea name="q13"></textarea></div>
-          <div class="q" data-title="14. 不可恢复"><div class="q-meta"><span class="pill">边界</span></div><h3>14. 举两个不适合简单重试的错误，并说明应该怎么反馈。</h3><textarea name="q14"></textarea></div>
-          <div class="q" data-title="15. 日志设计"><div class="q-meta"><span class="pill">设计</span></div><h3>15. 错误恢复日志应该记录哪些字段？</h3><textarea name="q15"></textarea></div>
-          <div class="q" data-title="16. 用户体验"><div class="q-meta"><span class="pill">设计</span></div><h3>16. 如何让用户知道系统正在恢复，而不是卡住？</h3><textarea name="q16"></textarea></div>
-          <div class="q full" data-title="17. 面试表达"><div class="q-meta"><span class="pill">表达</span></div><h3>17. 用 3-5 句话解释错误恢复在 Agent Harness 中的价值。</h3><textarea name="q17"></textarea></div>
-          <div class="q full" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：错误恢复如何让 Agent 更健壮。</h3><div class="solve-note">请串联 max_tokens、continuation、overlong prompt、auto compact、connection error、rate limit、backoff、retry limit。</div><textarea name="q18"></textarea></div>
-        </div>
-      </div>
-    </section>
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 2. 为什么 Agent 出错不一定是模型能力问题？</h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">定义</span></div>
+        <h3><b>Q:</b> 3. 用自己的话解释系统鲁棒性。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 4. 为什么恢复策略必须有次数上限？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、三类策略</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">流程</span></div>
+        <h3><b>Q:</b> 5. <code>stop_reason == max_tokens</code> 时，系统如何恢复？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">流程</span></div>
+        <h3><b>Q:</b> 6. overlong prompt 时，系统如何恢复？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 7. 网络错误或限流时为什么要 backoff + jitter？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 8. 所有错误都适合同样的 sleep retry。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、Loop 改造</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 9. 为什么模型请求外要包 try/catch？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 10. <code>for attempt in range(max_attempts)</code> 解决什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">比较</span></div>
+        <h3><b>Q:</b> 11. API error 和 <code>response.stop_reason</code> 有什么区别？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 12. 为什么代码会粗略用字符数 / 4 估算 token？这种方法有什么局限？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、设计迁移</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 13. auto compact 只取最早 80000 字符有什么风险？你会怎么改？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">边界</span></div>
+        <h3><b>Q:</b> 14. 举两个不适合简单重试的错误，并说明应该怎么反馈。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b> 15. 错误恢复日志应该记录哪些字段？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b> 16. 如何让用户知道系统正在恢复，而不是卡住？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">表达</span></div>
+        <h3><b>Q:</b> 17. 用 3-5 句话解释错误恢复在 Agent Harness 中的价值。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 18. 用 6-9 句话讲清楚：错误恢复如何让 Agent 更健壮。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>整理学习答案</h2><span class="tag">学习输出</span></div>
-      <p class="muted">完成练习后生成 Markdown 学习笔记，便于保存和继续学习。</p>
-      <div class="actions"><button onclick="generateRecord()">生成学习笔记</button><button class="ghost" onclick="copyRecord()">复制内容</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">学习笔记会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-const recStates={
-  max:["max_tokens 续写","detect:\nresponse.stop_reason == 'max_tokens'\n\nrecover:\nmax_output_recovery_count += 1\nmessages.append({role:'user', content:'Continue from where you stopped...'})\n\nlimit:\nif count > 3: stop\n\ncontinue loop","输出被截断，不代表任务失败。给模型一条续写消息，让它从停止处继续。",["detect","recover","limit","continue"]],
-  overlong:["overlong prompt 压缩","detect:\nAPIError body contains 'overlong prompt'\n\nrecover:\nauto_compact(messages)\nsummary = model.summarize(conversation_text)\nmessages = [continuation with summary]\n\ncontinue loop","上下文太长时，先压缩历史，再继续请求。",["detect","recover","continue"]],
-  network:["network/rate 退避","detect:\nConnectionError or RateLimitError\n\nrecover:\ndelay = min(base * 2**attempt, 30) + jitter(0..1)\ntime.sleep(delay)\n\nlimit:\nattempt < max_attempts","网络抖动和限流通常是临时问题，等待后重试比立即连续打 API 更稳。",["detect","recover","limit","continue"]],
-  estimate:["token estimate","after each turn:\nestimated_tokens = character_count(messages) / 4\nif estimated_tokens > threshold:\n  consider compact\n\n注意：这是粗略估算，不等于真实 tokenizer。","客户端估算 token 可提前触发压缩，但字符数/4 只是近似。",["detect","recover"]]
-};
-function renderRec(name){const d=recStates[name]||recStates.max;document.querySelectorAll("[data-rec]").forEach(b=>b.classList.toggle("active",b.dataset.rec===name));document.querySelectorAll("[data-rec-step]").forEach(s=>s.classList.toggle("active",d[3].includes(s.dataset.recStep)));document.getElementById("recTitle").textContent=d[0];document.getElementById("recText").textContent=d[1];document.getElementById("recExplain").textContent=d[2]}
-document.querySelectorAll("[data-rec]").forEach(btn=>btn.addEventListener("click",()=>renderRec(btn.dataset.rec)));renderRec("max");
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
-const questions=[
-  ["恢复直觉","1. 错误恢复核心目标。","q1","text"],["恢复直觉","2. 出错不一定是模型问题。","q2","text"],["恢复直觉","3. 鲁棒性定义。","q3","text"],["恢复直觉","4. 恢复上限。","q4","text"],["三类策略","5. max_tokens 恢复。","q5","text"],["三类策略","6. overlong prompt 恢复。","q6","text"],["三类策略","7. backoff + jitter。","q7","text"],["三类策略","8. 是否所有错误同样 sleep retry。","q8","radio"],["Loop改造","9. try/catch 作用。","q9","text"],["Loop改造","10. attempt 作用。","q10","text"],["Loop改造","11. API error 和 stop_reason 区别。","q11","text"],["Loop改造","12. token 估算局限。","q12","text"],["设计迁移","13. 压缩范围风险。","q13","text"],["设计迁移","14. 不适合简单重试的错误。","q14","text"],["设计迁移","15. 恢复日志字段。","q15","text"],["设计迁移","16. 用户体验。","q16","text"],["设计迁移","17. Harness 价值。","q17","text"],["费曼解释","18. 错误恢复费曼解释。","q18","text"]
-];
-function val(q){if(q[3]==="radio"){const el=document.querySelector(`input[name="${q[2]}"]:checked`);return el?el.value:""}const el=document.querySelector(`[name="${q[2]}"]`);return el?el.value.trim():""}
-function generateRecord(){const groups={};const missing=[];questions.forEach(q=>{const v=val(q);if(!v)missing.push(q[1]);if(!groups[q[0]])groups[q[0]]=[];groups[q[0]].push({t:q[1],a:v||"（未填写）"})});let out="# 22 错误恢复｜学习笔记\n\n";Object.keys(groups).forEach(g=>{out+=`## ${g}\n\n`;groups[g].forEach(item=>{out+=`### ${item.t}\n${item.a}\n\n`})});document.getElementById("record").textContent=out;const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=val(["","","q18","text"]);const keys=["max_tokens","continuation","overlong","compact","backoff","重试"];const lack=keys.filter(k=>!f.includes(k));if(f&&f.length<120)warnings.push("费曼解释偏短，建议讲成 6-9 句话。");if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join("、")}。`);const q=document.getElementById("quality");q.style.display="block";q.textContent=warnings.length?warnings.join("\n"):"学习笔记已生成，便于保存和继续学习。"}
-function copyRecord(){navigator.clipboard.writeText(document.getElementById("record").textContent).catch(()=>alert("复制失败，请手动复制。"))}
-</script>
-<script src="../assets/study-page.js"></script>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

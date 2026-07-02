@@ -4,433 +4,585 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P20｜GAN 评估与条件式生成</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="GAN evaluation,mode collapse,mode dropping,Inception Score,FID,conditional generation,conditional GAN,text to image,image translation,paired data,mismatched negative">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>GAN 评估与条件式生成</strong><span>P20。训练 GAN 难，评价 GAN 也难；conditional GAN 还必须让图片和条件对得上。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#training"><span class="dot"></span>训练难点</a>
-      <a href="#sequence"><span class="dot"></span>文字生成</a>
-      <a href="#quality"><span class="dot"></span>质量与多样性</a>
-      <a href="#fid"><span class="dot"></span>IS 与 FID</a>
-      <a href="#limits"><span class="dot"></span>评估边界</a>
-      <a href="#conditional"><span class="dot"></span>条件式生成</a>
-      <a href="#image2image"><span class="dot"></span>Image translation</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#terms"><span class="dot"></span>术语与检查</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：generator 做得好，不只要单张图片清楚，还要整体分布够多样；conditional generator 还要听懂条件。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P20</div>
-        <h1>怎么评估 Generator，又怎么让它听条件</h1>
-        <p>前两节已经知道 GAN 的基本训练与 WGAN 的理论动机。P20 先提醒一个现实：GAN 仍然很难训练，因为 generator 和 discriminator 必须互相推进。任何一方停下来，另一方也容易失去有效训练信号。更麻烦的是，generator 好不好也不容易评价。</p>
-        <p>这节分两条主线。第一条是评估：单张图片质量、整体多样性、mode collapse、mode dropping、Inception Score 和 FID。第二条是 conditional generation：把条件 <code>x</code> 加回来，让模型不仅产生清楚图片，还要产生“符合文字、图像或声音条件”的结果。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释为什么 GAN 训练需要 G 和 D 棋逢对手。</li>
-          <li>区分 quality、diversity、mode collapse、mode dropping。</li>
-          <li>说明 Inception Score 和 FID 各自大致量什么。</li>
-          <li>解释 conditional GAN 的 D 为什么必须同时看 <code>x</code> 与 <code>y</code>。</li>
-          <li>说清 image-to-image 中 GAN loss 与监督 loss 为什么常一起用。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">map</span></div>
-      <p>P20 的第一部分是训练与评估现实。GAN 的两个网络不是独立训练：D 太弱，G 得不到好反馈；G 不进步，D 也没有新挑战。即使用 WGAN、spectral normalization 等技巧，GAN 仍然以难训练出名。</p>
-      <p>第二部分是评价 generator。人眼看图直观但不客观；分类器置信度可以衡量单张图片清楚不清楚；平均分类分布可以粗略看多样性；FID 则把真实图片和生成图片送进预训练网络，比较中间特征分布距离。每种指标都有边界。</p>
-      <p>第三部分是 conditional generation。以前的 G 只看 <code>z</code>，现在 G 看 <code>x</code> 和 <code>z</code>。如果 D 只看输出图片，G 可以无视条件；所以 D 也必须同时看条件和输出，并把“图像清楚但条件不匹配”的样本当作负例。</p>
-      <div class="map">
-        <span class="node">GAN still hard</span><span class="arrow">→</span>
-        <span class="node">quality</span><span class="arrow">+</span>
-        <span class="node">diversity</span><span class="arrow">→</span>
-        <span class="node">IS / FID</span><span class="arrow">→</span>
-        <span class="node">conditional G(x,z)</span><span class="arrow">→</span>
-        <span class="node">D(x,y)</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P20</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把 P20 看成“生成模型的验收标准”和“有条件控制生成”的连接，而不是新的 GAN 理论推导。</p></div>
-    </section>
-
-    <section id="training">
-      <div class="head"><h2>为什么 GAN 仍然难训练</h2><span class="tag">training</span></div>
-      <p>GAN 的困难来自双网络互动。Discriminator 要分辨真实图片和生成图片，generator 要产生能骗过 discriminator 的图片。听起来像竞赛，但更准确地说，它们互相提供成长压力。只要其中一方在某个阶段训练不好，另一方就会失去合适目标。</p>
-      <p>普通 network 训练时，我们可以看训练 loss 是否下降，再调学习率、batch size、架构。GAN 中每个小阶段都在变化：D 的任务随着 G 的变化而变化，G 的训练信号又取决于 D 的状态。你无法保证每一次 D 或 G 的更新都刚好稳定有效。</p>
-      <p>Spectral normalization、WGAN、gradient penalty 等方法能缓解问题，但不代表 GAN 从此容易训练。网络架构、学习率、batch size、regularization、更新次数比例都可能影响结果。课程中特别提醒：GAN 是重要技术，也是真实会踩坑的技术。</p>
-      <div class="grid3">
-        <div class="box warn"><h3>D 太弱</h3><p>分不出 real/fake，G 不知道该往哪里改。</p></div>
-        <div class="box warn"><h3>G 停住</h3><p>总生成类似东西，D 没有新挑战，训练容易僵住。</p></div>
-        <div class="box soft"><h3>棋逢对手</h3><p>两者都能持续进步，训练才可能向好结果推进。</p></div>
+      <h1 class="hero-title">P20｜GAN 评估与条件式生成</h1>
+      <p class="hero-desc">前两节已经知道 GAN 的基本训练与 WGAN 的理论动机。P20 先提醒一个现实：GAN 仍然很难训练，因为 generator 和 discriminator 必须互相推进。任何一方停下来，另一方也容易失去有效训练信号。更麻烦的是，generator 好不好也不容易评价。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P19_GAN理论介绍与WGAN/学习页.html">上一节</a>
+            <a href="../P21_Cycle_GAN/学习页.html">下一节</a>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>看到 GAN 崩掉时，能从 G/D 互动角度排查，而不是只盯单个 loss。</p></div>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="sequence">
-      <div class="head"><h2>为什么用 GAN 生成文字特别难</h2><span class="tag">sequence</span></div>
-      <p>图片输出是连续向量，像素值稍微变化，discriminator 的分数也能有可微变化。文字不同。文本生成通常要在每一步从 token 分布里选一个 token。Token 可以是中文字、英文词、subword 或其他单位；关键是最后会做离散选择。</p>
-      <p>如果 decoder 参数只发生很小变化，输出分布可能稍微变了，但最大概率 token 没变。对 discriminator 来说，输入句子完全一样，输出分数也完全一样。这样 generator 参数的小变化无法通过 discriminator 分数形成有效梯度。</p>
-      <p>可以把文本生成当 reinforcement learning 来做，因为离散动作也能用奖励信号训练。但 RL 本身难训练，GAN 也难训练，两者叠加更困难。课程提到曾经有从零训练 language GAN 的论文，但需要大量技巧、很大的 batch size、regularization、pretrain embedding 等工程条件。</p>
-      <div class="codebar"><span class="label">错误示例：忽略离散 token 的梯度断点</span><span class="kind">pseudo</span></div>
-      <pre><code><span class="cmt"># 错误直觉：D 给句子一个分数，G 就能像图片一样直接反传。</span>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#training">为什么 GAN 仍然难训练</a>
+      <a href="#sequence">为什么用 GAN 生成文字特别难</a>
+      <a href="#section-quality">质量与多样性：评价 generator 不能只看单张图</a>
+      <a href="#fid">Inception Score 与 FID：常见但不完美的指标</a>
+      <a href="#limits">评估的边界：复制训练资料也可能拿高分</a>
+      <a href="#conditional">Conditional Generation：把条件 x 加回来</a>
+      <a href="#image2image">Image Translation：从一张图生成另一张图</a>
+      <a href="#code">最小代码：conditional D 的三类样本</a>
+      <a href="#mistakes">常见误区与修正</a>
+      <a href="#terms">术语与检查：评价不只看单张图</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">map</span>
+        </div>
+<p>P20 的第一部分是训练与评估现实。GAN 的两个网络不是独立训练：D 太弱，G 得不到好反馈；G 不进步，D 也没有新挑战。即使用 WGAN、spectral normalization 等技巧，GAN 仍然以难训练出名。</p>
+<p>第三部分是 conditional generation。以前的 G 只看 <code>z</code>，现在 G 看 <code>x</code> 和 <code>z</code>。如果 D 只看输出图片，G 可以无视条件；所以 D 也必须同时看条件和输出，并把“图像清楚但条件不匹配”的样本当作负例。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>把 P20 看成“生成模型的验收标准”和“有条件控制生成”的连接，而不是新的 GAN 理论推导。</p>
+        </div>
+      </section>
+      <section id="training">
+        <div class="head">
+          <h2>为什么 GAN 仍然难训练</h2>
+          <span class="tag">training</span>
+        </div>
+<p>GAN 的困难来自双网络互动。Discriminator 要分辨真实图片和生成图片，generator 要产生能骗过 discriminator 的图片。听起来像竞赛，但更准确地说，它们互相提供成长压力。只要其中一方在某个阶段训练不好，另一方就会失去合适目标。</p>
+<p>Spectral normalization、WGAN、gradient penalty 等方法能缓解问题，但不代表 GAN 从此容易训练。网络架构、学习率、batch size、regularization、更新次数比例都可能影响结果。课程中特别提醒：GAN 是重要技术，也是真实会踩坑的技术。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>看到 GAN 崩掉时，能从 G/D 互动角度排查，而不是只盯单个 loss。</p>
+        </div>
+      </section>
+      <section id="sequence">
+        <div class="head">
+          <h2>为什么用 GAN 生成文字特别难</h2>
+          <span class="tag">sequence</span>
+        </div>
+<p>图片输出是连续向量，像素值稍微变化，discriminator 的分数也能有可微变化。文字不同。文本生成通常要在每一步从 token 分布里选一个 token。Token 可以是中文字、英文词、subword 或其他单位；关键是最后会做离散选择。</p>
+<p>可以把文本生成当 reinforcement learning 来做，因为离散动作也能用奖励信号训练。但 RL 本身难训练，GAN 也难训练，两者叠加更困难。课程提到曾经有从零训练 language GAN 的论文，但需要大量技巧、很大的 batch size、regularization、pretrain embedding 等工程条件。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-sequence-1">复制</button></div>
+        <pre id="code-sequence-1" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误直觉：D 给句子一个分数，G 就能像图片一样直接反传。
 probs = decoder(prefix)
-token = argmax(probs)     <span class="cmt"># 离散选择，微小参数变化常不改变 token</span>
+token = argmax(probs) # 离散选择，微小参数变化常不改变 token
 score = discriminator(token)
 backprop(score)</code></pre>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么 argmax / sampling 的离散 token 会让 GAN 生成文字比生成图片更难。</p></div>
-    </section>
-
-    <section id="quality">
-      <div class="head"><h2>质量与多样性：评价 generator 不能只看单张图</h2><span class="tag">evaluation</span></div>
-      <p>最直觉的评价方法是让人看图：像不像真实图片？这很有用，但不稳定、不客观，也难以大规模比较。于是人们借助预训练 image classifier。把一张生成图片丢进去，如果分类分布很集中，说明 classifier 很确定它看到了某个对象，这可以当作单张图片 quality 的信号。</p>
-      <p>但只看单张 quality 会被 mode collapse 骗过。Mode collapse 是 generator 来来去去只会产生少数几种样本；单张看可能不错，但多生成几张就发现都差不多。Mode dropping 更隐蔽：生成结果有一定多样性，但只覆盖真实分布的一部分，例如人脸生成只覆盖某些肤色或某些角度。</p>
-      <p>多样性可以也用 classifier 粗略估计：让 generator 产生很多图，把每张图的分类分布平均起来。如果平均分布很平坦，说明图片覆盖较多类别；如果平均分布集中在一类，可能多样性不足。注意 quality 看单张的分布是否集中，diversity 看许多图片平均后的分布是否分散。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：quality 与 diversity 的拉扯</h3>
-            <select id="evalMode">
-              <option value="good">质量高且多样</option>
-              <option value="collapse">mode collapse</option>
-              <option value="bad">质量差但分散</option>
-              <option value="drop">mode dropping</option>
-            </select>
-            <div class="sample-grid" id="sampleGrid"></div>
-            <div class="barrow"><span>单张质量</span><div class="bar"><div class="fill blue" id="qualityBar"></div></div><strong id="qualityScore">0.80</strong></div>
-            <div class="barrow"><span>整体多样性</span><div class="bar"><div class="fill" id="divBar"></div></div><strong id="divScore">0.80</strong></div>
-          </div>
-          <div class="viz-note">
-            <h3 id="evalTitle">质量高且多样</h3>
-            <p id="evalText">单张图片清楚，许多样本又覆盖多种类别，这是比较理想的情况。</p>
-          </div>
         </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>判断一个 generator 的问题是“单张不像”、 “一直重复”还是“漏掉真实分布的一部分”。</p></div>
-    </section>
-
-    <section id="fid">
-      <div class="head"><h2>Inception Score 与 FID：常见但不完美的指标</h2><span class="tag">IS / FID</span></div>
-      <p>Inception Score 使用预训练 Inception network。它希望每张图片的分类分布集中，代表 quality 高；同时希望很多图片的平均类别分布分散，代表 diversity 大。两者结合成一个分数。但 IS 对任务依赖很强。二次元头像即使有不同发色、眼睛、表情，对 ImageNet 分类器来说可能都只是“人脸”或类似类别，多样性就被低估。</p>
-      <p>FID 的做法不同。它不拿最后类别，而是取 Inception network 进入 softmax 前的 hidden feature，把每张图片表示成一个向量。真实图片形成一组 feature，生成图片形成另一组 feature。再假设两组 feature 近似高斯分布，计算它们的 Fréchet distance。FID 是距离，所以越小越好。</p>
-      <p>FID 更常用，但也有假设与成本。它假设 feature 分布近似高斯，真实未必如此；还需要足够多样本才能估计稳定。课程作业中不会只看 FID，还会看动画人脸侦测数量，因为单个指标可能给出偏差结论。</p>
-      <table class="metric-table">
-        <thead><tr><th>指标</th><th>看什么</th><th>方向</th><th>常见问题</th></tr></thead>
-        <tbody>
-          <tr><td>人眼</td><td>图片是否看起来真实</td><td>主观判断</td><td>不客观、不稳定。</td></tr>
-          <tr><td>Inception Score</td><td>单张分类集中 + 多张类别分散</td><td>越大越好</td><td>依赖分类器类别，不适合所有任务。</td></tr>
-          <tr><td>FID</td><td>真实与生成图片的 feature 分布距离</td><td>越小越好</td><td>高斯假设、需要大量样本。</td></tr>
-          <tr><td>任务专属指标</td><td>例如人脸侦测数量</td><td>看设计</td><td>只覆盖任务的一部分。</td></tr>
-        </tbody>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说明为什么 FID 常用但不是万能指标，并能解释它大致比较的是 feature 分布。</p></div>
-    </section>
-
-    <section id="limits">
-      <div class="head"><h2>评估的边界：复制训练资料也可能拿高分</h2><span class="tag">limits</span></div>
-      <p>假设 generator 产生的图片和训练资料一模一样。FID 可能很低，人脸侦测也可能很高，但这不是我们真正想要的 generator。因为训练资料已经在手上，直接抽训练图就行；生成模型的价值在于产生新的、合理的样本。</p>
-      <p>你可能说，那就把生成图片和训练图片做相似度比对。但这也不够。Generator 可以学会把训练图片全部左右翻转、轻微裁剪或改颜色。它看起来生成了新图，但本质上仍然可能只是记忆训练资料的简单变换。</p>
-      <p>所以 generator evaluation 本身就是研究题目。好指标要同时考虑质量、多样性、覆盖率、新颖性、是否复制训练集、是否符合条件和任务需求。课程里不要求你掌握所有指标，但要知道：一个数字好看不等于模型真的好。</p>
-      <div class="grid2">
-        <div class="box warn"><h3>低 FID 不保证新颖</h3><p>如果模型复制训练集，分布距离可以很小，但生成价值很低。</p></div>
-        <div class="box info"><h3>相似度检查也不完美</h3><p>翻转、裁剪、风格变化都可能绕过简单相似度。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>评价生成模型时，主动问“它是否只是复制训练资料”这个问题。</p></div>
-    </section>
-
-    <section id="conditional">
-      <div class="head"><h2>Conditional Generation：把条件 x 加回来</h2><span class="tag">conditional GAN</span></div>
-      <p>到目前为止，generator 只看随机向量 <code>z</code>。这叫 unconditional generation：你无法明确控制它输出红眼睛、蓝头发还是某种姿势。Conditional generation 加入条件 <code>x</code>，让 generator 接收 <code>x</code> 和 <code>z</code>，输出符合条件但仍有多样性的 <code>y</code>。</p>
-      <p>Text-to-image 是典型例子。<code>x</code> 是文字描述，例如 “red eyes, blue hair”；<code>z</code> 决定同一描述下的随机变化；<code>y</code> 是图片。文字可以用 RNN、Transformer encoder 或其他编码器变成向量，再送入 generator。训练通常需要 paired data，也就是图片和文字描述成对出现。</p>
-      <p>关键在 discriminator。若 D 只看图片 <code>y</code>，G 只要生成清楚图片就能骗过 D，完全可以无视文字。Conditional GAN 的 D 必须同时看 <code>x</code> 和 <code>y</code>，判断两件事：图片本身是否真实，图片与条件是否匹配。训练时还要加入 mismatch negative：真实图片配错误文字，也要判为不好。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：D 是否检查条件匹配</h3>
-            <select id="condMode">
-              <option value="full">D 看 x 和 y，并加入错配负例</option>
-              <option value="imageonly">D 只看 y</option>
-              <option value="nomismatch">D 看 x 和 y，但没有错配负例</option>
-            </select>
-            <div class="pair-grid" id="pairGrid"></div>
-          </div>
-          <div class="viz-note">
-            <h3 id="condTitle">完整 conditional D</h3>
-            <p id="condText">D 不只检查图片清楚，也检查文字和图片是否配得上。真实错配样本能逼 D 学会“条件一致性”。</p>
-          </div>
+      </section>
+      <section id="section-quality">
+        <div class="head">
+          <h2>质量与多样性：评价 generator 不能只看单张图</h2>
+          <span class="tag">evaluation</span>
         </div>
-      </div>
-      <div class="formula">
-        Unconditional: y = G(z)<br>
-        Conditional: y = G(x, z), and D sees (x, y)
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么 conditional GAN 不能只让 discriminator 看输出图片。</p></div>
-    </section>
+<p>最直觉的评价方法是让人看图：像不像真实图片？这很有用，但不稳定、不客观，也难以大规模比较。于是人们借助预训练 image classifier。把一张生成图片丢进去，如果分类分布很集中，说明 classifier 很确定它看到了某个对象，这可以当作单张图片 quality 的信号。</p>
+<p>多样性可以也用 classifier 粗略估计：让 generator 产生很多图，把每张图的分类分布平均起来。如果平均分布很平坦，说明图片覆盖较多类别；如果平均分布集中在一类，可能多样性不足。注意 quality 看单张的分布是否集中，diversity 看许多图片平均后的分布是否分散。</p>
+<p>质量高且多样</p>
+<p>mode collapse</p>
+<p>质量差但分散</p>
+<p>mode dropping</p>
+<p>质量高且多样</p>
+<p>单张图片清楚，许多样本又覆盖多种类别，这是比较理想的情况。</p>
+      </section>
+      <section id="fid">
+        <div class="head">
+          <h2>Inception Score 与 FID：常见但不完美的指标</h2>
+          <span class="tag">IS</span>
+        </div>
+<p>Inception Score 使用预训练 Inception network。它希望每张图片的分类分布集中，代表 quality 高；同时希望很多图片的平均类别分布分散，代表 diversity 大。两者结合成一个分数。但 IS 对任务依赖很强。二次元头像即使有不同发色、眼睛、表情，对 ImageNet 分类器来说可能都只是“人脸”或类似类别，多样性就被低估。</p>
+<p>FID 更常用，但也有假设与成本。它假设 feature 分布近似高斯，真实未必如此；还需要足够多样本才能估计稳定。课程作业中不会只看 FID，还会看动画人脸侦测数量，因为单个指标可能给出偏差结论。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>说明为什么 FID 常用但不是万能指标，并能解释它大致比较的是 feature 分布。</p>
+        </div>
+      </section>
+      <section id="limits">
+        <div class="head">
+          <h2>评估的边界：复制训练资料也可能拿高分</h2>
+          <span class="tag">limits</span>
+        </div>
+<p>假设 generator 产生的图片和训练资料一模一样。FID 可能很低，人脸侦测也可能很高，但这不是我们真正想要的 generator。因为训练资料已经在手上，直接抽训练图就行；生成模型的价值在于产生新的、合理的样本。</p>
+<p>所以 generator evaluation 本身就是研究题目。好指标要同时考虑质量、多样性、覆盖率、新颖性、是否复制训练集、是否符合条件和任务需求。课程里不要求你掌握所有指标，但要知道：一个数字好看不等于模型真的好。</p>
+        <div class="box info">
+<h3>相似度检查也不完美</h3>
+<p>翻转、裁剪、风格变化都可能绕过简单相似度。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>评价生成模型时，主动问“它是否只是复制训练资料”这个问题。</p>
+        </div>
+      </section>
+      <section id="conditional">
+        <div class="head">
+          <h2>Conditional Generation：把条件 x 加回来</h2>
+          <span class="tag">conditional</span>
+        </div>
+<p>到目前为止，generator 只看随机向量 <code>z</code>。这叫 unconditional generation：你无法明确控制它输出红眼睛、蓝头发还是某种姿势。Conditional generation 加入条件 <code>x</code>，让 generator 接收 <code>x</code> 和 <code>z</code>，输出符合条件但仍有多样性的 <code>y</code>。</p>
+<p>关键在 discriminator。若 D 只看图片 <code>y</code>，G 只要生成清楚图片就能骗过 D，完全可以无视文字。Conditional GAN 的 D 必须同时看 <code>x</code> 和 <code>y</code>，判断两件事：图片本身是否真实，图片与条件是否匹配。训练时还要加入 mismatch negative：真实图片配错误文字，也要判为不好。</p>
+<p>D 看 x 和 y，并加入错配负例</p>
+<p>D 只看 y</p>
+<p>D 看 x 和 y，但没有错配负例</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+Unconditional: y = G(z)
+ Conditional: y = G(x, z), and D sees (x, y)
+$$
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释为什么 conditional GAN 不能只让 discriminator 看输出图片。</p>
+        </div>
+      </section>
+      <section id="image2image">
+        <div class="head">
+          <h2>Image Translation：从一张图生成另一张图</h2>
+          <span class="tag">pix2pix</span>
+        </div>
+<p>Conditional GAN 不只适用于文字到图片，也可以做 image-to-image translation。输入可以是房屋设计图、黑白照片、素描、白天街景、有雾图片；输出可以是真实房屋、彩色照片、实景图、夜晚街景、去雾结果。这类任务常叫 pix2pix。</p>
+<p>但只用 GAN 也会有问题：generator 可能想象力过度丰富，在输入没有的地方添东西。文献中常把 supervised loss 和 GAN loss 一起用。监督 loss 让输出贴近成对标准答案，GAN loss 让输出更清晰、更像真实图像分布。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释 pix2pix 为什么常同时使用重建损失和对抗损失。</p>
+        </div>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：conditional D 的三类样本</h2>
+          <span class="tag">minimal</span>
+        </div>
+<p>下面伪代码展示 conditional GAN 的训练重点：D 要看条件和输出，而且要见过“真实但错配”的负例。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">def train_conditional_discriminator(G, D, x, real_y):
+ z = sample_noise(len(x))
+ fake_y = G(x, z).detach()
+ wrong_y = shuffle(real_y) # real image, wrong condition pair
 
-    <section id="image2image">
-      <div class="head"><h2>Image Translation：从一张图生成另一张图</h2><span class="tag">pix2pix</span></div>
-      <p>Conditional GAN 不只适用于文字到图片，也可以做 image-to-image translation。输入可以是房屋设计图、黑白照片、素描、白天街景、有雾图片；输出可以是真实房屋、彩色照片、实景图、夜晚街景、去雾结果。这类任务常叫 pix2pix。</p>
-      <p>为什么不用普通 supervised learning 就好？因为同一个输入可能有多种合理输出。例如素描转实景，不同材质、光照、颜色都可能合理。只用像素级监督 loss，模型容易把多种可能平均，结果模糊。GAN loss 能鼓励输出看起来像真实图片。</p>
-      <p>但只用 GAN 也会有问题：generator 可能想象力过度丰富，在输入没有的地方添东西。文献中常把 supervised loss 和 GAN loss 一起用。监督 loss 让输出贴近成对标准答案，GAN loss 让输出更清晰、更像真实图像分布。</p>
-      <div class="grid3">
-        <div class="box warn"><h3>只用监督 loss</h3><p>容易平均多种可能，输出模糊。</p></div>
-        <div class="box warn"><h3>只用 GAN loss</h3><p>可能清楚但乱加输入没有的内容。</p></div>
-        <div class="box soft"><h3>两者结合</h3><p>既保持条件对应，又提升真实感。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释 pix2pix 为什么常同时使用重建损失和对抗损失。</p></div>
-    </section>
+ score_real = D(x, real_y) # matched real pair -&gt; 1
+ score_fake = D(x, fake_y) # generated image -&gt; 0
+ score_wrong = D(x, wrong_y) # mismatched real pair -&gt; 0
 
-    <section id="code">
-      <div class="head"><h2>最小代码：conditional D 的三类样本</h2><span class="tag">minimal code</span></div>
-      <p>下面伪代码展示 conditional GAN 的训练重点：D 要看条件和输出，而且要见过“真实但错配”的负例。</p>
-      <div class="codebar"><span class="label">正确示例：conditional discriminator</span><span class="kind">pseudo python</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">train_conditional_discriminator</span>(G, D, x, real_y):
-    z = sample_noise(len(x))
-    fake_y = G(x, z).detach()
-    wrong_y = shuffle(real_y)       <span class="cmt"># real image, wrong condition pair</span>
-
-    score_real = D(x, real_y)       <span class="cmt"># matched real pair -> 1</span>
-    score_fake = D(x, fake_y)       <span class="cmt"># generated image -> 0</span>
-    score_wrong = D(x, wrong_y)     <span class="cmt"># mismatched real pair -> 0</span>
-
-    loss_D = BCE(score_real, 1) + BCE(score_fake, 0) + BCE(score_wrong, 0)
-    update(D, loss_D)</code></pre>
-      <div class="codebar error"><span class="label">错误示例：D 只看图片</span><span class="kind">pseudo</span></div>
-      <pre><code><span class="cmt"># 错误：D 不看文字条件 x。</span>
+ loss_D = BCE(score_real, 1) + BCE(score_fake, 0) + BCE(score_wrong, 0)
+ update(D, loss_D)</code></pre>
+<p>错误示例：D 只看图片pseudo</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误：D 不看文字条件 x。
 score = D(y)
 
-<span class="cmt"># 后果：G 只要生成清楚图片即可，可能完全无视 red eyes / blue hair 等条件。</span></code></pre>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>检查 conditional GAN 训练资料中是否包含 matched real、generated fake、mismatched real 三类样本。</p></div>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区与修正</h2><span class="tag">pitfalls</span></div>
+# 后果：G 只要生成清楚图片即可，可能完全无视 red eyes / blue hair 等条件。</code></pre>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与修正</h2>
+          <span class="tag">pitfalls</span>
+        </div>
       <div class="grid2">
-        <div class="box redsoft"><h3>误区 1：GAN 有 WGAN 后就容易训练</h3><p>错因：把技巧当万能药。后果：忽略 G/D 互动失衡。修法：仍要调架构、学习率、正则化和更新比例。</p></div>
-        <div class="box redsoft"><h3>误区 2：单张图好看就代表 generator 好</h3><p>错因：只看 quality。后果：mode collapse 可能被漏掉。修法：同时看多样性和覆盖率。</p></div>
-        <div class="box redsoft"><h3>误区 3：IS/FID 是绝对真理</h3><p>错因：忘记指标假设。后果：在二次元、人脸等任务上误读分数。修法：结合任务专属指标与人工检查。</p></div>
-        <div class="box redsoft"><h3>误区 4：低 FID 一定代表模型有创造力</h3><p>错因：忽略复制训练集。后果：模型可能只是记忆资料。修法：检查新颖性和与训练资料的关系。</p></div>
-        <div class="box redsoft"><h3>误区 5：conditional GAN 的 D 只需看 y</h3><p>错因：把条件当作 G 的内部事。后果：G 可能无视条件。修法：D 同时看 <code>x,y</code> 并训练错配负例。</p></div>
-        <div class="box redsoft"><h3>误区 6：image-to-image 只用 GAN loss 就好</h3><p>错因：只追求真实感。后果：输出可能乱加内容。修法：常结合监督重建 loss 和对抗 loss。</p></div>
+        <div class="box redsoft">
+<h3>误区 1：GAN 有 WGAN 后就容易训练</h3>
+<p>错因：把技巧当万能药。后果：忽略 G/D 互动失衡。修法：仍要调架构、学习率、正则化和更新比例。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 2：单张图好看就代表 generator 好</h3>
+<p>错因：只看 quality。后果：mode collapse 可能被漏掉。修法：同时看多样性和覆盖率。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 3：IS/FID 是绝对真理</h3>
+<p>错因：忘记指标假设。后果：在二次元、人脸等任务上误读分数。修法：结合任务专属指标与人工检查。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 4：低 FID 一定代表模型有创造力</h3>
+<p>错因：忽略复制训练集。后果：模型可能只是记忆资料。修法：检查新颖性和与训练资料的关系。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 5：conditional GAN 的 D 只需看 y</h3>
+<p>错因：把条件当作 G 的内部事。后果：G 可能无视条件。修法：D 同时看 <code>x,y</code> 并训练错配负例。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 6：image-to-image 只用 GAN loss 就好</h3>
+<p>错因：只追求真实感。后果：输出可能乱加内容。修法：常结合监督重建 loss 和对抗 loss。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>评价 GAN 结果时，不只说“好看/不好看”，而是分解成质量、多样性、覆盖率、条件匹配和新颖性。</p>
+        </div>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>评价 GAN 结果时，不只说“好看/不好看”，而是分解成质量、多样性、覆盖率、条件匹配和新颖性。</p></div>
-    </section>
-
-    <section id="terms">
-      <div class="head"><h2>术语与检查：评价不只看单张图</h2><span class="tag">terms / checklist</span></div>
-      <p>P20 的核心是验收标准升级：生成模型既要单张样本像真的，也要覆盖真实分布，还要在条件式任务里匹配条件。一个好看的 cherry-pick 样本不能证明 generator 好。</p>
-      <table class="metric-table">
-        <thead><tr><th>术语</th><th>一句话解释</th><th>易混点</th></tr></thead>
-        <tbody>
-          <tr><td>Quality</td><td>单张样本是否清楚、可信。</td><td>单张质量高仍可能 mode collapse。</td></tr>
-          <tr><td>Diversity / Coverage</td><td>多张样本是否覆盖不同模式和真实分布区域。</td><td>多样不等于每张都好，覆盖不足就是 mode dropping。</td></tr>
-          <tr><td>FID</td><td>比较真实/生成样本在特征空间的分布距离，通常越小越好。</td><td>依赖预训练特征和样本量，不是绝对真理。</td></tr>
-          <tr><td>Conditional D</td><td>判别器同时看条件 <code>x</code> 和输出 <code>y</code>。</td><td>D 只看 <code>y</code> 时，G 可能无视条件。</td></tr>
-        </tbody>
-      </table>
-      <div class="grid2">
-        <div class="box soft"><h3>Worked example</h3><p>如果 text-to-image 条件是“蓝头发、红眼睛”，D 只看图片时，G 生成清楚的黑发头像也可能过关。让 D 看 <code>(x,y)</code>，再加入错配真实对，例如“蓝头发文字 + 黑发真实图”为 fake，才能迫使 G 学条件匹配。</p></div>
-        <div class="box info"><h3>小检查表</h3><ul><li>是否同时看单张质量和样本集合多样性？</li><li>是否检查复制训练集或过近邻样本？</li><li>conditional GAN 是否有 matched real、generated fake、mismatched real 三类样本？</li><li>image-to-image 是否平衡监督重建 loss 与 GAN loss？</li></ul></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>为一个生成任务写验收标准时，能把“像真、多样、覆盖、条件匹配、新颖”分开检查。</p></div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 questions</span></div>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语与检查：评价不只看单张图</h2>
+          <span class="tag">terms</span>
+        </div>
+<p>P20 的核心是验收标准升级：生成模型既要单张样本像真的，也要覆盖真实分布，还要在条件式任务里匹配条件。一个好看的 cherry-pick 样本不能证明 generator 好。</p>
+        <div class="box soft">
+<h3>Worked example</h3>
+<p>如果 text-to-image 条件是“蓝头发、红眼睛”，D 只看图片时，G 生成清楚的黑发头像也可能过关。让 D 看 <code>(x,y)</code>，再加入错配真实对，例如“蓝头发文字 + 黑发真实图”为 fake，才能迫使 G 学条件匹配。</p>
+        </div>
+        <div class="box info">
+<h3>小检查表</h3>
+<ul>
+<li>是否同时看单张质量和样本集合多样性？</li>
+<li>是否检查复制训练集或过近邻样本？</li>
+<li>conditional GAN 是否有 matched real、generated fake、mismatched real 三类样本？</li>
+<li>image-to-image 是否平衡监督重建 loss 与 GAN loss？</li>
+</ul>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>为一个生成任务写验收标准时，能把“像真、多样、覆盖、条件匹配、新颖”分开检查。</p>
+        </div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>做题前先抓住主线</strong><p>P20 的主线是：GAN 训练仍难；评价要同时看质量和多样性；conditional GAN 的关键是让 D 检查条件匹配。</p></div>
-        <div class="review-card"><strong>自检重点</strong><p class="muted">1-6 题是低摩擦诊断；7-18 题迁移到指标限制、错配负例和 pix2pix loss 设计。</p><ul><li>能不能解释 mode collapse / dropping？</li><li>能不能说清 IS 和 FID 的差别？</li><li>能不能设计 conditional D 的负例？</li></ul></div>
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>A. 训练与评估</h3></div>
+          <div class="quick-review">quick review GAN 难在 G/D 互动；评价要同时看 quality、diversity、coverage 和 novelty。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 1. 为什么 GAN 训练需要 generator 和 discriminator “棋逢对手”？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 2. 用 GAN 生成文字特别难的关键原因是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="文字长度一定比图片大。">文字长度一定比图片大。</label>
+      <label><input type="radio" name="q?" value="token 选择是离散的，小参数变化常不改变输出 token，梯度难传。">token 选择是离散的，小参数变化常不改变输出 token，梯度难传。</label>
+      <label><input type="radio" name="q?" value="discriminator 不能读取文字。">discriminator 不能读取文字。</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>A. 训练与评估</h3><p>先检查你是否理解 GAN 为什么难，以及 generator 应该怎样验收。</p></div><div class="quick-review"><b>quick review</b>GAN 难在 G/D 互动；评价要同时看 quality、diversity、coverage 和 novelty。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="1"><div class="q-meta"><span class="pill">简答</span><span class="pill">训练</span></div><h3>1. 为什么 GAN 训练需要 generator 和 discriminator “棋逢对手”？</h3><textarea data-answer="true" placeholder="从一方停住，另一方也失去有效信号回答。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="2"><div class="q-meta"><span class="pill">选择</span><span class="pill">文字生成</span></div><h3>2. 用 GAN 生成文字特别难的关键原因是什么？</h3><div class="choices"><label><input type="radio" name="q2" value="a">文字长度一定比图片大。</label><label><input type="radio" name="q2" value="b">token 选择是离散的，小参数变化常不改变输出 token，梯度难传。</label><label><input type="radio" name="q2" value="c">discriminator 不能读取文字。</label></div></div>
-          <div class="q" data-role="homework" data-qid="3"><div class="q-meta"><span class="pill">辨析</span><span class="pill">quality/diversity</span></div><h3>3. 用分类器评价图片时，quality 和 diversity 分别看什么分布？</h3><textarea data-answer="true" placeholder="quality 看单张；diversity 看多张平均。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="4"><div class="q-meta"><span class="pill">诊断</span><span class="pill">mode collapse</span></div><h3>4. Generator 每张图单看都不错，但 100 张里只有 3 种脸。这是什么问题？为什么单张 quality 指标可能被骗？</h3><textarea data-answer="true" placeholder="写出问题名和原因。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="5"><div class="q-meta"><span class="pill">诊断</span><span class="pill">mode dropping</span></div><h3>5. Generator 生成的人脸有男有女、有左看右看，但完全没有深肤色样本。更像 mode collapse 还是 mode dropping？为什么？</h3><textarea data-answer="true" placeholder="说明它漏掉真实分布的一部分。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="6"><div class="q-meta"><span class="pill">选择</span><span class="pill">人眼评估</span></div><h3>6. 早期只放几张生成图片来证明模型好，最大问题是什么？</h3><div class="choices"><label><input type="radio" name="q6" value="a">图片太大无法显示。</label><label><input type="radio" name="q6" value="b">主观、不稳定、容易 cherry pick。</label><label><input type="radio" name="q6" value="c">不能用于任何论文。</label></div></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">辨析</span></div>
+        <h3><b>Q:</b> 3. 用分类器评价图片时，quality 和 diversity 分别看什么分布？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 4. Generator 每张图单看都不错，但 100 张里只有 3 种脸。这是什么问题？为什么单张 quality 指标可能被骗？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 5. Generator 生成的人脸有男有女、有左看右看，但完全没有深肤色样本。更像 mode collapse 还是 mode dropping？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 6. 早期只放几张生成图片来证明模型好，最大问题是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="图片太大无法显示。">图片太大无法显示。</label>
+      <label><input type="radio" name="q?" value="主观、不稳定、容易 cherry pick。">主观、不稳定、容易 cherry pick。</label>
+      <label><input type="radio" name="q?" value="不能用于任何论文。">不能用于任何论文。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>B. IS、FID 与评估边界</h3><p>检查你是否能解释指标的直觉和限制。</p></div><div class="quick-review"><b>quick review</b>IS 看分类置信度与类别多样性；FID 比较真实/生成图片在预训练网络特征空间里的分布距离。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="7"><div class="q-meta"><span class="pill">简答</span><span class="pill">IS</span></div><h3>7. Inception Score 为什么同时想要“单张集中”和“整体平均分散”？</h3><textarea data-answer="true" placeholder="分别对应 quality 和 diversity。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="8"><div class="q-meta"><span class="pill">辨析</span><span class="pill">FID</span></div><h3>8. FID 为什么取 softmax 前的 hidden feature，而不是最终类别？</h3><textarea data-answer="true" placeholder="说明同类别内部差异仍可体现在 feature 中。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="9"><div class="q-meta"><span class="pill">选择</span><span class="pill">方向</span></div><h3>9. FID 的数值方向通常是什么？</h3><div class="choices"><label><input type="radio" name="q9" value="a">越大越好。</label><label><input type="radio" name="q9" value="b">越小越好，因为它是距离。</label><label><input type="radio" name="q9" value="c">永远等于 0。</label></div></div>
-          <div class="q" data-role="homework" data-qid="10"><div class="q-meta"><span class="pill">边界</span><span class="pill">FID</span></div><h3>10. 写出 FID 的两个局限。</h3><textarea data-answer="true" placeholder="例如高斯假设、样本量需求、依赖预训练特征等。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="11"><div class="q-meta"><span class="pill">伦理/验收</span><span class="pill">复制</span></div><h3>11. 如果 generator 复制训练集，为什么它可能拿到好指标却不是好 generator？</h3><textarea data-answer="true" placeholder="从新颖性和训练资料已存在回答。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="12"><div class="q-meta"><span class="pill">应用</span><span class="pill">作业指标</span></div><h3>12. 为什么二次元头像作业不适合只用 Inception Score？</h3><textarea data-answer="true" placeholder="从 ImageNet 类别和二次元属性差异回答。"></textarea></div>
+        <div class="group-head">
+          <div><h3>B. IS、FID 与评估边界</h3></div>
+          <div class="quick-review">quick review IS 看分类置信度与类别多样性；FID 比较真实/生成图片在预训练网络特征空间里的分布距离。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 7. Inception Score 为什么同时想要“单张集中”和“整体平均分散”？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">辨析</span></div>
+        <h3><b>Q:</b> 8. FID 为什么取 softmax 前的 hidden feature，而不是最终类别？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 9. FID 的数值方向通常是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="越大越好。">越大越好。</label>
+      <label><input type="radio" name="q?" value="越小越好，因为它是距离。">越小越好，因为它是距离。</label>
+      <label><input type="radio" name="q?" value="永远等于 0。">永远等于 0。</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>C. Conditional Generation</h3><p>最后检查你是否能设计条件式 GAN 的训练信号。</p></div><div class="quick-review"><b>quick review</b>Conditional G 看 <code>x,z</code>；conditional D 看 <code>x,y</code>；错配真实对也是负例。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="13"><div class="q-meta"><span class="pill">简答</span><span class="pill">定义</span></div><h3>13. Conditional generation 和 unconditional generation 的输入有什么不同？</h3><textarea data-answer="true" placeholder="写出 G(z) vs G(x,z)。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="14"><div class="q-meta"><span class="pill">错误诊断</span><span class="pill">错误示例</span></div><h3>14. 错误示例：text-to-image 中 D 只看图片，不看文字。G 会学到什么坏策略？</h3><textarea data-answer="true" placeholder="说明它可能无视文字，只生成清楚图片。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="15"><div class="q-meta"><span class="pill">设计</span><span class="pill">负例</span></div><h3>15. Conditional D 的训练中，除了真实配对和生成图，还应该加入哪类负例？为什么？</h3><textarea data-answer="true" placeholder="写出 mismatched real pair 的作用。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="16"><div class="q-meta"><span class="pill">迁移</span><span class="pill">image-to-image</span></div><h3>16. 为什么 image-to-image 只用监督学习容易模糊？</h3><textarea data-answer="true" placeholder="从同一输入可能对应多种合理输出回答。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="17"><div class="q-meta"><span class="pill">组合</span><span class="pill">loss</span></div><h3>17. Pix2pix 类任务为什么常把 supervised loss 和 GAN loss 一起用？</h3><textarea data-answer="true" placeholder="一个保证对应，一个提升真实感。"></textarea></div>
-          <div class="q full" data-role="homework" data-qid="18"><div class="q-meta"><span class="pill">费曼题</span><span class="pill">完整主线</span></div><h3>18. 费曼题：用 220-380 字讲清 P20 主线：GAN 为什么难训练、怎么评价 generator、IS/FID 的直觉与局限、conditional GAN 为什么要让 D 同时看条件和输出。</h3><textarea data-answer="true" placeholder="要求：用因果链串起来，不要只罗列术语。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">边界</span></div>
+        <h3><b>Q:</b> 10. 写出 FID 的两个局限。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">伦理/验收</span></div>
+        <h3><b>Q:</b> 11. 如果 generator 复制训练集，为什么它可能拿到好指标却不是好 generator？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">应用</span></div>
+        <h3><b>Q:</b> 12. 为什么二次元头像作业不适合只用 Inception Score？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>C. Conditional Generation</h3></div>
+          <div class="quick-review">quick review Conditional G 看 x,z ；conditional D 看 x,y ；错配真实对也是负例。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 13. Conditional generation 和 unconditional generation 的输入有什么不同？</h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 14. 错误示例：text-to-image 中 D 只看图片，不看文字。G 会学到什么坏策略？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b> 15. Conditional D 的训练中，除了真实配对和生成图，还应该加入哪类负例？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 16. 为什么 image-to-image 只用监督学习容易模糊？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">组合</span></div>
+        <h3><b>Q:</b> 17. Pix2pix 类任务为什么常把 supervised loss 和 GAN loss 一起用？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼题</span></div>
+        <h3><b>Q:</b> 18. 费曼题：用 220-380 字讲清 P20 主线：GAN 为什么难训练、怎么评价 generator、IS/FID 的直觉与局限、conditional GAN 为什么要让 D 同时看条件和输出。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>生成练习记录</h2><span class="tag">record</span></div>
-      <p>完成练习后生成 Markdown 记录。建议标记对 IS/FID 或 conditional D 设计最不确定的地方，方便公开分享时保留判断边界。</p>
-      <div class="quality" id="qualityBox"></div>
-      <div class="answer" id="answerBox">还没有生成记录。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" onclick="generateRecord()">生成记录</button>
-        <button type="button" class="ghost" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-  const $ = (id) => document.getElementById(id);
+      </ul>
+    </section>
+  </article>
 
-  function updateProgress(){
-    const h = document.documentElement;
-    const max = h.scrollHeight - h.clientHeight;
-    const pct = max > 0 ? h.scrollTop / max * 100 : 0;
-    $("readProgress").style.width = pct + "%";
-  }
-  document.addEventListener("scroll", updateProgress, {passive:true});
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-  const evalCases = {
-    good: {
-      title:"质量高且多样",
-      text:"单张图片清楚，许多样本又覆盖多种类别，这是比较理想的情况。",
-      q:.86,d:.82,cls:"good",items:["猫","狗","马","鸟","车","船","花","人","房","树"]
-    },
-    collapse: {
-      title:"Mode collapse",
-      text:"单张看起来都不错，但来来去去是同一类样本。quality 可以高，diversity 很低。",
-      q:.88,d:.16,cls:"same",items:["脸A","脸A","脸A","脸A","脸A","脸A","脸A","脸A","脸A","脸A"]
-    },
-    bad: {
-      title:"质量差但分散",
-      text:"分类器不确定每张图是什么，单张 quality 低；即使分布分散也不代表模型好。",
-      q:.22,d:.64,cls:"bad",items:["?","?","?","?","?","?","?","?","?","?"]
-    },
-    drop: {
-      title:"Mode dropping",
-      text:"生成结果有多样性，但只覆盖真实分布的一部分。单看样本可能不容易发现缺口。",
-      q:.78,d:.45,cls:"good",items:["白肤","白肤","黄肤","白肤","黄肤","白肤","黄肤","白肤","黄肤","白肤"]
-    }
-  };
-  function renderEval(){
-    const data = evalCases[$("evalMode").value];
-    $("evalTitle").textContent = data.title;
-    $("evalText").textContent = data.text;
-    $("qualityBar").style.width = Math.round(data.q*100) + "%";
-    $("divBar").style.width = Math.round(data.d*100) + "%";
-    $("qualityScore").textContent = data.q.toFixed(2);
-    $("divScore").textContent = data.d.toFixed(2);
-    $("sampleGrid").innerHTML = data.items.map(x => `<div class="sample ${data.cls}">${x}</div>`).join("");
-  }
-
-  const condCases = {
-    full: {
-      title:"完整 conditional D",
-      text:"D 不只检查图片清楚，也检查文字和图片是否配得上。真实错配样本能逼 D 学会条件一致性。",
-      pairs:[
-        ["red eyes","红眼角色","高分", "ok"],
-        ["red eyes","蓝眼角色","低分", "no"],
-        ["red eyes","G 生成红眼","视质量而定", "ok"]
-      ]
-    },
-    imageonly: {
-      title:"D 只看图片",
-      text:"只要图片清楚，D 就可能给高分。G 可以忽略条件，输入 red eyes 也生成别的属性。",
-      pairs:[
-        ["red eyes","清楚蓝眼图","高分风险", "no"],
-        ["green hair","清楚黑发图","高分风险", "no"],
-        ["任意条件","清楚头像","容易过关", "ok"]
-      ]
-    },
-    nomismatch: {
-      title:"少了错配负例",
-      text:"D 见过真实匹配和生成图片，但没被训练去识别“真实图片配错文字”。条件一致性会弱。",
-      pairs:[
-        ["red eyes","真实红眼","高分", "ok"],
-        ["red eyes","G 生成图","低分", "no"],
-        ["red eyes","真实蓝眼","没学充分", "no"]
-      ]
-    }
-  };
-  function renderCond(){
-    const data = condCases[$("condMode").value];
-    $("condTitle").textContent = data.title;
-    $("condText").textContent = data.text;
-    $("pairGrid").innerHTML = data.pairs.map(p => `<div class="pair ${p[3]}"><strong>x: ${p[0]}</strong><p>y: ${p[1]}</p><p>D: ${p[2]}</p></div>`).join("");
-  }
-
-  $("evalMode").addEventListener("change", renderEval);
-  $("condMode").addEventListener("change", renderCond);
-  renderEval();
-  renderCond();
-
-  function collectAnswer(q){
-    const checked = q.querySelector("input[type=radio]:checked, input[type=checkbox]:checked");
-    const text = Array.from(q.querySelectorAll("textarea[data-answer], input[type=text][data-answer]")).map(el => el.value.trim()).filter(Boolean).join("\n");
-    if(checked && text) return `${checked.parentElement.textContent.trim()}\n${text}`;
-    if(checked) return checked.parentElement.textContent.trim();
-    if(text) return text;
-    return "（未作答）";
-  }
-
-  function generateRecord(){
-    const blocks = Array.from(document.querySelectorAll('[data-role="homework"]'));
-    const lines = [];
-    let empty = 0;
-    lines.push("# P20 GAN 评估与条件式生成｜练习记录");
-    lines.push("");
-    lines.push(`生成时间：${new Date().toLocaleString()}`);
-    lines.push("");
-    blocks.forEach((q, idx) => {
-      const title = q.querySelector("h3").innerText.replace(/\s+/g, " ").trim();
-      const ans = collectAnswer(q);
-      if(ans === "（未作答）") empty++;
-      lines.push(`## ${idx + 1}. ${title}`);
-      lines.push(ans);
-      lines.push("");
-    });
-    const feynman = blocks[blocks.length - 1].querySelector("textarea").value.trim();
-    const notes = [];
-    if(empty > 0) notes.push(`还有 ${empty} 题未作答。`);
-    if(feynman.length > 0 && feynman.length < 150) notes.push("费曼题偏短，建议补上训练难点、评估和 conditional GAN 的完整链路。");
-    if(!/FID|IS|Inception|评估|指标/i.test(feynman)) notes.push("费曼题里建议明确写出 IS/FID 或评估指标。");
-    if(!/collapse|dropping|多样|diversity|quality/i.test(feynman)) notes.push("费曼题里建议明确写出质量与多样性的区别。");
-    if(!/conditional|条件|x|y|匹配|错配/i.test(feynman)) notes.push("费曼题里建议明确写出 conditional GAN 的 D 为什么要看条件。");
-    $("qualityBox").style.display = notes.length ? "block" : "none";
-    $("qualityBox").textContent = notes.join("\n");
-    $("answerBox").textContent = lines.join("\n");
-  }
-
-  function copyRecord(){
-    navigator.clipboard.writeText($("answerBox").textContent);
-  }
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

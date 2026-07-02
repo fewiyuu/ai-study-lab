@@ -4,356 +4,636 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>56_P57｜经典影像生成方法速览：VAE、Flow、Diffusion、GAN</title>
-  <link rel="stylesheet" href="../../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body data-study-kind="media" data-feynman-keywords="VAE、Auto Encoder、Encoder、Decoder、潜变量、Noise、Flow-based model、Diffusion model、Denoise、Diffusion Transformer、GAN、Generator、Discriminator、Latent Action">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand">
-      <strong>56_P57</strong>
-      <span>经典影像生成方法速览<br>核心讲义 · 李宏毅生成式 AI 课程</span>
+<body data-course="李宏毅 LLM 课程" data-unit="56">
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅 LLM 课程</a>
+        <span class="sep">/</span>
+        <span>56</span>
+      </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
     </div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>学习目标</a>
-      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
-      <a href="#terms"><span class="dot"></span>术语表</a>
-      <a href="#lecture"><span class="dot"></span>讲义主线</a>
-      <a href="#source"><span class="dot"></span>方法线索</a>
-      <a href="#example"><span class="dot"></span>最小例子</a>
-      <a href="#viz"><span class="dot"></span>交互观察</a>
-      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>自学记录</a>
-    </nav>
-    <div class="side-note">这节先别急着背模型名。所有方法都在处理同一个麻烦：文字条件说不完一张图，模型还得决定那些没被说出的细节。</div>
-  </aside>
-  <main>
-    <section class="hero" id="goal">
-      <div>
-        <div class="kicker">LI HONGYI LLM · 核心讲义</div>
-        <h1>经典影像生成方法速览：VAE、Flow、Diffusion、GAN</h1>
-        <p>影像生成的难点不只是“网络会不会画图”，而是同一段文字可以对应很多张合理图片。输入“一只奔跑的狗”，它可能是草原上的哈士奇，也可能是城市里的柴犬。训练资料里这些图片都配着相同或相近的文字，模型如果只看文字，就会不知道该学哪一种细节。</p>
-        <p>这节课把几条经典路线放在同一个问题下看：VAE 和 Auto Encoder 把没写出来的资讯压进潜变量；Flow-based model 强调可逆变换；Diffusion model 从噪声反复去噪；GAN 用另一个模型评价生成结果。你读完后，应该能把这些方法讲成一条清楚的生成链，而不是只背四个名词。</p>
-        <div class="map"><span class="node">文字条件不足</span><span class="arrow">→</span><span class="node">潜变量 / Noise</span><span class="arrow">→</span><span class="node">Decoder / Denoise</span><span class="arrow">→</span><span class="node">图像输出</span><span class="arrow">→</span><span class="node">评价或互动</span></div>
-        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=57">https://www.bilibili.com/video/BV1JKoeBiEt4?p=57</a></p>
-      </div>
-      <div class="route">
-        <h3>学完后要能做四件事</h3>
-        <ol><li>说明为什么文字描述通常无法唯一决定一张图片。</li><li>用 Encoder、Decoder、潜变量和 Noise 解释 VAE 的直觉。</li><li>区分 Flow、Diffusion 和 GAN 分别在解决什么训练或生成问题。</li><li>读懂 Diffusion Transformer 的“有噪 patch → 较干净 patch → 图像”流程。</li><li>解释互动式影像生成为什么需要从画面变化里反推 latent action。</li></ol>
-      </div>
-    </section>
+  </nav>
 
-    <section id="skeleton">
-      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
-      <div class="grid3">
-        <div class="box soft"><h3>共同问题</h3><p>训练资料里的文字说明经常不完整。同一句 prompt 对应多张真实图片时，模型不能只靠“正确答案”学习，因为答案本来就不唯一。</p><p>判断句：只要一个任务有多种合理输出，就要问模型如何处理那些没被输入明说的变量。</p></div>
-        <div class="box"><h3>共同工具</h3><p>经典方法都会引入某种隐藏资讯：VAE 把图像压成 code，Flow 把图像和 noise 做可逆转换，Diffusion 把图像逐步加噪再学习去噪，GAN 用判别器把“像不像”变成训练信号。</p><p>到这里，你可以把“噪声”先理解成模型用来填补细节的数值向量，不要急着把它看成无用杂讯。</p></div>
-        <div class="box warn"><h3>共同边界</h3><p>这些方法不是互斥标签。GAN 可以挂在 VAE、Flow 或 Diffusion 后面当评价器；Diffusion 也常和 Transformer 结合。比较方法时要先说明任务、训练稳定性、采样速度和生成质量。</p></div>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">LI HONGYI LLM · 核心讲义</div>
+      <div class="hero-meta">
+        <span class="hero-badge">56</span>
       </div>
-      <div class="mini-graph">
-        <div class="box"><h3>文字</h3><p>描述目标，但通常漏掉品种、背景、姿态、风格等细节。</p></div>
-        <div class="box"><h3>潜变量</h3><p>用向量保存或随机抽取“需要脑补”的资讯。</p></div>
-        <div class="box"><h3>生成过程</h3><p>一次解码、可逆转换、多步去噪，或被判别器推动。</p></div>
-        <div class="box"><h3>输出检查</h3><p>看图像是否符合文字，也看失败样本和生成成本。</p></div>
+      <h1 class="hero-title">56_P57｜经典影像生成方法速览：VAE、Flow、Diffusion、GAN</h1>
+      <p class="hero-desc">影像生成的难点不只是“网络会不会画图”，而是同一段文字可以对应很多张合理图片。输入“一只奔跑的狗”，它可能是草原上的哈士奇，也可能是城市里的柴犬。训练资料里这些图片都配着相同或相近的文字，模型如果只看文字，就会不知道该学哪一种细节。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../55_P56_第17讲：有关影像的生成式AI_上_AI如何产生图片和影片_S/学习页.html">上一节</a>
+            <a href="../57_P58_延申_VariationalAuto_encoder_VAE/学习页.html">下一节</a>
       </div>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="terms">
-      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
-      <table class="metric-table">
-        <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
-        <tr><td>文字条件</td><td>用户给模型的描述，例如“一只奔跑的狗”。</td><td>它是生成的条件，但通常不是完整的监督答案。</td><td>以为 prompt 写了主题，图片细节就被唯一决定了。</td></tr>
-        <tr><td>潜变量 / Noise</td><td>模型用来补齐细节的一串数值。</td><td>可以来自 Encoder 的输出，也可以在生成时从简单分布随机采样。</td><td>把 noise 当成纯粹无意义的干扰。</td></tr>
-        <tr><td>Auto Encoder</td><td>先压缩，再还原。</td><td>Encoder 从输入抽取 code，Decoder 根据 code 重建输入，训练目标是让输出接近输入。</td><td>以为 Encoder 抽出的资讯一定是人能读懂的文字。</td></tr>
-        <tr><td>VAE</td><td>让潜空间可采样的 Auto Encoder。</td><td>训练时学会从图像抽潜变量，生成时可采样一个潜变量交给 Decoder。</td><td>只记住“加噪”，忘了它是在让中间空间更适合生成。</td></tr>
-        <tr><td>Flow-based model</td><td>把图像和潜变量互相转换。</td><td>要求 Decoder 可逆，所以反函数可当 Encoder 使用。</td><td>以为它只是把 VAE 换了名字。</td></tr>
-        <tr><td>Diffusion model</td><td>从随机噪声慢慢去噪成图。</td><td>训练一个 Denoise 模块；训练时自己给干净图加噪，推理时反复去噪。</td><td>以为它一步直接生成清晰图像。</td></tr>
-        <tr><td>GAN</td><td>让生成器接受另一个模型的评价。</td><td>Generator 产图，Discriminator 判断图像和条件是否匹配，两者交替训练。</td><td>问“GAN 和 Diffusion 谁更强”却不说明 GAN 可作为外挂评价器。</td></tr>
-        <tr><td>Latent Action</td><td>从画面变化里猜出来的控制动作。</td><td>互动式影像生成可用动作抽取模型推断“可能按了哪个按钮”，再用该动作预测下一帧。</td><td>把 latent action 当成真实记录到的人类按键。</td></tr>
-      </table>
-      <p class="checkpoint">读完这一段，你应该能把“文字、潜变量、生成器、判别器、动作”放回同一条流程里。</p>
-    </section>
+        </ul>
+      </div>
+    </div>
+  </header>
 
-    <section id="lecture">
-      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#skeleton">概念骨架</a>
+      <a href="#terms">术语表</a>
+      <a href="#lecture">讲义主线</a>
+      <a href="#source">方法线索</a>
+      <a href="#example">最小例子</a>
+      <a href="#viz">交互观察</a>
+      <a href="#diagnosis">误区诊断</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="skeleton">
+        <div class="head">
+          <h2>概念骨架</h2>
+          <span class="tag">MAP</span>
+        </div>
+<p>共同问题训练资料里的文字说明经常不完整。同一句 prompt 对应多张真实图片时，模型不能只靠“正确答案”学习，因为答案本来就不唯一。判断句：只要一个任务有多种合理输出，就要问模型如何处理那些没被输入明说的变量。</p>
+<p>共同工具经典方法都会引入某种隐藏资讯：VAE 把图像压成 code，Flow 把图像和 noise 做可逆转换，Diffusion 把图像逐步加噪再学习去噪，GAN 用判别器把“像不像”变成训练信号。到这里，你可以把“噪声”先理解成模型用来填补细节的数值向量，不要急着把它看成无用杂讯。</p>
+<p>共同边界这些方法不是互斥标签。GAN 可以挂在 VAE、Flow 或 Diffusion 后面当评价器；Diffusion 也常和 Transformer 结合。比较方法时要先说明任务、训练稳定性、采样速度和生成质量。</p>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语表</h2>
+          <span class="tag">TERMS</span>
+        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
+<tr><td>文字条件</td><td>用户给模型的描述，例如“一只奔跑的狗”。</td><td>它是生成的条件，但通常不是完整的监督答案。</td><td>以为 prompt 写了主题，图片细节就被唯一决定了。</td></tr><tr><td>潜变量 / Noise</td><td>模型用来补齐细节的一串数值。</td><td>可以来自 Encoder 的输出，也可以在生成时从简单分布随机采样。</td><td>把 noise 当成纯粹无意义的干扰。</td></tr><tr><td>Auto Encoder</td><td>先压缩，再还原。</td><td>Encoder 从输入抽取 code，Decoder 根据 code 重建输入，训练目标是让输出接近输入。</td><td>以为 Encoder 抽出的资讯一定是人能读懂的文字。</td></tr><tr><td>VAE</td><td>让潜空间可采样的 Auto Encoder。</td><td>训练时学会从图像抽潜变量，生成时可采样一个潜变量交给 Decoder。</td><td>只记住“加噪”，忘了它是在让中间空间更适合生成。</td></tr><tr><td>Flow-based model</td><td>把图像和潜变量互相转换。</td><td>要求 Decoder 可逆，所以反函数可当 Encoder 使用。</td><td>以为它只是把 VAE 换了名字。</td></tr><tr><td>Diffusion model</td><td>从随机噪声慢慢去噪成图。</td><td>训练一个 Denoise 模块；训练时自己给干净图加噪，推理时反复去噪。</td><td>以为它一步直接生成清晰图像。</td></tr><tr><td>GAN</td><td>让生成器接受另一个模型的评价。</td><td>Generator 产图，Discriminator 判断图像和条件是否匹配，两者交替训练。</td><td>问“GAN 和 Diffusion 谁更强”却不说明 GAN 可作为外挂评价器。</td></tr><tr><td>Latent Action</td><td>从画面变化里猜出来的控制动作。</td><td>互动式影像生成可用动作抽取模型推断“可能按了哪个按钮”，再用该动作预测下一帧。</td><td>把 latent action 当成真实记录到的人类按键。</td></tr>
+        </table></div>
+<p>读完这一段，你应该能把“文字、潜变量、生成器、判别器、动作”放回同一条流程里。</p>
+      </section>
+      <section id="lecture">
+        <div class="head">
+          <h2>讲义主线</h2>
+          <span class="tag">LECTURE</span>
+        </div>
       <div class="grid2">
         <div class="box">
-          <h3>1. 为什么文字生图会让模型无所适从</h3>
-          <p>一张图片包含太多没有写进文字的变量。训练资料里同样写着“一只奔跑的狗”，图片可能是一只哈士奇在草原上跑，也可能是一只柴犬在城市里跑。对模型来说，这不是一个输入对应一个答案，而是一个输入对应很多合理答案。</p>
-          <p>如果训练时硬把同一个文字条件对应到不同图片，模型会在细节上被拉向不同方向。它可能知道“狗”和“奔跑”是什么，却不知道该把品种、背景、姿态、光照选成哪一种。生成结果出现混杂或模糊，常常不是因为模型完全不会画，而是监督讯号本来就不完整。</p>
-          <p>判断句：看到文字生图任务时，先问“哪些细节没有被文字说明”。能列出这些缺口，就能理解为什么经典生成模型需要潜变量、噪声、采样或判别器。</p>
+<h3>1. 为什么文字生图会让模型无所适从</h3>
+<p>一张图片包含太多没有写进文字的变量。训练资料里同样写着“一只奔跑的狗”，图片可能是一只哈士奇在草原上跑，也可能是一只柴犬在城市里跑。对模型来说，这一个输入对应很多合理答案。</p>
+<p>如果训练时硬把同一个文字条件对应到不同图片，模型会在细节上被拉向不同方向。它可能知道“狗”和“奔跑”是什么，却不知道该把品种、背景、姿态、光照选成哪一种。生成结果出现混杂或模糊，常常监督讯号本来就不完整。</p>
+<p>判断句：看到文字生图任务时，先问“哪些细节没有被文字说明”。能列出这些缺口，就能理解为什么经典生成模型需要潜变量、噪声、采样或判别器。</p>
         </div>
         <div class="box">
-          <h3>2. Auto Encoder 的基本想法</h3>
-          <p>Auto Encoder 先训练一个 Encoder 读入图片和文字，抽出文字没描述到的资讯；再训练一个 Decoder 读取文字和这些抽出的资讯，尽量还原原图。训练目标很直接：输入一张训练图片，经过抽取和重建后，输出越接近原图越好。</p>
-          <p>这里的“资讯抽取”不一定输出人类能读懂的句子。它通常是一串数值向量。第一维可能和狗的品种有关，第二维可能和背景有关，也可能没有这么整齐的人类语义。只要 Decoder 读得懂，并能用它还原图片，这串向量就完成了它的工作。</p>
-          <p>判断句：Encoder 的输出不是解释报告，而是给 Decoder 使用的内部 code。你以后看到潜变量时，要问它帮助 Decoder 补了哪些输入没有说出的细节。</p>
+<h3>2. Auto Encoder 的基本想法</h3>
+<p>Auto Encoder 先训练一个 Encoder 读入图片和文字，抽出文字没描述到的资讯；再训练一个 Decoder 读取文字和这些抽出的资讯，尽量还原原图。训练目标很直接：输入一张训练图片，经过抽取和重建后，输出越接近原图越好。</p>
+<p>这里的“资讯抽取”不一定输出人类能读懂的句子。它通常是一串数值向量。第一维可能和狗的品种有关，第二维可能和背景有关，也可能没有这么整齐的人类语义。只要 Decoder 读得懂，并能用它还原图片，这串向量就完成了它的工作。</p>
+<p>判断句：Encoder 的输出给 Decoder 使用的内部 code。你以后看到潜变量时，要问它帮助 Decoder 补了哪些输入没有说出的细节。</p>
+<ol>
+<li>VAE：生成时把细节交给采样训练时 Encoder 能看到真实图片，所以它可以抽出“文字没说的资讯”。但真正生成时，图片还没出现，Encoder 没有东西可读。VAE 的处理方式是：把这些潜在资讯看成可采样的向量。用户只给文字时，模型先从某个分布随机取一个潜变量，再让 Decoder 根据文字和潜变量生成图片。判断句：VAE 的随机性不是装饰，它负责决定“这次脑补成哪一种合理图片”。</li>
+<li>Flow：只训练一个可逆 DecoderFlow-based model 和 VAE 很像，也需要在图像与潜变量之间来回转换。差别在于 Flow 强迫 Decoder 必须可逆。可逆意味着 Decoder 有一个反函数。反函数可以把图片变回潜变量，所以不需要另外训练一个 Encoder。判断句：Flow 的重点“从 noise 到图像的转换可以反过来算”。</li>
+<li>Noise 不是没用的东西课程里提到把臭脸向量减掉、把笑脸向量加上，输出的人脸会笑得更明显。这个例子说明潜变量或 noise 里有图像属性。它可能控制品种、背景、表情、姿态、光线。虽然我们未必知道每一维的准确意义，但可以通过向量运算观察某些方向是否对应稳定变化。判断句：如果改动潜变量后输出只改变某个属性，说明这个方向携带了可操作的生成资讯。</li>
+<li>Diffusion：反复做一个小任务Diffusion model 的 Decoder 也从 noise 走向图片，但它不尝试一步完成。它训练一个 Denoise 模块，每次只把有噪图片变干净一点。训练资料可以自己造：把干净图片逐步加噪，得到“有噪图”和“较干净图”的配对，然后教 Denoise 模块逆着走。推理时从随机噪声开始，重复去噪数百次或上千次，最后得到清晰图像。判断句：Diffusion 的能力来自多次小修正；它的成本也来自多次小修正。</li>
+<li>Diffusion Transformer：Transformer 做去噪在影像模型里，图片或影片可以被切成 patch。Diffusion Transformer 让 Transformer 读取有噪 patch、文字条件和时间步，输出更干净的 patch。Sora 这类影片模型被课程拿来说明这一点：生成影片时在 patch 表示上反复去噪，最后再还原成影像。判断句：这里的 Transformer 在每一步负责“去掉一部分噪声”。</li>
+<li>GAN：把评价变成训练信号GAN 引入 Discriminator。它读图像和文字条件，判断两者是否匹配、图像是否像真实样本。Generator 不再只追某张唯一真图，而是学习产生能让 Discriminator 给高分的图片。Generator 和 Discriminator 交替训练：一个不断产出更像真的图，一个不断学会更细的判断标准。它很像额外挂上的评价器，可以和 VAE、Flow、Diffusion 结合。判断句：GAN 的核心用可学习的评价函数替代单一标准答案。</li>
+</ol>
+        </div>
+        <div class="box">
+<h3>完整知识链路</h3>
+<p>整节可以串成这样：文字条件不完整，所以模型需要额外资讯来决定图像细节。Auto Encoder 在训练时从真实图片抽出这些资讯，VAE 在生成时随机采样这些资讯，Flow 用可逆变换让图像和潜变量互相转换，Diffusion 通过反复去噪从 noise 走到图像，GAN 用 Discriminator 给 Generator 提供“像不像、配不配”的学习信号。到了互动式影像生成，缺失资讯从“图像细节”变成“用户按了什么动作”，于是课程又把 Auto Encoder 的思路迁移到 latent action：从前后画面里推断动作，再用画面和动作预测下一帧。你现在应该能解释每种方法把“未被输入明说的资讯”放在了哪里。</p>
         </div>
       </div>
-      <div class="grid3" style="margin-top:12px">
-        <div class="box soft"><h3>3. VAE：生成时把细节交给采样</h3><p>训练时 Encoder 能看到真实图片，所以它可以抽出“文字没说的资讯”。但真正生成时，图片还没出现，Encoder 没有东西可读。</p><p>VAE 的处理方式是：把这些潜在资讯看成可采样的向量。用户只给文字时，模型先从某个分布随机取一个潜变量，再让 Decoder 根据文字和潜变量生成图片。</p><p>判断句：VAE 的随机性不是装饰，它负责决定“这次脑补成哪一种合理图片”。</p></div>
-        <div class="box warn"><h3>4. Flow：只训练一个可逆 Decoder</h3><p>Flow-based model 和 VAE 很像，也需要在图像与潜变量之间来回转换。差别在于 Flow 强迫 Decoder 必须可逆。</p><p>可逆意味着 Decoder 有一个反函数。反函数可以把图片变回潜变量，所以不需要另外训练一个 Encoder。</p><p>判断句：Flow 的重点不是“也有 noise”，而是“从 noise 到图像的转换可以反过来算”。</p></div>
-        <div class="box"><h3>5. Noise 不是没用的东西</h3><p>课程里提到把臭脸向量减掉、把笑脸向量加上，输出的人脸会笑得更明显。这个例子说明潜变量或 noise 里有图像属性。</p><p>它可能控制品种、背景、表情、姿态、光线。虽然我们未必知道每一维的准确意义，但可以通过向量运算观察某些方向是否对应稳定变化。</p><p>判断句：如果改动潜变量后输出只改变某个属性，说明这个方向携带了可操作的生成资讯。</p></div>
-        <div class="box soft"><h3>6. Diffusion：反复做一个小任务</h3><p>Diffusion model 的 Decoder 也从 noise 走向图片，但它不尝试一步完成。它训练一个 Denoise 模块，每次只把有噪图片变干净一点。</p><p>训练资料可以自己造：把干净图片逐步加噪，得到“有噪图”和“较干净图”的配对，然后教 Denoise 模块逆着走。推理时从随机噪声开始，重复去噪数百次或上千次，最后得到清晰图像。</p><p>判断句：Diffusion 的能力来自多次小修正；它的成本也来自多次小修正。</p></div>
-        <div class="box warn"><h3>7. Diffusion Transformer：Transformer 做去噪</h3><p>在影像模型里，图片或影片可以被切成 patch。Diffusion Transformer 让 Transformer 读取有噪 patch、文字条件和时间步，输出更干净的 patch。</p><p>Sora 这类影片模型被课程拿来说明这一点：生成影片时不是逐像素接龙，而是在 patch 表示上反复去噪，最后再还原成影像。</p><p>判断句：这里的 Transformer 不是负责“文字接龙”，而是在每一步负责“去掉一部分噪声”。</p></div>
-        <div class="box"><h3>8. GAN：把评价变成训练信号</h3><p>GAN 引入 Discriminator。它读图像和文字条件，判断两者是否匹配、图像是否像真实样本。Generator 不再只追某张唯一真图，而是学习产生能让 Discriminator 给高分的图片。</p><p>Generator 和 Discriminator 交替训练：一个不断产出更像真的图，一个不断学会更细的判断标准。它很像额外挂上的评价器，可以和 VAE、Flow、Diffusion 结合。</p><p>判断句：GAN 的核心不是“两个网络打架”这个说法，而是用可学习的评价函数替代单一标准答案。</p></div>
-      </div>
-      <div class="box greenbox" style="margin-top:12px">
-        <h3>完整知识链路</h3>
-        <p>整节可以串成这样：文字条件不完整，所以模型需要额外资讯来决定图像细节。Auto Encoder 在训练时从真实图片抽出这些资讯，VAE 在生成时随机采样这些资讯，Flow 用可逆变换让图像和潜变量互相转换，Diffusion 通过反复去噪从 noise 走到图像，GAN 用 Discriminator 给 Generator 提供“像不像、配不配”的学习信号。到了互动式影像生成，缺失资讯从“图像细节”变成“用户按了什么动作”，于是课程又把 Auto Encoder 的思路迁移到 latent action：从前后画面里推断动作，再用画面和动作预测下一帧。你现在应该能解释每种方法把“未被输入明说的资讯”放在了哪里。</p>
-      </div>
-    </section>
-
-    <section id="source">
-      <div class="head"><h2>方法线索</h2><span class="tag">线索</span></div>
-      <p class="muted">下面把字幕里的口头讲解整理成课程线索。读它们时，请始终追问：这个方法把缺失资讯放在哪里，又怎样训练出来。</p>
-      <div class="source-lines">
-        <div class="box"><h3>线索 1：四条经典路线</h3><p>课程先列出 VAE、Flow-based model、Diffusion model 和 GAN。它们都能做影像生成，但关注点不同：VAE 讲潜变量，Flow 讲可逆，Diffusion 讲去噪，GAN 讲评价。</p><p class="checkpoint">你现在应该能先按“补资讯方式”分类，而不是按流行程度分类。</p></div>
-        <div class="box"><h3>线索 2：同一句文字有很多图</h3><p>“奔跑的狗”可以对应许多真实图片。这个例子解释了为什么直接让模型从相同文字学不同 patch 会很困难。</p><p class="checkpoint">你现在应该能说出“文字条件不足”为什么会造成训练冲突。</p></div>
-        <div class="box"><h3>线索 3：Encoder 和 Decoder 一起训练</h3><p>Encoder 从图片和文字里抽出文字没说到的资讯，Decoder 用文字和这串资讯重建原图。训练目标不是让中间资讯可读，而是让重建结果接近输入。</p><p class="checkpoint">你现在应该能解释 Auto Encoder 为什么不需要人工标注“没写出来的资讯”。</p></div>
-        <div class="box"><h3>线索 4：Flow 的可逆约束</h3><p>Flow 认为 Encoder 和 Decoder 做的是相反方向的事，所以强迫 Decoder 可逆。这样反函数就可以把图像变回潜变量。</p><p class="checkpoint">你现在应该能区分“两个模型互补”和“一个可逆模型两用”。</p></div>
-        <div class="box"><h3>线索 5：Diffusion 的多次去噪</h3><p>Diffusion 训练时给干净图片逐步加噪，学会从有噪图回到较干净图。生成时从随机噪声开始，反复调用 Denoise 模块。</p><p class="checkpoint">你现在应该能解释为什么它常常慢，以及研究为什么想减少去噪次数。</p></div>
-        <div class="box"><h3>线索 6：从生图到可互动世界</h3><p>课程最后提到 Genie 式互动环境：模型读取当前画面和动作，生成下一帧。没有真实按键记录时，可以用动作抽取模型从前后画面推断 latent action。</p><p class="checkpoint">你现在应该能把 Auto Encoder 的思路迁移到“动作也可能是隐藏资讯”。</p></div>
-      </div>
-    </section>
-
-    <section id="example">
-      <div class="head"><h2>最小例子</h2><span class="tag">EXAMPLE</span></div>
-      <p>下面的伪代码把本节四种方法压成可读流程。重点不在语法，而在每一步读什么、写什么、缺什么。</p>
-      <div class="codebar"><span class="label">最小示例：VAE 训练与生成</span><span class="kind">python</span></div>
-      <pre><code>text = encode_text(&quot;一只奔跑的狗&quot;)
+      </section>
+      <section id="source">
+        <div class="head">
+          <h2>方法线索</h2>
+          <span class="tag">线索</span>
+        </div>
+<p>下面把字幕里的口头讲解整理成课程线索。读它们时，请始终追问：这个方法把缺失资讯放在哪里，又怎样训练出来。</p>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>最小例子</h2>
+          <span class="tag">EXAMPLE</span>
+        </div>
+<p>下面的伪代码把本节四种方法压成可读流程。重点不在语法，而在每一步读什么、写什么、缺什么。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-example-1">复制</button></div>
+        <pre id="code-example-1" data-export-context="代码" data-export-lang="text"><code class="language-text">text = encode_text("一只奔跑的狗")
 image = load_training_image()
 
-latent = encoder(image, text)          # 抽出文字没写出的细节
-rebuild = decoder(text, latent)        # 用文字和细节重建原图
-loss = distance(rebuild, image)        # 让重建图接近训练图
+latent = encoder(image, text) # 抽出文字没写出的细节
+rebuild = decoder(text, latent) # 用文字和细节重建原图
+loss = distance(rebuild, image) # 让重建图接近训练图
 
-sampled_latent = sample_normal()       # 真实生成时没有原图，只能采样
+sampled_latent = sample_normal() # 真实生成时没有原图，只能采样
 new_image = decoder(text, sampled_latent)</code></pre>
-      <div class="grid2">
-        <div class="box soft"><h3>逐行理解</h3><p>`text` 只保存用户说出的条件。`image` 是训练时才有的真实图。`encoder` 读到两者后抽出潜变量；这个潜变量补的是文字没说完的品种、背景、姿态等资讯。`decoder` 负责把文字和潜变量合成图像。</p><p>最后两行说明生成阶段的差异：这时没有原图，也就没有 Encoder 可读的对象。模型只能从一个分布里取潜变量，再交给 Decoder。你现在应该能说清楚训练阶段和生成阶段的输入为什么不同。</p></div>
-        <div class="box warn"><h3>容易改错的地方</h3><p>如果把 `sampled_latent` 删除，生成会退化成“同一段文字总是同一张图”的倾向，很难覆盖多种合理细节。如果把 `loss` 理解成必须还原唯一标准答案，也会误解这节课：训练图是监督信号，但生成任务允许多种合理输出。</p><p>判断句：训练时潜变量来自真实图片，生成时潜变量来自采样；这两句话能分清，VAE 的核心就稳了。</p></div>
-      </div>
-      <div class="codebar"><span class="label">最小示例：Diffusion Transformer 去噪</span><span class="kind">python</span></div>
-      <pre><code>patches = sample_noise_patches()
-text = encode_text(&quot;雪地里的一只猫&quot;)
+        </div>
+        <div class="box warn">
+<h3>容易改错的地方</h3>
+<p>如果把 <code>sampled_latent</code> 删除，生成会退化成“同一段文字总是同一张图”的倾向，很难覆盖多种合理细节。如果把 <code>loss</code> 理解成必须还原唯一标准答案，也会误解这节课：训练图是监督信号，但生成任务允许多种合理输出。</p>
+<p>判断句：训练时潜变量来自真实图片，生成时潜变量来自采样；这两句话能分清，VAE 的核心就稳了。</p>
+<p>最小示例：Diffusion Transformer 去噪python</p>
+<pre><code class="language-text">patches = sample_noise_patches()
+text = encode_text("雪地里的一只猫")
 
 for step in range(1000, 0, -1):
-    cleaner = transformer_denoise(patches, text, step)
-    patches = update(patches, cleaner, step)
+ cleaner = transformer_denoise(patches, text, step)
+ patches = update(patches, cleaner, step)
 
 image = patch_decoder(patches)</code></pre>
-      <div class="box"><h3>再看 Diffusion</h3><p>`patches` 一开始全是噪声。`transformer_denoise` 每次只让它更干净一点；重复很多次后，patch 才能被还原成图像。这解释了课程中反复出现的说法：Diffusion 的痛点是去噪次数很多，研究趋势之一是用更少步骤得到清晰图。</p><p>你现在应该能判断：如果有人说 Diffusion 是“一步画完整图片”，这句话不准确。</p></div>
-      <div class="box warn">
-        <h3>Worked case：同一句 prompt 怎样产出三张合理狗图</h3>
-        <p>任务是给“一只奔跑的狗”生成三张彼此不同但都合理的图片：一张草地哈士奇、一张街道柴犬、一张海边金毛。核心判断不是“模型会不会画狗”，而是“未被文字说明的品种、背景、姿态和光线由谁补上”。</p>
-        <div class="table-wrap"><table class="metric-table">
-          <tr><th>方法</th><th>流程例子</th><th>你要检查的点</th></tr>
-          <tr><td>VAE</td><td>固定文字条件，每次采样不同 latent，再由 decoder 生成不同狗图。</td><td>训练时 latent 来自真实图，生成时 latent 来自采样；不要说生成阶段还能从目标图抽细节。</td></tr>
-          <tr><td>Flow</td><td>从简单噪声采样 z，经可逆变换得到图像；训练时真实图可反算回 z。</td><td>看它是否能反向算密度，而不只是能生成好看的图。</td></tr>
-          <tr><td>Diffusion</td><td>从三组不同噪声 patch 出发，在同一文字条件下反复去噪，得到三张图。</td><td>多样性来自初始噪声和采样路径，代价来自多步去噪。</td></tr>
-          <tr><td>GAN</td><td>generator 产图，discriminator 判断图像是否像真实狗图且是否匹配文字。</td><td>它提供的是可学习评价信号，训练稳定性和模式覆盖要单独检查。</td></tr>
-        </table></div>
-        <p>结论：四种方法都在处理“文字没说完”的问题，只是补信息的位置不同。你现在应该能做的事：看到新的图像生成论文时，先找它把未说明细节放在 latent、noise、可逆变换、去噪步骤，还是判别器反馈里。</p>
-      </div>
-    </section>
-
-    <section id="viz">
-      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <h3>文字没说出的细节</h3>
-            <div class="slider-row"><span>潜变量承担比例</span><input id="complexity" type="range" min="10" max="100" value="45"><b id="complexityOut">45</b></div>
-            <div class="demo-meter"><div class="demo-fill" id="complexityFill"></div></div>
-            <p id="complexityText" class="checkpoint"></p>
-          </div>
-          <div class="viz-cell">
-            <h3>生成路线</h3>
-            <div class="seg">
-              <button data-check="loose" class="active">VAE / Flow</button>
-              <button data-check="normal">Diffusion</button>
-              <button data-check="strict">GAN / 互动</button>
-            </div>
-            <p id="checkText" class="checkpoint"></p>
-          </div>
-        </div>
-      </div>
-      <p>观察重点：同一个 prompt 的不确定性越高，潜变量或多步采样承担的工作越多。比较方法时要说清楚：它是一次解码、可逆转换、反复去噪，还是靠另一个模型评价。</p>
-    </section>
-
-    <section id="diagnosis">
-      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
-      <div class="grid2">
-        <div class="box redsoft">
-          <h3>常见坑</h3>
-          <ol><li>把 noise 当成无用杂讯。错因：只看名字，没有看它在生成时补细节。后果：无法解释表情、背景、风格如何变化。修法：把 noise 看成潜变量的一种来源。</li><li>认为 VAE 生成时还能用 Encoder 读原图。错因：混淆训练和推理。后果：说不清为什么要采样潜变量。修法：训练时有原图，生成时只有文字条件。</li><li>把 Flow 说成“多训练一个 Encoder”。错因：漏掉可逆约束。后果：无法区分 Flow 和普通 Auto Encoder。修法：说明反函数直接承担 Encoder 的角色。</li><li>认为 Diffusion 一步生成图像。错因：忽略多步 Denoise。后果：看不懂为什么采样速度是研究重点。修法：讲清 forward process 加噪与 reverse process 去噪。</li><li>问“GAN 和 Diffusion 谁赢”但不说明比较对象。错因：把 GAN 当成只能独立存在的模型。后果：忽略 GAN 可以作为评价训练框架挂到其他生成器上。修法：先定义任务、质量、速度和训练稳定性。</li><li>把 latent action 当作真实按键记录。错因：没看动作抽取模型的来源。后果：误判互动模型的数据要求。修法：说明它是从前后画面变化中推断出来的隐藏动作。</li></ol>
         </div>
         <div class="box">
-          <h3>易混概念</h3>
-          <table class="metric-table">
-            <tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr>
-            <tr><td>Encoder</td><td>Decoder</td><td>Encoder 把图像压成潜变量；Decoder 用潜变量和条件还原或生成图像。</td></tr>
-            <tr><td>VAE</td><td>Flow</td><td>VAE 训练 Encoder 和 Decoder；Flow 强迫转换可逆，用反函数当 Encoder。</td></tr>
-            <tr><td>Forward process</td><td>Reverse process</td><td>前者把图像加噪；后者从噪声逐步去噪回图像。</td></tr>
-            <tr><td>Generator</td><td>Discriminator</td><td>Generator 产图；Discriminator 评价图像是否真实、是否符合条件。</td></tr>
-            <tr><td>真实动作</td><td>Latent Action</td><td>真实动作来自用户记录；latent action 是模型从画面变化中猜出的控制变量。</td></tr>
-          </table>
+<h3>再看 Diffusion</h3>
+<p><code>patches</code> 一开始全是噪声。<code>transformer_denoise</code> 每次只让它更干净一点；重复很多次后，patch 才能被还原成图像。这解释了课程中反复出现的说法：Diffusion 的痛点是去噪次数很多，研究趋势之一是用更少步骤得到清晰图。</p>
+<p>你现在应该能判断：如果有人说 Diffusion 是“一步画完整图片”，这句话不准确。</p>
+        </div>
+        <div class="box warn">
+<h3>Worked case：同一句 prompt 怎样产出三张合理狗图</h3>
+<p>任务是给“一只奔跑的狗”生成三张彼此不同但都合理的图片：一张草地哈士奇、一张街道柴犬、一张海边金毛。核心判断“未被文字说明的品种、背景、姿态和光线由谁补上”。</p>
+<p>方法流程例子你要检查的点</p>
+<p>VAE固定文字条件，每次采样不同 latent，再由 decoder 生成不同狗图。训练时 latent 来自真实图，生成时 latent 来自采样；不要说生成阶段还能从目标图抽细节。</p>
+<p>Flow从简单噪声采样 z，经可逆变换得到图像；训练时真实图可反算回 z。看它是否能反向算密度，而不只是能生成好看的图。</p>
+<p>Diffusion从三组不同噪声 patch 出发，在同一文字条件下反复去噪，得到三张图。多样性来自初始噪声和采样路径，代价来自多步去噪。</p>
+<p>GANgenerator 产图，discriminator 判断图像是否像真实狗图且是否匹配文字。它提供的是可学习评价信号，训练稳定性和模式覆盖要单独检查。</p>
+<p>结论：四种方法都在处理“文字没说完”的问题，只是补信息的位置不同。你现在应该能做的事：看到新的图像生成论文时，先找它把未说明细节放在 latent、noise、可逆变换、去噪步骤，还是判别器反馈里。</p>
+        </div>
+      </section>
+      <section id="viz">
+        <div class="head">
+          <h2>交互观察</h2>
+          <span class="tag">OBSERVE</span>
+        </div>
+<p>文字没说出的细节</p>
+<p>潜变量承担比例<b>45</b></p>
+<p>VAE / Flow</p>
+<p>Diffusion</p>
+<p>GAN / 互动</p>
+      </section>
+      <section id="diagnosis">
+        <div class="head">
+          <h2>误区诊断</h2>
+          <span class="tag">DIAGNOSIS</span>
+        </div>
+      <div class="grid2">
+        <div class="box redsoft">
+<h3>常见坑</h3>
+<ol>
+<li>把 noise 当成无用杂讯。错因：只看名字，没有看它在生成时补细节。后果：无法解释表情、背景、风格如何变化。修法：把 noise 看成潜变量的一种来源。</li>
+<li>认为 VAE 生成时还能用 Encoder 读原图。错因：混淆训练和推理。后果：说不清为什么要采样潜变量。修法：训练时有原图，生成时只有文字条件。</li>
+<li>把 Flow 说成“多训练一个 Encoder”。错因：漏掉可逆约束。后果：无法区分 Flow 和普通 Auto Encoder。修法：说明反函数直接承担 Encoder 的角色。</li>
+<li>认为 Diffusion 一步生成图像。错因：忽略多步 Denoise。后果：看不懂为什么采样速度是研究重点。修法：讲清 forward process 加噪与 reverse process 去噪。</li>
+<li>问“GAN 和 Diffusion 谁赢”但不说明比较对象。错因：把 GAN 当成只能独立存在的模型。后果：忽略 GAN 可以作为评价训练框架挂到其他生成器上。修法：先定义任务、质量、速度和训练稳定性。</li>
+<li>把 latent action 当作真实按键记录。错因：没看动作抽取模型的来源。后果：误判互动模型的数据要求。修法：说明它是从前后画面变化中推断出来的隐藏动作。</li>
+</ol>
+        </div>
+        <div class="box">
+<h3>易混概念</h3>
+<p>概念 A概念 B区别</p>
+<p>EncoderDecoderEncoder 把图像压成潜变量；Decoder 用潜变量和条件还原或生成图像。</p>
+<p>VAEFlowVAE 训练 Encoder 和 Decoder；Flow 强迫转换可逆，用反函数当 Encoder。</p>
+<p>Forward processReverse process前者把图像加噪；后者从噪声逐步去噪回图像。</p>
+<p>GeneratorDiscriminatorGenerator 产图；Discriminator 评价图像是否真实、是否符合条件。</p>
+<p>真实动作Latent Action真实动作来自用户记录；latent action 是模型从画面变化中猜出的控制变量。</p>
         </div>
       </div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">DRILL</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答前先抓主线</strong><p>先写“输入漏了什么”，再写“方法怎样补这些资讯”，最后写“训练和生成阶段有什么不同”。开放题短一点也可以，但要能检查。</p></div>
-        <div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起 VAE、Auto Encoder、Encoder、Decoder、潜变量、Noise、Flow-based model、Diffusion model、Denoise、GAN、Latent Action。</p></div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、基础概念</h3><p>这一组先检查术语和边界。答案短一点也可以，但要说准。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-title="1. 同一句文字条件可能对应多张合理图片，所以影像生成需要处理未被文字说明的细节。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. 同一句文字条件可能对应多张合理图片，所以影像生成需要处理未被文字说明的细节。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
-          <div class="q" data-role="homework" data-title="2. 在“一只奔跑的狗”这个例子里，哪个问题最能说明文字条件不足？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. 在“一只奔跑的狗”这个例子里，哪个问题最能说明文字条件不足？</h3><div class="choices"><label><input type="radio" name="q2" value="狗的品种、背景和姿态没有被唯一指定">狗的品种、背景和姿态没有被唯一指定</label><label><input type="radio" name="q2" value="模型不能处理文字">模型不能处理文字</label><label><input type="radio" name="q2" value="图片只能从左上角开始生成">图片只能从左上角开始生成</label></div></div>
-          <div class="q short" data-role="homework" data-title="3. Auto Encoder 的两个主要部件是 ______ 和 ______。"><div class="q-meta"><span class="pill">填空</span></div><h3>3. Auto Encoder 的两个主要部件是 ______ 和 ______。</h3><input type="text" name="q3"></div>
-          <div class="q short" data-role="homework" data-title="4. 用 1-2 句话解释潜变量或 noise 在图像生成里承担什么工作。"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 用 1-2 句话解释潜变量或 noise 在图像生成里承担什么工作。</h3><textarea name="q4"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>二、主线理解</h3><p>这一组要求你把概念连成一条可复述的链路。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="5. 把 VAE 的训练流程排序：重建原图、Encoder 抽 code、输入图片和文字、Decoder 读 code 和文字。"><div class="q-meta"><span class="pill">排序</span></div><h3>5. 把 VAE 的训练流程排序：重建原图、Encoder 抽 code、输入图片和文字、Decoder 读 code 和文字。</h3><textarea name="q5"></textarea></div>
-          <div class="q short" data-role="homework" data-title="6. 区分 VAE 和 Flow-based model：它们怎样得到 Encoder 方向？"><div class="q-meta"><span class="pill">对照</span></div><h3>6. 区分 VAE 和 Flow-based model：它们怎样得到 Encoder 方向？</h3><textarea name="q6"></textarea></div>
-          <div class="q short" data-role="homework" data-title="7. 为什么说 Diffusion 的 forward process 类似其他模型里的 Encoder 方向？"><div class="q-meta"><span class="pill">解释</span></div><h3>7. 为什么说 Diffusion 的 forward process 类似其他模型里的 Encoder 方向？</h3><textarea name="q7"></textarea></div>
-          <div class="q short" data-role="homework" data-title="8. Diffusion 训练 Denoise 模块时，需要自己制造 ______ 图和 ______ 图的配对。"><div class="q-meta"><span class="pill">填空</span></div><h3>8. Diffusion 训练 Denoise 模块时，需要自己制造 ______ 图和 ______ 图的配对。</h3><input type="text" name="q8"></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、例子阅读</h3><p>这一组把讲义里的最小例子转成可检查的问题。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="9. VAE 伪代码里，为什么训练时有 image，生成时没有 image？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>9. VAE 伪代码里，为什么训练时有 image，生成时没有 image？</h3><textarea name="q9"></textarea></div>
-          <div class="q short" data-role="homework" data-title="10. 如果生成阶段不采样 sampled_latent，输出多样性会有什么问题？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>10. 如果生成阶段不采样 sampled_latent，输出多样性会有什么问题？</h3><textarea name="q10"></textarea></div>
-          <div class="q short" data-role="homework" data-title="11. Diffusion Transformer 伪代码中，transformer_denoise 的输入和输出分别是什么？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>11. Diffusion Transformer 伪代码中，transformer_denoise 的输入和输出分别是什么？</h3><textarea name="q11"></textarea></div>
-          <div class="q" data-role="homework" data-title="12. Diffusion model 的采样步骤很多，所以速度和步数是重要研究问题。"><div class="q-meta"><span class="pill">判断</span></div><h3>12. Diffusion model 的采样步骤很多，所以速度和步数是重要研究问题。</h3><div class="choices"><label><input type="radio" name="q12" value="对">对</label><label><input type="radio" name="q12" value="错">错</label></div></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、错误诊断</h3><p>这一组按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="13. 有人说“noise 都是没用的干扰，生成时应该删掉”。错因是什么、后果是什么、怎么改？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 有人说“noise 都是没用的干扰，生成时应该删掉”。错因是什么、后果是什么、怎么改？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q13"></textarea></div>
-          <div class="q short" data-role="homework" data-title="14. 有人说“VAE 生成图片时，Encoder 会从目标图片里抽细节”。这句话哪里错？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. 有人说“VAE 生成图片时，Encoder 会从目标图片里抽细节”。这句话哪里错？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q14"></textarea></div>
-          <div class="q short" data-role="homework" data-title="15. 有人把 Flow-based model 解释成“和 VAE 一样，只是名字不同”。错因是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 有人把 Flow-based model 解释成“和 VAE 一样，只是名字不同”。错因是什么？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q15"></textarea></div>
-          <div class="q short" data-role="homework" data-title="16. 有人说“Diffusion Transformer 就是拿 Transformer 做文字接龙”。这句话的问题在哪里？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 有人说“Diffusion Transformer 就是拿 Transformer 做文字接龙”。这句话的问题在哪里？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q16"></textarea></div>
-          <div class="q short" data-role="homework" data-title="17. 有人问“GAN 和 Diffusion 到底谁比较强”，但没有说明任务。这个问题为什么不稳？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>17. 有人问“GAN 和 Diffusion 到底谁比较强”，但没有说明任务。这个问题为什么不稳？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q17"></textarea></div>
-          <div class="q short" data-role="homework" data-title="18. 有人把 latent action 当成真实记录到的玩家按键。错因是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>18. 有人把 latent action 当成真实记录到的玩家按键。错因是什么？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q18"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>五、场景迁移</h3><p>这一组检查你能不能换个场景继续判断。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="19. 你要做“同一句 prompt 生成多张不同但合理的狗图”。你会让哪个变量负责多样性？"><div class="q-meta"><span class="pill">应用</span></div><h3>19. 你要做“同一句 prompt 生成多张不同但合理的狗图”。你会让哪个变量负责多样性？</h3><textarea name="q19"></textarea></div>
-          <div class="q short" data-role="homework" data-title="20. 如果要把生图模型变成可操控的横向卷轴游戏，训练资料至少需要哪些东西？"><div class="q-meta"><span class="pill">应用</span></div><h3>20. 如果要把生图模型变成可操控的横向卷轴游戏，训练资料至少需要哪些东西？</h3><textarea name="q20"></textarea></div>
-          <div class="q short" data-role="homework" data-title="21. 如果只有游戏影片、没有玩家按键记录，可以怎样借用 Auto Encoder 的思路？"><div class="q-meta"><span class="pill">迁移</span></div><h3>21. 如果只有游戏影片、没有玩家按键记录，可以怎样借用 Auto Encoder 的思路？</h3><textarea name="q21"></textarea></div>
-          <div class="q short" data-role="homework" data-title="22. 写出 5 条比较 VAE、Flow、Diffusion、GAN 时需要声明的条件。"><div class="q-meta"><span class="pill">清单</span></div><h3>22. 写出 5 条比较 VAE、Flow、Diffusion、GAN 时需要声明的条件。</h3><textarea name="q22"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>六、表达输出</h3><p>最后两题检查你能不能讲给别人听。</p></div><div class="quick-review"><b>REMIND</b>把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="23. 如果面试官问“这节课里四种经典影像生成方法的共同问题是什么”，你会怎么答？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>23. 如果面试官问“这节课里四种经典影像生成方法的共同问题是什么”，你会怎么答？</h3><textarea name="q23"></textarea></div>
-          <div class="q short" data-role="homework" data-title="24. 用 2-3 句话解释 GAN 为什么可以被看成某种“外挂评价器”。"><div class="q-meta"><span class="pill">面试短答</span></div><h3>24. 用 2-3 句话解释 GAN 为什么可以被看成某种“外挂评价器”。</h3><textarea name="q24"></textarea></div>
-          <div class="q full" data-role="homework" data-title="25. 用 7-10 句话讲清楚经典影像生成方法速览。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>25. 用 7-10 句话讲清楚经典影像生成方法速览。请串联 VAE、Auto Encoder、Encoder、Decoder、潜变量、Noise、Flow-based model、Diffusion model、Denoise、GAN、Latent Action。</h3><div class="solve-note">先说文字条件为什么不够，再说各方法怎样补资讯，最后说互动式影像生成怎样把动作也变成隐藏变量。</div><textarea name="q25"></textarea></div>
-        </div>
-      </div>
-    </section>
 
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          <div class="quick-review">REMIND 把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 1. 同一句文字条件可能对应多张合理图片，所以影像生成需要处理未被文字说明的细节。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 2. 在“一只奔跑的狗”这个例子里，哪个问题最能说明文字条件不足？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="狗的品种、背景和姿态没有被唯一指定">狗的品种、背景和姿态没有被唯一指定</label>
+      <label><input type="radio" name="q?" value="模型不能处理文字">模型不能处理文字</label>
+      <label><input type="radio" name="q?" value="图片只能从左上角开始生成">图片只能从左上角开始生成</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 3. Auto Encoder 的两个主要部件是 ______ 和 ______。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 4. 用 1-2 句话解释潜变量或 noise 在图像生成里承担什么工作。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、主线理解</h3></div>
+          <div class="quick-review">REMIND 把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">排序</span></div>
+        <h3><b>Q:</b> 5. 把 VAE 的训练流程排序：重建原图、Encoder 抽 code、输入图片和文字、Decoder 读 code 和文字。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 6. 区分 VAE 和 Flow-based model：它们怎样得到 Encoder 方向？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 7. 为什么说 Diffusion 的 forward process 类似其他模型里的 Encoder 方向？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 8. Diffusion 训练 Denoise 模块时，需要自己制造 ______ 图和 ______ 图的配对。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、例子阅读</h3></div>
+          <div class="quick-review">REMIND 把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">代码阅读</span></div>
+        <h3><b>Q:</b> 9. VAE 伪代码里，为什么训练时有 image，生成时没有 image？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">代码阅读</span></div>
+        <h3><b>Q:</b> 10. 如果生成阶段不采样 sampled_latent，输出多样性会有什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">代码阅读</span></div>
+        <h3><b>Q:</b> 11. Diffusion Transformer 伪代码中，transformer_denoise 的输入和输出分别是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 12. Diffusion model 的采样步骤很多，所以速度和步数是重要研究问题。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、错误诊断</h3></div>
+          <div class="quick-review">REMIND 把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 13. 有人说“noise 都是没用的干扰，生成时应该删掉”。错因是什么、后果是什么、怎么改？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 14. 有人说“VAE 生成图片时，Encoder 会从目标图片里抽细节”。这句话哪里错？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 15. 有人把 Flow-based model 解释成“和 VAE 一样，只是名字不同”。错因是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 16. 有人说“Diffusion Transformer 就是拿 Transformer 做文字接龙”。这句话的问题在哪里？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 17. 有人问“GAN 和 Diffusion 到底谁比较强”，但没有说明任务。这个问题为什么不稳？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 18. 有人把 latent action 当成真实记录到的玩家按键。错因是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、场景迁移</h3></div>
+          <div class="quick-review">REMIND 把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">应用</span></div>
+        <h3><b>Q:</b> 19. 你要做“同一句 prompt 生成多张不同但合理的狗图”。你会让哪个变量负责多样性？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">应用</span></div>
+        <h3><b>Q:</b> 20. 如果要把生图模型变成可操控的横向卷轴游戏，训练资料至少需要哪些东西？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 21. 如果只有游戏影片、没有玩家按键记录，可以怎样借用 Auto Encoder 的思路？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 22. 写出 5 条比较 VAE、Flow、Diffusion、GAN 时需要声明的条件。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>六、表达输出</h3></div>
+          <div class="quick-review">REMIND 把答案写成能被检查的句子。遇到错误题，先定位错因，再说后果。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 23. 如果面试官问“这节课里四种经典影像生成方法的共同问题是什么”，你会怎么答？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 24. 用 2-3 句话解释 GAN 为什么可以被看成某种“外挂评价器”。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 25. 用 7-10 句话讲清楚经典影像生成方法速览。请串联 VAE、Auto Encoder、Encoder、Decoder、潜变量、Noise、Flow-based model、Diffusion model、Denoise、GAN、Latent Action。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>自学记录</h2><span class="tag">记录</span></div>
-      <p class="muted">完成练习后生成学习记录，方便自查和讨论。</p>
-      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../../assets/study-page.js"></script>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){
-  const max=document.documentElement.scrollHeight-innerHeight;
-  progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";
-  let current=sections[0]?.id;
-  for(const section of sections){
-    const rect=section.getBoundingClientRect();
-    if(rect.top<innerHeight*.36) current=section.id;
-    section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);
-  }
-  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));
-}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-document.querySelectorAll(".codebar").forEach(bar=>{
-  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
-  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});
-  bar.appendChild(btn);
-});
-const complexity=document.getElementById("complexity");
-function updateComplexity(){
-  const value=Number(complexity.value);
-  document.getElementById("complexityOut").textContent=value;
-  document.getElementById("complexityFill").style.width=value+"%";
-  document.getElementById("complexityText").textContent=value>75?"文字条件很粗时，潜变量决定大量细节；同一句 prompt 会有很多合理输出。":value<30?"文字条件已经很具体时，潜变量主要补小范围风格和随机变化。":"文字给出主题，潜变量补背景、姿态、光照等未说明细节。";
-}
-complexity.addEventListener("input",updateComplexity);updateComplexity();
-const checkTexts={
-  loose:"VAE 用 Encoder/Decoder 学潜空间；Flow 强调转换可逆，反函数可以当作 Encoder。",
-  normal:"Diffusion 先加噪再学去噪；推理时从噪声开始，反复调用 Denoise 模块。",
-  strict:"GAN 用 Discriminator 给 Generator 提供评价；互动式生成还要把动作当成可推断的隐藏变量。"
-};
-document.querySelectorAll("[data-check]").forEach(btn=>btn.addEventListener("click",()=>{
-  document.querySelectorAll("[data-check]").forEach(b=>b.classList.toggle("active",b===btn));
-  document.getElementById("checkText").textContent=checkTexts[btn.dataset.check];
-}));
-document.getElementById("checkText").textContent=checkTexts.loose;
-function valueOfQuestion(q){
-  const radio=q.querySelector("input[type=radio]:checked"); if(radio) return radio.value;
-  const text=q.querySelector("textarea,input[type=text],select"); return text?text.value.trim():"";
-}
-function questionGroup(q){return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";}
-function generateRecord(){
-  const qs=[...document.querySelectorAll('[data-role="homework"]')],groups={},warnings=[];
-  qs.forEach((q,i)=>{
-    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";
-    const hint=q.querySelector(".solve-note")?.innerText.trim()||"";
-    const answer=valueOfQuestion(q);
-    if(!answer) warnings.push("第 "+(i+1)+" 题未填写："+title);
-    if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))) warnings.push("第 "+(i+1)+" 题建议补齐“错因 / 后果 / 修法”。");
-    if(q.dataset.type==="feynman"){
-      const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
-      if(answer&&answer.length<120) warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");
-      const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):[];
-      if(lack.length) warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");
-    }
-    const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
-  });
-  let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";
-  Object.keys(groups).forEach(group=>{out+="## "+group+"\n\n";groups[group].forEach(item=>{out+="### "+item.title+"\n";if(item.hint) out+="提示摘要："+item.hint+"\n\n";out+=item.answer+"\n\n";});});
-  document.getElementById("record").textContent=out;
-  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以用于自查。";
-}
-function fallbackCopy(text,onOk,onFail){
-  const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";document.body.appendChild(ta);ta.focus();ta.select();
-  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
-}
-function copyText(text,onOk,onFail){
-  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
-  else fallbackCopy(text,onOk,onFail);
-}
-function copyRecord(){
-  copyText(document.getElementById("record").textContent,()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";},()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";});
-}
-</script>
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

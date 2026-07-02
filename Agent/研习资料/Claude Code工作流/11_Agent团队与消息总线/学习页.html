@@ -4,301 +4,515 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>11 Agent团队与消息总线｜Claude Code 工作流</title>
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body>
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Claude Code 工作流</strong><span>11｜Agent团队与消息总线</span></div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>目标与主线</a>
-      <a href="#why"><span class="dot"></span>团队系统</a>
-      <a href="#bus"><span class="dot"></span>消息总线</a>
-      <a href="#manager"><span class="dot"></span>队员管理</a>
-      <a href="#loop"><span class="dot"></span>双 loop 对比</a>
-      <a href="#slash"><span class="dot"></span>slash 命令</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>导出学习记录</a>
-    </nav>
-    <div class="side-note">Agent team 的底座不是“很多模型同时聊天”，而是队员状态、消息邮箱、独立 loop 和精简工具集。</div>
-  </aside>
-  <main>
-    <header class="hero" id="goal">
-      <div>
-        <div class="kicker">Agent team</div>
-        <h1>Agent团队与消息总线</h1>
-        <p class="muted">本节实现一个最小 Agent team：lead Agent 可以生成 teammate，例如 Alice；TeammateManager 把成员写进 `.teams/config.json`；MessageBus 把消息写进 `.teams/inbox/{name}.jsonl`；lead loop 和 teammate loop 每轮开始都会读取自己的 inbox，把消息注入 messages 后再请求模型。</p>
-        <div class="map">
-          <span class="node">spawn_teammate</span><span class="arrow">→</span>
-          <span class="node">config.json</span><span class="arrow">→</span>
-          <span class="node">teammate thread</span><span class="arrow">→</span>
-          <span class="node">send_message</span><span class="arrow">→</span>
-          <span class="node">inbox jsonl</span>
-        </div>
-        <p>学完本页，你应该能解释团队系统如何创建队员、队员如何收发消息、为什么队员工具集要裁剪，以及 `/tm`、`/inbox` 如何绕开 LLM 直接查看团队状态。</p>
-      </div>
-      <div class="box soft">
-        <h3>来源材料</h3>
-        <p>视频：《Learn Claude Code 源码详解》团队协作，让 Agent 更强大，开发实战分享屋，2026-03-25。</p>
-        <p>本页聚焦 MessageBus、TeammateManager、teammate loop、消息收件箱、成员状态和 slash 命令。</p>
-      </div>
-    </header>
+<body data-course="Claude Code 工作流" data-unit="11">
 
-    <section id="why">
-      <div class="head"><h2>1. Agent team 先要有团队状态和通信通道</h2><span class="tag">team basics</span></div>
-      <p>多个 Agent 协作时，不能只靠“多开几个模型”。系统至少要知道团队里有哪些成员、成员负责什么角色、当前状态是什么，以及成员之间如何发送消息。本节用文件系统实现了一个简单团队底座。</p>
-      <p>目录结构很直接：`.teams/config.json` 保存 team name 和 members；`.teams/inbox/` 存每个成员的收件箱文件。lead 是主 Agent，teammate 是被生成的队员，每个队员运行在独立线程里，有自己的 prompt、自己的工具集和自己的收件箱。</p>
-      <div class="grid2">
-        <div class="box ok">
-          <h3>团队系统需要保存</h3>
-          <ul>
-            <li>成员名称，例如 Alice。</li>
-            <li>成员角色，例如 coder。</li>
-            <li>成员状态，例如 working / idle。</li>
-            <li>成员线程引用。</li>
-          </ul>
-        </div>
-        <div class="box warn">
-          <h3>团队系统需要通信</h3>
-          <ul>
-            <li>向指定成员发送消息。</li>
-            <li>读取自己的 inbox。</li>
-            <li>读完后清空收件箱。</li>
-            <li>把收件箱消息注入 messages。</li>
-          </ul>
-        </div>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">Claude Code 工作流</a>
+        <span class="sep">/</span>
+        <span>11</span>
       </div>
-      <p>你现在应该能做什么：看到一个多 Agent 系统时，先问“成员状态在哪里、消息怎么传、谁能生成谁”。</p>
-    </section>
-
-    <section id="bus">
-      <div class="head"><h2>2. MessageBus：用 JSONL 文件做收件箱</h2><span class="tag">inbox jsonl</span></div>
-      <p>MessageBus 初始化时创建 `.teams/inbox` 目录。发送消息时，它根据接收者名字找到对应文件，例如发给 lead 就写入 `.teams/inbox/lead.jsonl`。每条消息是一行 JSON，包含 type、from、content、timestamp 等字段。</p>
-      <p>读取 inbox 时，它会读出所有行并解析成消息列表，然后清空这个文件。这和上一节后台任务的 drain 通知队列很像：取出后清空，避免同一条消息反复注入。</p>
-      <div class="grid2">
-        <div class="box soft">
-          <h3>消息字段的最小约定</h3>
-          <ul>
-            <li>`type`：区分普通消息、请求、响应或系统事件。</li>
-            <li>`from`：发送者，用来追溯来源。</li>
-            <li>`to`：接收者，便于调试和审计。</li>
-            <li>`content`：人类或模型可读的正文。</li>
-            <li>`timestamp`：排序和排查延迟。</li>
-          </ul>
-        </div>
-        <div class="box ok">
-          <h3>验收清单</h3>
-          <ul>
-            <li>发给谁就只写入谁的 inbox。</li>
-            <li>每行 JSON 都能独立解析。</li>
-            <li>读完 inbox 后不会重复注入。</li>
-            <li>并发写入有锁、队列或追加策略。</li>
-            <li>坏消息不会让整个 inbox 解析失败。</li>
-          </ul>
-        </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
-      <div class="codebar"><span class="label">最小示例：写入 lead 收件箱</span><span>JSONL</span></div>
-      <pre><code>{"type":"message","from":"alice","content":"Hi, I am Alice, a coder.","timestamp":"2026-03-25T...Z"}</code></pre>
-      <div class="codebar"><span class="label">逐行拆解：发送消息</span><span>Python</span></div>
-      <pre><code>def send(to, sender, content, message_type="message"):
-    message = {
-        "type": message_type,
-        "from": sender,
-        "content": content,
-        "timestamp": now_iso(),
-    }
-    inbox_path = inbox_dir / f"{to}.jsonl"
-    with inbox_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(message, ensure_ascii=False) + "\n")
-    return f"sent message to {to}"</code></pre>
-      <div class="codebar"><span class="label">正确示例：读取并清空 inbox</span><span>Python</span></div>
-      <pre><code>def read_inbox(name):
-    inbox_path = inbox_dir / f"{name}.jsonl"
-    if not inbox_path.exists():
-        return []
+    </div>
+  </nav>
 
-    messages = [json.loads(line) for line in inbox_path.read_text().splitlines()]
-    inbox_path.write_text("", encoding="utf-8")
-    return messages</code></pre>
-    </section>
-
-    <section id="manager">
-      <div class="head"><h2>3. TeammateManager：生成队员并维护状态</h2><span class="tag">config + thread</span></div>
-      <p>`spawn_teammate` 工具要求模型返回 `name`、`role` 和 `prompt`。本地收到后，TeammateManager 会先检查成员是否已存在；不存在就把成员加入 config，状态设为 working，保存到 `.teams/config.json`，再创建一个线程运行 `teammate_loop`。</p>
-      <p>队员完成自己的 loop 后，状态会从 working 改成 idle 并保存回 config。这样 `/tm` 查看团队时，就能看到 Alice 是 coder，当前 idle。状态不是只存在内存里，而是落到 config 文件中。</p>
-      <div class="codebar"><span class="label">正确示例：config.json</span><span>JSON</span></div>
-      <pre><code>{
-  "team_name": "default",
-  "members": [
-    {"name": "alice", "role": "coder", "status": "idle"}
-  ]
-}</code></pre>
-      <div class="codebar"><span class="label">逐行拆解：生成 teammate</span><span>Python</span></div>
-      <pre><code>def spawn_teammate(name, role, prompt):
-    if self.find_member(name):
-        return f"{name} already exists"
-
-    member = {"name": name, "role": role, "status": "working"}
-    self.config["members"].append(member)
-    self.save_config()
-
-    thread = threading.Thread(target=teammate_loop, args=(name, role, prompt))
-    self.threads[name] = thread
-    thread.start()
-    return f"spawned teammate {name}"</code></pre>
-      <p>这里和子 Agent 有相似点：新队员不是拥有所有能力的完整主 Agent。它有自己的 system prompt 和工具集，并且工具集会被裁剪，避免它继续无限 spawn 新队员。</p>
-    </section>
-
-    <section id="loop">
-      <div class="head"><h2>4. lead loop 与 teammate loop 的共同点和差异</h2><span class="tag">two loops</span></div>
-      <p>lead Agent 的 loop 和 teammate loop 很像：每轮都先读自己的 inbox，把消息加入 messages，再请求模型；模型如果返回 tool use，就执行工具并把结果继续写回 messages。差异在于 system prompt、工具集和循环上限。</p>
-      <p>lead 的 system prompt 是 team leader，工具集更强，可以 spawn teammate、list teammates、send message 等。teammate 的 prompt 是创建时传入的角色任务，工具集更小，通常只能收发消息或读取 inbox，不能再生成新 teammate。teammate loop 也不是无限 while，而是有限轮，例如 50 轮。</p>
-      <div class="box soft">
-        <h3>流程图式文字</h3>
-        <p>lead 调用 `spawn_teammate` → config 增加 Alice → Alice 线程启动 → Alice loop 读取 `alice.jsonl` → Alice 执行任务并调用 `send_message(to=lead)` → MessageBus 追加一行到 `lead.jsonl` → lead 下一轮读取自己的 inbox → 消息被注入 lead messages → lead 根据新信息继续决策。</p>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Agent team</div>
+      <div class="hero-meta">
+        <span class="hero-badge">11</span>
       </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>维度</th><th>lead loop</th><th>teammate loop</th></tr></thead>
-          <tbody>
-            <tr><td>system prompt</td><td>team leader</td><td>角色专属 prompt</td></tr>
-            <tr><td>inbox</td><td>`lead.jsonl`</td><td>`alice.jsonl` 等自己的 inbox</td></tr>
-            <tr><td>工具集</td><td>spawn/list/send/read 等较完整工具</td><td>裁剪后的 teammate tools</td></tr>
-            <tr><td>循环边界</td><td>主交互循环可持续</td><td>有限轮，例如 50 轮</td></tr>
-            <tr><td>状态</td><td>主控</td><td>working → idle</td></tr>
-          </tbody>
-        </table>
+      <h1 class="hero-title">11 Agent团队与消息总线｜Claude Code 工作流</h1>
+      <p class="hero-desc">本节实现一个最小 Agent team：lead Agent 可以生成 teammate，例如 Alice；TeammateManager 把成员写进 `.teams/config.json`；MessageBus 把消息写进 `.teams/inbox/{name}.jsonl`；lead loop 和 teammate loop 每轮开始都会读取自己的 inbox，把消息注入 messages 后再请求模型。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../10_后台任务与通知队列/学习页.html">上一节</a>
+            <a href="../12_团队关机协议与FSM/学习页.html">下一节</a>
       </div>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <h3>消息流切换</h3>
-            <div class="viz-actions">
-              <button data-flow="spawn" class="active">生成 Alice</button>
-              <button data-flow="send">Alice 发消息</button>
-              <button data-flow="read">lead 读 inbox</button>
-              <button data-flow="idle">Alice 变 idle</button>
-            </div>
-            <div class="flow">
-              <div class="flow-step" data-step="spawn"><strong>1. spawn_teammate</strong><br>lead 调用工具，写入 config，并启动 Alice 线程。</div>
-              <div class="flow-step" data-step="send"><strong>2. send_message</strong><br>Alice 调用 send_message，把消息写入 lead.jsonl。</div>
-              <div class="flow-step" data-step="read"><strong>3. read_inbox</strong><br>lead 下一轮读取 lead.jsonl，把消息注入 messages 并清空文件。</div>
-              <div class="flow-step" data-step="idle"><strong>4. status update</strong><br>Alice loop 结束，成员状态从 working 保存为 idle。</div>
-            </div>
-          </div>
-          <div class="viz-cell">
-            <h3 id="flowTitle">lead 创建队员</h3>
-            <p id="flowText">模型调用 `spawn_teammate`，本地把 Alice 写入 `.teams/config.json`，并启动一个 teammate loop 线程。</p>
-            <div class="mailbox" id="mailText"></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section id="slash">
-      <div class="head"><h2>5. `/tm` 和 `/inbox` 是直接命令，不走 LLM</h2><span class="tag">slash commands</span></div>
-      <p>main 函数对 `/tm` 和 `/inbox` 做了特殊处理。输入 `/tm` 时，程序直接读取 config 并列出团队成员；输入 `/inbox` 时，程序直接读取 lead 的 inbox。它们不会进入 agent loop，也不会请求模型。</p>
-      <p>这种设计很实用：团队状态和收件箱是系统状态，用户有时只想查看，不需要模型解释。直接命令更快、更稳定，也避免把一个简单查询变成模型推理。</p>
-      <div class="grid2">
-        <div class="box soft">
-          <h3>`/tm` 输出</h3>
-          <p>读取 `.teams/config.json`，显示 team name 和 members，例如 `alice coder idle`。</p>
-        </div>
-        <div class="box soft">
-          <h3>`/inbox` 输出</h3>
-          <p>读取 `.teams/inbox/lead.jsonl`，显示消息，并在读取后清空。</p>
-        </div>
-      </div>
-      <div class="box soft">
-        <h3>Worked example：为什么要裁剪 teammate 工具</h3>
-        <p>假设 Alice 是 coder，只负责实现一个小功能。如果 Alice 也能调用 `spawn_teammate`，她可能再生成 Bob，Bob 又生成 Carol，团队规模会在没有 lead 决策的情况下扩散。更稳的设计是：lead 拥有创建成员和查看全局状态的工具，teammate 只拥有完成自己任务、收发消息和报告结果所需的工具。</p>
-      </div>
-      <div class="box warn">
-        <h3>常见坑</h3>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
         <ul>
-          <li>队员工具集没裁剪，导致 teammate 也能无限 spawn。</li>
-          <li>读取 inbox 后不清空，导致消息重复进入上下文。</li>
-          <li>成员状态只改内存，不保存 config。</li>
-          <li>JSONL 消息缺少 type/from/content，后续无法路由和解释。</li>
-          <li>线程并发写 inbox 时没有考虑文件写入冲突。</li>
+
         </ul>
       </div>
-    </section>
+    </div>
+  </header>
 
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、基础概念</h3><p>先分清团队成员、消息总线和 loop。</p></div><div class="box soft">提示：多 Agent 协作首先要能记录成员、传递消息。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="1. 团队底座"><div class="q-meta"><span class="pill">选择</span></div><h3>1. Agent team 最少需要哪两类基础设施？</h3><label><input type="radio" name="q1" value="A">A. 成员状态和消息通道</label><br><label><input type="radio" name="q1" value="B">B. 只要更多模型就够了</label><br><label><input type="radio" name="q1" value="C">C. 只要一个更长 prompt</label></div>
-          <div class="q" data-title="2. 目录结构"><div class="q-meta"><span class="pill">填空</span></div><h3>2. 团队 config 存在 `.teams/______`，收件箱存在 `.teams/______`。</h3><input type="text" name="q2"></div>
-          <div class="q" data-title="3. JSONL"><div class="q-meta"><span class="pill">短答</span></div><h3>3. 为什么 inbox 使用 JSONL 比普通纯文本更适合？</h3><textarea name="q3"></textarea></div>
-          <div class="q" data-title="4. drain inbox"><div class="q-meta"><span class="pill">机制</span></div><h3>4. 读取 inbox 后为什么要清空文件？</h3><textarea name="q4"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>二、成员管理</h3><p>检查你能不能讲清 spawn 和状态保存。</p></div><div class="box warn">状态必须保存回 config，否则 `/tm` 看不到真实变化。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="5. spawn参数"><div class="q-meta"><span class="pill">填空</span></div><h3>5. `spawn_teammate` 的三个关键参数是 ______、______、______。</h3><input type="text" name="q5"></div>
-          <div class="q" data-title="6. config字段"><div class="q-meta"><span class="pill">清单</span></div><h3>6. `.teams/config.json` 中成员至少应保存哪些字段？</h3><textarea name="q6"></textarea></div>
-          <div class="q" data-title="7. working到idle"><div class="q-meta"><span class="pill">解释</span></div><h3>7. 为什么 teammate loop 结束后要把状态从 working 改成 idle？</h3><textarea name="q7"></textarea></div>
-          <div class="q" data-title="8. 重复成员"><div class="q-meta"><span class="pill">诊断</span></div><h3>8. 如果 `spawn_teammate` 不检查成员是否已存在，会有什么问题？</h3><textarea name="q8"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、消息流与工具集</h3><p>把 lead 和 teammate 的 loop 差异说清。</p></div><div class="box soft">teammate 不能拥有和 lead 完全相同的工具。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="9. send_message"><div class="q-meta"><span class="pill">流程</span></div><h3>9. Alice 给 lead 发消息时，文件系统里发生了什么？</h3><textarea name="q9"></textarea></div>
-          <div class="q" data-title="10. 自己inbox"><div class="q-meta"><span class="pill">判断</span></div><h3>10. 每个 Agent loop 开始时读取的是自己的 inbox。</h3><label><input type="radio" name="q10" value="对">对</label><br><label><input type="radio" name="q10" value="错">错</label></div>
-          <div class="q" data-title="11. 工具裁剪"><div class="q-meta"><span class="pill">解释</span></div><h3>11. 为什么 teammate tools 不应该包含 `spawn_teammate`？</h3><textarea name="q11"></textarea></div>
-          <div class="q" data-title="12. loop上限"><div class="q-meta"><span class="pill">边界</span></div><h3>12. teammate loop 为什么设置有限轮，例如 50 轮？</h3><textarea name="q12"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、命令与迁移</h3><p>理解 slash 命令和系统设计边界。</p></div><div class="box soft">直接命令适合查看系统状态，不必每次都请求模型。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="13. slash tm"><div class="q-meta"><span class="pill">短答</span></div><h3>13. `/tm` 做什么？为什么它不需要进入 agent loop？</h3><textarea name="q13"></textarea></div>
-          <div class="q" data-title="14. slash inbox"><div class="q-meta"><span class="pill">短答</span></div><h3>14. `/inbox` 与普通 Agent loop 开头读取 inbox 有什么相似点？</h3><textarea name="q14"></textarea></div>
-          <div class="q" data-title="15. 并发风险"><div class="q-meta"><span class="pill">清单</span></div><h3>15. 用文件 inbox 做消息总线有哪些并发或一致性风险？</h3><textarea name="q15"></textarea></div>
-          <div class="q" data-title="16. 面试短答"><div class="q-meta"><span class="pill">表达</span></div><h3>16. 用 2-3 句话解释 Agent team 的最小实现思路。</h3><textarea name="q16"></textarea></div>
-          <div class="q full" data-title="17. 流程图"><div class="q-meta"><span class="pill">流程图</span></div><h3>17. 用文字画出 lead 生成 Alice，Alice 发消息，lead 读取消息的完整流程。</h3><textarea name="q17"></textarea></div>
-          <div class="q full" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：Agent team 如何通过成员管理和消息总线实现协作。</h3><div class="solve-note">请串联 `.teams/config.json`、MessageBus、inbox JSONL、spawn_teammate、teammate loop、工具裁剪、`/tm`、`/inbox`。</div><textarea name="q18"></textarea></div>
-        </div>
-      </div>
-    </section>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#why">1. Agent team 先要有团队状态和通信通道</a>
+      <a href="#bus">2. MessageBus：用 JSONL 文件做收件箱</a>
+      <a href="#manager">3. TeammateManager：生成队员并维护状态</a>
+      <a href="#loop">4. lead loop 与 teammate loop 的共同点和差异</a>
+      <a href="#slash">5. `/tm` 和 `/inbox` 是直接命令，不走 LLM</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
 
+  <!-- Content -->
+  <article class="content">
+      <section id="why">
+        <div class="head">
+          <h2>1. Agent team 先要有团队状态和通信通道</h2>
+          <span class="tag">team</span>
+        </div>
+<p>多个 Agent 协作时，不能只靠“多开几个模型”。系统至少要知道团队里有哪些成员、成员负责什么角色、当前状态是什么，以及成员之间如何发送消息。本节用文件系统实现了一个简单团队底座。</p>
+        <div class="box">
+<h3>团队系统需要保存</h3>
+<ul>
+<li>成员名称，例如 Alice。</li>
+<li>成员角色，例如 coder。</li>
+<li>成员状态，例如 working / idle。</li>
+<li>成员线程引用。</li>
+</ul>
+        </div>
+        <div class="box warn">
+<h3>团队系统需要通信</h3>
+<ul>
+<li>向指定成员发送消息。</li>
+<li>读取自己的 inbox。</li>
+<li>读完后清空收件箱。</li>
+<li>把收件箱消息注入 messages。</li>
+</ul>
+<p>你现在应该能做什么：看到一个多 Agent 系统时，先问“成员状态在哪里、消息怎么传、谁能生成谁”。</p>
+        </div>
+      </section>
+      <section id="bus">
+        <div class="head">
+          <h2>2. MessageBus：用 JSONL 文件做收件箱</h2>
+          <span class="tag">inbox</span>
+        </div>
+<p>MessageBus 初始化时创建 <code>.teams/inbox</code> 目录。发送消息时，它根据接收者名字找到对应文件，例如发给 lead 就写入 <code>.teams/inbox/lead.jsonl</code>。每条消息是一行 JSON，包含 type、from、content、timestamp 等字段。</p>
+        <div class="box soft">
+<h3>消息字段的最小约定</h3>
+<ul>
+<li><code>type</code>：区分普通消息、请求、响应或系统事件。</li>
+<li><code>from</code>：发送者，用来追溯来源。</li>
+<li><code>to</code>：接收者，便于调试和审计。</li>
+<li><code>content</code>：人类或模型可读的正文。</li>
+<li><code>timestamp</code>：排序和排查延迟。</li>
+</ul>
+        </div>
+        <div class="box">
+<h3>验收清单</h3>
+<ul>
+<li>发给谁就只写入谁的 inbox。</li>
+<li>每行 JSON 都能独立解析。</li>
+<li>读完 inbox 后不会重复注入。</li>
+<li>并发写入有锁、队列或追加策略。</li>
+<li>坏消息不会让整个 inbox 解析失败。</li>
+</ul>
+<p>最小示例：写入 lead 收件箱JSONL</p>
+<pre><code class="language-text">{"type":"message","from":"alice","content":"Hi, I am Alice, a coder.","timestamp":"2026-03-25T...Z"}</code></pre>
+<p>逐行拆解：发送消息Python</p>
+<pre><code class="language-text">def send(to, sender, content, message_type="message"):
+ message = {
+ "type": message_type,
+ "from": sender,
+ "content": content,
+ "timestamp": now_iso(),
+ }
+ inbox_path = inbox_dir / f"{to}.jsonl"
+ with inbox_path.open("a", encoding="utf-8") as f:
+ f.write(json.dumps(message, ensure_ascii=False) + "\n")
+ return f"sent message to {to}"</code></pre>
+<p>正确示例：读取并清空 inboxPython</p>
+<pre><code class="language-text">def read_inbox(name):
+ inbox_path = inbox_dir / f"{name}.jsonl"
+ if not inbox_path.exists():
+ return []
+
+ messages = [json.loads(line) for line in inbox_path.read_text().splitlines()]
+ inbox_path.write_text("", encoding="utf-8")
+ return messages</code></pre>
+        </div>
+      </section>
+      <section id="manager">
+        <div class="head">
+          <h2>3. TeammateManager：生成队员并维护状态</h2>
+          <span class="tag">config</span>
+        </div>
+<p><code>spawn_teammate</code> 工具要求模型返回 <code>name</code>、<code>role</code> 和 <code>prompt</code>。本地收到后，TeammateManager 会先检查成员是否已存在；不存在就把成员加入 config，状态设为 working，保存到 <code>.teams/config.json</code>，再创建一个线程运行 <code>teammate_loop</code>。</p>
+<p>正确示例：config.jsonJSON</p>
+<p>逐行拆解：生成 teammatePython</p>
+<p>这里和子 Agent 有相似点：新队员不是拥有所有能力的完整主 Agent。它有自己的 system prompt 和工具集，并且工具集会被裁剪，避免它继续无限 spawn 新队员。</p>
+      </section>
+      <section id="loop">
+        <div class="head">
+          <h2>4. lead loop 与 teammate loop 的共同点和差异</h2>
+          <span class="tag">two</span>
+        </div>
+<p>lead Agent 的 loop 和 teammate loop 很像：每轮都先读自己的 inbox，把消息加入 messages，再请求模型；模型如果返回 tool use，就执行工具并把结果继续写回 messages。差异在于 system prompt、工具集和循环上限。</p>
+        <div class="box soft">
+<h3>流程图式文字</h3>
+<p>lead 调用 <code>spawn_teammate</code> → config 增加 Alice → Alice 线程启动 → Alice loop 读取 <code>alice.jsonl</code> → Alice 执行任务并调用 <code>send_message(to=lead)</code> → MessageBus 追加一行到 <code>lead.jsonl</code> → lead 下一轮读取自己的 inbox → 消息被注入 lead messages → lead 根据新信息继续决策。</p>
+<p>维度lead loopteammate loop</p>
+<p>system promptteam leader角色专属 prompt</p>
+<p>inbox<code>lead.jsonl</code><code>alice.jsonl</code> 等自己的 inbox</p>
+<p>工具集spawn/list/send/read 等较完整工具裁剪后的 teammate tools</p>
+<p>循环边界主交互循环可持续有限轮，例如 50 轮</p>
+<p>状态主控working → idle</p>
+<p>消息流切换</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>生成 Alice</th><th>Alice 发消息</th><th>lead 读 inbox</th><th>Alice 变 idle</th></tr>
+<tr><td><b>1. spawn_teammate</b></td><td>lead 调用工具，写入 config，并启动 Alice 线程。</td><td><b>2. send_message</b></td><td>Alice 调用 send_message，把消息写入 lead.jsonl。</td></tr>
+<tr><td><b>3. read_inbox</b></td><td>lead 下一轮读取 lead.jsonl，把消息注入 messages 并清空文件。</td><td><b>4. status update</b></td><td>Alice loop 结束，成员状态从 working 保存为 idle。</td></tr>
+</table></div>
+<p>lead 创建队员</p>
+<p>模型调用 <code>spawn_teammate</code>，本地把 Alice 写入 <code>.teams/config.json</code>，并启动一个 teammate loop 线程。</p>
+        </div>
+      </section>
+      <section id="slash">
+        <div class="head">
+          <h2>5. `/tm` 和 `/inbox` 是直接命令，不走 LLM</h2>
+          <span class="tag">slash</span>
+        </div>
+<p>main 函数对 <code>/tm</code> 和 <code>/inbox</code> 做了特殊处理。输入 <code>/tm</code> 时，程序直接读取 config 并列出团队成员；输入 <code>/inbox</code> 时，程序直接读取 lead 的 inbox。它们不会进入 agent loop，也不会请求模型。</p>
+        <div class="box soft">
+<h3><code>/tm</code> 输出</h3>
+<p>读取 <code>.teams/config.json</code>，显示 team name 和 members，例如 <code>alice coder idle</code>。</p>
+        </div>
+        <div class="box soft">
+<h3><code>/inbox</code> 输出</h3>
+<p>读取 <code>.teams/inbox/lead.jsonl</code>，显示消息，并在读取后清空。</p>
+        </div>
+        <div class="box soft">
+<h3>Worked example：为什么要裁剪 teammate 工具</h3>
+<p>假设 Alice 是 coder，只负责实现一个小功能。如果 Alice 也能调用 <code>spawn_teammate</code>，她可能再生成 Bob，Bob 又生成 Carol，团队规模会在没有 lead 决策的情况下扩散。更稳的设计是：lead 拥有创建成员和查看全局状态的工具，teammate 只拥有完成自己任务、收发消息和报告结果所需的工具。</p>
+        </div>
+        <div class="box warn">
+<h3>常见坑</h3>
+<ul>
+<li>队员工具集没裁剪，导致 teammate 也能无限 spawn。</li>
+<li>读取 inbox 后不清空，导致消息重复进入上下文。</li>
+<li>成员状态只改内存，不保存 config。</li>
+<li>JSONL 消息缺少 type/from/content，后续无法路由和解释。</li>
+<li>线程并发写 inbox 时没有考虑文件写入冲突。</li>
+</ul>
+        </div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">检查理解</span>
+        </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. Agent team 最少需要哪两类基础设施？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="成员状态和消息通道">成员状态和消息通道</label>
+      <label><input type="radio" name="q?" value="只要更多模型就够了">只要更多模型就够了</label>
+      <label><input type="radio" name="q?" value="只要一个更长 prompt">只要一个更长 prompt</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 2. 团队 config 存在 <code>.teams/______</code>，收件箱存在 <code>.teams/______</code>。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 3. 为什么 inbox 使用 JSONL 比普通纯文本更适合？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">机制</span></div>
+        <h3><b>Q:</b> 4. 读取 inbox 后为什么要清空文件？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、成员管理</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 5. <code>spawn_teammate</code> 的三个关键参数是 ______、______、______。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 6. <code>.teams/config.json</code> 中成员至少应保存哪些字段？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 7. 为什么 teammate loop 结束后要把状态从 working 改成 idle？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 8. 如果 <code>spawn_teammate</code> 不检查成员是否已存在，会有什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、消息流与工具集</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">流程</span></div>
+        <h3><b>Q:</b> 9. Alice 给 lead 发消息时，文件系统里发生了什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 10. 每个 Agent loop 开始时读取的是自己的 inbox。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 11. 为什么 teammate tools 不应该包含 <code>spawn_teammate</code>？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">边界</span></div>
+        <h3><b>Q:</b> 12. teammate loop 为什么设置有限轮，例如 50 轮？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、命令与迁移</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 13. <code>/tm</code> 做什么？为什么它不需要进入 agent loop？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 14. <code>/inbox</code> 与普通 Agent loop 开头读取 inbox 有什么相似点？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 15. 用文件 inbox 做消息总线有哪些并发或一致性风险？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">表达</span></div>
+        <h3><b>Q:</b> 16. 用 2-3 句话解释 Agent team 的最小实现思路。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">流程图</span></div>
+        <h3><b>Q:</b> 17. 用文字画出 lead 生成 Alice，Alice 发消息，lead 读取消息的完整流程。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 18. 用 6-9 句话讲清楚：Agent team 如何通过成员管理和消息总线实现协作。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>导出学习记录</h2><span class="tag">self-check</span></div>
-      <p class="muted">完成练习后生成 Markdown 记录，方便保存或提交给同伴检查。</p>
-      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-const flows={
-  spawn:["lead 创建队员","模型调用 `spawn_teammate`，本地把 Alice 写入 `.teams/config.json`，并启动一个 teammate loop 线程。","config.json\n{\n  \"team_name\": \"default\",\n  \"members\": [{\"name\":\"alice\",\"role\":\"coder\",\"status\":\"working\"}]\n}"],
-  send:["Alice 写入 lead 收件箱","Alice 的模型调用 `send_message`，MessageBus 把一行 JSON 写入 `.teams/inbox/lead.jsonl`。","lead.jsonl\n{\"type\":\"message\",\"from\":\"alice\",\"content\":\"Hi, I am Alice, a coder.\"}"],
-  read:["lead 读取并清空 inbox","lead 下一轮 loop 开头读取 `lead.jsonl`，把消息注入 messages，然后清空文件。","messages += [\n  \"Inbox message from alice: Hi, I am Alice, a coder.\"\n]\nlead.jsonl -> empty"],
-  idle:["Alice 完成后更新状态","teammate loop stop_reason 为 end_turn 后结束，TeammateManager 把 Alice 从 working 改为 idle 并保存。","config.json\n{\n  \"members\": [{\"name\":\"alice\",\"role\":\"coder\",\"status\":\"idle\"}]\n}"]
-};
-function renderFlow(name){const d=flows[name]||flows.spawn;document.querySelectorAll("[data-flow]").forEach(b=>b.classList.toggle("active",b.dataset.flow===name));document.querySelectorAll("[data-step]").forEach(s=>s.classList.toggle("active",s.dataset.step===name));document.getElementById("flowTitle").textContent=d[0];document.getElementById("flowText").textContent=d[1];document.getElementById("mailText").textContent=d[2]}
-document.querySelectorAll("[data-flow]").forEach(btn=>btn.addEventListener("click",()=>renderFlow(btn.dataset.flow)));renderFlow("spawn");
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
-const questions=[
-  ["基础概念","1. Agent team 最少需要什么基础设施？","q1","radio"],["基础概念","2. 团队 config 和收件箱路径。","q2","text"],["基础概念","3. 为什么 inbox 用 JSONL？","q3","text"],["基础概念","4. 读取 inbox 后为什么清空？","q4","text"],["成员管理","5. spawn_teammate 三个参数。","q5","text"],["成员管理","6. config 成员字段。","q6","text"],["成员管理","7. 为什么 working 改 idle？","q7","text"],["成员管理","8. 不检查重复成员的问题。","q8","text"],["消息工具","9. Alice 给 lead 发消息发生什么？","q9","text"],["消息工具","10. 是否读取自己的 inbox？","q10","radio"],["消息工具","11. teammate tools 为什么不含 spawn？","q11","text"],["消息工具","12. teammate loop 为什么有限轮？","q12","text"],["命令迁移","13. /tm 做什么？","q13","text"],["命令迁移","14. /inbox 与 loop 读 inbox 的相似点。","q14","text"],["命令迁移","15. 文件 inbox 并发风险。","q15","text"],["命令迁移","16. Agent team 最小实现思路。","q16","text"],["命令迁移","17. lead/Alice 消息流程。","q17","text"],["费曼解释","18. Agent team 如何通过成员管理和消息总线协作。","q18","text"]
-];
-function val(q){if(q[3]==="radio"){const el=document.querySelector(`input[name="${q[2]}"]:checked`);return el?el.value:""}const el=document.querySelector(`[name="${q[2]}"]`);return el?el.value.trim():""}
-function generateRecord(){const groups={};const missing=[];questions.forEach(q=>{const v=val(q);if(!v)missing.push(q[1]);if(!groups[q[0]])groups[q[0]]=[];groups[q[0]].push({t:q[1],a:v||"（未填写）"})});let out="# 11 Agent团队与消息总线｜练习记录\n\n";Object.keys(groups).forEach(g=>{out+=`## ${g}\n\n`;groups[g].forEach(item=>{out+=`### ${item.t}\n${item.a}\n\n`})});document.getElementById("record").textContent=out;const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=val(["","","q18","text"]);const keys=["config","MessageBus","inbox","spawn","teammate","/tm"];const lack=keys.filter(k=>!f.includes(k));if(f&&f.length<120)warnings.push("费曼解释偏短，建议讲成 6-9 句话。");if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join("、")}。`);const q=document.getElementById("quality");q.style.display="block";q.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以保存或提交检查。"}
-function copyRecord(){navigator.clipboard.writeText(document.getElementById("record").textContent).catch(()=>alert("复制失败，请手动复制。"))}
-</script>
-<script src="../assets/study-page.js"></script>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

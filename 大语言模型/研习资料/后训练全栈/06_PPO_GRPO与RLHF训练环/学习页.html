@@ -4,834 +4,669 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PPO、GRPO 与 RLHF 训练环｜后训练全栈 06</title>
-  <link rel="stylesheet" href="../assets/study-page.css">
-  <script src="../assets/study-page.js" defer></script>
-  <meta name="description" content="自包含学习页：理解 RLHF 中 rollout、reward、KL 与 policy update 的训练闭环，并区分 PPO 与 GRPO。">
-  </head>
-
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
+</head>
 <body data-course="后训练全栈" data-unit="PPO_GRPO与RLHF训练环">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>PPO、GRPO 与 RLHF 训练环</strong>
-        <span>后训练全栈 06｜从在线采样到策略更新</span>
-      </div>
-      <nav aria-label="页面导航">
-        <a href="../index.html"><span>00</span>课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#map"><span class="dot"></span>训练环总览</a>
-        <a href="#terms"><span class="dot"></span>术语与误区</a>
-        <a href="#rollout"><span class="dot"></span>Rollout</a>
-        <a href="#reward"><span class="dot"></span>Reward</a>
-        <a href="#kl"><span class="dot"></span>KL 约束</a>
-        <a href="#update"><span class="dot"></span>Policy Update</a>
-        <a href="#compare"><span class="dot"></span>PPO vs GRPO</a>
-        <a href="#examples"><span class="dot"></span>案例与伪代码</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-      </nav>
-      <div class="side-note">
-        本页承接偏好优化，进入在线 RL。重点不是记住某个 trainer 参数，而是能画出 <b>rollout → reward → KL → policy update</b> 的闭环，并说清每一步错了会怎样。
-        <p><a href="../index.html">返回课程地图</a></p>
-      </div>
-    </aside>
 
-    <main>
-      <header class="hero">
-        <div>
-          <div class="kicker">后训练全栈｜第 06 单元</div>
-          <h1>PPO、GRPO 与 RLHF 训练环</h1>
-          <p>RLHF 的直觉很简单：让当前模型自己生成回答，给这些回答打分，再把高分行为推高、低分行为压低。但真正难的是稳定性：模型如果只追奖励，很快会偏离原来的语言能力、钻奖励函数空子，或在几个更新后崩掉。</p>
-          <p>本页把 RLHF 拆成四个动作：<code>rollout</code> 生成样本、<code>reward</code> 计算偏好信号、<code>KL</code> 限制策略漂移、<code>policy update</code> 更新模型。PPO 和 GRPO 的差异也围绕这四步展开。</p>
-        </div>
-        <div class="box soft">
-          <h3>本页完成后</h3>
-          <ul>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">后训练全栈</a>
+        <span class="sep">/</span>
+        <span>PPO_GRPO与RLHF训练环</span>
+      </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">后训练全栈｜第 06 单元</div>
+      <div class="hero-meta">
+        <span class="hero-badge">PPO_GRPO与RLHF训练环</span>
+      </div>
+      <h1 class="hero-title">PPO、GRPO 与 RLHF 训练环｜后训练全栈 06</h1>
+      <p class="hero-desc">RLHF 的直觉很简单：让当前模型自己生成回答，给这些回答打分，再把高分行为推高、低分行为压低。但真正难的是稳定性：模型如果只追奖励，很快会偏离原来的语言能力、钻奖励函数空子，或在几个更新后崩掉。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../05_DPO_ORPO与直接偏好优化/学习页.html">上一节</a>
+            <a href="../07_评测判别器与回归检查/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
             <li>能把 RLHF 训练环画成可执行流程。</li>
             <li>能解释 reward 与 KL 为什么必须一起看。</li>
             <li>能区分 PPO 的 value/advantage 与 GRPO 的组内相对优势。</li>
-          </ul>
-        </div>
-      </header>
+        </ul>
+      </div>
+    </div>
+  </header>
 
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#map">训练环总览</a>
+      <a href="#terms">术语与误区</a>
+      <a href="#rollout">Rollout：训练数据来自当前模型</a>
+      <a href="#reward">Reward：把偏好变成可优化信号</a>
+      <a href="#kl">KL：防止模型为了奖励跑偏</a>
+      <a href="#update">Policy Update：把好轨迹概率推高</a>
+      <a href="#compare">PPO vs GRPO：两种构造更新信号的路线</a>
+      <a href="#examples">案例与工作示例</a>
+      <a href="#mistakes">五个高频误区</a>
+      <a href="#mechanism">机制演示：reward / KL / 更新信号</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
         <div class="head">
           <h2>学习目标</h2>
-          <span class="tag">Foundation for RL</span>
+          <span class="tag">Foundation</span>
         </div>
-        <div class="grid3">
-          <div class="box">
-            <h3>看懂训练对象</h3>
-            <p>分清 policy model、reference model、reward model 或 reward function 的职责。直觉上，policy 是正在学习的学生，reference 是不希望偏离太远的旧版本，reward 是评卷标准。</p>
-          </div>
-          <div class="box">
-            <h3>看懂优化信号</h3>
-            <p>知道为什么奖励不能直接当成唯一目标。RLHF 的核心不是“分数越高越好”，而是“在不毁掉原有能力的前提下，让更符合偏好的生成更常出现”。</p>
-          </div>
-          <div class="box">
-            <h3>看懂 PPO/GRPO 差别</h3>
-            <p>PPO 通常要估计 advantage 并依赖 value 估计稳定更新；GRPO 倾向用同一 prompt 下多条回答的组内相对分数构造 advantage，减少或移除单独 value model 的需要。</p>
-          </div>
-        </div>
+<p>看懂训练对象</p>
+<p>分清 policy model、reference model、reward model 或 reward function 的职责。直觉上，policy 是正在学习的学生，reference 是不希望偏离太远的旧版本，reward 是评卷标准。</p>
+<p>看懂 PPO/GRPO 差别</p>
+<p>PPO 通常要估计 advantage 并依赖 value 估计稳定更新；GRPO 倾向用同一 prompt 下多条回答的组内相对分数构造 advantage，减少或移除单独 value model 的需要。</p>
       </section>
-
       <section id="map">
         <div class="head">
           <h2>训练环总览</h2>
-          <span class="tag">Rollout → Reward → KL → Update</span>
+          <span class="tag">Rollout</span>
         </div>
-        <div class="map" aria-label="RLHF 训练环">
-          <span class="node">Prompt Batch</span>
-          <span class="arrow">→</span>
-          <span class="node">Rollout</span>
-          <span class="arrow">→</span>
-          <span class="node">Reward</span>
-          <span class="arrow">→</span>
-          <span class="node">KL Penalty</span>
-          <span class="arrow">→</span>
-          <span class="node">Policy Update</span>
-        </div>
-        <p>先给模型一批 prompt，让当前 policy 采样生成回答，这叫 rollout。然后把回答送进 reward model、规则奖励或 judge，得到每条回答的分数。接着计算 policy 与 reference 在这些回答上的差异，形成 KL 惩罚。最后用 PPO 或 GRPO 把“净收益更高”的 token 轨迹推高。</p>
-        <div class="pipeline">
-          <div class="pipe-step"><b>01 Prompt</b><p>输入问题、任务或环境状态。prompt 分布决定模型会在哪些场景里学习。</p></div>
-          <div class="pipe-step"><b>02 Rollout</b><p>当前 policy 生成一个或多个 response。采样温度、长度上限、stop 条件都会影响训练数据。</p></div>
-          <div class="pipe-step"><b>03 Reward</b><p>给完整回答或中间步骤打分。奖励可以来自 reward model、可验证规则、工具环境或模型评审。</p></div>
-          <div class="pipe-step"><b>04 KL</b><p>惩罚 policy 相对 reference 的过度偏移。它不是奖励本身，而是稳定器。</p></div>
-          <div class="pipe-step"><b>05 Update</b><p>根据 advantage 更新 policy。更新幅度太小学不到，太大会崩。</p></div>
-        </div>
+<p>Prompt Batch</p>
+<p>→</p>
+<p>Rollout</p>
+<p>→</p>
+<p>Reward</p>
+<p>→</p>
+<p>KL Penalty</p>
+<p>→</p>
+<p>Policy Update</p>
+<p><b>01 Prompt</b>输入问题、任务或环境状态。prompt 分布决定模型会在哪些场景里学习。</p>
+<p><b>02 Rollout</b>当前 policy 生成一个或多个 response。采样温度、长度上限、stop 条件都会影响训练数据。</p>
+<p><b>03 Reward</b>给完整回答或中间步骤打分。奖励可以来自 reward model、可验证规则、工具环境或模型评审。</p>
+<p><b>04 KL</b>惩罚 policy 相对 reference 的过度偏移。它稳定器。</p>
+<p><b>05 Update</b>根据 advantage 更新 policy。更新幅度太小学不到，太大会崩。</p>
       </section>
-
       <section id="terms">
         <div class="head">
           <h2>术语与误区</h2>
-          <span class="tag">Key Terms</span>
+          <span class="tag">Key</span>
         </div>
-        <table class="metric-table">
-          <thead>
-            <tr>
-              <th>术语</th>
-              <th>直觉解释</th>
-              <th>精确定义</th>
-              <th>常见误解</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Policy</td>
-              <td>正在被训练的生成模型。</td>
-              <td>给定上下文后，对下一个 token 或完整 response 轨迹给出概率分布的模型。</td>
-              <td>把 policy 当成固定模型。RL 阶段中，policy 每轮都会变，所以 rollout 数据也会变。</td>
-            </tr>
-            <tr>
-              <td>Rollout</td>
-              <td>让当前模型真的生成一批回答。</td>
-              <td>从当前 policy 按采样策略得到 response，并记录 token、logprob、长度、奖励等训练所需信息。</td>
-              <td>以为 rollout 只是普通推理。训练用 rollout 必须保存概率、mask 和奖励对齐信息。</td>
-            </tr>
-            <tr>
-              <td>Reward</td>
-              <td>这条回答“值得鼓励”的程度。</td>
-              <td>由 reward model、规则、环境反馈或 judge 对 response 给出的标量或分步信号。</td>
-              <td>以为 reward 越高模型越好。奖励一旦有漏洞，模型会优先学会利用漏洞。</td>
-            </tr>
-            <tr>
-              <td>KL Penalty</td>
-              <td>别为了高分跑得离旧模型太远。</td>
-              <td>衡量 policy 分布与 reference 分布差异的惩罚项，常按 token logprob 差近似加入目标。</td>
-              <td>把 KL 当成“安全评测”。KL 只限制分布漂移，不保证事实、安全或无偏。</td>
-            </tr>
-            <tr>
-              <td>Advantage</td>
-              <td>这次回答比预期好多少。</td>
-              <td>用于 policy gradient 的相对收益信号，常见形式是 reward 减 baseline 或经过标准化的相对分数。</td>
-              <td>把 reward 和 advantage 混用。reward 是原始分数，advantage 是“该不该增加这条轨迹概率”的更新信号。</td>
-            </tr>
-            <tr>
-              <td>Reference Model</td>
-              <td>训练前的锚点。</td>
-              <td>通常是 SFT 后冻结的模型，用来计算 KL 或 logprob ratio，防止 policy 过度漂移。</td>
-              <td>以为 reference 会跟着训练更新。多数 RLHF 设定里 reference 是冻结的。</td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="grid3">
-          <div class="box warn"><h3>易混 1：Reward vs Advantage</h3><p>reward 是评分，advantage 是更新方向。两个回答都可能得高分，但如果其中一个只是“符合预期”，它的 advantage 不一定大。</p></div>
-          <div class="box warn"><h3>易混 2：KL vs Clip</h3><p>KL 约束 policy 与 reference 的距离；PPO 的 clip 约束新旧 policy ratio 的更新幅度。一个管“别偏离旧模型太远”，一个管“这一轮别改太猛”。</p></div>
-          <div class="box warn"><h3>易混 3：DPO vs RLHF</h3><p>DPO 用静态偏好对直接优化；RLHF/PPO/GRPO 通常在线生成新样本再学习。在线性带来更强探索，也带来更高不稳定性。</p></div>
-        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>术语</th><th>直觉解释</th><th>精确定义</th><th>常见误解</th></tr>
+<tr><td>Policy</td><td>正在被训练的生成模型。</td><td>给定上下文后，对下一个 token 或完整 response 轨迹给出概率分布的模型。</td><td>把 policy 当成固定模型。RL 阶段中，policy 每轮都会变，所以 rollout 数据也会变。</td></tr><tr><td>Rollout</td><td>让当前模型真的生成一批回答。</td><td>从当前 policy 按采样策略得到 response，并记录 token、logprob、长度、奖励等训练所需信息。</td><td>以为 rollout 只是普通推理。训练用 rollout 必须保存概率、mask 和奖励对齐信息。</td></tr><tr><td>Reward</td><td>这条回答“值得鼓励”的程度。</td><td>由 reward model、规则、环境反馈或 judge 对 response 给出的标量或分步信号。</td><td>以为 reward 越高模型越好。奖励一旦有漏洞，模型会优先学会利用漏洞。</td></tr><tr><td>KL Penalty</td><td>别为了高分跑得离旧模型太远。</td><td>衡量 policy 分布与 reference 分布差异的惩罚项，常按 token logprob 差近似加入目标。</td><td>把 KL 当成“安全评测”。KL 只限制分布漂移，不保证事实、安全或无偏。</td></tr><tr><td>Advantage</td><td>这次回答比预期好多少。</td><td>用于 policy gradient 的相对收益信号，常见形式是 reward 减 baseline 或经过标准化的相对分数。</td><td>把 reward 和 advantage 混用。reward 是原始分数，advantage 是“该不该增加这条轨迹概率”的更新信号。</td></tr><tr><td>Reference Model</td><td>训练前的锚点。</td><td>通常是 SFT 后冻结的模型，用来计算 KL 或 logprob ratio，防止 policy 过度漂移。</td><td>以为 reference 会跟着训练更新。多数 RLHF 设定里 reference 是冻结的。</td></tr>
+        </table></div>
+<p>易混 1：Reward vs Advantagereward 是评分，advantage 是更新方向。两个回答都可能得高分，但如果其中一个只是“符合预期”，它的 advantage 不一定大。</p>
+<p>易混 2：KL vs ClipKL 约束 policy 与 reference 的距离；PPO 的 clip 约束新旧 policy ratio 的更新幅度。一个管“别偏离旧模型太远”，一个管“这一轮别改太猛”。</p>
+<p>易混 3：DPO vs RLHFDPO 用静态偏好对直接优化；RLHF/PPO/GRPO 通常在线生成新样本再学习。在线性带来更强探索，也带来更高不稳定性。</p>
       </section>
-
       <section id="rollout">
         <div class="head">
           <h2>Rollout：训练数据来自当前模型</h2>
-          <span class="tag">Online Samples</span>
+          <span class="tag">Online</span>
         </div>
-        <div class="grid2">
-          <div>
-            <p>RLHF 与 SFT 的第一个关键区别是数据来源。SFT 读取人工或合成数据里的标准答案；RLHF 则让当前 policy 面对 prompt 自己生成回答。因为 policy 每次更新后都会变化，下一批 rollout 的分布也会变化，这叫在线训练。</p>
-            <p>rollout 要记录的不只是 response 文本，还包括每个 token 在当前 policy 下的 log probability、attention mask、是否越界、生成长度、stop 原因，以及稍后要对齐的奖励。没有这些记录，后面的 KL 和 policy update 就无法可靠计算。</p>
-            <div class="formula">
-              response y ~ π<sub>θ</sub>(· | x)
-              <small>x 是 prompt，y 是采样出的回答，π<sub>θ</sub> 是当前 policy。采样不是装饰，它决定模型会从哪些自己制造的行为中学习。</small>
-            </div>
-          </div>
-          <div class="box info">
-            <h3>你现在应该能做什么</h3>
-            <p>看到一份 RLHF 训练日志时，先问：prompt 从哪里来？每个 prompt 采样几条回答？采样温度多大？是否保存了 logprob？回答被截断了吗？这些问题比先问“用了哪个算法”更基础。</p>
-          </div>
+      <div class="grid2">
+<p>RLHF 与 SFT 的第一个关键区别是数据来源。SFT 读取人工或合成数据里的标准答案；RLHF 则让当前 policy 面对 prompt 自己生成回答。因为 policy 每次更新后都会变化，下一批 rollout 的分布也会变化，这叫在线训练。</p>
+<p>rollout 要记录的不只是 response 文本，还包括每个 token 在当前 policy 下的 log probability、attention mask、是否越界、生成长度、stop 原因，以及稍后要对齐的奖励。没有这些记录，后面的 KL 和 policy update 就无法可靠计算。</p>
+        <div class="box info">
+<h3>你现在应该能做什么</h3>
+<p>看到一份 RLHF 训练日志时，先问：prompt 从哪里来？每个 prompt 采样几条回答？采样温度多大？是否保存了 logprob？回答被截断了吗？这些问题比先问“用了哪个算法”更基础。</p>
+<table class="metric-table">
+<tr><th>Rollout 设置</th><th>太保守时</th><th>太激进时</th><th>检查方式</th></tr>
+<tr><td>temperature / top-p</td><td>样本太像，reward 差异小，学不到新行为。</td><td>低质量或格式错误样本增多，奖励模型压力变大。</td><td>抽样看回答多样性、错误率和长度分布。</td></tr>
+<tr><td>每个 prompt 的 response 数</td><td>难以比较同题下多个候选。</td><td>算力成本高，可能被少数 prompt 主导。</td><td>看每个 prompt 的奖励方差和组内排序。</td></tr>
+<tr><td>最大长度</td><td>长推理被截断，奖励不可信。</td><td>模型学会啰嗦，KL 和训练成本上升。</td><td>看截断率、平均长度、单位 token 收益。</td></tr>
+</table>
         </div>
-        <table class="metric-table">
-          <thead>
-            <tr>
-              <th>Rollout 设置</th>
-              <th>太保守时</th>
-              <th>太激进时</th>
-              <th>检查方式</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>temperature / top-p</td>
-              <td>样本太像，reward 差异小，学不到新行为。</td>
-              <td>低质量或格式错误样本增多，奖励模型压力变大。</td>
-              <td>抽样看回答多样性、错误率和长度分布。</td>
-            </tr>
-            <tr>
-              <td>每个 prompt 的 response 数</td>
-              <td>难以比较同题下多个候选。</td>
-              <td>算力成本高，可能被少数 prompt 主导。</td>
-              <td>看每个 prompt 的奖励方差和组内排序。</td>
-            </tr>
-            <tr>
-              <td>最大长度</td>
-              <td>长推理被截断，奖励不可信。</td>
-              <td>模型学会啰嗦，KL 和训练成本上升。</td>
-              <td>看截断率、平均长度、单位 token 收益。</td>
-            </tr>
-          </tbody>
-        </table>
+      </div>
       </section>
-
       <section id="reward">
         <div class="head">
           <h2>Reward：把偏好变成可优化信号</h2>
-          <span class="tag">Score Is Not Truth</span>
+          <span class="tag">Score</span>
         </div>
-        <div class="grid2">
-          <div>
-            <p>reward 是 RLHF 的方向盘。它可以来自人类偏好训练出的 reward model，也可以来自可验证规则，比如数学题是否答对、代码测试是否通过、工具调用是否完成目标。推理模型训练中，规则奖励和可验证奖励尤其重要，因为“答案是否正确”比“看起来像好答案”更可靠。</p>
-            <p>但是 reward 只是代理目标。代理目标的意思是：它不是最终真正想要的全部品质，只是一个可以计算、可以训练的近似信号。模型会优化你给它的信号，而不是你心里想象的完整目标。</p>
-            <div class="formula">
-              R<sub>total</sub>(x, y) = R<sub>task</sub>(x, y) - β · KL(π<sub>θ</sub>(·|x) || π<sub>ref</sub>(·|x))
-              <small>任务奖励负责“做得好”，KL 惩罚负责“别偏太远”。β 越大，训练越保守。</small>
-            </div>
-          </div>
-          <div class="box danger">
-            <h3>奖励黑客现象</h3>
-            <p>reward hacking 指模型找到奖励函数漏洞，而不是学到真实能力。例如奖励长度时，模型可能变得冗长；奖励格式时，模型可能堆格式；只用 judge 打分时，模型可能学会迎合 judge 的表面偏好。</p>
-          </div>
+      <div class="grid2">
+<p>reward 是 RLHF 的方向盘。它可以来自人类偏好训练出的 reward model，也可以来自可验证规则，比如数学题是否答对、代码测试是否通过、工具调用是否完成目标。推理模型训练中，规则奖励和可验证奖励尤其重要，因为“答案是否正确”比“看起来像好答案”更可靠。</p>
+<p>但是 reward 只是代理目标。代理目标的意思是：它不是最终真正想要的全部品质，只是一个可以计算、可以训练的近似信号。模型会优化你给它的信号，而不是你心里想象的完整目标。</p>
+        <div class="box">
+<h3>奖励黑客现象</h3>
+<p>reward hacking 指模型找到奖励函数漏洞，而不是学到真实能力。例如奖励长度时，模型可能变得冗长；奖励格式时，模型可能堆格式；只用 judge 打分时，模型可能学会迎合 judge 的表面偏好。</p>
+<p>Reward Model从 chosen/rejected 偏好数据训练，适合复杂主观偏好，但会继承标注噪声。</p>
+<p>Rule Reward由规则直接计算，适合数学、代码、格式、工具结果等可验证任务。</p>
+<p>Environment Reward来自环境状态变化，常见于工具使用、网页操作、游戏或代理任务。</p>
+<p>Judge Reward由另一个模型评审，覆盖面广，但要防止偏见、串谋和评分漂移。</p>
         </div>
-        <div class="grid4">
-          <div class="box"><h3>Reward Model</h3><p>从 chosen/rejected 偏好数据训练，适合复杂主观偏好，但会继承标注噪声。</p></div>
-          <div class="box"><h3>Rule Reward</h3><p>由规则直接计算，适合数学、代码、格式、工具结果等可验证任务。</p></div>
-          <div class="box"><h3>Environment Reward</h3><p>来自环境状态变化，常见于工具使用、网页操作、游戏或代理任务。</p></div>
-          <div class="box"><h3>Judge Reward</h3><p>由另一个模型评审，覆盖面广，但要防止偏见、串谋和评分漂移。</p></div>
-        </div>
+      </div>
       </section>
-
       <section id="kl">
         <div class="head">
           <h2>KL：防止模型为了奖励跑偏</h2>
-          <span class="tag">Stability Dial</span>
+          <span class="tag">Stability</span>
         </div>
-        <p>KL divergence 衡量两个概率分布的差异。在 RLHF 里，我们常关心：当前 policy 对生成 token 的概率，和 reference model 对同样 token 的概率差多少。若 policy 为了拿高 reward 把某些奇怪 token 概率抬得很高，KL 会变大，净奖励会被扣掉。</p>
-        <div class="grid2">
-          <div>
-            <div class="formula">
-              KL token 近似项：log π<sub>θ</sub>(y<sub>t</sub>|x,y&lt;t) - log π<sub>ref</sub>(y<sub>t</sub>|x,y&lt;t)
-              <small>实现中常对生成 token 求和或求均值，再乘上 KL 系数。不同库会有具体近似与归一化差异，应以当前文档为准。</small>
-            </div>
-            <p>KL 系数不是越大越好。太小，模型可能奖励冲高但语言质量下降；太大，模型几乎不敢改变，reward 上不去。实际训练会同时看 reward、KL、response length、entropy、clip fraction、胜率和人工样本。</p>
-          </div>
-          <div class="viz-panel" aria-label="KL 交互面板">
-            <h3>调一调：奖励与 KL 的拉扯</h3>
-            <div class="slider-row">
-              <label for="rawReward">原始奖励</label>
-              <input id="rawReward" type="range" min="-2" max="8" step="0.1" value="4.2">
-              <output id="rawRewardOut">4.2</output>
-            </div>
-            <div class="slider-row">
-              <label for="klValue">KL 偏移</label>
-              <input id="klValue" type="range" min="0" max="3" step="0.05" value="0.8">
-              <output id="klValueOut">0.80</output>
-            </div>
-            <div class="slider-row">
-              <label for="betaValue">KL 系数 β</label>
-              <input id="betaValue" type="range" min="0" max="2" step="0.05" value="0.25">
-              <output id="betaValueOut">0.25</output>
-            </div>
-            <div class="status-line">
-              <div class="stat"><b>净奖励</b><span id="netReward">4.00</span></div>
-              <div class="stat"><b>惩罚</b><span id="penalty">0.20</span></div>
-              <div class="stat"><b>更新倾向</b><span id="updateMood">推进</span></div>
-              <div class="stat"><b>风险</b><span id="riskLevel">可控</span></div>
-            </div>
-            <div class="meter" aria-hidden="true"><span id="riskBar"></span></div>
-            <p class="hint">观察：原始奖励不变时，KL 或 β 增大都会降低净奖励。若净奖励仍高但风险很高，说明奖励可能在推模型偏离 reference。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback" aria-live="polite"></div>
-          </div>
-        </div>
+<p>KL divergence 衡量两个概率分布的差异。在 RLHF 里，我们常关心：当前 policy 对生成 token 的概率，和 reference model 对同样 token 的概率差多少。若 policy 为了拿高 reward 把某些奇怪 token 概率抬得很高，KL 会变大，净奖励会被扣掉。</p>
+<p>KL 系数不是越大越好。太小，模型可能奖励冲高但语言质量下降；太大，模型几乎不敢改变，reward 上不去。实际训练会同时看 reward、KL、response length、entropy、clip fraction、胜率和人工样本。</p>
+<p>原始奖励</p>
+<p>KL 偏移</p>
+<p>KL 系数 β</p>
+<p><b>净奖励</b>4.00</p>
+<p><b>惩罚</b>0.20</p>
+<p><b>更新倾向</b>推进</p>
+<p><b>风险</b>可控</p>
       </section>
-
       <section id="update">
         <div class="head">
           <h2>Policy Update：把好轨迹概率推高</h2>
-          <span class="tag">Gradient Step</span>
+          <span class="tag">Gradient</span>
         </div>
-        <div class="grid2">
-          <div>
-            <p>policy update 的目标是改变模型参数，让带来正 advantage 的生成更可能出现，让负 advantage 的生成更不可能出现。对语言模型来说，这个更新落在生成 token 的 log probability 上：某条 response 的 advantage 为正，就提升这串 token 在相同上下文下的概率；advantage 为负，就压低。</p>
-            <p>PPO 的名字里有 proximal，意思是“更新要靠近原策略”。它会用新旧 policy 概率比值控制单次更新幅度，避免模型因为一批 rollout 的奖励信号就大幅跳动。常见做法还会估计 value，用 GAE 或类似方法得到 advantage，再用 clipped objective 更新 policy。</p>
-            <div class="formula">
-              PPO clipped objective：min(r<sub>t</sub>A<sub>t</sub>, clip(r<sub>t</sub>, 1-ε, 1+ε)A<sub>t</sub>)
-              <small>r<sub>t</sub> 是新旧 policy 对同一 token 的概率比。clip 让“这一轮学太猛”的收益不再继续变大。</small>
-            </div>
-          </div>
-          <div class="box violet">
-            <h3>实现时要盯住什么</h3>
-            <ul>
-              <li><b>ratio：</b>新 policy 相对 rollout 时 old policy 的变化幅度。</li>
-              <li><b>clip fraction：</b>有多少 token 或样本触发了裁剪。</li>
-              <li><b>entropy：</b>分布是否过早变窄，导致探索下降。</li>
-              <li><b>value loss：</b>PPO 中 value 估计是否拖累训练。</li>
-              <li><b>KL：</b>policy 是否整体偏离 reference。</li>
-            </ul>
-          </div>
+      <div class="grid2">
+<p>policy update 的目标是改变模型参数，让带来正 advantage 的生成更可能出现，让负 advantage 的生成更不可能出现。对语言模型来说，这个更新落在生成 token 的 log probability 上：某条 response 的 advantage 为正，就提升这串 token 在相同上下文下的概率；advantage 为负，就压低。</p>
+<p>PPO 的名字里有 proximal，意思是“更新要靠近原策略”。它会用新旧 policy 概率比值控制单次更新幅度，避免模型因为一批 rollout 的奖励信号就大幅跳动。常见做法还会估计 value，用 GAE 或类似方法得到 advantage，再用 clipped objective 更新 policy。</p>
+        <div class="box">
+<h3>实现时要盯住什么</h3>
+<ul>
+<li><b>ratio：</b>新 policy 相对 rollout 时 old policy 的变化幅度。</li>
+<li><b>clip fraction：</b>有多少 token 或样本触发了裁剪。</li>
+<li><b>entropy：</b>分布是否过早变窄，导致探索下降。</li>
+<li><b>value loss：</b>PPO 中 value 估计是否拖累训练。</li>
+<li><b>KL：</b>policy 是否整体偏离 reference。</li>
+</ul>
+<p>训练环伪代码</p>
+<p>conceptual loop</p>
+<pre><code class="language-text">for step in training_steps:
+ prompts = sample_prompt_batch(dataset)
+
+ # 1. rollout: 用当前 policy 生成回答，并保存 logprob
+ responses, old_logprobs = policy.generate_with_logprobs(prompts)
+
+ # 2. reward: 对回答打分
+ task_reward = reward_fn(prompts, responses)
+
+ # 3. KL: 与冻结 reference 比较，得到漂移惩罚
+ ref_logprobs = reference.logprobs(prompts, responses)
+ kl_penalty = beta * (old_logprobs - ref_logprobs)
+ rewards = task_reward - kl_penalty
+
+ # 4. advantage: PPO 用 value/baseline；GRPO 可用组内标准化
+ advantages = estimate_advantage(rewards, prompts, responses)
+
+ # 5. policy update: 提升正 advantage 轨迹，压低负 advantage 轨迹
+ loss = policy_gradient_loss(policy, prompts, responses, old_logprobs, advantages)
+ loss.backward()
+ optimizer.step()</code></pre>
         </div>
-        <div class="codebar">
-          <span class="label">训练环伪代码</span>
-          <span class="kind">conceptual loop</span>
-        </div>
-        <pre><code>for step in training_steps:
-    prompts = sample_prompt_batch(dataset)
-
-    # 1. rollout: 用当前 policy 生成回答，并保存 logprob
-    responses, old_logprobs = policy.generate_with_logprobs(prompts)
-
-    # 2. reward: 对回答打分
-    task_reward = reward_fn(prompts, responses)
-
-    # 3. KL: 与冻结 reference 比较，得到漂移惩罚
-    ref_logprobs = reference.logprobs(prompts, responses)
-    kl_penalty = beta * (old_logprobs - ref_logprobs)
-    rewards = task_reward - kl_penalty
-
-    # 4. advantage: PPO 用 value/baseline；GRPO 可用组内标准化
-    advantages = estimate_advantage(rewards, prompts, responses)
-
-    # 5. policy update: 提升正 advantage 轨迹，压低负 advantage 轨迹
-    loss = policy_gradient_loss(policy, prompts, responses, old_logprobs, advantages)
-    loss.backward()
-    optimizer.step()</code></pre>
+      </div>
       </section>
-
       <section id="compare">
         <div class="head">
           <h2>PPO vs GRPO：两种构造更新信号的路线</h2>
-          <span class="tag">Algorithm Contrast</span>
+          <span class="tag">Algorithm</span>
         </div>
-        <div class="compare">
-          <div class="box info">
-            <h3>PPO 的基本形态</h3>
-            <p>PPO 常用于传统 RLHF 配方。它通常需要 policy、reference、reward model，以及用于估计预期收益的 value model 或 value head。它的优势是方法成熟、稳定性工具多；代价是训练组件多、显存和调参复杂度高。</p>
-            <ul>
-              <li>适合：主观偏好、对话质量、已有 reward model 的场景。</li>
-              <li>关注：value loss、ratio clipping、KL、reward hacking。</li>
-              <li>风险：组件越多，故障来源越多。</li>
-            </ul>
-          </div>
-          <div class="box soft">
-            <h3>GRPO 的基本形态</h3>
-            <p>GRPO 常见于推理强化学习语境。它对同一个 prompt 采样一组回答，用组内 reward 的均值和标准差做归一化，得到每条回答的相对 advantage。这样可以减少对单独 value model 的依赖，尤其适合有可验证奖励的任务。</p>
-            <ul>
-              <li>适合：数学、代码、格式可验证、同题多样采样的场景。</li>
-              <li>关注：每组样本数、组内 reward 方差、长度偏置、KL。</li>
-              <li>风险：组内分数都差不多时，相对优势信号会变弱。</li>
-            </ul>
-          </div>
-        </div>
-        <table class="metric-table">
-          <thead>
-            <tr>
-              <th>维度</th>
-              <th>PPO</th>
-              <th>GRPO</th>
-              <th>判断建议</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>优势估计</td>
-              <td>常用 value/baseline 估计 advantage。</td>
-              <td>同一 prompt 的多条回答做组内相对比较。</td>
-              <td>若 value 估计难、但可为同题生成多答案，GRPO 更自然。</td>
-            </tr>
-            <tr>
-              <td>奖励来源</td>
-              <td>常搭配 reward model，也可用规则奖励。</td>
-              <td>常搭配可验证奖励或规则奖励。</td>
-              <td>奖励越可验证，越适合让模型在线探索。</td>
-            </tr>
-            <tr>
-              <td>训练成本</td>
-              <td>组件多，value 相关开销和调参更多。</td>
-              <td>少一个 value 组件，但需要同题多样本 rollout。</td>
-              <td>不要只看算法名，算 prompt 数、response 数和总 token。</td>
-            </tr>
-            <tr>
-              <td>稳定器</td>
-              <td>clip、KL、value loss、entropy 等。</td>
-              <td>组内标准化、KL、ratio 裁剪或类似约束。</td>
-              <td>稳定器是训练成功的主角之一，不是附属参数。</td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="formula">
-          GRPO 组内优势直觉：A<sub>i</sub> = (r<sub>i</sub> - mean(r<sub>group</sub>)) / std(r<sub>group</sub>)
-          <small>同一道题生成多条回答，奖励高于组内平均的回答被鼓励，低于平均的回答被压低。真实实现还会处理标准差为零、长度归一化、KL 和裁剪细节。</small>
+<p>PPO 的基本形态</p>
+<p>PPO 常用于传统 RLHF 配方。它通常需要 policy、reference、reward model，以及用于估计预期收益的 value model 或 value head。它的优势是方法成熟、稳定性工具多；代价是训练组件多、显存和调参复杂度高。</p>
+<p>GRPO 的基本形态</p>
+<p>GRPO 常见于推理强化学习语境。它对同一个 prompt 采样一组回答，用组内 reward 的均值和标准差做归一化，得到每条回答的相对 advantage。这样可以减少对单独 value model 的依赖，尤其适合有可验证奖励的任务。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>维度</th><th>PPO</th><th>GRPO</th><th>判断建议</th></tr>
+<tr><td>优势估计</td><td>常用 value/baseline 估计 advantage。</td><td>同一 prompt 的多条回答做组内相对比较。</td><td>若 value 估计难、但可为同题生成多答案，GRPO 更自然。</td></tr><tr><td>奖励来源</td><td>常搭配 reward model，也可用规则奖励。</td><td>常搭配可验证奖励或规则奖励。</td><td>奖励越可验证，越适合让模型在线探索。</td></tr><tr><td>训练成本</td><td>组件多，value 相关开销和调参更多。</td><td>少一个 value 组件，但需要同题多样本 rollout。</td><td>不要只看算法名，算 prompt 数、response 数和总 token。</td></tr><tr><td>稳定器</td><td>clip、KL、value loss、entropy 等。</td><td>组内标准化、KL、ratio 裁剪或类似约束。</td><td>稳定器是训练成功的主角之一，不是附属参数。</td></tr>
+        </table></div>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+GRPO 组内优势直觉：Ai = (ri - mean(rgroup)) / std(rgroup)
+ 同一道题生成多条回答，奖励高于组内平均的回答被鼓励，低于平均的回答被压低。真实实现还会处理标准差为零、长度归一化、KL 和裁剪细节。
+$$
         </div>
       </section>
-
       <section id="examples">
         <div class="head">
           <h2>案例与工作示例</h2>
-          <span class="tag">Worked Cases</span>
+          <span class="tag">Worked</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>案例 1：数学题的 GRPO 训练</h3>
-            <p>同一个数学 prompt 采样 8 条回答。规则奖励只看最终答案是否正确，同时额外检查是否按要求输出。若 2 条答对、6 条答错，答对样本在组内有正 advantage，答错样本为负 advantage。policy 更新后，模型更倾向生成答对轨迹中的 token 模式。</p>
-            <p>关键点：如果所有 8 条都答错，组内 reward 方差可能很小，更新信号弱。此时需要更好的 prompt 分布、采样策略、课程难度或奖励 shaping，而不是盲目加大学习率。</p>
-          </div>
-          <div class="box">
-            <h3>案例 2：客服对话的 PPO 训练</h3>
-            <p>reward model 根据“是否有帮助、是否礼貌、是否遵守政策”给分。PPO 用 value head 估计预期收益，再根据 advantage 更新 policy。KL 约束防止模型为了迎合 reward model 变得模板化、冗长或过度拒答。</p>
-            <p>关键点：主观 reward model 的漏洞很难完全消除，所以必须把训练指标、抽样人工检查和回归评测放在一起看。</p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>案例 1：数学题的 GRPO 训练</h3>
+<p>同一个数学 prompt 采样 8 条回答。规则奖励只看最终答案是否正确，同时额外检查是否按要求输出。若 2 条答对、6 条答错，答对样本在组内有正 advantage，答错样本为负 advantage。policy 更新后，模型更倾向生成答对轨迹中的 token 模式。</p>
+<p>关键点：如果所有 8 条都答错，组内 reward 方差可能很小，更新信号弱。此时需要更好的 prompt 分布、采样策略、课程难度或奖励 shaping，而不是盲目加大学习率。</p>
         </div>
-        <div class="codebar">
-          <span class="label">GRPO 组内优势计算</span>
-          <span class="kind">minimal example</span>
-        </div>
-        <pre><code>prompt = "求 17 * 23，并给出简短推理"
-rewards = [1, 0, 0, 1, 0, 0, 0, 0]  # 1 表示最终答案正确，0 表示错误
+        <div class="box">
+<h3>案例 2：客服对话的 PPO 训练</h3>
+<p>reward model 根据“是否有帮助、是否礼貌、是否遵守政策”给分。PPO 用 value head 估计预期收益，再根据 advantage 更新 policy。KL 约束防止模型为了迎合 reward model 变得模板化、冗长或过度拒答。</p>
+<p>关键点：主观 reward model 的漏洞很难完全消除，所以必须把训练指标、抽样人工检查和回归评测放在一起看。</p>
+<p>GRPO 组内优势计算</p>
+<p>minimal example</p>
+<pre><code class="language-text">prompt = "求 17 * 23，并给出简短推理"
+rewards = [1, 0, 0, 1, 0, 0, 0, 0] # 1 表示最终答案正确，0 表示错误
 
-mean_r = sum(rewards) / len(rewards)       # 0.25
-std_r = standard_deviation(rewards)        # 约 0.43
+mean_r = sum(rewards) / len(rewards) # 0.25
+std_r = standard_deviation(rewards) # 约 0.43
 advantages = [(r - mean_r) / (std_r + 1e-6) for r in rewards]
 
 # 正确样本 advantage 约为 +1.73，错误样本约为 -0.58
 # 更新方向：提高正确回答轨迹概率，降低错误回答轨迹概率，同时受 KL 约束。</code></pre>
-        <div class="box warn">
-          <h3>常见错误：只看 reward 曲线</h3>
-          <p>如果 reward 上升但 KL、长度、重复率、人工样本质量同时变坏，训练可能是在奖励函数上过拟合。一个成熟的 RLHF 实验记录至少要同时看 reward、KL、生成长度、通过率、拒答率、样本质检和离线评测。</p>
-          <p><strong>修法：</strong>为每次训练保留固定 prompt 集做回归检查，并定期比较 policy、reference 和上一个 checkpoint 的输出。</p>
         </div>
+        <div class="box warn">
+<h3>常见错误：只看 reward 曲线</h3>
+<p>如果 reward 上升但 KL、长度、重复率、人工样本质量同时变坏，训练可能是在奖励函数上过拟合。一个成熟的 RLHF 实验记录至少要同时看 reward、KL、生成长度、通过率、拒答率、样本质检和离线评测。</p>
+<p><b>修法：</b>为每次训练保留固定 prompt 集做回归检查，并定期比较 policy、reference 和上一个 checkpoint 的输出。</p>
+        </div>
+      </div>
       </section>
-
       <section id="mistakes">
         <div class="head">
           <h2>五个高频误区</h2>
-          <span class="tag">Failure Modes</span>
+          <span class="tag">Failure</span>
         </div>
-        <div class="grid3">
-          <div class="box danger"><h3>误区 1：RLHF 一定比 DPO 高级</h3><p>不一定。若没有可靠奖励、在线采样成本太高，DPO 类方法可能更稳、更划算。</p></div>
-          <div class="box danger"><h3>误区 2：KL 越低越好</h3><p>KL 太低可能说明模型没学动。正确问题是：在能力和安全不退化的前提下，KL 是否支撑 reward 改善。</p></div>
-          <div class="box danger"><h3>误区 3：规则奖励天然安全</h3><p>规则奖励只覆盖规则写到的部分。模型可能满足格式和答案，却学会不良中间过程或投机策略。</p></div>
-          <div class="box danger"><h3>误区 4：多采样一定提升 GRPO</h3><p>多采样提升比较机会，也增加成本。若 prompt 太简单或太难，组内差异不足，优势信号仍然弱。</p></div>
-          <div class="box danger"><h3>误区 5：训练稳定只靠学习率</h3><p>学习率重要，但 KL 系数、clip、batch 组成、奖励尺度、长度归一化和采样策略同样会决定稳定性。</p></div>
-          <div class="box danger"><h3>误区 6：reward model 是客观裁判</h3><p>reward model 学的是偏好数据里的模式。标注偏差、数据覆盖不足和 judge 习惯都会进入训练目标。</p></div>
-        </div>
+<p>误区 1：RLHF 一定比 DPO 高级不一定。若没有可靠奖励、在线采样成本太高，DPO 类方法可能更稳、更划算。</p>
+<p>误区 2：KL 越低越好KL 太低可能说明模型没学动。正确问题是：在能力和安全不退化的前提下，KL 是否支撑 reward 改善。</p>
+<p>误区 3：规则奖励天然安全规则奖励只覆盖规则写到的部分。模型可能满足格式和答案，却学会不良中间过程或投机策略。</p>
+<p>误区 4：多采样一定提升 GRPO多采样提升比较机会，也增加成本。若 prompt 太简单或太难，组内差异不足，优势信号仍然弱。</p>
+<p>误区 5：训练稳定只靠学习率学习率重要，但 KL 系数、clip、batch 组成、奖励尺度、长度归一化和采样策略同样会决定稳定性。</p>
+<p>误区 6：reward model 是客观裁判reward model 学的是偏好数据里的模式。标注偏差、数据覆盖不足和 judge 习惯都会进入训练目标。</p>
       </section>
-
       <section id="mechanism">
         <div class="head">
           <h2>机制演示：reward / KL / 更新信号</h2>
           <span class="tag">trace</span>
         </div>
-        <div class="math-block">
-          <p><strong>净奖励：</strong>R<sub>net</sub> = R<sub>raw</sub> - β × KL(policy, reference)</p>
-          <p>原始奖励描述“这条回答好不好”，KL 约束描述“偏离参考模型有多远”，beta 控制收紧还是放松。</p>
-        </div>
-        <div class="codebar"><span>reward / KL 计算</span></div>
-        <pre><code class="language-python">raw_reward = 5
+<p><b>净奖励：</b>Rnet = Rraw - β × KL(policy, reference)</p>
+<p>原始奖励描述“这条回答好不好”，KL 约束描述“偏离参考模型有多远”，beta 控制收紧还是放松。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-mechanism-1">复制</button></div>
+        <pre id="code-mechanism-1" data-export-context="代码" data-export-lang="python"><code class="language-python">raw_reward = 5
 kl = 0.4
 beta = 2.0
 net_reward = raw_reward - beta * kl</code></pre>
-        <div class="terminal-lab" data-terminal-lab>
-          <div class="terminal-controls">
-            <button class="ghost" type="button" data-terminal-case="low">低 KL</button>
-            <button class="ghost" type="button" data-terminal-case="high">高 KL</button>
-            <button class="ghost" type="button" data-terminal-case="group">组内比较</button>
-          </div>
-          <pre class="terminal-output"></pre>
-          <template data-terminal-output="low"><p class="ok">raw reward 领先，但 KL 很小，policy 还贴着 reference，更新更容易放大偏好。</p></template>
-          <template data-terminal-output="high"><p class="err">raw reward 不一定差，问题是 KL 过高，policy 被奖励推得太远，训练会先变得不稳。</p></template>
-          <template data-terminal-output="group"><p>GRPO 看的是同一 prompt 的组内相对差异；把分数和组内排序一起看，才知道 advantage 从哪里来。</p></template>
+<p>净奖励不是“分数减分数”这么简单。训练时要同时看原始奖励、KL 约束和 beta 的权重方向。</p>
         </div>
-        <div class="grid2">
-          <div data-export-context="公式摘要" data-export-lang="text">
-            净奖励不是“分数减分数”这么简单。训练时要同时看原始奖励、KL 约束和 beta 的权重方向。
-          </div>
-          <table data-export-context="变量对照表" data-export-lang="table">
-            <tr><th>变量</th><th>作用</th><th>看什么</th></tr>
-            <tr><td>raw reward</td><td>原始评分</td><td>样本本身是否更好</td></tr>
-            <tr><td>KL</td><td>偏离惩罚</td><td>policy 有没有跑偏</td></tr>
-            <tr><td>beta</td><td>约束强度</td><td>更新是收紧还是放松</td></tr>
-          </table>
-          <div data-export-context="常见误区" data-export-lang="text">
-            只看 reward 会忽略漂移；只看 KL 会忽略任务收益。后训练要同时把两件事读出来。
-          </div>
-          <div data-export-context="下一步" data-export-lang="text">
-            先会读 net reward，再去看 rollout、advantage 和 policy update，最后再判断有没有能力折损。
-          </div>
-        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>变量</th><th>作用</th><th>看什么</th></tr>
+<tr><td>raw reward</td><td>原始评分</td><td>样本本身是否更好</td></tr><tr><td>KL</td><td>偏离惩罚</td><td>policy 有没有跑偏</td></tr><tr><td>beta</td><td>约束强度</td><td>更新是收紧还是放松</td></tr>
+        </table></div>
+<p>只看 reward 会忽略漂移；只看 KL 会忽略任务收益。后训练要同时把两件事读出来。</p>
       </section>
-
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
-          <span class="tag">20 Mixed Questions</span>
+          <span class="tag">20</span>
         </div>
-        <div class="practice-intro">
-          <div class="review-card">
-            <strong>作答目标</strong>
-            <p>不要只背术语。每题都尽量回答“对象是什么、依赖什么、错了会怎样、如何检查”。导出的练习记录会保留题目上下文，方便复盘。</p>
-          </div>
-          <div class="review-card">
-            <strong>检查重点</strong>
-            <p>能否把 rollout、reward、KL 和 update 串成因果链；能否说明 PPO 与 GRPO 的差别不是“一个旧一个新”，而是 advantage 构造和训练组件不同。</p>
-          </div>
+      <div class="practice-intro">
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、概念辨认</h3></div>
+          <div class="quick-review">快查 policy 生成，reward 评分，KL 限漂移，advantage 决定更新方向。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="prompt → rollout → reward/KL → advantage → policy update">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> Q1. 下面哪个顺序最接近 RLHF 的基本训练环？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>一、概念辨认</h3>
-              <p>先确认你能分清训练环里的对象和信号。</p>
-            </div>
-            <div class="quick-review">
-              <b>快查</b>
-              <span>policy 生成，reward 评分，KL 限漂移，advantage 决定更新方向。</span>
-            </div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q1" data-group="一、概念辨认" data-title="Q1 训练环顺序" data-answer="B" data-explain="训练环先从 prompt 出发，让 policy rollout，随后得到 reward 和 KL 约束，再算 advantage 并更新 policy。">
-              <div class="q-meta"><span class="pill">选择</span><span class="pill">流程</span></div>
-              <h3>Q1. 下面哪个顺序最接近 RLHF 的基本训练环？</h3>
-              <div class="choices">
-                <label><input type="radio" name="q1" value="A">A. reward → rollout → prompt → policy update → KL</label>
-                <label><input type="radio" name="q1" value="B">B. prompt → rollout → reward/KL → advantage → policy update</label>
-                <label><input type="radio" name="q1" value="C">C. SFT loss → tokenizer → reward → deployment → prompt</label>
-              </div>
-              <p class="hint">看谁先产生 response，谁再给 response 打分。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback" aria-live="polite"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q1" value="reward → rollout → prompt → policy update → KL">reward → rollout → prompt → policy update → KL</label>
+      <label><input type="radio" name="q1" value="prompt → rollout → reward/KL → advantage → policy update">prompt → rollout → reward/KL → advantage → policy update</label>
+      <label><input type="radio" name="q1" value="SFT loss → tokenizer → reward → deployment → prompt">SFT loss → tokenizer → reward → deployment → prompt</label>
+      </div>
 
-            <div class="q" data-question="q2" data-group="一、概念辨认" data-title="Q2 rollout 是否等于普通推理" data-answer="false" data-explain="训练用 rollout 需要保留 logprob、mask 和奖励对齐信息，不只是文本。">
-              <div class="q-meta"><span class="pill">判断</span><span class="pill">rollout</span></div>
-              <h3>Q2. 训练用 rollout 只需要保存生成文本，不需要保存 logprob。</h3>
-              <label><input type="radio" name="q2" value="true">对</label>
-              <label><input type="radio" name="q2" value="false">错</label>
-              <p class="hint">后面计算 KL 和 policy ratio 时需要什么？</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback" aria-live="polite"></div>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>prompt → rollout → reward/KL → advantage → policy update。训练环先从 prompt 出发，让 policy rollout，随后得到 reward 和 KL 约束，再算 advantage 并更新 policy。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="false">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> Q2. 训练用 rollout 只需要保存生成文本，不需要保存 logprob。</h3>
 
-            <div class="q short" data-question="q3" data-group="一、概念辨认" data-title="Q3 reference model 的作用" data-answer="KL 约束|KL penalty|KL" data-answer-mode="any" data-explain="reference model 通常用于计算 KL 约束，作为 policy 的稳定锚点。">
-              <div class="q-meta"><span class="pill">填空</span><span class="pill">reference</span></div>
-              <h3>Q3. RLHF 中 reference model 通常是训练前冻结的模型，主要用于计算 ________。</h3>
-              <input type="text" name="q3" data-answer="已知能力,历史修复,安全边界" placeholder="填写一个核心作用">
-              <p class="hint">它是 policy 不要偏离太远的锚点。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback" aria-live="polite"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      </div>
 
-            <div class="q" data-question="q4" data-group="一、概念辨认" data-title="Q4 reward 与 advantage" data-answer="B" data-explain="reward 是原始评分，advantage 是相对 baseline 的更新信号。">
-              <div class="q-meta"><span class="pill">选择</span><span class="pill">advantage</span></div>
-              <h3>Q4. 哪句话最准确？</h3>
-              <div class="choices">
-                <label><input type="radio" name="q4" value="A">A. reward 和 advantage 完全相同，只是叫法不同。</label>
-                <label><input type="radio" name="q4" value="B">B. reward 是原始评分，advantage 是相对预期或 baseline 的更新信号。</label>
-                <label><input type="radio" name="q4" value="C">C. advantage 只用于 SFT，不用于 RLHF。</label>
-              </div>
-              <p class="hint">想想“比预期好多少”。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback" aria-live="polite"></div>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>false。训练用 rollout 需要保留 logprob、mask 和奖励对齐信息，不只是文本。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="KL 约束|KL penalty|KL">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> Q3. RLHF 中 reference model 通常是训练前冻结的模型，主要用于计算 ________。</h3>
 
-            <div class="q full" data-question="q5" data-group="一、概念辨认" data-title="Q5 用一句话解释 RLHF">
-              <div class="q-meta"><span class="pill">解释</span><span class="pill">总览</span></div>
-              <h3>Q5. 用一句话解释 RLHF 训练环，但必须同时包含 rollout、reward、KL、policy update 四个词。</h3>
-              <textarea name="q5" placeholder="例如：先...再...同时...最后..."></textarea>
-              <p class="solve-note">脚手架：先说数据怎么来，再说信号怎么来，再说约束，最后说更新。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考</summary>
-                <p>对照本节内容检查答案。</p>
-              </details>
-            </div>
-          </div>
+
+      <textarea name="q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>KL 约束|KL penalty|KL。reference model 通常用于计算 KL 约束，作为 policy 的稳定锚点。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="reward 是原始评分，advantage 是相对预期或 baseline 的更新信号。">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> Q4. 哪句话最准确？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q4" value="reward 和 advantage 完全相同，只是叫法不同。">reward 和 advantage 完全相同，只是叫法不同。</label>
+      <label><input type="radio" name="q4" value="reward 是原始评分，advantage 是相对预期或 baseline 的更新信号。">reward 是原始评分，advantage 是相对预期或 baseline 的更新信号。</label>
+      <label><input type="radio" name="q4" value="advantage 只用于 SFT，不用于 RLHF。">advantage 只用于 SFT，不用于 RLHF。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>reward 是原始评分，advantage 是相对预期或 baseline 的更新信号。。reward 是原始评分，advantage 是相对 baseline 的更新信号。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> Q5. 用一句话解释 RLHF 训练环，但必须同时包含 rollout、reward、KL、policy update 四个词。</h3>
+
+
+      <textarea name="q5"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。对照本节内容检查答案。</p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>二、机制推理</h3>
-              <p>判断设置变化会怎样影响训练。</p>
-            </div>
-            <div class="quick-review">
-              <b>快查</b>
-              <span>奖励尺度、KL 系数、采样多样性和长度都会改变训练信号。</span>
-            </div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q6" data-group="二、机制推理" data-title="Q6 KL 系数过小" data-answer="B" data-explain="KL 权重过小会放松漂移约束，模型更容易为了奖励偏离 reference。">
-              <div class="q-meta"><span class="pill">选择</span><span class="pill">KL</span></div>
-              <h3>Q6. KL 系数 β 过小，最可能出现什么问题？</h3>
-              <div class="choices">
-                <label><input type="radio" name="q6" value="A">A. 模型完全无法更新，因为所有 reward 都被扣完。</label>
-                <label><input type="radio" name="q6" value="B">B. 模型可能为了拿 reward 过度偏离 reference。</label>
-                <label><input type="radio" name="q6" value="C">C. rollout 会自动变成贪心解码。</label>
-              </div>
-              <p class="hint">β 是漂移惩罚的权重。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback" aria-live="polite"></div>
-            </div>
-
-            <div class="q" data-question="q7" data-group="二、机制推理" data-title="Q7 temperature 过低" data-answer="true" data-explain="温度过低会让同一 prompt 的候选回答差异变小，组内比较也会变弱。">
-              <div class="q-meta"><span class="pill">判断</span><span class="pill">采样</span></div>
-              <h3>Q7. rollout 采样温度过低，可能导致同一 prompt 的候选回答差异太小。</h3>
-              <label><input type="radio" name="q7" value="true">对</label>
-              <label><input type="radio" name="q7" value="false">错</label>
-              <p class="hint">GRPO 尤其依赖组内差异。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback" aria-live="polite"></div>
-            </div>
-
-            <div class="q short" data-question="q8" data-group="二、机制推理" data-title="Q8 净奖励计算" data-answer="4.2" data-explain="净奖励 = 5 - 0.4 × 2 = 4.2。">
-              <div class="q-meta"><span class="pill">计算</span><span class="pill">reward</span></div>
-              <h3>Q8. 原始奖励 5，KL=2，β=0.4，净奖励是多少？</h3>
-              <input type="text" name="q8" data-answer="4.2" placeholder="写出数字和计算式">
-              <p class="hint">R_total = R_task - β × KL。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback" aria-live="polite"></div>
-            </div>
-
-            <div class="q full" data-question="q9" data-group="二、机制推理" data-title="Q9 reward hacking 诊断">
-              <div class="q-meta"><span class="pill">错误诊断</span><span class="pill">reward hacking</span></div>
-              <h3>Q9. 训练后 reward 上升，但回答明显变长、重复、空话更多。请判断可能原因，并给两个检查指标。</h3>
-              <textarea name="q9" placeholder="原因：... 指标 1：... 指标 2：..."></textarea>
-              <p class="solve-note">脚手架：从奖励漏洞、长度偏置、KL 和人工样本质检四个角度选两个。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考</summary>
-                <p>对照本节内容检查答案。</p>
-              </details>
-            </div>
-
-            <div class="q full" data-question="q10" data-group="二、机制推理" data-title="Q10 为什么不能只看 reward">
-              <div class="q-meta"><span class="pill">解释</span><span class="pill">指标</span></div>
-              <h3>Q10. 为什么 RLHF 训练不能只看 reward 曲线？请按“原因、后果、补充指标”回答。</h3>
-              <textarea name="q10" placeholder="原因：... 后果：... 补充指标：..."></textarea>
-              <p class="solve-note">至少提到 KL、长度、离线评测或人工抽样中的两个。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考</summary>
-                <p>对照本节内容检查答案。</p>
-              </details>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、机制推理</h3></div>
+          <div class="quick-review">快查 奖励尺度、KL 系数、采样多样性和长度都会改变训练信号。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="模型可能为了拿 reward 过度偏离 reference。">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> Q6. KL 系数 β 过小，最可能出现什么问题？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>三、PPO 与 GRPO 对比</h3>
-              <p>把算法差异落到训练组件和 advantage 构造上。</p>
-            </div>
-            <div class="quick-review">
-              <b>快查</b>
-              <span>PPO 常用 value 估计；GRPO 用同题多回答的组内相对分数。</span>
-            </div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q11" data-group="三、PPO 与 GRPO 对比" data-title="Q11 PPO 的 clip" data-answer="A" data-explain="clip 的作用是限制一次 policy 更新不要因为 ratio 过大而失控。">
-              <div class="q-meta"><span class="pill">选择</span><span class="pill">PPO</span></div>
-              <h3>Q11. PPO clipped objective 的主要目的是什么？</h3>
-              <div class="choices">
-                <label><input type="radio" name="q11" value="A">A. 让单轮 policy 更新不要因为 ratio 过大而失控。</label>
-                <label><input type="radio" name="q11" value="B">B. 替代 tokenizer。</label>
-                <label><input type="radio" name="q11" value="C">C. 保证 reward model 永远正确。</label>
-              </div>
-              <p class="hint">proximal 的意思是“靠近”。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback" aria-live="polite"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q6" value="模型完全无法更新，因为所有 reward 都被扣完。">模型完全无法更新，因为所有 reward 都被扣完。</label>
+      <label><input type="radio" name="q6" value="模型可能为了拿 reward 过度偏离 reference。">模型可能为了拿 reward 过度偏离 reference。</label>
+      <label><input type="radio" name="q6" value="rollout 会自动变成贪心解码。">rollout 会自动变成贪心解码。</label>
+      </div>
 
-            <div class="q" data-question="q12" data-group="三、PPO 与 GRPO 对比" data-title="Q12 GRPO 的组内相对优势" data-answer="true" data-explain="GRPO 会用同一 prompt 的多条回答构造组内相对 advantage。">
-              <div class="q-meta"><span class="pill">判断</span><span class="pill">GRPO</span></div>
-              <h3>Q12. GRPO 可以对同一个 prompt 采样多条回答，再用组内 reward 均值和标准差构造相对 advantage。</h3>
-              <label><input type="radio" name="q12" value="true">对</label>
-              <label><input type="radio" name="q12" value="false">错</label>
-              <p class="hint">这正是 group relative 的直觉。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback" aria-live="polite"></div>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>模型可能为了拿 reward 过度偏离 reference。。KL 权重过小会放松漂移约束，模型更容易为了奖励偏离 reference。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="true">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> Q7. rollout 采样温度过低，可能导致同一 prompt 的候选回答差异太小。</h3>
 
-            <div class="q short" data-question="q13" data-group="三、PPO 与 GRPO 对比" data-title="Q13 GRPO 的适用任务" data-answer="可验证|确定|确定性" data-answer-mode="any" data-explain="GRPO 更适合能自动验证对错的任务。">
-              <div class="q-meta"><span class="pill">填空</span><span class="pill">迁移</span></div>
-              <h3>Q13. GRPO 特别适合奖励较 ________ 的任务，比如数学答案、代码测试或格式校验。</h3>
-              <input type="text" name="q13" data-answer="可验证,确定,确定性" placeholder="填写一个形容词">
-              <p class="hint">不是“主观漂亮”，而是能算对错。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback" aria-live="polite"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q7" value="对">对</label>
+      <label><input type="radio" name="q7" value="错">错</label>
+      </div>
 
-            <div class="q full" data-question="q14" data-group="三、PPO 与 GRPO 对比" data-title="Q14 选择算法">
-              <div class="q-meta"><span class="pill">场景选择</span><span class="pill">PPO/GRPO</span></div>
-              <h3>Q14. 你要训练一个模型做小学数学题，最终答案可自动验证，同一题可以采样 8 个解法。你会优先考虑 PPO 还是 GRPO？说明理由和一个风险。</h3>
-              <textarea name="q14" placeholder="选择：... 理由：... 风险：..."></textarea>
-              <p class="solve-note">脚手架：从可验证奖励、组内比较、样本数成本或难度分布回答。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考</summary>
-                <p>对照本节内容检查答案。</p>
-              </details>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>true。温度过低会让同一 prompt 的候选回答差异变小，组内比较也会变弱。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="4.2">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">计算</span></div>
+        <h3><b>Q:</b> Q8. 原始奖励 5，KL=2，β=0.4，净奖励是多少？</h3>
 
-            <div class="q full" data-question="q15" data-group="三、PPO 与 GRPO 对比" data-title="Q15 value model 的代价">
-              <div class="q-meta"><span class="pill">解释</span><span class="pill">value</span></div>
-              <h3>Q15. PPO 中引入 value model 或 value head 的作用是什么？它也带来什么复杂度？</h3>
-              <textarea name="q15" placeholder="作用：... 复杂度：..."></textarea>
-              <p class="solve-note">先说 baseline/advantage，再说训练、显存、value loss 或估计误差。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考</summary>
-                <p>对照本节内容检查答案。</p>
-              </details>
-            </div>
-          </div>
+
+      <textarea name="q8"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>4.2。净奖励 = 5 - 0.4 × 2 = 4.2。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> Q9. 训练后 reward 上升，但回答明显变长、重复、空话更多。请判断可能原因，并给两个检查指标。</h3>
+
+
+      <textarea name="q9"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。对照本节内容检查答案。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> Q10. 为什么 RLHF 训练不能只看 reward 曲线？请按“原因、后果、补充指标”回答。</h3>
+
+
+      <textarea name="q10"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。对照本节内容检查答案。</p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>四、综合设计</h3>
-              <p>把本节知识迁移到一个小型训练方案。</p>
-            </div>
-            <div class="quick-review">
-              <b>快查</b>
-              <span>好的方案要同时写 prompt、rollout、reward、KL、update 和评测。</span>
-            </div>
-          </div>
-          <div class="drill-grid">
-            <div class="q full" data-question="q16" data-group="四、综合设计" data-title="Q16 设计一个 rollout 配置">
-              <div class="q-meta"><span class="pill">方案</span><span class="pill">rollout</span></div>
-              <h3>Q16. 为“代码补全是否通过单元测试”的任务设计一个 rollout 配置，至少写出每个 prompt 采样数、温度、长度上限和需要记录的数据。</h3>
-              <textarea name="q16" placeholder="采样数：... 温度：... 长度：... 记录：..."></textarea>
-              <p class="solve-note">注意：训练用 rollout 要记录 logprob、response、mask、奖励结果等。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考</summary>
-                <p>对照本节内容检查答案。</p>
-              </details>
-            </div>
-
-            <div class="q full" data-question="q17" data-group="四、综合设计" data-title="Q17 设计 reward">
-              <div class="q-meta"><span class="pill">方案</span><span class="pill">reward</span></div>
-              <h3>Q17. 为同一个代码任务设计 reward。请区分主奖励、辅助奖励和可能的奖励漏洞。</h3>
-              <textarea name="q17" placeholder="主奖励：... 辅助奖励：... 漏洞：..."></textarea>
-              <p class="solve-note">主奖励最好可验证；辅助奖励要小心不要压过真正目标。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考</summary>
-                <p>对照本节内容检查答案。</p>
-              </details>
-            </div>
-
-            <div class="q full" data-question="q18" data-group="四、综合设计" data-title="Q18 指标面板">
-              <div class="q-meta"><span class="pill">监控</span><span class="pill">metrics</span></div>
-              <h3>Q18. 列出一个 RLHF/GRPO 训练面板至少应该监控的 6 个指标，并说明其中 2 个指标异常时代表什么。</h3>
-              <textarea name="q18" placeholder="指标：... 异常解释：..."></textarea>
-              <p class="solve-note">可选：reward、KL、pass rate、length、entropy、clip fraction、人工样本质量、拒答率。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考</summary>
-                <p>对照本节内容检查答案。</p>
-              </details>
-            </div>
-
-            <div class="q full" data-question="q19" data-group="四、综合设计" data-title="Q19 失败后如何修">
-              <div class="q-meta"><span class="pill">调试</span><span class="pill">failure</span></div>
-              <h3>Q19. 训练出现“KL 快速升高、reward 也升高，但离线评测下降”。请给出三个可能修法。</h3>
-              <textarea name="q19" placeholder="修法 1：... 修法 2：... 修法 3：..."></textarea>
-              <p class="solve-note">从 β、学习率、clip、奖励函数、prompt 分布、长度约束和回归数据集考虑。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考</summary>
-                <p>对照本节内容检查答案。</p>
-              </details>
-            </div>
-
-            <div class="q full" data-question="q20" data-group="四、综合设计" data-title="Q20 综合讲述">
-              <div class="q-meta"><span class="pill">综合解释</span><span class="pill">Feynman</span></div>
-              <h3>Q20. 假设你要向同学解释本节，请用 150-250 字讲清：为什么 RLHF 不是简单“让模型追高分”？</h3>
-              <textarea name="q20" placeholder="请写成一段完整解释，包含 reward、KL、rollout、policy update、PPO 或 GRPO。"></textarea>
-              <p class="solve-note">把四步串起来，并指出 reward hacking 或分布漂移风险。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考</summary>
-                <p>对照本节内容检查答案。</p>
-              </details>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、PPO 与 GRPO 对比</h3></div>
+          <div class="quick-review">快查 PPO 常用 value 估计；GRPO 用同题多回答的组内相对分数。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="让单轮 policy 更新不要因为 ratio 过大而失控。">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> Q11. PPO clipped objective 的主要目的是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q11" value="让单轮 policy 更新不要因为 ratio 过大而失控。">让单轮 policy 更新不要因为 ratio 过大而失控。</label>
+      <label><input type="radio" name="q11" value="替代 tokenizer。">替代 tokenizer。</label>
+      <label><input type="radio" name="q11" value="保证 reward model 永远正确。">保证 reward model 永远正确。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>让单轮 policy 更新不要因为 ratio 过大而失控。。clip 的作用是限制一次 policy 更新不要因为 ratio 过大而失控。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="true">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> Q12. GRPO 可以对同一个 prompt 采样多条回答，再用组内 reward 均值和标准差构造相对 advantage。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q12" value="对">对</label>
+      <label><input type="radio" name="q12" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>true。GRPO 会用同一 prompt 的多条回答构造组内相对 advantage。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q13" data-group="" data-title="" data-answer="可验证|确定|确定性">
+        <div class="q-meta"><span class="pill">13</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> Q13. GRPO 特别适合奖励较 ________ 的任务，比如数学答案、代码测试或格式校验。</h3>
+
+
+      <textarea name="q13"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>可验证|确定|确定性。GRPO 更适合能自动验证对错的任务。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q14" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">14</span><span class="pill">场景选择</span></div>
+        <h3><b>Q:</b> Q14. 你要训练一个模型做小学数学题，最终答案可自动验证，同一题可以采样 8 个解法。你会优先考虑 PPO 还是 GRPO？说明理由和一个风险。</h3>
+
+
+      <textarea name="q14"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。对照本节内容检查答案。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q15" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">15</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> Q15. PPO 中引入 value model 或 value head 的作用是什么？它也带来什么复杂度？</h3>
+
+
+      <textarea name="q15"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。对照本节内容检查答案。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、综合设计</h3></div>
+          <div class="quick-review">快查 好的方案要同时写 prompt、rollout、reward、KL、update 和评测。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q16" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">16</span><span class="pill">方案</span></div>
+        <h3><b>Q:</b> Q16. 为“代码补全是否通过单元测试”的任务设计一个 rollout 配置，至少写出每个 prompt 采样数、温度、长度上限和需要记录的数据。</h3>
+
+
+      <textarea name="q16"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。对照本节内容检查答案。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q17" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">17</span><span class="pill">方案</span></div>
+        <h3><b>Q:</b> Q17. 为同一个代码任务设计 reward。请区分主奖励、辅助奖励和可能的奖励漏洞。</h3>
+
+
+      <textarea name="q17"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。对照本节内容检查答案。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q18" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">18</span><span class="pill">监控</span></div>
+        <h3><b>Q:</b> Q18. 列出一个 RLHF/GRPO 训练面板至少应该监控的 6 个指标，并说明其中 2 个指标异常时代表什么。</h3>
+
+
+      <textarea name="q18"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。对照本节内容检查答案。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q19" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">19</span><span class="pill">调试</span></div>
+        <h3><b>Q:</b> Q19. 训练出现“KL 快速升高、reward 也升高，但离线评测下降”。请给出三个可能修法。</h3>
+
+
+      <textarea name="q19"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。对照本节内容检查答案。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q20" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">20</span><span class="pill">综合解释</span></div>
+        <h3><b>Q:</b> Q20. 假设你要向同学解释本节，请用 150-250 字讲清：为什么 RLHF 不是简单“让模型追高分”？</h3>
+
+
+      <textarea name="q20"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。对照本节内容检查答案。</p>
+        </details>
+      </article>
+        </div>
+      </div>
       </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">Practice Record</span>
-        </div>
-        <p>点击生成后，页面会把所有题目和你的答案整理成 Markdown。未填写题会被列出来，方便你补完或直接用于复盘。</p>
-        <div class="quality" id="quality"></div>
-        <div class="answer" id="record">尚未生成练习记录。</div>
-        <div class="actions">
-          <button class="ghost" type="button" onclick="generateRecord()">生成练习记录</button>
-          <button type="button" onclick="copyRecord()">复制</button>
-          <button class="ghost" type="button" onclick="downloadRecord()">下载 Markdown</button>
-        </div>
-      </section>
-
-      <section id="sources">
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-          <li><a href="https://huggingface.co/docs/trl/ppo_trainer">Hugging Face TRL: PPO Trainer</a>。访问于 2026-06-22，用来确认 PPO 训练环、dummy reward 运行方式和现成 trainer 的职责边界。</li>
-          <li><a href="https://huggingface.co/docs/trl/grpo_trainer">Hugging Face TRL: GRPO Trainer</a>。访问于 2026-06-22，用来确认 GRPO 的组内相对优势、多个 reward 函数和可选 KL 设定。</li>
-          <li><a href="https://huggingface.co/docs/transformers/chat_templating">Hugging Face Transformers: Chat templates</a>。访问于 2026-06-22，用来说明 rollout 的 prompt 结构、role/content 到 token 序列的转换，以及为何模板会影响训练数据形态。</li>
-          <li><a href="../index.html">本课程地图</a>。这页在课程里负责把 RLHF / GRPO 的训练闭环立起来，再把评测、判别器和发布边界串起来。</li>
-        </ul>
+<ul>
+<li><a href="https://huggingface.co/docs/trl/ppo_trainer">Hugging Face TRL: PPO Trainer</a>。访问于 2026-06-22，用来确认 PPO 训练环、dummy reward 运行方式和现成 trainer 的职责边界。</li>
+<li><a href="https://huggingface.co/docs/trl/grpo_trainer">Hugging Face TRL: GRPO Trainer</a>。访问于 2026-06-22，用来确认 GRPO 的组内相对优势、多个 reward 函数和可选 KL 设定。</li>
+<li><a href="https://huggingface.co/docs/transformers/chat_templating">Hugging Face Transformers: Chat templates</a>。访问于 2026-06-22，用来说明 rollout 的 prompt 结构、role/content 到 token 序列的转换，以及为何模板会影响训练数据形态。</li>
+<li><a href="../index.html">本课程地图</a>。这页在课程里负责把 RLHF / GRPO 的训练闭环立起来，再把评测、判别器和发布边界串起来。</li>
+</ul>
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  </body>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
+</body>
 </html>

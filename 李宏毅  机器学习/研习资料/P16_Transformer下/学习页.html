@@ -4,290 +4,575 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P16｜Transformer（下）</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="decoder,autoregressive,BOS,END,masked self-attention,NAT,cross-attention,teacher forcing,cross entropy,copy mechanism,guided attention,beam search,BLEU,exposure bias,scheduled sampling">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Transformer 下</strong><span>P16。Decoder 如何生成、如何看 encoder、如何训练，以及常见解码技巧。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#ar"><span class="dot"></span>AR Decoder</a>
-      <a href="#mask"><span class="dot"></span>Masked Attention</a>
-      <a href="#nat"><span class="dot"></span>NAT Decoder</a>
-      <a href="#cross"><span class="dot"></span>Cross Attention</a>
-      <a href="#training"><span class="dot"></span>训练方式</a>
-      <a href="#tips"><span class="dot"></span>训练与解码技巧</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#terms"><span class="dot"></span>术语与检查</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">这一节的判断句：decoder 训练时常看正确答案，测试时看自己前一步输出；这个差异就是很多 seq2seq 问题的根源。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P16</div>
-        <h1>Transformer（下）：Decoder、Cross-attention 与训练技巧</h1>
-        <p>P15 讲 encoder：读入 sequence，输出一串上下文向量。P16 讲 decoder：它如何从特殊符号 BOS 开始，一步一步产生 token，把自己前一步的输出当作下一步输入，直到输出 END 停止。</p>
-        <p>Decoder 里有 masked self-attention，因为生成第 t 个 token 时，未来 token 还不存在，不能偷看右边。Decoder 还需要 cross-attention，用自己的 query 去 encoder 输出里抽取信息。训练时，每一步输出都像一次分类，用 cross entropy 对齐正确 token；但训练时常用 teacher forcing，测试时却要吃自己的输出，于是产生 exposure bias。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释 autoregressive decoder 如何逐步生成输出。</li>
-          <li>说明为什么 decoder self-attention 需要 mask。</li>
-          <li>区分 AR decoder 与 NAT decoder。</li>
-          <li>画出 cross-attention 中 Q、K、V 分别来自哪里。</li>
-          <li>解释 teacher forcing、beam search、exposure bias 等训练/解码问题。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">map</span></div>
-      <p>Autoregressive decoder 从 <code>BOS</code> 开始。它先预测第一个 token，再把这个 token 当作下一步输入；第二步预测第二个 token，再继续往后。模型需要学会在合适时机输出 <code>END</code>，否则序列会无限延续。</p>
-      <p>Decoder block 和 encoder block 很像：都有 attention、residual、normalization、feed-forward。关键差异有两处：第一，decoder 的 self-attention 是 masked，只能看左边已经生成的 token；第二，decoder 中间多了 cross-attention，用 decoder hidden state 去读取 encoder output。</p>
-      <p>训练时，我们知道正确答案序列，因此常把正确前缀喂给 decoder，这叫 teacher forcing。每一步都预测下一个 token，用 cross entropy 训练。但测试时没有正确前缀，decoder 只能吃自己的输出，这会带来训练/测试不一致。</p>
-      <div class="map">
-        <span class="node">BOS</span><span class="arrow">→</span>
-        <span class="node">masked self-attention</span><span class="arrow">→</span>
-        <span class="node">cross-attention</span><span class="arrow">→</span>
-        <span class="node">softmax token</span><span class="arrow">→</span>
-        <span class="node">feed back</span><span class="arrow">→</span>
-        <span class="node">END</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P16</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>用一条时间线说明 decoder 如何从开始符号生成到结束符号。</p></div>
-    </section>
-
-    <section id="ar">
-      <div class="head"><h2>Autoregressive Decoder：一步一步吐 token</h2><span class="tag">AR decoder</span></div>
-      <p>Autoregressive 的意思是“后一步依赖前一步”。语音辨识里，encoder 读声音，decoder 先吃 <code>BOS</code>，输出第一个文字的概率分布。分数最高的 token 被选出来，作为下一步输入。这个过程重复，直到输出 <code>END</code>。</p>
-      <p>Vocabulary 决定每一步 softmax 的长度。中文语音辨识可以把常用中文字作为输出单位；英文可以用字母、词、subword。每一步 decoder 输出的向量都是一个分布，选哪个 token 就是一次多类别分类。</p>
-      <p>AR decoder 的风险是 error propagation。如果第一步输出错了，下一步就会看到错误输入，可能一步错步步错。这也是后面 teacher forcing、scheduled sampling 等技巧要处理的问题。</p>
-      <div class="tokenline">
-        <span class="tok on">BOS</span><span class="arrow">→</span><span class="tok">机</span><span class="arrow">→</span><span class="tok">器</span><span class="arrow">→</span><span class="tok">学</span><span class="arrow">→</span><span class="tok">习</span><span class="arrow">→</span><span class="tok on">END</span>
+      <h1 class="hero-title">P16｜Transformer（下）</h1>
+      <p class="hero-desc">P15 讲 encoder：读入 sequence，输出一串上下文向量。P16 讲 decoder：它如何从特殊符号 BOS 开始，一步一步产生 token，把自己前一步的输出当作下一步输入，直到输出 END 停止。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P15_Transformer上/学习页.html">上一节</a>
+            <a href="../P17_自注意力机制变型/学习页.html">下一节</a>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么 decoder 要有 BOS 和 END 这两个特殊符号。</p></div>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="mask">
-      <div class="head"><h2>Masked Self-attention：不能偷看未来</h2><span class="tag">causal mask</span></div>
-      <p>Encoder 一次读完整个输入，所以每个位置可以看所有位置。Decoder 不一样：生成第 2 个 token 时，第 3、第 4 个 token 还没有产生。如果让它在训练时看到右边未来答案，测试时就做不到同样条件，训练会作弊。</p>
-      <p>Masked self-attention 的规则是：第 <code>t</code> 个位置只能 attend 到 <code>1...t</code> 的位置，不能 attend 到 <code>t+1...T</code>。产生 <code>b₂</code> 时只看 <code>a₁,a₂</code>；产生 <code>b₃</code> 时只看 <code>a₁,a₂,a₃</code>。</p>
-      <div class="viz-panel">
-        <h3>Mask 对照</h3>
-        <table class="metric-table">
-          <thead><tr><th>输出位置</th><th>允许看的 token</th><th>被 mask 的 token</th></tr></thead>
-          <tbody>
-            <tr><td>b1</td><td><span class="tok on">a1</span></td><td><span class="tok mask">a2</span> <span class="tok mask">a3</span> <span class="tok mask">a4</span></td></tr>
-            <tr><td>b2</td><td><span class="tok on">a1</span> <span class="tok on">a2</span></td><td><span class="tok mask">a3</span> <span class="tok mask">a4</span></td></tr>
-            <tr><td>b3</td><td><span class="tok on">a1</span> <span class="tok on">a2</span> <span class="tok on">a3</span></td><td><span class="tok mask">a4</span></td></tr>
-          </tbody>
-        </table>
+        </ul>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>给定一个 decoder 位置，判断它能 attend 到哪些前缀 token。</p></div>
-    </section>
+    </div>
+  </header>
 
-    <section id="nat">
-      <div class="head"><h2>NAT Decoder：一次生成整句的诱惑与代价</h2><span class="tag">non-autoregressive</span></div>
-      <p>Non-autoregressive decoder，简称 NAT，不是一字一字生成，而是一次产生整个输出序列。它可以吃一排 <code>BOS</code> token，同时输出多个 token，因此速度更快，也更容易显式控制长度。</p>
-      <p>长度问题需要额外处理。一种做法是训练一个 classifier，根据 encoder output 预测输出长度；另一种做法是给一个最大长度的 <code>BOS</code> 序列，让模型输出 <code>END</code> 后的部分作废。语音合成里，能控制输出长度有时很有用，例如调整说话速度。</p>
-      <p>但 NAT 通常 performance 不如 AR decoder，常需要许多技巧才能逼近 AR。课程提到 multi-modality 问题：同一个输入可能对应多种合理输出，如果并行独立地产生每个位置，协调这些位置会更困难。</p>
-      <table class="metric-table">
-        <thead><tr><th>Decoder</th><th>生成方式</th><th>优点</th><th>常见问题</th></tr></thead>
-        <tbody>
-          <tr><td>AR</td><td>逐 token 生成</td><td>质量通常较好</td><td>速度慢，error propagation。</td></tr>
-          <tr><td>NAT</td><td>并行生成整段</td><td>快，可控长度</td><td>质量较难追上 AR。</td></tr>
-        </tbody>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说明 NAT 为什么快，以及为什么它不自然知道输出长度。</p></div>
-    </section>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#ar">Autoregressive Decoder：一步一步吐 token</a>
+      <a href="#mask">Masked Self-attention：不能偷看未来</a>
+      <a href="#nat">NAT Decoder：一次生成整句的诱惑与代价</a>
+      <a href="#cross">Cross-attention：Decoder 如何读取 Encoder</a>
+      <a href="#training">训练：每一步都是分类，但输入常偷看正确答案</a>
+      <a href="#tips">常见技巧：copy、guided attention、beam search、scheduled sampling</a>
+      <a href="#code">最小代码：训练与测试的 decoder 差异</a>
+      <a href="#mistakes">常见误区与修正</a>
+      <a href="#terms">术语与检查：Decoder 的三条边界</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
 
-    <section id="cross">
-      <div class="head"><h2>Cross-attention：Decoder 如何读取 Encoder</h2><span class="tag">cross attention</span></div>
-      <p>Cross-attention 是 encoder 和 decoder 之间的桥。Self-attention 的 Q/K/V 都来自同一串向量；cross-attention 不同：query 来自 decoder 当前状态，key 和 value 来自 encoder 输出。</p>
-      <p>直觉是：decoder 现在要生成某个 token，于是拿自己的 query 去问 encoder：“输入里哪些位置对我现在最重要？”Encoder 输出提供 key 让它匹配，提供 value 让它抽取内容。加权求和后得到的向量再进入后面的 feed-forward network。</p>
-      <p>语音辨识中的 attention 图常呈现从左上到右下的斜线：输出第一个字母时关注前段声音，输出后面的字母时注意力逐渐往右移动。这说明 decoder 在不同生成时刻从 encoder 取不同位置的信息。</p>
-      <div class="formula">
-        Q = decoder hidden state<br>
-        K,V = encoder outputs<br>
-        context = softmax(QK<sup>T</sup>)V
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>明确说出 cross-attention 里 Q 来自 decoder，K/V 来自 encoder。</p></div>
-    </section>
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">map</span>
+        </div>
+<p>Autoregressive decoder 从 <code>BOS</code> 开始。它先预测第一个 token，再把这个 token 当作下一步输入；第二步预测第二个 token，再继续往后。模型需要学会在合适时机输出 <code>END</code>，否则序列会无限延续。</p>
+<p>训练时，我们知道正确答案序列，因此常把正确前缀喂给 decoder，这叫 teacher forcing。每一步都预测下一个 token，用 cross entropy 训练。但测试时没有正确前缀，decoder 只能吃自己的输出，这会带来训练/测试不一致。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>用一条时间线说明 decoder 如何从开始符号生成到结束符号。</p>
+        </div>
+      </section>
+      <section id="ar">
+        <div class="head">
+          <h2>Autoregressive Decoder：一步一步吐 token</h2>
+          <span class="tag">AR</span>
+        </div>
+<p>Autoregressive 的意思是“后一步依赖前一步”。语音辨识里，encoder 读声音，decoder 先吃 <code>BOS</code>，输出第一个文字的概率分布。分数最高的 token 被选出来，作为下一步输入。这个过程重复，直到输出 <code>END</code>。</p>
+<p>AR decoder 的风险是 error propagation。如果第一步输出错了，下一步就会看到错误输入，可能一步错步步错。这也是后面 teacher forcing、scheduled sampling 等技巧要处理的问题。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释为什么 decoder 要有 BOS 和 END 这两个特殊符号。</p>
+        </div>
+      </section>
+      <section id="mask">
+        <div class="head">
+          <h2>Masked Self-attention：不能偷看未来</h2>
+          <span class="tag">causal</span>
+        </div>
+<p>Encoder 一次读完整个输入，所以每个位置可以看所有位置。Decoder 不一样：生成第 2 个 token 时，第 3、第 4 个 token 还没有产生。如果让它在训练时看到右边未来答案，测试时就做不到同样条件，训练会作弊。</p>
+<p>Mask 对照</p>
+<p>b1a1a2 a3 a4</p>
+<p>b2a1 a2a3 a4</p>
+<p>b3a1 a2 a3a4</p>
+      </section>
+      <section id="nat">
+        <div class="head">
+          <h2>NAT Decoder：一次生成整句的诱惑与代价</h2>
+          <span class="tag">non-autoregressive</span>
+        </div>
+<p>Non-autoregressive decoder，简称 NAT，一次产生整个输出序列。它可以吃一排 <code>BOS</code> token，同时输出多个 token，因此速度更快，也更容易显式控制长度。</p>
+<p>但 NAT 通常 performance 不如 AR decoder，常需要许多技巧才能逼近 AR。课程提到 multi-modality 问题：同一个输入可能对应多种合理输出，如果并行独立地产生每个位置，协调这些位置会更困难。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>说明 NAT 为什么快，以及为什么它不自然知道输出长度。</p>
+        </div>
+      </section>
+      <section id="cross">
+        <div class="head">
+          <h2>Cross-attention：Decoder 如何读取 Encoder</h2>
+          <span class="tag">cross</span>
+        </div>
+<p>Cross-attention 是 encoder 和 decoder 之间的桥。Self-attention 的 Q/K/V 都来自同一串向量；cross-attention 不同：query 来自 decoder 当前状态，key 和 value 来自 encoder 输出。</p>
+<p>语音辨识中的 attention 图常呈现从左上到右下的斜线：输出第一个字母时关注前段声音，输出后面的字母时注意力逐渐往右移动。这说明 decoder 在不同生成时刻从 encoder 取不同位置的信息。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>明确说出 cross-attention 里 Q 来自 decoder，K/V 来自 encoder。</p>
+        </div>
+      </section>
+      <section id="training">
+        <div class="head">
+          <h2>训练：每一步都是分类，但输入常偷看正确答案</h2>
+          <span class="tag">teacher</span>
+        </div>
+<p>训练 seq2seq 需要成对资料。例如语音辨识要有声音讯号和正确文字。Decoder 每一步输出一个 vocabulary 分布，正确 token 用 one-hot 表示。我们计算输出分布和正确 one-hot 的 cross entropy，并把所有时间步的 loss 加总。</p>
+<p>训练时常用 teacher forcing：decoder 的输入正确答案前缀。例如要训练第三步输出“学”，就喂给它 <code>BOS, 机, 器</code>。这让训练稳定，但和测试时“只能看自己输出”的条件不同。</p>
+        <div class="box warn">
+<h3>Inference</h3>
+<p>输入模型自己前面输出的 token；如果前面错了，后面也会受影响。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释 teacher forcing 为什么训练方便，也为什么会造成训练/测试不一致。</p>
+        </div>
+      </section>
+      <section id="tips">
+        <div class="head">
+          <h2>常见技巧：copy、guided attention、beam search、scheduled sampling</h2>
+          <span class="tag">tips</span>
+        </div>
+<p><b>Copy mechanism</b> 让 decoder 从输入复制词。对聊天机器人、摘要等任务很有用：人名、专有名词、文章中的关键短语，不一定要模型从 vocabulary 里“创造”，可以直接从输入拷贝。</p>
+<p><b>Beam search</b> 保留若干条候选路径，找较好的整体序列。对语音辨识、翻译等答案较明确的任务常有帮助；对故事续写、开放聊天、TTS 等需要随机性或多样性的任务，贪心或 beam search 不一定最好。</p>
+<p><b>Exposure bias</b> 来自 teacher forcing：训练时看正确前缀，测试时看自己输出。Scheduled sampling 的思路是训练时偶尔喂模型自己的错误输出，让它更习惯测试情境；但在 Transformer 上会影响并行化，需要特别设计。</p>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：训练与测试的 decoder 差异</h2>
+          <span class="tag">minimal</span>
+        </div>
+<p>下面代码不是完整 Transformer，只是展示 P16 的关键差异：训练时使用正确前缀，测试时循环使用模型预测，并在预测到 END 时停止。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">def train_step(encoder_out, target):
+ # target = [机, 器, 学, 习, END]
+ decoder_in = [BOS] + target[:-1] # teacher forcing
+ logits = decoder(decoder_in, encoder_out, causal_mask=True)
+ loss = cross_entropy(logits, target)
+ return loss
 
-    <section id="training">
-      <div class="head"><h2>训练：每一步都是分类，但输入常偷看正确答案</h2><span class="tag">teacher forcing</span></div>
-      <p>训练 seq2seq 需要成对资料。例如语音辨识要有声音讯号和正确文字。Decoder 每一步输出一个 vocabulary 分布，正确 token 用 one-hot 表示。我们计算输出分布和正确 one-hot 的 cross entropy，并把所有时间步的 loss 加总。</p>
-      <p>注意 END 也要训练。如果正确输出是“机器学习”四个字，第五步正确答案应该是 <code>END</code>，模型要学会停止。</p>
-      <p>训练时常用 teacher forcing：decoder 的输入不是自己前一步预测，而是正确答案前缀。例如要训练第三步输出“学”，就喂给它 <code>BOS, 机, 器</code>。这让训练稳定，但和测试时“只能看自己输出”的条件不同。</p>
-      <div class="grid2">
-        <div class="box soft"><h3>Training</h3><p>输入正确前缀：<code>BOS, 机, 器</code> → 目标输出 <code>学</code>。</p></div>
-        <div class="box warn"><h3>Inference</h3><p>输入模型自己前面输出的 token；如果前面错了，后面也会受影响。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释 teacher forcing 为什么训练方便，也为什么会造成训练/测试不一致。</p></div>
-    </section>
-
-    <section id="tips">
-      <div class="head"><h2>常见技巧：copy、guided attention、beam search、scheduled sampling</h2><span class="tag">tips</span></div>
-      <p><b>Copy mechanism</b> 让 decoder 从输入复制词。对聊天机器人、摘要等任务很有用：人名、专有名词、文章中的关键短语，不一定要模型从 vocabulary 里“创造”，可以直接从输入拷贝。</p>
-      <p><b>Guided attention</b> 用任务先验约束 attention 形状。语音辨识或语音合成常希望 attention 大致从左到右移动，如果乱跳，可能漏听或漏念。用 monotonic attention、location-aware attention 等方法，可以引导注意力更符合任务结构。</p>
-      <p><b>Beam search</b> 不是每一步只选最高分 token，而是保留若干条候选路径，找较好的整体序列。对语音辨识、翻译等答案较明确的任务常有帮助；对故事续写、开放聊天、TTS 等需要随机性或多样性的任务，贪心或 beam search 不一定最好。</p>
-      <p><b>Evaluation mismatch</b> 也要注意。训练常最小化 token-level cross entropy，但作业或任务可能看整句 BLEU score。BLEU 不容易直接微分，所以有人把句子级指标当 reinforcement learning 的 reward 来优化，但这通常更难。</p>
-      <p><b>Exposure bias</b> 来自 teacher forcing：训练时看正确前缀，测试时看自己输出。Scheduled sampling 的思路是训练时偶尔喂模型自己的错误输出，让它更习惯测试情境；但在 Transformer 上会影响并行化，需要特别设计。</p>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>根据任务特点判断应该考虑 copy、guided attention、beam search、随机采样或 scheduled sampling。</p></div>
-    </section>
-
-    <section id="code">
-      <div class="head"><h2>最小代码：训练与测试的 decoder 差异</h2><span class="tag">minimal code</span></div>
-      <p>下面代码不是完整 Transformer，只是展示 P16 的关键差异：训练时使用正确前缀，测试时循环使用模型预测，并在预测到 END 时停止。</p>
-      <div class="codebar"><span class="label">正确示例：teacher forcing 与 inference</span><span class="kind">python</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">train_step</span>(encoder_out, target):
-    <span class="cmt"># target = [机, 器, 学, 习, END]</span>
-    decoder_in = [BOS] + target[:-<span class="num">1</span>]   <span class="cmt"># teacher forcing</span>
-    logits = decoder(decoder_in, encoder_out, causal_mask=True)
-    loss = cross_entropy(logits, target)
-    <span class="kw">return</span> loss
-
-<span class="kw">def</span> <span class="fn">infer</span>(encoder_out, max_len):
-    ys = [BOS]
-    <span class="kw">for</span> _ <span class="kw">in</span> range(max_len):
-        logits = decoder(ys, encoder_out, causal_mask=True)
-        next_token = choose_token(logits[-<span class="num">1</span>])
-        ys.append(next_token)
-        <span class="kw">if</span> next_token == END:
-            <span class="kw">break</span>
-    <span class="kw">return</span> ys[<span class="num">1</span>:]</code></pre>
-      <div class="codebar error"><span class="label">错误示例：训练时让 decoder 看未来 token</span><span class="kind">pseudo</span></div>
-      <pre><code><span class="cmt"># 错误：没有 causal mask，decoder 训练时可看到右侧答案。</span>
+def infer(encoder_out, max_len):
+ ys = [BOS]
+ for _ in range(max_len):
+ logits = decoder(ys, encoder_out, causal_mask=True)
+ next_token = choose_token(logits[-1])
+ ys.append(next_token)
+ if next_token == END:
+ break
+ return ys[1:]</code></pre>
+<p>错误示例：训练时让 decoder 看未来 tokenpseudo</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误：没有 causal mask，decoder 训练时可看到右侧答案。
 logits = decoder(full_target_sentence, encoder_out, causal_mask=False)
 
-<span class="cmt"># 后果：训练条件和测试条件不一致，模型学到偷看未来。</span></code></pre>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>读训练代码时检查 decoder input、target、causal mask、END token 是否正确。</p></div>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区与修正</h2><span class="tag">pitfalls</span></div>
+# 后果：训练条件和测试条件不一致，模型学到偷看未来。</code></pre>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与修正</h2>
+          <span class="tag">pitfalls</span>
+        </div>
       <div class="grid2">
-        <div class="box redsoft"><h3>误区 1：decoder 可以看完整答案</h3><p>错因：混淆训练并行和生成因果性。后果：模型偷看未来。修法：masked self-attention 只能看左侧前缀。</p></div>
-        <div class="box redsoft"><h3>误区 2：不用 END，模型自然会停</h3><p>错因：忽略输出长度由模型决定。后果：生成无法停止或靠外部硬截断。修法：把 END 当作特殊 token 训练。</p></div>
-        <div class="box redsoft"><h3>误区 3：cross-attention 的 Q/K/V 都来自 decoder</h3><p>错因：套用 self-attention。后果：说错 encoder-decoder 交互。修法：Q 来自 decoder，K/V 来自 encoder。</p></div>
-        <div class="box redsoft"><h3>误区 4：teacher forcing 测试时也能用</h3><p>错因：忘了测试没有正确答案。后果：低估 exposure bias。修法：区分训练输入和 inference 输入。</p></div>
-        <div class="box redsoft"><h3>误区 5：beam search 永远最好</h3><p>错因：只看全局高分路径。后果：开放生成可能重复、僵硬。修法：答案明确任务常用 beam，需要创造性的任务可加随机性。</p></div>
-        <div class="box redsoft"><h3>误区 6：cross entropy 最小就等于 BLEU 最高</h3><p>错因：混淆 token-level loss 和 sentence-level metric。后果：验证选择指标不匹配。修法：训练看 CE，模型选择可看任务指标。</p></div>
+        <div class="box redsoft">
+<h3>误区 1：decoder 可以看完整答案</h3>
+<p>错因：混淆训练并行和生成因果性。后果：模型偷看未来。修法：masked self-attention 只能看左侧前缀。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 2：不用 END，模型自然会停</h3>
+<p>错因：忽略输出长度由模型决定。后果：生成无法停止或靠外部硬截断。修法：把 END 当作特殊 token 训练。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 3：cross-attention 的 Q/K/V 都来自 decoder</h3>
+<p>错因：套用 self-attention。后果：说错 encoder-decoder 交互。修法：Q 来自 decoder，K/V 来自 encoder。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 4：teacher forcing 测试时也能用</h3>
+<p>错因：忘了测试没有正确答案。后果：低估 exposure bias。修法：区分训练输入和 inference 输入。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 5：beam search 永远最好</h3>
+<p>错因：只看全局高分路径。后果：开放生成可能重复、僵硬。修法：答案明确任务常用 beam，需要创造性的任务可加随机性。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 6：cross entropy 最小就等于 BLEU 最高</h3>
+<p>错因：混淆 token-level loss 和 sentence-level metric。后果：验证选择指标不匹配。修法：训练看 CE，模型选择可看任务指标。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>诊断 decoder 训练和 inference 流程中常见的“偷看未来”和“训练测试不一致”问题。</p>
+        </div>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>诊断 decoder 训练和 inference 流程中常见的“偷看未来”和“训练测试不一致”问题。</p></div>
-    </section>
-
-    <section id="terms">
-      <div class="head"><h2>术语与检查：Decoder 的三条边界</h2><span class="tag">terms / checklist</span></div>
-      <p>讲 decoder 时最重要的边界有三条：生成时只能看左边，读取输入时通过 cross-attention，训练时看到正确前缀但测试时只能吃自己的输出。这三条边界决定了 mask、teacher forcing、exposure bias 和 beam search 为什么重要。</p>
-      <table class="metric-table">
-        <thead><tr><th>术语</th><th>一句话解释</th><th>易混点</th></tr></thead>
-        <tbody>
-          <tr><td>Autoregressive</td><td>一步一步生成，下一步依赖前面已生成 token。</td><td>训练可并行算 loss，但因果 mask 不能取消。</td></tr>
-          <tr><td>Causal mask</td><td>第 <code>t</code> 个位置只能看 <code>1...t</code>。</td><td>不是为了省计算，而是为了防止偷看未来。</td></tr>
-          <tr><td>Cross-attention</td><td>decoder 用 Q 读取 encoder 的 K/V。</td><td>Q 来自 decoder，K/V 来自 encoder。</td></tr>
-          <tr><td>Teacher forcing</td><td>训练时喂正确前缀，让每步预测下一个 token。</td><td>测试时没有正确前缀，因此会产生 exposure bias。</td></tr>
-        </tbody>
-      </table>
-      <div class="grid2">
-        <div class="box soft"><h3>Worked example</h3><p>目标是“机器学习 END”时，训练第三步输出“学”，decoder 输入通常是 <code>BOS, 机, 器</code>；测试时如果前两步生成成 <code>BOS, 机, 其</code>，第三步就必须基于错误前缀继续预测。</p></div>
-        <div class="box info"><h3>小检查表</h3><ul><li>decoder self-attention 是否启用 causal mask？</li><li>END 是否作为真实目标训练？</li><li>训练代码中 decoder input 和 target 是否错位一格？</li><li>解码策略是 greedy、beam 还是 sampling，是否符合任务目标？</li></ul></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>看到 seq2seq 训练代码时，能检查它是否把训练、推理和评价指标三件事分清。</p></div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 questions</span></div>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语与检查：Decoder 的三条边界</h2>
+          <span class="tag">terms</span>
+        </div>
+<p>讲 decoder 时最重要的边界有三条：生成时只能看左边，读取输入时通过 cross-attention，训练时看到正确前缀但测试时只能吃自己的输出。这三条边界决定了 mask、teacher forcing、exposure bias 和 beam search 为什么重要。</p>
+        <div class="box soft">
+<h3>Worked example</h3>
+<p>目标是“机器学习 END”时，训练第三步输出“学”，decoder 输入通常是 <code>BOS, 机, 器</code>；测试时如果前两步生成成 <code>BOS, 机, 其</code>，第三步就必须基于错误前缀继续预测。</p>
+        </div>
+        <div class="box info">
+<h3>小检查表</h3>
+<ul>
+<li>decoder self-attention 是否启用 causal mask？</li>
+<li>END 是否作为真实目标训练？</li>
+<li>训练代码中 decoder input 和 target 是否错位一格？</li>
+<li>解码策略是 greedy、beam 还是 sampling，是否符合任务目标？</li>
+</ul>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>看到 seq2seq 训练代码时，能检查它是否把训练、推理和评价指标三件事分清。</p>
+        </div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>做题前先抓住主线</strong><p>P16 是 decoder 的世界：如何生成、如何看 encoder、如何训练，以及如何处理解码质量。</p></div>
-        <div class="review-card"><strong>自检重点</strong><p class="muted">1-6 题是低摩擦检查；8-18 题迁移到语音辨识、指标选择和解码策略。</p><ul><li>能不能解释 mask？</li><li>能不能说清 cross-attention 的 Q/K/V 来源？</li><li>能不能区分 teacher forcing 和 inference？</li></ul></div>
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、AR / NAT 与特殊符号</h3></div>
+          <div class="quick-review">抓手 BOS 开始，END 停止。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. Autoregressive decoder 下一步的输入通常来自哪里？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="前一步自己的输出">前一步自己的输出</label>
+      <label><input type="radio" name="q?" value="随机图片">随机图片</label>
+      <label><input type="radio" name="q?" value="encoder 的参数名">encoder 的参数名</label>
+      <label><input type="radio" name="q?" value="learning rate">learning rate</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、AR / NAT 与特殊符号</h3><p>先确认 decoder 如何生成。</p></div><div class="quick-review"><b>抓手</b><span>BOS 开始，END 停止。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="选择" data-title="1. AR decoder 的输入来自哪里？"><div class="q-meta"><span class="pill">选择</span></div><h3>1. Autoregressive decoder 下一步的输入通常来自哪里？</h3><label><input type="radio" name="q1" value="A">A. 前一步自己的输出</label><label><input type="radio" name="q1" value="B">B. 随机图片</label><label><input type="radio" name="q1" value="C">C. encoder 的参数名</label><label><input type="radio" name="q1" value="D">D. learning rate</label></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="2. BOS 和 END 的作用。"><div class="q-meta"><span class="pill">短答</span></div><h3>2. BOS 和 END 分别解决什么问题？</h3><textarea name="q2" placeholder="说明开始和停止"></textarea></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="3. NAT 为什么快？"><div class="q-meta"><span class="pill">短答</span></div><h3>3. NAT decoder 为什么比 AR decoder 更容易并行？</h3><textarea name="q3" placeholder="从一次产生整段回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="错误诊断" data-title="4. NAT 自然知道输出长度。"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>4. “NAT decoder 自然知道要放几个 BOS。”这句话哪里不严谨？</h3><textarea name="q4" placeholder="按错因 / 后果 / 修法回答"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 2. BOS 和 END 分别解决什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 3. NAT decoder 为什么比 AR decoder 更容易并行？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 4. “NAT decoder 自然知道要放几个 BOS。”这句话哪里不严谨？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、Mask 与 Cross-attention</h3><p>理解 decoder block 的关键差异。</p></div><div class="quick-review"><b>区分</b><span>self 看前缀，cross 看 encoder。</span></div></div>
+        <div class="group-head">
+          <div><h3>二、Mask 与 Cross-attention</h3></div>
+          <div class="quick-review">区分 self 看前缀，cross 看 encoder。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="填空" data-title="5. b3 可以看哪些位置？"><div class="q-meta"><span class="pill">填空</span></div><h3>5. 在 masked self-attention 中，产生 <code>b3</code> 时可以看哪些输入位置？</h3><input type="text" name="q5" placeholder="写出允许位置"></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="6. 为什么 decoder self-attention 要 mask？"><div class="q-meta"><span class="pill">短答</span></div><h3>6. 为什么 decoder 的 self-attention 需要 mask？</h3><textarea name="q6" placeholder="从不能偷看未来回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="匹配" data-title="7. cross-attention Q/K/V 来源。"><div class="q-meta"><span class="pill">匹配</span></div><h3>7. 匹配 cross-attention 中 Q、K、V 的来源。</h3><textarea name="q7" placeholder="Q→...；K→...；V→..."></textarea></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="8. cross-attention 在语音辨识图中如何表现？"><div class="q-meta"><span class="pill">短答</span></div><h3>8. 语音辨识的 cross-attention 图为什么常呈现从左上到右下的趋势？</h3><textarea name="q8" placeholder="从输出字符依序对应声音片段回答"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 5. 在 masked self-attention 中，产生 <code>b3</code> 时可以看哪些输入位置？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 6. 为什么 decoder 的 self-attention 需要 mask？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">匹配</span></div>
+        <h3><b>Q:</b> 7. 匹配 cross-attention 中 Q、K、V 的来源。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 8. 语音辨识的 cross-attention 图为什么常呈现从左上到右下的趋势？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>三、训练与指标</h3><p>掌握 teacher forcing 和 loss。</p></div><div class="quick-review"><b>训练</b><span>CE 逐 token，END 也算。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="选择" data-title="9. 每一步 decoder 训练像什么任务？"><div class="q-meta"><span class="pill">选择</span></div><h3>9. 每一步 decoder 预测 token，最像什么任务？</h3><label><input type="radio" name="q9" value="A">A. 多类别分类</label><label><input type="radio" name="q9" value="B">B. 聚类</label><label><input type="radio" name="q9" value="C">C. 排序文件夹</label><label><input type="radio" name="q9" value="D">D. 图片裁切</label></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="10. teacher forcing 是什么？"><div class="q-meta"><span class="pill">短答</span></div><h3>10. Teacher forcing 是什么？</h3><textarea name="q10" placeholder="从训练时喂正确前缀回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="判断" data-title="11. 训练输出四个字就不需要训练 END。"><div class="q-meta"><span class="pill">判断</span></div><h3>11. 正确句子有四个字，所以训练时只需要预测这四个字，不需要预测 END。</h3><label><input type="radio" name="q11" value="对">对</label><label><input type="radio" name="q11" value="错">错</label></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="12. CE 和 BLEU 的 mismatch。"><div class="q-meta"><span class="pill">短答</span></div><h3>12. 为什么 minimize cross entropy 不一定等于 maximize BLEU？</h3><textarea name="q12" placeholder="从 token-level loss 和 sentence-level metric 回答"></textarea></div>
+        <div class="group-head">
+          <div><h3>三、训练与指标</h3></div>
+          <div class="quick-review">训练 CE 逐 token，END 也算。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 9. 每一步 decoder 预测 token，最像什么任务？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="多类别分类">多类别分类</label>
+      <label><input type="radio" name="q?" value="聚类">聚类</label>
+      <label><input type="radio" name="q?" value="排序文件夹">排序文件夹</label>
+      <label><input type="radio" name="q?" value="图片裁切">图片裁切</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、解码技巧与训练测试差异</h3><p>判断什么时候该用什么 trick。</p></div><div class="quick-review"><b>问题</b><span>质量、复制、对齐、exposure bias。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="简答" data-title="13. copy mechanism 适合什么场景？"><div class="q-meta"><span class="pill">短答</span></div><h3>13. Copy mechanism 适合什么场景？</h3><textarea name="q13" placeholder="从人名、专有名词、摘要回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="场景判断" data-title="14. guided attention 为什么适合 TTS/ASR？"><div class="q-meta"><span class="pill">场景判断</span></div><h3>14. Guided attention 为什么常适合语音合成或语音辨识？</h3><textarea name="q14" placeholder="从由左到右、避免漏听漏念回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="15. beam search 什么时候有帮助，什么时候可能不好？"><div class="q-meta"><span class="pill">短答</span></div><h3>15. Beam search 什么时候有帮助？什么时候可能不好？</h3><textarea name="q15" placeholder="从答案明确 vs 需要创造力回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="错误诊断" data-title="16. teacher forcing 不会带来任何问题。"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>16. “Teacher forcing 训练更稳定，所以不会带来任何问题。”这句话哪里不完整？</h3><textarea name="q16" placeholder="按错因 / 后果 / 修法回答"></textarea></div>
-        </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 10. Teacher forcing 是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 11. 正确句子有四个字，所以训练时只需要预测这四个字，不需要预测 END。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>五、表达输出</h3><p>把本节讲给别人听。</p></div><div class="quick-review"><b>主线</b><span>生成、读取、训练、解码。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="面试短答" data-title="17. 一句话说明 Transformer 下。"><div class="q-meta"><span class="pill">面试短答</span></div><h3>17. 用一句话说明 P16 主要讲了什么。</h3><textarea name="q17" placeholder="控制在 1-2 句话"></textarea></div>
-          <div class="q full" data-role="homework" data-type="费曼解释" data-title="18. 费曼解释：Transformer decoder 如何生成与训练？" data-keywords="decoder,autoregressive,BOS,END,masked self-attention,NAT,cross-attention,teacher forcing,cross entropy,copy mechanism,guided attention,beam search,BLEU,exposure bias,scheduled sampling"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 8-12 句话讲清楚：Transformer decoder 如何生成、读取 encoder，并训练出来？</h3><textarea name="q18" placeholder="必须串起：decoder、autoregressive、BOS、END、masked self-attention、NAT、cross-attention、teacher forcing、cross entropy、copy mechanism、guided attention、beam search、BLEU、exposure bias、scheduled sampling"></textarea><div class="solve-note">提示：先讲 AR 生成，再讲 mask 和 cross-attention，最后讲 teacher forcing 与解码技巧。</div></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 12. 为什么 minimize cross entropy 不一定等于 maximize BLEU？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、解码技巧与训练测试差异</h3></div>
+          <div class="quick-review">问题 质量、复制、对齐、exposure bias。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 13. Copy mechanism 适合什么场景？</h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景判断</span></div>
+        <h3><b>Q:</b> 14. Guided attention 为什么常适合语音合成或语音辨识？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 15. Beam search 什么时候有帮助？什么时候可能不好？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 16. “Teacher forcing 训练更稳定，所以不会带来任何问题。”这句话哪里不完整？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、表达输出</h3></div>
+          <div class="quick-review">主线 生成、读取、训练、解码。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 17. 用一句话说明 P16 主要讲了什么。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 18. 用 8-12 句话讲清楚：Transformer decoder 如何生成、读取 encoder，并训练出来？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>生成练习记录</h2><span class="tag">review</span></div>
-      <p class="muted">完成练习后生成记录。未填写题目、错误诊断缺少“错因 / 后果 / 修法”、费曼解释过短，都会在下方提示。</p>
-      <div class="actions"><button onclick="generateRecord()">生成记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const s of sections){if(s.getBoundingClientRect().top<innerHeight*.36) current=s.id;}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`));}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";navigator.clipboard.writeText(code).then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});bar.appendChild(btn);});
+      </ul>
+    </section>
+  </article>
 
-function valueOfQuestion(q){const checks=[...q.querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value);if(checks.length) return checks.join('、');const radio=q.querySelector('input[type=radio]:checked');if(radio) return radio.value;const text=q.querySelector('textarea,input[type=text],select');return text ? text.value.trim() : '';}
-function questionGroup(q){const group=q.closest('.practice-group');return group?.querySelector('.group-head h3')?.innerText.trim() || '综合练习';}
-function generateRecord(){
-  const qs=[...document.querySelectorAll('[data-role="homework"]')];const groups={};const warnings=[];
-  qs.forEach((q,i)=>{const title=q.dataset.title || q.querySelector('h3')?.innerText.trim() || `第 ${i+1} 题`;const hint=q.querySelector('.solve-note')?.innerText.trim() || '';const answer=valueOfQuestion(q);if(!answer) warnings.push(`第 ${i+1} 题未填写：${title}`);const typeText=`${q.dataset.type||''} ${title}`;if(/诊断|错误/.test(typeText) && answer && !(/错因|原因/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))){warnings.push(`第 ${i+1} 题建议按“错因 / 后果 / 修法”补全。`);}if(/费曼/.test(typeText)){const keys=(q.dataset.keywords || document.body.dataset.feynmanKeywords || '').split(/[、,，\s]+/).filter(Boolean);if(answer && answer.length<180) warnings.push(`第 ${i+1} 题解释偏短，建议至少写 180 个中文字符。`);if(answer && keys.length){const lack=keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase()));if(lack.length) warnings.push(`第 ${i+1} 题可能缺少关键词：${lack.join('、')}。`);}}const group=questionGroup(q);(groups[group] ||= []).push({title, hint, answer: answer || '（未填写）'});});
-  const pageTitle=(document.querySelector('.brand strong,h1')?.innerText || document.title).replace(/\s+/g,' ').trim();let out=`# P16｜${pageTitle}｜练习记录\n\n`;Object.keys(groups).forEach(group=>{out+=`## ${group}\n\n`;groups[group].forEach(item=>{out+=`### ${item.title}\n`;if(item.hint) out+=`提示摘要：${item.hint}\n\n`;out+=`${item.answer}\n\n`;});});document.getElementById('record').textContent=out;const quality=document.getElementById('quality');quality.style.display='block';quality.textContent=warnings.length ? warnings.join('\n') : '练习记录完整，可以直接用于公开分享。';
-}
-function copyRecord(){const text=document.getElementById('record').textContent;navigator.clipboard.writeText(text).catch(()=>alert('复制失败，请手动复制页面中的记录。'));}
-</script>
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

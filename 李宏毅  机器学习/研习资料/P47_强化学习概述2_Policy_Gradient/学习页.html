@@ -4,505 +4,537 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P47｜强化学习 2：Policy Gradient</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="policy gradient,cumulative reward,discount factor,baseline,on-policy,off-policy,exploration,advantage">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Policy Gradient</strong><span>P47。关键不是会不会写 cross entropy，而是动作分数怎么来。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#question"><span class="dot"></span>核心问题</a>
-      <a href="#v0"><span class="dot"></span>Version 0</a>
-      <a href="#v1"><span class="dot"></span>累计回馈</a>
-      <a href="#discount"><span class="dot"></span>Discount</a>
-      <a href="#baseline"><span class="dot"></span>Baseline</a>
-      <a href="#algo"><span class="dot"></span>算法流程</a>
-      <a href="#onpolicy"><span class="dot"></span>On / Off Policy</a>
-      <a href="#explore"><span class="dot"></span>Exploration</a>
-      <a href="#mood"><span class="dot"></span>修课心情类比</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：一次动作好不好，不能只看眼前 reward，要看它之后造成的整段结果。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P47</div>
-        <h1>Policy Gradient 要回答：这一步动作到底该不该被鼓励</h1>
-        <p>P46 说过，如果知道某个 <code>(state, action)</code> 是好是坏，就可以像训练分类器一样调整 actor：好动作提高概率，坏动作降低概率。P47 的核心就是：这些“好坏分数”怎么从环境互动中估计出来。</p>
-        <p>最幼稚的版本只看 immediate reward，容易变成短视 actor。更合理的版本看未来累计 reward，再用 discount factor 让远处 reward 影响变小，再用 baseline 把“相对好坏”凸显出来。最后，我们会看到为什么 policy gradient 要反复收集资料，以及 on-policy、off-policy、exploration 为什么重要。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释为什么 immediate reward 不能直接当动作好坏。</li>
-          <li>计算 cumulative reward 与 discounted return。</li>
-          <li>说明 baseline 为什么能把相对好坏变成正负信号。</li>
-          <li>复述 policy gradient 的基本训练循环。</li>
-          <li>区分 on-policy、off-policy 与 exploration 的作用。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
-      <p>policy gradient 的入口不是复杂推导，而是一个很朴素的问题：actor 采样了一串动作，环境给了一串 reward。我们要回头评价每一个动作，决定之后要提高还是降低它被采样到的概率。</p>
-      <p>动作评价从简单到合理有几个版本。Version 0：用当下 reward 评价当下 action，太短视。Version 1：用 action 之后的所有 reward 总和评价它，能处理延迟回馈。Version 2：加 discount factor，远处 reward 打折。Version 3：减 baseline，让 reward 从绝对数值变成相对好坏。</p>
-      <div class="map">
-        <span class="node">采样轨迹</span>
-        <span class="node">即时回馈</span>
-        <span class="node">未来累计</span>
-        <span class="node">距离折扣</span>
-        <span class="node">相对基准</span>
-        <span class="node">更新策略</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P47</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把 policy gradient 理解成：根据经验回头调高好动作概率、调低坏动作概率。</p></div>
-    </section>
-
-    <section id="question">
-      <div class="head"><h2>核心问题：训练资料和动作分数从哪里来</h2><span class="tag">QUESTION</span></div>
-      <p>P46 最后说，如果我们有 <code>(s, a, A)</code>，其中 <code>A</code> 表示在 state <code>s</code> 做 action <code>a</code> 有多好，就能写出类似 <code>-A log πθ(a|s)</code> 的 loss。<code>A</code> 为正时，提高该 action 概率；<code>A</code> 为负时，降低该 action 概率。</p>
-      <p>RL 的困难是：没有人事先告诉我们每个 state 的最佳 action。资料必须由 actor 自己和 environment 互动得到。最初 actor 甚至可以是随机的；它玩几局，留下每一步 state、action、reward，然后我们根据这些经历计算每一步 action 的分数。</p>
-      <div class="formula">
-        <span class="big">L = - Σ<sub>t</sub> A<sub>t</sub> log πθ(a<sub>t</sub>|s<sub>t</sub>)</span>
-        <small>本节重点是 <code>A_t</code> 怎么定义。它可以是即时 reward、累计 reward、折扣累计 reward，或减掉 baseline 后的相对分数。</small>
+      <h1 class="hero-title">P47｜强化学习 2：Policy Gradient</h1>
+      <p class="hero-desc">P46 说过，如果知道某个 (state, action) 是好是坏，就可以像训练分类器一样调整 actor：好动作提高概率，坏动作降低概率。P47 的核心就是：这些“好坏分数”怎么从环境互动中估计出来。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P46_强化学习概述1_三步骤框架/学习页.html">上一节</a>
+            <a href="../P48_强化学习概述3_Actor_Critic/学习页.html">下一节</a>
       </div>
-      <p><strong>现在你应该能做什么：</strong>说明 policy gradient 不是只会套公式，而是在估计 action 的 credit。</p>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="v0">
-      <div class="head"><h2>Version 0：只看 immediate reward，太短视</h2><span class="tag">V0</span></div>
-      <p>最简单的想法是：在 <code>s_t</code> 做了 <code>a_t</code>，得到 <code>r_t</code>，那就把 <code>A_t = r_t</code>。如果 reward 是正的，鼓励这个动作；如果 reward 是负的，抑制这个动作。</p>
-      <p>问题是它太短视。Space Invader 里左右移动本身通常没有 reward，但移动可以帮助瞄准，之后开火才得分。如果只看当下 reward，模型会觉得移动没价值，只学会疯狂开火。围棋更极端，中间大多数落子没有即时 reward，最后胜负才给回馈。</p>
-      <div class="codebar error"><span class="label">错误示例：把即时 reward 直接当动作价值</span><span class="kind">Short-sighted</span></div>
-      <pre><code><span class="cmt"># 错误示例：移动没有立即得分，于是永远不鼓励移动。</span>
-A_t = reward_t
-loss += -A_t * log_prob(action_t)</code></pre>
-      <p><strong>现在你应该能做什么：</strong>解释为什么只看 immediate reward 会学出“一时爽”的 actor。</p>
-    </section>
-
-    <section id="v1">
-      <div class="head"><h2>Version 1：用未来累计回馈评价动作</h2><span class="tag">CUMULATIVE</span></div>
-      <p>更合理的做法是：评价 <code>a_t</code> 时，不只看 <code>r_t</code>，而是看从 t 开始到 episode 结束的所有 reward 总和。这个值叫 cumulative reward 或 return-to-go，记作 <code>G_t</code>。</p>
-      <div class="formula">
-        <span class="big">G<sub>t</sub> = r<sub>t</sub> + r<sub>t+1</sub> + ... + r<sub>N</sub></span>
-        <small>如果移动帮助之后开火得分，那么移动那一步的 <code>G_t</code> 也会变正。</small>
+        </ul>
       </div>
-      <p>这可以缓解 reward delay。虽然“右移”当下没有得分，但它让后面“开火”打中敌人，所以右移也应该被部分鼓励。用未来累计回馈，就能把后续成果回传给早先动作。</p>
-      <p><strong>现在你应该能做什么：</strong>从一串 reward 计算每一步的 return-to-go，并解释它为什么比 immediate reward 更合理。</p>
-    </section>
+    </div>
+  </header>
 
-    <section id="discount">
-      <div class="head"><h2>Version 2：加 Discount Factor，让太远的未来打折</h2><span class="tag">DISCOUNT</span></div>
-      <p>如果 episode 很长，把最后一步 reward 全部归功给最早动作也不一定合理。于是引入 discount factor <code>γ</code>，通常小于 1，例如 0.9 或 0.99。越远的 reward，被乘上的 <code>γ</code> 次数越多，影响越小。</p>
-      <div class="formula">
-        <span class="big">G'<sub>t</sub> = Σ<sub>n=t</sub><sup>N</sup> γ<sup>n-t</sup> r<sub>n</sub></span>
-        <small><code>γ</code> 越接近 1，越重视远期；越小，越偏短期。</small>
-      </div>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="timeline" id="returnTimeline"></div>
-          <div>
-            <div class="slider-row"><label for="gammaSlider">γ</label><input id="gammaSlider" type="range" min="0.50" max="1.00" step="0.01" value="0.90"><span id="gammaVal">0.90</span></div>
-            <div class="slider-row"><label for="baseSlider">baseline</label><input id="baseSlider" type="range" min="-2" max="6" step="0.5" value="2"><span id="baseVal">2.0</span></div>
-            <p class="viz-note" id="returnNote">调节 γ 和 baseline，观察每一步 action 的分数如何变化。</p>
-          </div>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#question">核心问题：训练资料和动作分数从哪里来</a>
+      <a href="#v0">Version 0：只看 immediate reward，太短视</a>
+      <a href="#v1">Version 1：用未来累计回馈评价动作</a>
+      <a href="#discount">Version 2：加 Discount Factor，让太远的未来打折</a>
+      <a href="#baseline">Version 3：减 Baseline，看相对好坏</a>
+      <a href="#algo">Policy Gradient 的训练循环</a>
+      <a href="#onpolicy">On-Policy 与 Off-Policy：谁收集资料，谁被训练</a>
+      <a href="#explore">Exploration：没试过，就不知道好不好</a>
+      <a href="#mood">修课心情类比：Baseline 和挫折都是相对的</a>
+      <a href="#code">最小代码：Policy Gradient 骨架</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">MAP</span>
         </div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>解释 discount factor 如何在“长远规划”和“近期因果”之间折中。</p>
-    </section>
-
-    <section id="baseline">
-      <div class="head"><h2>Version 3：减 Baseline，看相对好坏</h2><span class="tag">BASELINE</span></div>
-      <p>reward 的绝对值不一定能说明好坏。如果一个游戏每步最低也能拿 10 分，那么拿 10 分其实很差；如果一门课大家都 40 分，你拿 60 分可能已经很好。也就是说，好坏是相对的。</p>
-      <p>baseline 的作用是把 <code>G_t</code> 变成相对分数：<code>A_t = G_t - b</code>。高于 baseline 的动作被鼓励，低于 baseline 的动作被抑制。这里的 <code>A_t</code> 常被称为 advantage 的直觉版本，表示“比预期好多少”。</p>
-      <div class="formula">
-        <span class="big">A<sub>t</sub> = G'<sub>t</sub> - b</span>
-        <small><code>b</code> 可以是平均 return，也可以由 value function 估计。下一节 Actor-Critic 会继续发展这个想法。</small>
-      </div>
-      <p>baseline 通常还可以降低梯度方差，让训练更稳定。P47 只讲直觉：不要把所有正 reward 都当好；要看它是否比一般表现更好。</p>
-      <p><strong>现在你应该能做什么：</strong>用“修课成绩要看班上分布”解释 baseline 的必要性。</p>
-    </section>
-
-    <section id="algo">
-      <div class="head"><h2>Policy Gradient 的训练循环</h2><span class="tag">ALGORITHM</span></div>
-      <p>policy gradient 的基本循环是：随机初始化 actor；用当前 actor 跟环境互动，收集若干 episode；对每一步 action 计算分数 <code>A_t</code>；用 <code>-A_t log πθ(a_t|s_t)</code> 更新 actor；更新后再重新收集资料。</p>
-      <div class="stage">
-        <div><strong>1. 初始化</strong><p>actor 一开始可能几乎随机。</p></div>
-        <div><strong>2. 互动采样</strong><p>跑多个 episode，得到 trajectory。</p></div>
-        <div><strong>3. 评价动作</strong><p>用 return、discount、baseline 算 <code>A_t</code>。</p></div>
-        <div><strong>4. 更新 actor</strong><p>提高好动作概率，降低坏动作概率。</p></div>
-      </div>
-      <p>和普通监督学习不同，资料收集在训练循环里面。因为 actor 更新后，新的 actor 会产生新的行为分布，旧 actor 的经验未必适合新 actor。这个特点让 RL 训练很花时间。</p>
-      <p><strong>现在你应该能做什么：</strong>复述 policy gradient 的循环，并指出最该改进的是 action 评价方式。</p>
-    </section>
-
-    <section id="onpolicy">
-      <div class="head"><h2>On-Policy 与 Off-Policy：谁收集资料，谁被训练</h2><span class="tag">POLICY TYPE</span></div>
-      <p>on-policy 指收集资料的 actor 和被训练的 actor 是同一个，或非常接近。刚才的 policy gradient 就是 on-policy：当前 actor 采样经验，用这些经验更新自己。更新后，最好重新采样，因为行为分布变了。</p>
-      <p>off-policy 则希望用别的 actor 收集到的经验来训练当前 actor。好处是资料利用率高，不必每次更新都重新收集。但它必须知道“示范者”和“学习者”不一样，需要校正差异。PPO 等方法就是现代常用路线之一，不过细节在本节只做概念提示。</p>
-      <div class="grid2">
-        <div class="box info"><h3>On-policy</h3><p>自己采样、自己学习。稳定直观，但资料利用率低。</p></div>
-        <div class="box warn"><h3>Off-policy</h3><p>从别人的经验学习。更省样本，但要处理策略差异。</p></div>
-      </div>
-      <p>课程用棋力类比解释：同一步棋，对弱棋手可能是稳健选择，对强棋手可能限制发展。经验属于产生它的 actor，不能无条件搬给另一个 actor。</p>
-      <p><strong>现在你应该能做什么：</strong>解释为什么 RL 经常需要“更新一次、重新采样一次”。</p>
-    </section>
-
-    <section id="explore">
-      <div class="head"><h2>Exploration：没试过，就不知道好不好</h2><span class="tag">EXPLORATION</span></div>
-      <p>探索是 RL 的关键。如果初始 actor 从不选择“开火”，它就永远不知道开火能得分。只有某个 action 被采样过、产生结果，模型才有机会评价它。</p>
-      <p>因此训练时常故意保留随机性，提高 action distribution 的 entropy，或在参数上加 noise，让 actor 尝试低概率动作。探索太少会卡在局部行为；探索太多又会浪费样本，训练不稳定。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <div class="probrow"><span>常规动作</span><div class="probbar"><div class="probfill" id="safeProb"></div></div><span id="safeText">0</span></div>
-            <div class="probrow"><span>尝试动作</span><div class="probbar"><div class="probfill" id="tryProb"></div></div><span id="tryText">0</span></div>
-            <div class="probrow"><span>杂乱动作</span><div class="probbar"><div class="probfill red" id="noiseProb"></div></div><span id="noiseText">0</span></div>
-            <p class="viz-note" id="exploreNote">调节探索强度，观察策略从保守到随机的变化。</p>
-          </div>
-          <div>
-            <div class="slider-row"><label for="entropySlider">探索强度</label><input id="entropySlider" type="range" min="0" max="100" value="45"><span id="entropyVal">45</span></div>
-            <p>直觉：探索让模型发现新行为；但探索本身不是目标，目标仍是提高 return。</p>
-          </div>
+<p>policy gradient 的入口一个很朴素的问题：actor 采样了一串动作，环境给了一串 reward。我们要回头评价每一个动作，决定之后要提高还是降低它被采样到的概率。</p>
+<p>采样轨迹</p>
+<p>即时回馈</p>
+<p>未来累计</p>
+<p>距离折扣</p>
+<p>相对基准</p>
+<p>更新策略</p>
+      </section>
+      <section id="question">
+        <div class="head">
+          <h2>核心问题：训练资料和动作分数从哪里来</h2>
+          <span class="tag">QUESTION</span>
         </div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>说明为什么 actor 的随机性不是缺陷，而是学习新行为的必要条件。</p>
-    </section>
+<p>P46 最后说，如果我们有 <code>(s, a, A)</code>，其中 <code>A</code> 表示在 state <code>s</code> 做 action <code>a</code> 有多好，就能写出类似 <code>-A log πθ(a|s)</code> 的 loss。<code>A</code> 为正时，提高该 action 概率；<code>A</code> 为负时，降低该 action 概率。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+L = - Σt At log πθ(at|st)
+本节重点是 A_t 怎么定义。它可以是即时 reward、累计 reward、折扣累计 reward，或减掉 baseline 后的相对分数。
+$$
+        </div>
+<p><b>现在你应该能做什么：</b>说明 policy gradient 在估计 action 的 credit。</p>
+      </section>
+      <section id="v0">
+        <div class="head">
+          <h2>Version 0：只看 immediate reward，太短视</h2>
+          <span class="tag">V0</span>
+        </div>
+<p>最简单的想法是：在 <code>s_t</code> 做了 <code>a_t</code>，得到 <code>r_t</code>，那就把 <code>A_t = r_t</code>。如果 reward 是正的，鼓励这个动作；如果 reward 是负的，抑制这个动作。</p>
+<p>错误示例：把即时 reward 直接当动作价值Short-sighted</p>
+<p><b>现在你应该能做什么：</b>解释为什么只看 immediate reward 会学出“一时爽”的 actor。</p>
+      </section>
+      <section id="v1">
+        <div class="head">
+          <h2>Version 1：用未来累计回馈评价动作</h2>
+          <span class="tag">CUMULATIVE</span>
+        </div>
+<p>更合理的做法是：评价 <code>a_t</code> 时，不只看 <code>r_t</code>，而是看从 t 开始到 episode 结束的所有 reward 总和。这个值叫 cumulative reward 或 return-to-go，记作 <code>G_t</code>。</p>
+<p>这可以缓解 reward delay。虽然“右移”当下没有得分，但它让后面“开火”打中敌人，所以右移也应该被部分鼓励。用未来累计回馈，就能把后续成果回传给早先动作。</p>
+      </section>
+      <section id="discount">
+        <div class="head">
+          <h2>Version 2：加 Discount Factor，让太远的未来打折</h2>
+          <span class="tag">DISCOUNT</span>
+        </div>
+<p>如果 episode 很长，把最后一步 reward 全部归功给最早动作也不一定合理。于是引入 discount factor <code>γ</code>，通常小于 1，例如 0.9 或 0.99。越远的 reward，被乘上的 <code>γ</code> 次数越多，影响越小。</p>
+<p>γ0.90</p>
+<p>baseline2.0</p>
+<p>调节 γ 和 baseline，观察每一步 action 的分数如何变化。</p>
+      </section>
+      <section id="baseline">
+        <div class="head">
+          <h2>Version 3：减 Baseline，看相对好坏</h2>
+          <span class="tag">BASELINE</span>
+        </div>
+<p>reward 的绝对值不一定能说明好坏。如果一个游戏每步最低也能拿 10 分，那么拿 10 分其实很差；如果一门课大家都 40 分，你拿 60 分可能已经很好。也就是说，好坏是相对的。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+At = G't - b
+b 可以是平均 return，也可以由 value function 估计。下一节 Actor-Critic 会继续发展这个想法。
+$$
+        </div>
+<p>baseline 通常还可以降低梯度方差，让训练更稳定。P47 只讲直觉：不要把所有正 reward 都当好；要看它是否比一般表现更好。</p>
+      </section>
+      <section id="algo">
+        <div class="head">
+          <h2>Policy Gradient 的训练循环</h2>
+          <span class="tag">ALGORITHM</span>
+        </div>
+<p>policy gradient 的基本循环是：随机初始化 actor；用当前 actor 跟环境互动，收集若干 episode；对每一步 action 计算分数 <code>A_t</code>；用 <code>-A_t log πθ(a_t|s_t)</code> 更新 actor；更新后再重新收集资料。</p>
+<p>和普通监督学习不同，资料收集在训练循环里面。因为 actor 更新后，新的 actor 会产生新的行为分布，旧 actor 的经验未必适合新 actor。这个特点让 RL 训练很花时间。</p>
+      </section>
+      <section id="onpolicy">
+        <div class="head">
+          <h2>On-Policy 与 Off-Policy：谁收集资料，谁被训练</h2>
+          <span class="tag">POLICY</span>
+        </div>
+<p>on-policy 指收集资料的 actor 和被训练的 actor 是同一个，或非常接近。刚才的 policy gradient 就是 on-policy：当前 actor 采样经验，用这些经验更新自己。更新后，最好重新采样，因为行为分布变了。</p>
+        <div class="box info">
+<h3>On-policy</h3>
+<p>自己采样、自己学习。稳定直观，但资料利用率低。</p>
+        </div>
+        <div class="box warn">
+<h3>Off-policy</h3>
+<p>从别人的经验学习。更省样本，但要处理策略差异。</p>
+<p>课程用棋力类比解释：同一步棋，对弱棋手可能是稳健选择，对强棋手可能限制发展。经验属于产生它的 actor，不能无条件搬给另一个 actor。</p>
+<p><b>现在你应该能做什么：</b>解释为什么 RL 经常需要“更新一次、重新采样一次”。</p>
+        </div>
+      </section>
+      <section id="explore">
+        <div class="head">
+          <h2>Exploration：没试过，就不知道好不好</h2>
+          <span class="tag">EXPLORATION</span>
+        </div>
+<p>探索是 RL 的关键。如果初始 actor 从不选择“开火”，它就永远不知道开火能得分。只有某个 action 被采样过、产生结果，模型才有机会评价它。</p>
+<p>常规动作0</p>
+<p>尝试动作0</p>
+<p>杂乱动作0</p>
+<p>调节探索强度，观察策略从保守到随机的变化。</p>
+<p><b>现在你应该能做什么：</b>说明为什么 actor 的随机性不是缺陷，而是学习新行为的必要条件。</p>
+      </section>
+      <section id="mood">
+        <div class="head">
+          <h2>修课心情类比：Baseline 和挫折都是相对的</h2>
+          <span class="tag">MOOD</span>
+        </div>
+<p>课程结尾用“修机器学习课”的小短片调侃 RL：一路遇到 baseline、Colab 断线、out of memory、public/private 分数不一致，仍然继续往前。这个类比虽然轻松，但也可以帮助理解 RL 的训练心情。</p>
+<p><b>现在你应该能做什么：</b>用生活中的相对评价解释 baseline，同时知道它背后是为了稳定策略更新。</p>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：Policy Gradient 骨架</h2>
+          <span class="tag">CODE</span>
+        </div>
+<p>下面是最小 REINFORCE 风格伪代码：先收集 trajectory，再计算 discounted return，减掉 baseline，最后用 <code>-A log prob</code> 更新 policy。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">def compute_advantages(rewards, gamma, baseline):
+ returns = []
+ G = 0
+ for r in reversed(rewards):
+ G = r + gamma * G
+ returns.insert(0, G)
+ advantages = [G - baseline for G in returns]
+ return advantages</code></pre>
+<p>正确示例：用 advantage 更新 actorPython-like</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text">def policy_gradient_step(actor, trajectory, gamma):
+ rewards = [r for _, _, r in trajectory]
+ baseline = mean_discounted_return(rewards, gamma)
+ advantages = compute_advantages(rewards, gamma, baseline)
 
-    <section id="mood">
-      <div class="head"><h2>修课心情类比：Baseline 和挫折都是相对的</h2><span class="tag">MOOD</span></div>
-      <p>课程结尾用“修机器学习课”的小短片调侃 RL：一路遇到 baseline、Colab 断线、out of memory、public/private 分数不一致，仍然继续往前。这个类比虽然轻松，但也可以帮助理解 RL 的训练心情。</p>
-      <p>baseline 像你对这门课的预期。一次作业拿 60 分到底好不好，要看全班分布和自己目标；一次 trajectory 拿到某个 return 到底该不该鼓励，也要看它比 baseline 高还是低。训练 RL 时，失败轨迹很多，波动很大，需要不断采样、评价、更新、再采样。</p>
-      <p><strong>现在你应该能做什么：</strong>用生活中的相对评价解释 baseline，同时知道它背后是为了稳定策略更新。</p>
-    </section>
-
-    <section id="code">
-      <div class="head"><h2>最小代码：Policy Gradient 骨架</h2><span class="tag">CODE</span></div>
-      <p>下面是最小 REINFORCE 风格伪代码：先收集 trajectory，再计算 discounted return，减掉 baseline，最后用 <code>-A log prob</code> 更新 policy。</p>
-      <div class="codebar"><span class="label">正确示例：discounted return + baseline</span><span class="kind">Python-like</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">compute_advantages</span>(rewards, gamma, baseline):
-    returns = []
-    G = <span class="num">0</span>
-    <span class="kw">for</span> r <span class="kw">in</span> reversed(rewards):
-        G = r + gamma * G
-        returns.insert(<span class="num">0</span>, G)
-    advantages = [G - baseline <span class="kw">for</span> G <span class="kw">in</span> returns]
-    <span class="kw">return</span> advantages</code></pre>
-      <div class="codebar"><span class="label">正确示例：用 advantage 更新 actor</span><span class="kind">Python-like</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">policy_gradient_step</span>(actor, trajectory, gamma):
-    rewards = [r <span class="kw">for</span> _, _, r <span class="kw">in</span> trajectory]
-    baseline = mean_discounted_return(rewards, gamma)
-    advantages = compute_advantages(rewards, gamma, baseline)
-
-    loss = <span class="num">0</span>
-    <span class="kw">for</span> (s, a, _), A <span class="kw">in</span> zip(trajectory, advantages):
-        loss += -A * log(actor(s)[a])
-    loss.backward()
-    update(actor)</code></pre>
-      <div class="codebar error"><span class="label">错误示例：旧资料反复更新 on-policy actor</span><span class="kind">Sampling bug</span></div>
-      <pre><code><span class="cmt"># 错误示例：收集一次资料，就拿来更新很多轮。</span>
+ loss = 0
+ for (s, a, _), A in zip(trajectory, advantages):
+ loss += -A * log(actor(s)[a])
+ loss.backward()
+ update(actor)</code></pre>
+<p>错误示例：旧资料反复更新 on-policy actorSampling bug</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-3">复制</button></div>
+        <pre id="code-code-3" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误示例：收集一次资料，就拿来更新很多轮。
 trajectory = run_episode(old_actor, env)
 for _ in range(400):
-    policy_gradient_step(current_actor, trajectory, gamma)
+ policy_gradient_step(current_actor, trajectory, gamma)
 
-<span class="cmt"># on-policy 情境下，actor 更新后应重新采样，旧经验不再完全匹配。</span></code></pre>
-      <p><strong>现在你应该能做什么：</strong>读懂 policy gradient 的最小训练流程，并指出每个改进版本在修什么问题。</p>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+# on-policy 情境下，actor 更新后应重新采样，旧经验不再完全匹配。</code></pre>
+<p><b>现在你应该能做什么：</b>读懂 policy gradient 的最小训练流程，并指出每个改进版本在修什么问题。</p>
+        </div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答建议</strong><p>每题先回答“动作分数怎么算”，再说明它会鼓励还是抑制动作。</p></div>
-        <div class="review-card"><strong>自检标准</strong><p>你能从 V0 一路讲到 baseline，就掌握了本节主线。</p></div>
-      </div>
 
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>一、动作评价</h3><p>理解从 immediate reward 到 cumulative reward。</p></div>
-          <div class="quick-review"><b>快速回顾</b>好动作不一定立刻得分，可能是为未来得分铺路。</div>
+          <div><h3>一、动作评价</h3></div>
+          <div class="quick-review">快速回顾 好动作不一定立刻得分，可能是为未来得分铺路。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q01" data-title="核心问题">
-            <div class="q-meta"><span class="pill">Q01</span><span class="pill">解释</span></div>
-            <h3>Policy Gradient 要解决 P46 留下的哪个核心问题？</h3>
-            <textarea placeholder="训练资料和动作好坏分数从哪里来。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q02" data-title="V0 短视">
-            <div class="q-meta"><span class="pill">Q02</span><span class="pill">诊断</span></div>
-            <h3>为什么把 <code>A_t=r_t</code> 会让 Space Invader actor 变短视？</h3>
-            <textarea placeholder="移动无即时分数，但为之后开火铺路。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q03" data-title="累计回馈">
-            <div class="q-meta"><span class="pill">Q03</span><span class="pill">概念</span></div>
-            <h3>什么是 cumulative reward / return-to-go？它如何解决 reward delay？</h3>
-            <textarea placeholder="从当前步到结束的未来 reward 总和。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q04" data-title="计算 G">
-            <div class="q-meta"><span class="pill">Q04</span><span class="pill">计算</span></div>
-            <h3>reward 序列为 0, 0, 5, 0。请计算不折扣时每一步的 <code>G_t</code>。</h3>
-            <input type="text" placeholder="G1=5，G2=5，G3=5，G4=0">
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q01</span></div>
+        <h3><b>Q:</b> Policy Gradient 要解决 P46 留下的哪个核心问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q02</span></div>
+        <h3><b>Q:</b> 为什么把 <code>A_t=r_t</code> 会让 Space Invader actor 变短视？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q03</span></div>
+        <h3><b>Q:</b> 什么是 cumulative reward / return-to-go？它如何解决 reward delay？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q04</span></div>
+        <h3><b>Q:</b> reward 序列为 0, 0, 5, 0。请计算不折扣时每一步的 <code>G_t</code>。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>二、Discount 与 Baseline</h3><p>把动作评价变得更稳。</p></div>
-          <div class="quick-review"><b>快速回顾</b>discount 控制远期影响，baseline 控制相对好坏。</div>
+          <div><h3>二、Discount 与 Baseline</h3></div>
+          <div class="quick-review">快速回顾 discount 控制远期影响，baseline 控制相对好坏。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q05" data-title="discount factor">
-            <div class="q-meta"><span class="pill">Q05</span><span class="pill">解释</span></div>
-            <h3>discount factor <code>γ</code> 的作用是什么？<code>γ</code> 越接近 1 代表什么？</h3>
-            <select>
-              <option value="">选择最贴近的解释</option>
-              <option value="越接近 1 越重视长远">γ 用来折扣未来回馈；越接近 1，越重视长远结果。</option>
-              <option value="越接近 1 越只看眼前">γ 越接近 1，越只看当前一步 reward。</option>
-              <option value="gamma 只控制探索率">γ 只控制探索随机性，不影响回馈累计。</option>
-            </select>
-          </div>
-          <div class="q" data-role="homework" data-qid="q06" data-title="折扣计算">
-            <div class="q-meta"><span class="pill">Q06</span><span class="pill">计算</span></div>
-            <h3>reward 序列为 0, 0, 5，<code>γ=0.9</code>。请计算第一步的折扣累计回馈。</h3>
-            <textarea placeholder="G1'=0 + 0.9*0 + 0.9^2*5 = 4.05。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q07" data-title="baseline">
-            <div class="q-meta"><span class="pill">Q07</span><span class="pill">概念</span></div>
-            <h3>为什么要从 <code>G_t</code> 减掉 baseline？请用“成绩好坏是相对的”解释。</h3>
-            <textarea placeholder="让高于平均的为正，低于平均的为负。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q08" data-title="advantage">
-            <div class="q-meta"><span class="pill">Q08</span><span class="pill">辨析</span></div>
-            <h3><code>A_t=G_t-b</code> 可以怎样直觉理解为 advantage？正负号分别如何影响 actor？</h3>
-            <textarea placeholder="比预期好多少；正数提高概率，负数降低概率。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q05</span></div>
+        <h3><b>Q:</b> discount factor <code>γ</code> 的作用是什么？<code>γ</code> 越接近 1 代表什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q06</span></div>
+        <h3><b>Q:</b> reward 序列为 0, 0, 5，<code>γ=0.9</code>。请计算第一步的折扣累计回馈。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q07</span></div>
+        <h3><b>Q:</b> 为什么要从 <code>G_t</code> 减掉 baseline？请用“成绩好坏是相对的”解释。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q08</span></div>
+        <h3><b>Q:</b> <code>A_t=G_t-b</code> 可以怎样直觉理解为 advantage？正负号分别如何影响 actor？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>三、训练循环与策略类型</h3><p>理解为什么 RL 要不断重新采样。</p></div>
-          <div class="quick-review"><b>快速回顾</b>on-policy 自己采样自己学；off-policy 从别人的经验学习。</div>
+          <div><h3>三、训练循环与策略类型</h3></div>
+          <div class="quick-review">快速回顾 on-policy 自己采样自己学；off-policy 从别人的经验学习。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q09" data-title="训练循环">
-            <div class="q-meta"><span class="pill">Q09</span><span class="pill">流程</span></div>
-            <h3>复述 policy gradient 的基本训练循环：初始化、收集、评价、更新。</h3>
-            <textarea placeholder="写出四步。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q10" data-title="资料在循环内">
-            <div class="q-meta"><span class="pill">Q10</span><span class="pill">解释</span></div>
-            <h3>为什么 RL 的 data collection 通常放在训练循环里面，而不是一开始收集一次就反复训练？</h3>
-            <textarea placeholder="actor 更新后行为分布变了，旧资料不再完全适合。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q11" data-title="on policy">
-            <div class="q-meta"><span class="pill">Q11</span><span class="pill">概念</span></div>
-            <h3>什么是 on-policy learning？它的优点和代价是什么？</h3>
-            <textarea placeholder="自己采样自己学；直观但耗样本。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q12" data-title="off policy">
-            <div class="q-meta"><span class="pill">Q12</span><span class="pill">对照</span></div>
-            <h3>off-policy learning 想解决什么问题？为什么它必须处理“示范者”和“学习者”的差异？</h3>
-            <textarea placeholder="提高资料利用率；经验来自不同 actor。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q13" data-title="棋力类比">
-            <div class="q-meta"><span class="pill">Q13</span><span class="pill">解释</span></div>
-            <h3>用棋力类比解释：为什么同一个 action 对不同 actor 的好坏可能不同？</h3>
-            <textarea placeholder="弱者稳健走法对强者可能限制发展。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q09</span></div>
+        <h3><b>Q:</b> 复述 policy gradient 的基本训练循环：初始化、收集、评价、更新。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q10</span></div>
+        <h3><b>Q:</b> 为什么 RL 的 data collection 通常放在训练循环里面，而不是一开始收集一次就反复训练？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q11</span></div>
+        <h3><b>Q:</b> 什么是 on-policy learning？它的优点和代价是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q12</span></div>
+        <h3><b>Q:</b> off-policy learning 想解决什么问题？为什么它必须处理“示范者”和“学习者”的差异？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q13</span></div>
+        <h3><b>Q:</b> 用棋力类比解释：为什么同一个 action 对不同 actor 的好坏可能不同？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>四、探索与完整理解</h3><p>把训练稳定性和探索连起来。</p></div>
-          <div class="quick-review"><b>快速回顾</b>没试过的 action，没有办法知道它好不好。</div>
+          <div><h3>四、探索与完整理解</h3></div>
+          <div class="quick-review">快速回顾 没试过的 action，没有办法知道它好不好。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q14" data-title="exploration">
-            <div class="q-meta"><span class="pill">Q14</span><span class="pill">解释</span></div>
-            <h3>为什么 exploration 对 RL 很重要？如果 actor 从不尝试开火，会发生什么？</h3>
-            <textarea placeholder="永远不知道开火是否能得分。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q15" data-title="提高探索">
-            <div class="q-meta"><span class="pill">Q15</span><span class="pill">应用</span></div>
-            <h3>列出两种提高 exploration 的方式，并说明可能代价。</h3>
-            <textarea placeholder="提高 entropy、参数加 noise；代价是训练更随机。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q16" data-title="错误示例">
-            <div class="q-meta"><span class="pill">Q16</span><span class="pill">错误示例</span></div>
-            <h3>错误示例：只要某个 trajectory 的 total reward 是正的，就把里面每个 action 都强烈鼓励。这个做法有什么风险？</h3>
-            <div class="choice-list">
-              <label><input type="checkbox" value="可能把同一条轨迹里的坏动作也鼓励">可能把同一条轨迹里的坏动作也鼓励。</label>
-              <label><input type="checkbox" value="没有做好 credit assignment">没有区分哪些动作真正贡献了好结果。</label>
-              <label><input type="checkbox" value="会降低估计方差到零">会自动把估计方差降到零。</label>
-            </div>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q17" data-title="费曼题">
-            <div class="q-meta"><span class="pill">Q17</span><span class="pill">费曼题</span></div>
-            <h3>请用 8-12 句话向同学讲清楚：Policy Gradient 如何从一串 reward 中决定哪些 action 要被鼓励？</h3>
-            <textarea placeholder="要求串起：trajectory、immediate reward 问题、G_t、discount、baseline、-A log prob。"></textarea>
-            <div class="solve-note">提示：用 Space Invader 的移动再开火例子说明。</div>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q18" data-title="完整方案">
-            <div class="q-meta"><span class="pill">Q18</span><span class="pill">综合</span></div>
-            <h3>设计一个简单 RL 训练方案：说明如何收集 episode、如何计算 <code>A_t</code>、如何设置 baseline、如何保证 exploration，以及何时重新收集资料。</h3>
-            <textarea placeholder="写成训练流程。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q14</span></div>
+        <h3><b>Q:</b> 为什么 exploration 对 RL 很重要？如果 actor 从不尝试开火，会发生什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q15</span></div>
+        <h3><b>Q:</b> 列出两种提高 exploration 的方式，并说明可能代价。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q16</span></div>
+        <h3><b>Q:</b> 错误示例：只要某个 trajectory 的 total reward 是正的，就把里面每个 action 都强烈鼓励。这个做法有什么风险？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="。">。</label>
+      <label><input type="radio" name="q?" value="没有区分哪些动作真正贡献了好结果。">没有区分哪些动作真正贡献了好结果。</label>
+      <label><input type="radio" name="q?" value="会自动把估计方差降到零。">会自动把估计方差降到零。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q17</span></div>
+        <h3><b>Q:</b> 请用 8-12 句话向同学讲清楚：Policy Gradient 如何从一串 reward 中决定哪些 action 要被鼓励？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q18</span></div>
+        <h3><b>Q:</b> 设计一个简单 RL 训练方案：说明如何收集 episode、如何计算 <code>A_t</code>、如何设置 baseline、如何保证 exploration，以及何时重新收集资料。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
-
+      </section>
     <section id="export">
-      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
-      <p>完成练习后，生成一份 Markdown 记录。它会保留完整题目和你的回答，方便之后回顾。</p>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" onclick="generateRecord()">生成记录</button>
-        <button type="button" class="ghost" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
-      <div class="quality" id="qualityBox"></div>
-      <pre class="answer" id="recordOutput">还没有生成记录。</pre>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-  const $ = (id) => document.getElementById(id);
+      </ul>
+    </section>
+  </article>
 
-  function updateProgress(){
-    const doc = document.documentElement;
-    const max = doc.scrollHeight - doc.clientHeight;
-    const pct = max > 0 ? (doc.scrollTop / max) * 100 : 0;
-    $('readProgress').style.width = pct + '%';
-  }
-  document.addEventListener('scroll', updateProgress);
-  updateProgress();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-  const navLinks = Array.from(document.querySelectorAll('nav a'));
-  const sections = navLinks.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
-  const observer = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if(entry.isIntersecting){
-        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id));
-      }
-    });
-  }, {rootMargin:'-30% 0px -65% 0px'});
-  sections.forEach(sec => observer.observe(sec));
-
-  const rewards = [0, 0, 5, 0, -1];
-  const actions = ['右移','右移','开火','左移','被击中'];
-
-  function updateReturns(){
-    const gamma = parseFloat($('gammaSlider').value);
-    const base = parseFloat($('baseSlider').value);
-    $('gammaVal').textContent = gamma.toFixed(2);
-    $('baseVal').textContent = base.toFixed(1);
-    let rows = '';
-    for(let t = 0; t < rewards.length; t++){
-      let g = 0;
-      for(let n = t; n < rewards.length; n++){
-        g += Math.pow(gamma, n - t) * rewards[n];
-      }
-      const adv = g - base;
-      rows += '<div class="step"><span class="badge">t' + (t + 1) + '</span><span>' + actions[t] + '</span><span>G=' + g.toFixed(2) + '</span><span class="score ' + (adv >= 0 ? 'pos' : 'neg') + '">A=' + adv.toFixed(2) + '</span></div>';
-    }
-    $('returnTimeline').innerHTML = rows;
-    $('returnNote').textContent = gamma > 0.96
-      ? 'γ 很高，远处 reward 对早期 action 仍有很大影响。'
-      : gamma < 0.7
-        ? 'γ 较低，评价更偏向近期结果。'
-        : '当前 γ 保留未来影响，同时对远期结果打折。';
-  }
-  ['gammaSlider','baseSlider'].forEach(id => $(id).addEventListener('input', updateReturns));
-  updateReturns();
-
-  function updateExplore(){
-    const e = parseInt($('entropySlider').value, 10);
-    $('entropyVal').textContent = e;
-    const safe = Math.max(0.25, 0.82 - e * 0.006);
-    const tryAct = Math.min(0.45, 0.08 + e * 0.004);
-    const noise = Math.max(0.03, 1 - safe - tryAct);
-    const vals = {safeProb:safe, tryProb:tryAct, noiseProb:noise};
-    Object.entries(vals).forEach(([id, val]) => {
-      $(id).style.width = (val * 100).toFixed(0) + '%';
-      $(id.replace('Prob','Text')).textContent = val.toFixed(2);
-    });
-    $('exploreNote').textContent = e < 25
-      ? '探索太少，模型可能永远试不到低概率但有价值的动作。'
-      : e > 75
-        ? '探索很强，资料丰富但动作也更杂乱。'
-        : '探索适中，既保留常规动作，也给新动作机会。';
-  }
-  $('entropySlider').addEventListener('input', updateExplore);
-  updateExplore();
-
-  function collectAnswer(card){
-    const parts = [];
-    const checked = Array.from(card.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(input => {
-      const label = input.closest('label');
-      return (label ? label.innerText : input.value).trim();
-    }).filter(Boolean);
-    const selected = Array.from(card.querySelectorAll('select')).map(select => {
-      const option = select.selectedOptions[0];
-      return option && option.value ? option.textContent.trim() : '';
-    }).filter(Boolean);
-    if(checked.length) parts.push('选择：' + checked.join('；'));
-    if(selected.length) parts.push('下拉选择：' + selected.join('；'));
-    const texts = Array.from(card.querySelectorAll('textarea,input[type="text"],input[type="number"]')).map(el => el.value.trim()).filter(Boolean);
-    if(texts.length) parts.push(texts.join('\n'));
-    return parts.join('\n').trim();
-  }
-
-  function generateRecord(){
-    const cards = Array.from(document.querySelectorAll(".q[data-role='homework']"));
-    const lines = [];
-    let answered = 0;
-    lines.push('# P47 强化学习 2：Policy Gradient - 练习记录');
-    lines.push('');
-    lines.push('## 完成情况');
-    cards.forEach((card, idx) => {
-      const title = card.dataset.title || ('题目 ' + (idx + 1));
-      const question = card.querySelector('h3')?.innerText.trim() || title;
-      const answer = collectAnswer(card);
-      if(answer) answered += 1;
-      lines.push('');
-      lines.push('### Q' + String(idx + 1).padStart(2, '0') + ' ' + title);
-      lines.push('');
-      lines.push('题目：' + question);
-      lines.push('');
-      lines.push('回答：');
-      lines.push(answer ? answer : '（未作答）');
-    });
-    const missing = cards.length - answered;
-    const quality = [];
-    quality.push('已作答：' + answered + ' / ' + cards.length);
-    if(missing > 0) quality.push('还有 ' + missing + ' 题未作答。');
-    if(!$('qualityBox').style.display || $('qualityBox').style.display === 'none') $('qualityBox').style.display = 'block';
-    $('qualityBox').textContent = quality.join('\n');
-    $('recordOutput').textContent = lines.join('\n');
-  }
-
-  async function copyRecord(){
-    const text = $('recordOutput').textContent;
-    if(!text || text === '还没有生成记录。') generateRecord();
-    try{
-      await navigator.clipboard.writeText($('recordOutput').textContent);
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '已复制练习记录。';
-    }catch(err){
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '复制失败，请手动选中下方记录。';
-    }
-  }
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

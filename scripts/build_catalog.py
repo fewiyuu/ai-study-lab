@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import html
 import json
 import posixpath
 import re
+import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
@@ -1315,12 +1317,25 @@ def slugify(text: str) -> str:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="生成 catalog.json 与可选的课程索引页")
+    parser.add_argument(
+        "--write-indexes",
+        action="store_true",
+        help="同时生成 v1 风格的课程索引页（默认已关闭，避免覆盖 v2 索引页）",
+    )
+    args = parser.parse_args()
+
     tz = timezone(timedelta(hours=8))
     pages = build_pages()
     courses = build_courses(pages)
     learning_paths = build_learning_paths(pages, courses)
-    written_indexes = write_course_indexes(courses, pages)
-    write_public_course_indexes(build_public_course_indexes(pages), skip_paths=written_indexes)
+
+    if args.write_indexes:
+        written_indexes = write_course_indexes(courses, pages)
+        write_public_course_indexes(build_public_course_indexes(pages), skip_paths=written_indexes)
+    else:
+        print("Skipping index page generation (use --write-indexes to enable)")
+
     data = {
         "generatedAt": datetime.now(tz).isoformat(timespec="seconds"),
         "pageCount": len(pages),

@@ -4,981 +4,524 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>07｜引擎对比与源码阅读路线</title>
-  <meta name="description" content="现代 LLM 推理引擎内核第 07 单元：对比 vLLM、SGLang 与 PagedAttention，建立源码阅读路线、选型标准和常见误区检查表。">
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="现代 LLM 推理引擎内核" data-unit="07｜引擎对比与源码阅读路线">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>现代 LLM 推理引擎内核</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">现代 LLM 推理引擎内核</a>
+        <span class="sep">/</span>
         <span>07｜引擎对比与源码阅读路线</span>
       </div>
-      <nav aria-label="页面导航">
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#map"><span class="dot"></span>概念骨架</a>
-        <a href="#terms"><span class="dot"></span>术语与边界</a>
-        <a href="#compare"><span class="dot"></span>引擎对比</a>
-        <a href="#route"><span class="dot"></span>源码阅读路线</a>
-        <a href="#diagnosis"><span class="dot"></span>故障实验室</a>
-        <a href="#example"><span class="dot"></span>一个小例子</a>
-        <a href="#mistakes"><span class="dot"></span>常见错误</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">
-        先把“怎么看引擎”看清，再谈“选哪个”。这里先不追每个项目的全部参数，先把阅读入口和判断维度定住。
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
-    </aside>
+    </div>
+  </nav>
 
-    <main>
-      <header class="hero">
-        <div>
-          <div class="kicker">第 07 单元</div>
-          <h1>引擎对比与源码阅读路线</h1>
-          <p>这一页收束整门课：把 vLLM、SGLang 和 PagedAttention 放到同一张工程地图里，看清它们各自解决哪类问题、哪一层该先读、哪一层不该拿来硬比。目标不是背项目清单，而是建立一条能落到源码和 benchmark 的阅读路径。</p>
-          <p>本页基于 2026-06-21 可访问的公开文档、官方仓库和 benchmark 说明。</p>
-        </div>
-        <div class="box soft">
-          <h3>读完后你应该能做什么</h3>
-          <ul>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">第 07 单元</div>
+      <div class="hero-meta">
+        <span class="hero-badge">07｜引擎对比与源码阅读路线</span>
+      </div>
+      <h1 class="hero-title">07｜引擎对比与源码阅读路线</h1>
+      <p class="hero-desc">这一页收束整门课：把 vLLM、SGLang 和 PagedAttention 放到同一张工程地图里，看清它们各自解决哪类问题、哪一层该先读、哪一层不该拿来硬比。目标不是背项目清单，而是建立一条能落到源码和 benchmark 的阅读路径。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../06_结构化生成与约束解码/学习页.html">上一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
             <li>区分 serving framework、runtime、gateway 和 KV cache 技术的层级。</li>
             <li>沿着请求入口、调度循环、缓存管理、模型执行和指标统计去读源码。</li>
             <li>看 benchmark 时先补上下文，再决定某个结论值不值得信。</li>
-          </ul>
-          <p><a href="../06_结构化生成与约束解码/学习页.html">上一单元：结构化生成与约束解码</a></p>
-          <p><a href="../index.html">回到课程地图</a></p>
-        </div>
-      </header>
+        </ul>
+      </div>
+    </div>
+  </header>
 
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">先抓主线</a>
+      <a href="#map">概念骨架</a>
+      <a href="#terms">术语与边界</a>
+      <a href="#compare">引擎对比</a>
+      <a href="#route">源码阅读路线</a>
+      <a href="#walkthrough">把一条请求从头走到尾</a>
+      <a href="#project-read">按项目各读一条线</a>
+      <a href="#benchmark">怎么读 benchmark</a>
+      <a href="#selection-review">选型复盘</a>
+      <a href="#diagnosis">故障实验室</a>
+      <a href="#example">一个小例子</a>
+      <a href="#mistakes">常见错误</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
         <div class="head">
           <h2>先抓主线</h2>
-          <span class="tag">learning goals</span>
+          <span class="tag">learning</span>
         </div>
-        <div class="grid3">
-          <div class="box">
-            <h3>先分层</h3>
-            <p>把“服务框架”“调度 runtime”“缓存技术”“后端实现”分开。层级一混，后面比较就只剩印象分。</p>
-          </div>
-          <div class="box">
-            <h3>先读入口</h3>
-            <p>读源码不要从 kernel 硬切进去，先找请求入口、scheduler、cache manager 和 model runner，才能把路径拼起来。</p>
-          </div>
-          <div class="box">
-            <h3>先看上下文</h3>
-            <p>benchmark、feature 列表和 README 都要带版本和 workload 才能看。没有上下文的数字，只能当线索。</p>
-          </div>
-        </div>
+<p>先分层</p>
+<p>把“服务框架”“调度 runtime”“缓存技术”“后端实现”分开。层级一混，后面比较就只剩印象分。</p>
+<p>先看上下文</p>
+<p>benchmark、feature 列表和 README 都要带版本和 workload 才能看。没有上下文的数字，只能当线索。</p>
       </section>
-
       <section id="map">
         <div class="head">
           <h2>概念骨架</h2>
           <span class="tag">map</span>
         </div>
-        <div class="shape-tracer" data-shape-tracer>
-          <div class="trace-lines">
-            <button type="button" class="trace-line" data-trace-step="entry">
-              <span>请求入口</span>
-              <em>OpenAI API / native API / request object</em>
-            </button>
-            <button type="button" class="trace-line" data-trace-step="schedule">
-              <span>调度层</span>
-              <em>scheduler / engine step / token budget</em>
-            </button>
-            <button type="button" class="trace-line" data-trace-step="cache">
-              <span>缓存层</span>
-              <em>KV cache / PagedAttention / radix cache</em>
-            </button>
-            <button type="button" class="trace-line" data-trace-step="run">
-              <span>执行层</span>
-              <em>model runner / backend / logits / sampling</em>
-            </button>
-            <button type="button" class="trace-line" data-trace-step="observe">
-              <span>观测层</span>
-              <em>TTFT / TPOT / ITL / throughput / cache usage</em>
-            </button>
-          </div>
-          <div class="trace-canvas">
-            <div class="tensor-card" data-trace-target="entry">
-              <b>请求入口</b>
-              <span>先看外部请求长什么样，再看内部请求对象怎么变化。</span>
-              <p>这一步决定你从哪里开始追踪。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="schedule">
-              <b>调度层</b>
-              <span>这里决定本轮执行谁、给多少 token、是否抢占。</span>
-              <p>它连接请求状态和资源分配。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="cache">
-              <b>缓存层</b>
-              <span>KV cache 的布局、共享和回收，会直接影响容量。</span>
-              <p>PagedAttention 和 radix cache 都属于这层附近的技术。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="run">
-              <b>执行层</b>
-              <span>真正把 token 变出来的地方在这里。</span>
-              <p>backend、logits processor、sampling 都在这一段衔接。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="observe">
-              <b>观测层</b>
-              <span>用指标确认前面的理解是不是对的。</span>
-              <p>只看单个 kernel 基准，通常会误判。</p>
-            </div>
-          </div>
-        </div>
-        <p>这条链的价值在于：你可以把“项目能力”“源码入口”“日志信号”和“指标变化”对齐到同一张图上。这样读引擎时，比较才不会停在名字层。</p>
+<p>这条链的价值在于：你可以把“项目能力”“源码入口”“日志信号”和“指标变化”对齐到同一张图上。这样读引擎时，比较才不会停在名字层。</p>
       </section>
-
       <section id="terms">
         <div class="head">
           <h2>术语与边界</h2>
           <span class="tag">terms</span>
         </div>
-        <table class="metric-table" data-export-context="引擎对比术语表" data-export-lang="table">
-          <thead>
-            <tr>
-              <th>对象</th>
-              <th>直觉解释</th>
-              <th>精确定义</th>
-              <th>容易混淆的地方</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>vLLM</td>
-              <td>一个高性能 LLM serving / inference 引擎。</td>
-              <td>围绕请求调度、KV cache、后端和服务接口组织的推理系统。</td>
-              <td>不要把它等同于某一个 kernel 或某一个 feature。</td>
-            </tr>
-            <tr>
-              <td>SGLang</td>
-              <td>一个面向高性能 serving 和编排的框架。</td>
-              <td>把运行时、结构化输出、前缀复用和多模型场景组织在一起。</td>
-              <td>不要把它只看成“更会写 prompt 的工具”。</td>
-            </tr>
-            <tr>
-              <td>PagedAttention</td>
-              <td>KV cache 的块式管理技术。</td>
-              <td>把分页思想引入 KV cache，减少碎片并提升共享和复用能力。</td>
-              <td>它不是完整 serving 框架。</td>
-            </tr>
-            <tr>
-              <td>benchmark</td>
-              <td>拿来比较速度和容量的数据。</td>
-              <td>必须和模型、硬件、输入输出长度、并发和配置一起解释。</td>
-              <td>单张图通常不能直接推出生产结论。</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>对象</th><th>直觉解释</th><th>精确定义</th><th>容易混淆的地方</th></tr>
+<tr><td>vLLM</td><td>一个高性能 LLM serving / inference 引擎。</td><td>围绕请求调度、KV cache、后端和服务接口组织的推理系统。</td><td>不要把它等同于某一个 kernel 或某一个 feature。</td></tr><tr><td>SGLang</td><td>一个面向高性能 serving 和编排的框架。</td><td>把运行时、结构化输出、前缀复用和多模型场景组织在一起。</td><td>不要把它只看成“更会写 prompt 的工具”。</td></tr><tr><td>PagedAttention</td><td>KV cache 的块式管理技术。</td><td>把分页思想引入 KV cache，减少碎片并提升共享和复用能力。</td><td>它不是完整 serving 框架。</td></tr><tr><td>benchmark</td><td>拿来比较速度和容量的数据。</td><td>必须和模型、硬件、输入输出长度、并发和配置一起解释。</td><td>单张图通常不能直接推出生产结论。</td></tr>
+        </table></div>
       </section>
-
       <section id="compare">
         <div class="head">
           <h2>引擎对比</h2>
           <span class="tag">comparison</span>
         </div>
-        <p>这张表不是为了给项目打分，而是为了帮你问出正确的问题。你要比较的是问题类型、阅读入口和工程边界，不是“谁名字更大”。</p>
-        <table class="metric-table" data-export-context="vLLM、SGLang 与 PagedAttention 对照表" data-export-lang="table">
-          <thead>
-            <tr>
-              <th>维度</th>
-              <th>vLLM</th>
-              <th>SGLang</th>
-              <th>PagedAttention</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>类型</td>
-              <td>LLM inference / serving engine。</td>
-              <td>高性能 serving framework。</td>
-              <td>KV cache 管理与 attention 访问相关的技术。</td>
-            </tr>
-            <tr>
-              <td>核心问题</td>
-              <td>高并发下提升吞吐、控制显存和提供易用服务接口。</td>
-              <td>在复杂生成、前缀复用、结构化输出和多硬件场景里保持低延迟高吞吐。</td>
-              <td>动态序列下的 KV cache 容易碎片化并占掉容量。</td>
-            </tr>
-            <tr>
-              <td>先读入口</td>
-              <td>API server → engine → scheduler → cache manager → runner。</td>
-              <td>OpenAI / native API → runtime → scheduler → prefix cache → executor。</td>
-              <td>论文问题设定 → block table → 物理块分配 → attention 映射。</td>
-            </tr>
-            <tr>
-              <td>典型关键词</td>
-              <td>PagedAttention、continuous batching、chunked prefill、structured outputs、quantization。</td>
-              <td>RadixAttention、structured outputs、prefix caching、speculative decoding、multi-LoRA。</td>
-              <td>block、sharing、fragmentation、copy-on-write、paging。</td>
-            </tr>
-            <tr>
-              <td>选型时先问</td>
-              <td>模型支持、OpenAI 兼容、吞吐、监控和团队维护成本。</td>
-              <td>是否重视复杂编排、结构化输出、前缀复用和部分多模型场景。</td>
-              <td>你的系统是否已经有块式 KV 管理，还是只在比较技术路线。</td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="grid2">
-          <div class="box soft">
-            <h3>别拿什么直接比</h3>
-            <p>不要拿单张 benchmark 图直接裁决生产选型。输入长度、输出长度、并发数、是否流式、是否启用 prefix cache、是否量化，这些上下文缺一项，结论都可能变。</p>
-          </div>
-          <div class="box info">
-            <h3>比较的正确姿势</h3>
-            <p>先看这个项目解决的层级，再看它默认打开了什么能力，最后才看它在你那类 workload 上的可复现表现。</p>
-          </div>
+<p>这张表为了帮你问出正确的问题。你要比较的是问题类型、阅读入口和工程边界，不是“谁名字更大”。</p>
+        <div class="box soft">
+<h3>别拿什么直接比</h3>
+<p>不要拿单张 benchmark 图直接裁决生产选型。输入长度、输出长度、并发数、是否流式、是否启用 prefix cache、是否量化，这些上下文缺一项，结论都可能变。</p>
+        </div>
+        <div class="box info">
+<h3>比较的正确姿势</h3>
+<p>先看这个项目解决的层级，再看它默认打开了什么能力，最后才看它在你那类 workload 上的可复现表现。</p>
         </div>
       </section>
-
       <section id="route">
         <div class="head">
           <h2>源码阅读路线</h2>
           <span class="tag">route</span>
         </div>
-        <p>阅读顺序尽量按“先主循环、再资源、再特性”走。你不需要一次读完整个项目，只要先把一条请求路径追通，就已经能继续往下拆。</p>
-        <div class="codebar"><span>最小搜索命令</span></div>
-        <pre data-export-context="源码阅读搜索命令" data-export-lang="bash"><code class="language-bash">rg -n "scheduler|engine|kv cache|cache manager|structured outputs|metrics" .
+<p>阅读顺序尽量按“先主循环、再资源、再特性”走。你不需要一次读完整个项目，只要先把一条请求路径追通，就已经能继续往下拆。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-route-1">复制</button></div>
+        <pre id="code-route-1" data-export-context="代码" data-export-lang="bash"><code class="language-bash">rg -n "scheduler|engine|kv cache|cache manager|structured outputs|metrics" .
 rg -n "request|prefill|decode|running|waiting|preempt" .
 rg -n "backend|logits|sampling|grammar|json_schema|regex" .</code></pre>
-        <div class="table-wrap">
-          <table data-export-context="源码阅读路线表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>步骤</th>
-                <th>先看什么</th>
-                <th>为什么这样看</th>
-                <th>常见信号</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>1</td>
-                <td>README / docs / quickstart</td>
-                <td>先确认这个项目把自己定位成什么。</td>
-                <td>服务入口、支持模型、feature 列表。</td>
-              </tr>
-              <tr>
-                <td>2</td>
-                <td>API handler / request object</td>
-                <td>把外部请求和内部状态对象对应起来。</td>
-                <td>request id、sampling params、prompt / output tokens。</td>
-              </tr>
-              <tr>
-                <td>3</td>
-                <td>scheduler / engine step</td>
-                <td>看本轮执行谁、给多少 token、是否抢占。</td>
-                <td>waiting / running、budget、preemption。</td>
-              </tr>
-              <tr>
-                <td>4</td>
-                <td>KV cache / prefix cache / block manager</td>
-                <td>把显存账本和请求状态对齐。</td>
-                <td>block、reuse、evict、fragmentation。</td>
-              </tr>
-              <tr>
-                <td>5</td>
-                <td>model runner / backend / logits</td>
-                <td>确认 token 如何从调度结果变成一次执行。</td>
-                <td>backend selection、fallback、sampling、structured outputs。</td>
-              </tr>
-              <tr>
-                <td>6</td>
-                <td>metrics / tracing / benchmark</td>
-                <td>把源码里的统计项映射到工程指标。</td>
-                <td>TTFT、TPOT、ITL、throughput、cache usage。</td>
-              </tr>
-            </tbody>
-          </table>
         </div>
         <div class="box warn">
-          <h3>先别追的东西</h3>
-          <p>现在先别钻 kernel 里的每个实现细节，也别把 gateway、路由器、分布式 RPC 和评测平台混进来。等你把这条路径跑通，再回头看这些边界会更稳。</p>
+<h3>先别追的东西</h3>
+<p>现在先别钻 kernel 里的每个实现细节，也别把 gateway、路由器、分布式 RPC 和评测平台混进来。等你把这条路径跑通，再回头看这些边界会更稳。</p>
         </div>
       </section>
-
       <section id="walkthrough">
         <div class="head">
           <h2>把一条请求从头走到尾</h2>
           <span class="tag">walkthrough</span>
         </div>
-        <p>如果你只想记一个阅读故事，就记这一条：请求从 API 进来，先变成内部 request object，再进入 scheduler；scheduler 决定它这一轮要不要执行、执行多少 token；cache manager 给它分配或复用 KV 块；model runner 把这一轮的 token 计算出来；最后 metrics 把 TTFT、TPOT、ITL 和 cache usage 记下来。</p>
-        <p>这条链的每一站都能变成源码里的关键词。你不是在“找某个文件”，而是在找角色：谁创建 request，谁修改状态，谁决定本轮预算，谁记录性能，谁负责 fallback。只要角色找对，文件名怎么变都不会把你带偏。</p>
-        <div class="table-wrap">
-          <table data-export-context="请求路径与角色表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>路径段</th>
-                <th>角色</th>
-                <th>主要读什么</th>
-                <th>主要写什么</th>
-                <th>出错时的症状</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>API / handler</td>
-                <td>把外部请求变成内部对象。</td>
-                <td>prompt、sampling params、stream 标志。</td>
-                <td>request id、内部上下文、初始状态。</td>
-                <td>请求看起来进来了，但内部字段缺失。</td>
-              </tr>
-              <tr>
-                <td>scheduler</td>
-                <td>决定本轮跑谁。</td>
-                <td>waiting / running 队列、token budget、抢占条件。</td>
-                <td>本轮执行集合、预算分配、预抢占状态。</td>
-                <td>吞吐、延迟或公平性开始明显异常。</td>
-              </tr>
-              <tr>
-                <td>cache manager</td>
-                <td>给请求分配和回收 KV 资源。</td>
-                <td>block table、prefix 命中、剩余显存。</td>
-                <td>块分配、复用、释放、碎片状态。</td>
-                <td>高并发时 OOM，或者复用收益看不见。</td>
-              </tr>
-              <tr>
-                <td>model runner / backend</td>
-                <td>把调度结果变成一次执行。</td>
-                <td>隐藏状态、约束、后端兼容矩阵。</td>
-                <td>logits、输出 token、fallback 记录。</td>
-                <td>能跑但慢，或者直接回退到备选路径。</td>
-              </tr>
-              <tr>
-                <td>metrics / tracing</td>
-                <td>把运行现象留成可复盘证据。</td>
-                <td>完成时间、队列时间、token 速率、cache 使用。</td>
-                <td>TTFT、TPOT、ITL、throughput、preemption 次数。</td>
-                <td>你只能感觉“慢了”，说不清慢在哪一层。</td>
-              </tr>
-            </tbody>
-          </table>
+<p>如果你只想记一个阅读故事，就记这一条：请求从 API 进来，先变成内部 request object，再进入 scheduler；scheduler 决定它这一轮要不要执行、执行多少 token；cache manager 给它分配或复用 KV 块；model runner 把这一轮的 token 计算出来；最后 metrics 把 TTFT、TPOT、ITL 和 cache usage 记下来。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>路径段</th><th>角色</th><th>主要读什么</th><th>主要写什么</th><th>出错时的症状</th></tr>
+<tr><td>API / handler</td><td>把外部请求变成内部对象。</td><td>prompt、sampling params、stream 标志。</td><td>request id、内部上下文、初始状态。</td><td>请求看起来进来了，但内部字段缺失。</td></tr>
+<tr><td>scheduler</td><td>决定本轮跑谁。</td><td>waiting / running 队列、token budget、抢占条件。</td><td>本轮执行集合、预算分配、预抢占状态。</td><td>吞吐、延迟或公平性开始明显异常。</td></tr>
+<tr><td>cache manager</td><td>给请求分配和回收 KV 资源。</td><td>block table、prefix 命中、剩余显存。</td><td>块分配、复用、释放、碎片状态。</td><td>高并发时 OOM，或者复用收益看不见。</td></tr>
+<tr><td>model runner / backend</td><td>把调度结果变成一次执行。</td><td>隐藏状态、约束、后端兼容矩阵。</td><td>logits、输出 token、fallback 记录。</td><td>能跑但慢，或者直接回退到备选路径。</td></tr>
+<tr><td>metrics / tracing</td><td>把运行现象留成可复盘证据。</td><td>完成时间、队列时间、token 速率、cache 使用。</td><td>TTFT、TPOT、ITL、throughput、preemption 次数。</td><td>你只能感觉“慢了”，说不清慢在哪一层。</td></tr>
+        </table></div>
+        <div class="box soft">
+<h3>一个有用的判断</h3>
+<p>如果问题主要落在 queue time 和 token budget，上游多半是 scheduler；如果问题主要落在 cache usage 和高并发 OOM，先看 cache manager；如果问题主要落在 fallback 和支持范围，先看 backend。</p>
         </div>
-        <div class="grid2">
-          <div class="box soft">
-            <h3>一个有用的判断</h3>
-            <p>如果问题主要落在 queue time 和 token budget，上游多半是 scheduler；如果问题主要落在 cache usage 和高并发 OOM，先看 cache manager；如果问题主要落在 fallback 和支持范围，先看 backend。</p>
-          </div>
-          <div class="box info">
-            <h3>为什么这段值得先读</h3>
-            <p>它把“调度”“缓存”“执行”和“观测”串成了一条链。读源码时只要能把这条链映射到文件和函数，你就不会被目录结构绕住。</p>
-          </div>
+        <div class="box info">
+<h3>为什么这段值得先读</h3>
+<p>它把“调度”“缓存”“执行”和“观测”串成了一条链。读源码时只要能把这条链映射到文件和函数，你就不会被目录结构绕住。</p>
         </div>
         <div class="box warn">
-          <h3>失败后果</h3>
-          <p>如果你跳过这条主线，后面读到的会是“这个项目支持了什么”“那个项目又多了什么能力”，但你仍然不知道问题从哪一层开始出现。比较最后会退化成印象分，源码阅读也会变成四处翻目录。</p>
+<h3>失败后果</h3>
+<p>如果你跳过这条主线，后面读到的会是“这个项目支持了什么”“那个项目又多了什么能力”，但你仍然不知道问题从哪一层开始出现。比较最后会退化成印象分，源码阅读也会变成四处翻目录。</p>
         </div>
       </section>
-
       <section id="project-read">
         <div class="head">
           <h2>按项目各读一条线</h2>
-          <span class="tag">project read</span>
+          <span class="tag">project</span>
         </div>
-        <p>真正开始读源码时，可以把 vLLM、SGLang 和 PagedAttention 分成三种读法。vLLM 更适合从 request / scheduler / cache manager / runner 的闭环去看；SGLang 更适合从 API、runtime、structured outputs 和 prefix cache 的组合去看；PagedAttention 更适合从论文的问题设定、块表和映射关系去看。</p>
-        <div class="table-wrap">
-          <table data-export-context="按项目阅读对照表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>项目</th>
-                <th>先读哪条线</th>
-                <th>先找什么关键词</th>
-                <th>要得到什么图</th>
-                <th>常见误区</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>vLLM</td>
-                <td>API → engine → scheduler → cache manager → runner。</td>
-                <td>scheduler、kv cache、structured outputs、metrics。</td>
-                <td>一条请求如何进、如何排、如何跑、如何退。</td>
-                <td>只盯特性列表，不看主循环。</td>
-              </tr>
-              <tr>
-                <td>SGLang</td>
-                <td>API → runtime → prefix cache → structured outputs → executor。</td>
-                <td>structured outputs、prefix cache、benchmark、profiling。</td>
-                <td>前缀复用和结构化输出如何嵌到 serving 里。</td>
-                <td>只把它当成 prompt DSL。</td>
-              </tr>
-              <tr>
-                <td>PagedAttention</td>
-                <td>问题设定 → block table → 分配 → 映射 → 共享。</td>
-                <td>block、sharing、fragmentation、copy-on-write。</td>
-                <td>逻辑 token 怎样映射到物理块。</td>
-                <td>拿论文结论直接外推到所有场景。</td>
-              </tr>
-            </tbody>
-          </table>
+<p>真正开始读源码时，可以把 vLLM、SGLang 和 PagedAttention 分成三种读法。vLLM 更适合从 request / scheduler / cache manager / runner 的闭环去看；SGLang 更适合从 API、runtime、structured outputs 和 prefix cache 的组合去看；PagedAttention 更适合从论文的问题设定、块表和映射关系去看。</p>
+        <div class="box info">
+<h3>为什么要分三条线</h3>
+<p>因为这三个对象的层级不一样。vLLM 和 SGLang 是完整系统，PagedAttention 是其中一类关键技术。读法不同，关注点也不同：系统看闭环，技术看映射，论文看问题定义。</p>
         </div>
-        <div class="grid2">
-          <div class="box info">
-            <h3>为什么要分三条线</h3>
-            <p>因为这三个对象的层级不一样。vLLM 和 SGLang 是完整系统，PagedAttention 是其中一类关键技术。读法不同，关注点也不同：系统看闭环，技术看映射，论文看问题定义。</p>
-          </div>
-          <div class="box soft">
-            <h3>看完你该拿到什么图</h3>
-            <p>你至少应该能画出一条请求路径、一个缓存账本、一个 backend 回退路径，以及一个 benchmark 的条件列表。少了任何一个，选型和复盘都还差一层。</p>
-          </div>
+        <div class="box soft">
+<h3>看完你该拿到什么图</h3>
+<p>你至少应该能画出一条请求路径、一个缓存账本、一个 backend 回退路径，以及一个 benchmark 的条件列表。少了任何一个，选型和复盘都还差一层。</p>
         </div>
       </section>
-
       <section id="benchmark">
         <div class="head">
           <h2>怎么读 benchmark</h2>
           <span class="tag">benchmark</span>
         </div>
-        <p>一张 benchmark 图最容易骗人的地方，不在于它是不是漂亮，而在于它把上下文藏掉了。看似相同的 tokens/s，背后可能是不同模型、不同长度分布、不同并发、不同流式配置、不同 prefix cache 命中率，甚至不同 backend。你若不先问条件，就会把偶然结果当成稳定规律。</p>
-        <p>所以 benchmark 先读条件，再读结果。条件里至少要有模型、硬件、输入长度、输出长度、并发数、是否流式、是否量化、是否启用 prefix cache、是否启用 speculative decoding，以及统计的是平均值还是分位数。没有这组信息，图只能当线索，不能当结论。</p>
-        <div class="table-wrap">
-          <table data-export-context="benchmark 读法清单" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>必须补的条件</th>
-                <th>为什么要看</th>
-                <th>如果漏了会怎样</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>模型和版本</td>
-                <td>不同模型的结构和上下文行为不一样。</td>
-                <td>你不知道是在比项目还是在比模型。</td>
-              </tr>
-              <tr>
-                <td>硬件和 dtype</td>
-                <td>backend 和 kernel 对架构、精度很敏感。</td>
-                <td>性能差异可能只是硬件差异。</td>
-              </tr>
-              <tr>
-                <td>输入 / 输出长度</td>
-                <td>prefill、decode、cache 压力会换位置。</td>
-                <td>TTFT 快不代表 TPOT 也快。</td>
-              </tr>
-              <tr>
-                <td>并发和流式</td>
-                <td>调度行为、队列和尾延迟都会变。</td>
-                <td>你看到的可能只是单请求的理想状态。</td>
-              </tr>
-              <tr>
-                <td>cache / 量化 / speculative</td>
-                <td>这些开关会同时改容量和速度。</td>
-                <td>很难知道收益来自哪一层。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="codebar"><span>最小对照实验</span></div>
-        <pre data-export-context="引擎对比最小实验" data-export-lang="text"><code>baseline:
-  model: same
-  hardware: same
-  input_length: same
-  output_length: same
-  concurrency: same
+<p>一张 benchmark 图最容易骗人的地方，不在于它是不是漂亮，而在于它把上下文藏掉了。看似相同的 tokens/s，背后可能是不同模型、不同长度分布、不同并发、不同流式配置、不同 prefix cache 命中率，甚至不同 backend。你若不先问条件，就会把偶然结果当成稳定规律。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>必须补的条件</th><th>为什么要看</th><th>如果漏了会怎样</th></tr>
+<tr><td>模型和版本</td><td>不同模型的结构和上下文行为不一样。</td><td>你不知道是在比项目还是在比模型。</td></tr>
+<tr><td>硬件和 dtype</td><td>backend 和 kernel 对架构、精度很敏感。</td><td>性能差异可能只是硬件差异。</td></tr>
+<tr><td>输入 / 输出长度</td><td>prefill、decode、cache 压力会换位置。</td><td>TTFT 快不代表 TPOT 也快。</td></tr>
+<tr><td>并发和流式</td><td>调度行为、队列和尾延迟都会变。</td><td>你看到的可能只是单请求的理想状态。</td></tr>
+<tr><td>cache / 量化 / speculative</td><td>这些开关会同时改容量和速度。</td><td>很难知道收益来自哪一层。</td></tr>
+        </table></div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-benchmark-1">复制</button></div>
+        <pre id="code-benchmark-1" data-export-context="代码" data-export-lang="text"><code class="language-text">baseline:
+ model: same
+ hardware: same
+ input_length: same
+ output_length: same
+ concurrency: same
 
 compare:
-  vllm:
-    prefix_cache: on/off
-    structured_outputs: on/off
-  sglang:
-    prefix_cache: on/off
-    structured_outputs: on/off</code></pre>
-        <div class="grid2">
-          <div class="box warn">
-            <h3>失败后果</h3>
-            <p>如果 benchmark 条件没补齐，最后很容易得出“这个项目更快”这种空结论。真正的工程问题会被遮住，后面换工作load 时又会重新撞墙。</p>
-          </div>
-          <div class="box info">
-            <h3>练习钩子</h3>
-            <p>练习里的第 4、8、11 题就是在逼你把条件说全。只要你能把条件补齐，再看图就不会只看数字。</p>
-          </div>
+ vllm:
+ prefix_cache: on/off
+ structured_outputs: on/off
+ sglang:
+ prefix_cache: on/off
+ structured_outputs: on/off</code></pre>
         </div>
-        <div class="shape-tracer" data-shape-tracer>
-          <div class="trace-lines">
-            <button type="button" class="trace-line" data-trace-step="case">
-              <span>同样的 tokens/s</span>
-              <em>先别下结论</em>
-            </button>
-            <button type="button" class="trace-line" data-trace-step="context">
-              <span>补条件</span>
-              <em>模型 / 硬件 / 长度 / 并发 / 流式 / cache</em>
-            </button>
-            <button type="button" class="trace-line" data-trace-step="signal">
-              <span>看信号</span>
-              <em>TTFT / TPOT / ITL / preemption</em>
-            </button>
-            <button type="button" class="trace-line" data-trace-step="decision">
-              <span>做决定</span>
-              <em>是否值得继续比</em>
-            </button>
-          </div>
-          <div class="trace-canvas">
-            <div class="tensor-card" data-trace-target="case">
-              <b>先看案例</b>
-              <span>两张图的 tokens/s 一样，不代表它们在同一 workload 下表现一样。</span>
-              <p>这一步先抑制“见数就信”的冲动。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="context">
-              <b>补条件</b>
-              <span>模型、硬件、长度分布、并发、流式和 cache 先对齐。</span>
-              <p>少一个条件，比较就可能换对象。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="signal">
-              <b>看信号</b>
-              <span>TTFT 看首 token，TPOT / ITL 看持续输出，preemption 看调度压力。</span>
-              <p>这些信号帮助你把“慢”拆到具体层。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="decision">
-              <b>再做决定</b>
-              <span>只有条件和信号都对齐，才值得把图拿来支持选型。</span>
-              <p>这时比较的是工程路径，不是表面数字。</p>
-            </div>
-          </div>
+        <div class="box info">
+<h3>练习钩子</h3>
+<p>练习里的第 4、8、11 题就是在逼你把条件说全。只要你能把条件补齐，再看图就不会只看数字。</p>
         </div>
       </section>
-
       <section id="selection-review">
         <div class="head">
           <h2>选型复盘</h2>
           <span class="tag">review</span>
         </div>
-        <p>假设你手里有三份材料：vLLM 的 benchmark 图、SGLang 的功能说明、PagedAttention 的论文。它们都在讲推理，但它们说的是三种不同层级的事。最容易出错的地方，不是信息太少，而是你把这三种层级混成了同一个问题，然后用同一个结论去回答。</p>
-        <p>复盘时可以直接把材料分成三句。第一句说系统层，哪个项目更适合你的请求路径和运维方式。第二句说能力层，哪个项目更适合结构化输出、前缀复用和路由需求。第三句说技术层，哪个机制只是在局部把容量、碎片或访问路径做得更好。这样写，讨论会自然收口。</p>
-        <div class="table-wrap">
-          <table data-export-context="选型复盘分层表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>层级</th>
-                <th>该问什么</th>
-                <th>该看什么材料</th>
-                <th>常见误判</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>系统层</td>
-                <td>它能不能接住你的线上请求和运维方式？</td>
-                <td>API、runtime、scheduler、metrics、README。</td>
-                <td>只看 feature 列表，不看闭环。</td>
-              </tr>
-              <tr>
-                <td>能力层</td>
-                <td>它对结构化输出、前缀复用和流式请求支持得怎样？</td>
-                <td>structured outputs、prefix cache、benchmark、示例。</td>
-                <td>把能力层直接当成最终性能。</td>
-              </tr>
-              <tr>
-                <td>技术层</td>
-                <td>哪一个机制真正解决了局部瓶颈？</td>
-                <td>PagedAttention、cache layout、block table、论文图。</td>
-                <td>把局部技术当成完整系统结论。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="codebar"><span>复盘模板</span></div>
-        <pre data-export-context="引擎选型复盘模板" data-export-lang="text"><code>系统层：____ 更适合我的请求路径和运维方式，因为 ____。
+<p>假设你手里有三份材料：vLLM 的 benchmark 图、SGLang 的功能说明、PagedAttention 的论文。它们都在讲推理，但它们说的是三种不同层级的事。最容易出错的地方，你把这三种层级混成了同一个问题，然后用同一个结论去回答。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>层级</th><th>该问什么</th><th>该看什么材料</th><th>常见误判</th></tr>
+<tr><td>系统层</td><td>它能不能接住你的线上请求和运维方式？</td><td>API、runtime、scheduler、metrics、README。</td><td>只看 feature 列表，不看闭环。</td></tr>
+<tr><td>能力层</td><td>它对结构化输出、前缀复用和流式请求支持得怎样？</td><td>structured outputs、prefix cache、benchmark、示例。</td><td>把能力层直接当成最终性能。</td></tr>
+<tr><td>技术层</td><td>哪一个机制真正解决了局部瓶颈？</td><td>PagedAttention、cache layout、block table、论文图。</td><td>把局部技术当成完整系统结论。</td></tr>
+        </table></div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-selection-review-1">复制</button></div>
+        <pre id="code-selection-review-1" data-export-context="代码" data-export-lang="text"><code class="language-text">系统层：____ 更适合我的请求路径和运维方式，因为 ____。
 能力层：____ 更适合我的结构化输出 / 前缀复用需求，因为 ____。
 技术层：____ 说明了容量或碎片上的关键机制，但它不等于完整系统。</code></pre>
-        <div class="grid2">
-          <div class="box soft">
-            <h3>怎么用这段</h3>
-            <p>你可以拿任何一组 benchmark 或 README 来填这个模板。填完以后，很多“谁更强”的争论就会自然变成“哪一层更适合我”。这比直接下结论更接近工程决策。</p>
-          </div>
-          <div class="box warn">
-            <h3>失败后果</h3>
-            <p>如果不分层，评审里最常出现的结果就是：把技术点当成系统点，把局部结果当成全局结论，最后选型和源码阅读都偏航。</p>
-          </div>
         </div>
-        <p>这一段和前面的 benchmark 读法是同一件事的两面：前者教你补条件，后者教你给条件分层。做完这一步，你就能把这门课收束成一个可复用的阅读和选型方法。</p>
+        <div class="box warn">
+<h3>失败后果</h3>
+<p>如果不分层，评审里最常出现的结果就是：把技术点当成系统点，把局部结果当成全局结论，最后选型和源码阅读都偏航。</p>
+<p>这一段和前面的 benchmark 读法是同一件事的两面：前者教你补条件，后者教你给条件分层。做完这一步，你就能把这门课收束成一个可复用的阅读和选型方法。</p>
+        </div>
       </section>
-
       <section id="diagnosis">
         <div class="head">
           <h2>故障实验室</h2>
-          <span class="tag">terminal lab</span>
+          <span class="tag">terminal</span>
         </div>
-        <p>看引擎时最容易犯的错，是把“看起来像一个问题”的几类症状混成一类。下面几个场景先把分层感练出来。</p>
-        <div class="terminal-lab" data-terminal-lab>
-          <div class="terminal-controls">
-            <button type="button" class="ghost" data-terminal-case="ttft">TTFT 偏高</button>
-            <button type="button" class="ghost" data-terminal-case="oom">长上下文 OOM</button>
-            <button type="button" class="ghost" data-terminal-case="fallback">backend 回退</button>
-            <button type="button" class="ghost" data-terminal-case="cache">prefix cache 不生效</button>
-          </div>
-          <div class="terminal-output"></div>
-          <template data-terminal-output="ttft">
-            <pre>症状：首 token 很慢，但后续 token 正常。
-先看：prefill、长 prompt、chunked prefill、structured outputs 是否引入额外约束成本。
-下一步：不要先调 sampler，先看请求是否在前半段被拖慢。</pre>
-          </template>
-          <template data-terminal-output="oom">
-            <pre>症状：单请求能跑，高并发长上下文 OOM。
-先看：KV cache 账本、并发 token、block 管理和 cache dtype。
-下一步：不要把锅先甩给权重，先看显存大头是不是 cache。</pre>
-          </template>
-          <template data-terminal-output="fallback">
-            <pre>症状：日志里出现 fallback，速度也明显掉。
-先看：GPU 架构、dtype、shape、模型支持范围和 backend 兼容矩阵。
-下一步：确认你跑的是不是目标实现，而不是能跑就行的备选路径。</pre>
-          </template>
-          <template data-terminal-output="cache">
-            <pre>症状：重复前缀没有省时间。
-先看：前缀是否真的一致、cache 是否命中、是否被清理或过期。
-下一步：把命中率、复用粒度和过期策略一起查，不要只看一次请求。</pre>
-          </template>
-        </div>
+<p>看引擎时最容易犯的错，是把“看起来像一个问题”的几类症状混成一类。下面几个场景先把分层感练出来。</p>
       </section>
-
       <section id="example">
         <div class="head">
           <h2>一个小例子</h2>
           <span class="tag">example</span>
         </div>
-        <p>假设你要做一个服务：重复的 system prompt 很多，还要求输出稳定的 JSON，而且有时会混进工具调用。你不能先问“哪个项目最强”，你要先拆成三件事：请求入口是否兼容、约束输出是否能在 decode 里执行、缓存和调度是否会因为额外规则变慢。</p>
-        <div class="grid3">
-          <div class="box">
-            <h3>看入口</h3>
-            <p>先确认你的请求是 OpenAI 兼容、native API 还是别的接口。</p>
-          </div>
-          <div class="box soft">
-            <h3>看约束</h3>
-            <p>再确认结构化输出是 schema、regex 还是 grammar，是否需要 tool parser。</p>
-          </div>
-          <div class="box info">
-            <h3>看运行时</h3>
-            <p>最后再看 prefix cache、scheduler、backend 和 metrics，确认收益有没有被开销抵消。</p>
-          </div>
-        </div>
-        <div class="codebar"><span>最小判断顺序</span></div>
-        <pre data-export-context="引擎选型判断顺序" data-export-lang="text"><code>1. 先确认问题属于哪一层：请求、调度、缓存、backend、还是观测。
-2. 再确认工作负载：长 prompt、短 prompt、重复前缀、长输出、结构化输出。
-3. 然后看约束和缓存会不会互相拖慢。
-4. 最后才把 benchmark 结论拿来支持选型。</code></pre>
-        <div class="table-wrap">
-          <table data-export-context="工程选型快查表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>问题线索</th>
-                <th>先查的对象</th>
-                <th>想得到的答案</th>
-                <th>不该立刻做什么</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>重复前缀很多</td>
-                <td>prefix cache / radix cache</td>
-                <td>是否真的在复用前缀，是否命中稳定</td>
-                <td>先别把慢直接归给 model runner</td>
-              </tr>
-              <tr>
-                <td>JSON 输出不稳定</td>
-                <td>structured outputs / schema / backend</td>
-                <td>是否在 decode 时被约束</td>
-                <td>先别只改 prompt 文案</td>
-              </tr>
-              <tr>
-                <td>看起来同样快</td>
-                <td>benchmark 条件</td>
-                <td>是否真的是同一 workload</td>
-                <td>先别把一张图当结论</td>
-              </tr>
-              <tr>
-                <td>偶发 fallback</td>
-                <td>兼容矩阵 / dtype / shape</td>
-                <td>目标 backend 是否被限制</td>
-                <td>先别直接换项目</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+<p>假设你要做一个服务：重复的 system prompt 很多，还要求输出稳定的 JSON，而且有时会混进工具调用。你不能先问“哪个项目最强”，你要先拆成三件事：请求入口是否兼容、约束输出是否能在 decode 里执行、缓存和调度是否会因为额外规则变慢。</p>
+<p>看约束</p>
+<p>再确认结构化输出是 schema、regex 还是 grammar，是否需要 tool parser。</p>
+<p>最小判断顺序</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>问题线索</th><th>先查的对象</th><th>想得到的答案</th><th>不该立刻做什么</th></tr>
+<tr><td>重复前缀很多</td><td>prefix cache / radix cache</td><td>是否真的在复用前缀，是否命中稳定</td><td>先别把慢直接归给 model runner</td></tr>
+<tr><td>JSON 输出不稳定</td><td>structured outputs / schema / backend</td><td>是否在 decode 时被约束</td><td>先别只改 prompt 文案</td></tr>
+<tr><td>看起来同样快</td><td>benchmark 条件</td><td>是否真的是同一 workload</td><td>先别把一张图当结论</td></tr>
+<tr><td>偶发 fallback</td><td>兼容矩阵 / dtype / shape</td><td>目标 backend 是否被限制</td><td>先别直接换项目</td></tr>
+        </table></div>
       </section>
-
       <section id="mistakes">
         <div class="head">
           <h2>常见错误</h2>
           <span class="tag">mistakes</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>错误 1：从 kernel 开始读</h3>
-            <p>kernel 只能解释单次计算怎么更快，不解释请求为什么被选中、cache 为什么够用、输出为什么停。修正：先读运行时主循环。</p>
-          </div>
-          <div class="box">
-            <h3>错误 2：把 benchmark 当结论</h3>
-            <p>没有模型、硬件、长度分布和并发上下文的 benchmark，不足以支持选型。修正：先补条件，再看数值。</p>
-          </div>
-          <div class="box">
-            <h3>错误 3：把 PagedAttention 当完整引擎</h3>
-            <p>它解决的是 KV cache 管理的重要问题，但不自动解决服务治理、路由、限流或可观测性。修正：把它放回引擎的一部分看。</p>
-          </div>
-          <div class="box">
-            <h3>错误 4：把“能跑”误认为“走了目标实现”</h3>
-            <p>后端回退很常见，能跑不代表走的是你以为的那条路径。修正：先看兼容矩阵，再谈速度。</p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>错误 1：从 kernel 开始读</h3>
+<p>kernel 只能解释单次计算怎么更快，不解释请求为什么被选中、cache 为什么够用、输出为什么停。修正：先读运行时主循环。</p>
+        </div>
+        <div class="box">
+<h3>错误 2：把 benchmark 当结论</h3>
+<p>没有模型、硬件、长度分布和并发上下文的 benchmark，不足以支持选型。修正：先补条件，再看数值。</p>
+        </div>
+        <div class="box">
+<h3>错误 3：把 PagedAttention 当完整引擎</h3>
+<p>它解决的是 KV cache 管理的重要问题，但不自动解决服务治理、路由、限流或可观测性。修正：把它放回引擎的一部分看。</p>
+        </div>
+        <div class="box">
+<h3>错误 4：把“能跑”误认为“走了目标实现”</h3>
+<p>后端回退很常见，能跑不代表走的是你以为的那条路径。修正：先看兼容矩阵，再谈速度。</p>
         </div>
         <div class="box warn">
-          <h3>失败后果</h3>
-          <p>如果你从 kernel 切入，通常会得到一堆局部优化名词，却不知道请求是怎么进来的、资源是怎么分的、为什么会回退。最后你会能讲单个实现，却不能解释一个线上现象。</p>
+<h3>失败后果</h3>
+<p>如果你从 kernel 切入，通常会得到一堆局部优化名词，却不知道请求是怎么进来的、资源是怎么分的、为什么会回退。最后你会能讲单个实现，却不能解释一个线上现象。</p>
+<p>如果你想把这页变成真的工程判断工具，最少要同时回答三件事：请求路径在哪一层、缓存账本有没有复用、benchmark 条件有没有对齐。只会其中一件，选型还是会飘。</p>
         </div>
-        <p>如果你想把这页变成真的工程判断工具，最少要同时回答三件事：请求路径在哪一层、缓存账本有没有复用、benchmark 条件有没有对齐。只会其中一件，选型还是会飘。</p>
+      </div>
       </section>
-
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>一组：概念分层</h3>
-              <p class="muted">先确认层级，再谈比较。</p>
-            </div>
-            <div class="quick-review">快速复盘：framework、runtime、cache 技术、backend 不是一层。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="vllm-vs-sglang" data-group="概念分层" data-title="用一句话区分 vLLM 和 SGLang。">
-              <div class="q-meta"><span class="pill" data-type="explain">解释</span><span class="pill">对比</span></div>
-              <p><b>1. 用一句话区分 vLLM 和 SGLang。</b></p>
-              <textarea name="vllm-vs-sglang" placeholder="先说它们各自解决什么问题。"></textarea>
-              <p class="solve-note">提示：不要只写“两个都是推理框架”，要说出侧重点差异。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>vLLM 更像围绕高性能 LLM serving 组织的推理引擎，SGLang 更强调 serving、编排和结构化输出等能力；两者都做高性能推理，但关注点不一样。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q" data-question="pagedattention-layer" data-group="概念分层" data-title="判断正误：PagedAttention 是一个完整的 serving framework。">
-              <div class="q-meta"><span class="pill" data-type="true-false">判断</span><span class="pill">边界</span></div>
-              <p><b>2. 判断正误：PagedAttention 是一个完整的 serving framework。</b></p>
-              <label><input type="radio" name="pagedattention-layer" value="对">对</label><br>
-              <label><input type="radio" name="pagedattention-layer" value="错">错</label>
-              <p class="hint">提示：想想它主要解决的是哪一层的问题。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>展开反馈</summary>
-                <p>PagedAttention 主要是 KV cache 管理和 attention 访问相关的技术，不是完整服务框架。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q short" data-question="read-first" data-group="概念分层" data-title="读一个新引擎源码时，先找哪三个模块？">
-              <div class="q-meta"><span class="pill" data-type="fill">填空</span><span class="pill">源码</span></div>
-              <p><b>3. 读一个新引擎源码时，先找哪三个模块？</b></p>
-              <input type="text" name="read-first" data-answer="scheduler; cache manager; model runner" placeholder="三个短关键词。">
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>展开反馈</summary>
-                <p>先找 scheduler、cache manager、model runner。它们通常把请求、资源和执行连成一条线。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q short" data-question="benchmark-questions" data-group="概念分层" data-title="看 benchmark 时至少要补哪三个上下文？">
-              <div class="q-meta"><span class="pill" data-type="fill">填空</span><span class="pill">benchmark</span></div>
-              <p><b>4. 看 benchmark 时至少要补哪三个上下文？</b></p>
-              <input type="text" name="benchmark-questions" data-answer="model; hardware; length distribution" placeholder="三个关键词。">
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>展开反馈</summary>
-                <p>至少要看模型、硬件和长度分布；很多时候还要再补并发和是否流式。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-          </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一组：概念分层</h3></div>
+          <div class="quick-review">快速复盘：framework、runtime、cache 技术、backend 不是一层。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="qvllmvssglang" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">vllm-vs-sglang</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b></h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>二组：阅读路线</h3>
-              <p class="muted">把源码路径串起来。</p>
-            </div>
-            <div class="quick-review">快速复盘：入口 -> 调度 -> 缓存 -> 执行 -> 指标。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q full" data-question="route-order" data-group="阅读路线" data-title="把源码阅读顺序排出来。">
-              <div class="q-meta"><span class="pill" data-type="ordering">排序</span><span class="pill">路线</span></div>
-              <p><b>5. 把源码阅读顺序排出来。</b></p>
-              <textarea name="route-order" placeholder="按先后顺序写：README、入口、调度、缓存、执行、指标。"></textarea>
-              <p class="solve-note">提示：先读能告诉你“这是什么”的地方，再读决定“怎么跑”的地方。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>推荐顺序是 README / docs → API 入口 → scheduler / engine step → cache manager → model runner / backend → metrics / tracing。这样最容易把一条请求路径串起来。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q full" data-question="search-terms" data-group="阅读路线" data-title="你会用哪三个搜索词开始读源码？">
-              <div class="q-meta"><span class="pill" data-type="code reading">检索</span><span class="pill">rg</span></div>
-              <p><b>6. 你会用哪三个搜索词开始读源码？</b></p>
-              <textarea name="search-terms" placeholder="写三个关键词或短语。"></textarea>
-              <p class="solve-note">提示：最好能覆盖调度、缓存和输出约束三个方向。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>可以从 scheduler、kv cache、structured outputs 或 backend 这些词开始。目标是先把主循环和约束路径找出来，而不是先翻每个子目录。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q full" data-question="request-path" data-group="阅读路线" data-title="把一次请求从入口到释放资源的路径说出来。">
-              <div class="q-meta"><span class="pill" data-type="synthesis">综合</span><span class="pill">路径</span></div>
-              <p><b>7. 把一次请求从入口到释放资源的路径说出来。</b></p>
-              <textarea name="request-path" placeholder="至少要包含请求对象、调度、缓存、执行和输出。"></textarea>
-              <p class="solve-note">提示：写成“入口 -> 调度 -> 缓存 -> 执行 -> 输出 -> 释放”的链。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>一条可接受的路径是：请求进入 API，创建内部 request object，进入 scheduler，分配 KV cache 或 prefix cache，进入 model runner / backend，生成并采样输出，最后判断停止并释放资源。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q full" data-question="engine-signal" data-group="阅读路线" data-title="如果只看日志，你会优先看哪四类信号？">
-              <div class="q-meta"><span class="pill" data-type="diagnosis">诊断</span><span class="pill">日志</span></div>
-              <p><b>8. 如果只看日志，你会优先看哪四类信号？</b></p>
-              <textarea name="engine-signal" placeholder="例如 TTFT、TPOT、回退、cache usage、preemption。"></textarea>
-              <p class="solve-note">提示：尽量把症状和层级对应起来。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>优先看 TTFT、TPOT / ITL、backend 回退、KV cache 占用或 preemption 计数。这样能快速定位到是入口、调度、缓存还是执行层出了问题。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-          </div>
-        </div>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>三组：迁移与表达</h3>
-              <p class="muted">把概念说成工程判断。</p>
-            </div>
-            <div class="quick-review">快速复盘：别用“感觉更强”，用“哪层更合适、为什么”。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q full" data-question="pick-engine" data-group="迁移与表达" data-title="如果业务重前缀复用和结构化输出，你会先比较什么？">
-              <div class="q-meta"><span class="pill" data-type="design">设计</span><span class="pill">选型</span></div>
-              <p><b>9. 如果业务重前缀复用和结构化输出，你会先比较什么？</b></p>
-              <textarea name="pick-engine" placeholder="写出你会先比较的四个维度。"></textarea>
-              <p class="solve-note">提示：从功能、后端、缓存、指标四个方向说。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>先比较结构化输出支持、prefix cache 或 radix cache 机制、backend 兼容范围和实际 workload 下的 TTFT / TPOT / 命中率。只有这些都对齐了，选型才有意义。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q full" data-question="route-code-reading" data-group="迁移与表达" data-title="读这段路线代码，说出它提醒你先看什么。">
-              <div class="q-meta"><span class="pill" data-type="code reading">读代码</span><span class="pill">检索</span></div>
-              <p><b>10. 读这段路线代码，说出它提醒你先看什么。</b></p>
-              <div class="codebar"><span>路线代码片段</span></div>
-              <pre data-export-context="源码阅读命令复盘" data-export-lang="bash"><code class="language-bash">rg -n "scheduler|engine|kv cache" .
-rg -n "structured outputs|json_schema|regex|grammar" .
-rg -n "TTFT|TPOT|ITL|throughput|cache usage" .</code></pre>
-              <textarea name="route-code-reading" placeholder="先说命令在找什么，再说为什么这样排顺序。"></textarea>
-              <p class="solve-note">提示：把检索顺序和阅读顺序联系起来。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>这段命令提醒你先找调度、缓存和执行路径，再看结构化输出，最后把这些路径映射到 TTFT、TPOT 和 cache usage。它不是在搜目录，是在搜阅读入口。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q" data-question="one-sentence" data-group="迁移与表达" data-title="用一句话解释为什么不能只拿一张 benchmark 图做选型。">
-              <div class="q-meta"><span class="pill" data-type="explain">解释</span><span class="pill">benchmark</span></div>
-              <p><b>11. 用一句话解释为什么不能只拿一张 benchmark 图做选型。</b></p>
-              <textarea name="one-sentence" placeholder="限制在 60 字以内。"></textarea>
-              <p class="solve-note">提示：一定要点出上下文缺失和 workload 差异。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>因为 benchmark 脱离模型、硬件、长度分布和并发上下文就没有可比性，单张图只能说明某个测试场景，不足以直接代表生产选型。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q full" data-question="boundary-note" data-group="迁移与表达" data-title="指出一个本单元故意没有展开的内容，并说明为什么。">
-              <div class="q-meta"><span class="pill" data-type="boundary">边界</span><span class="pill">开放</span></div>
-              <p><b>12. 指出一个本单元故意没有展开的内容，并说明为什么。</b></p>
-              <textarea name="boundary-note" placeholder="例如 gateway、路由、分布式 RPC、评测平台、kernel 细节。"></textarea>
-              <p class="solve-note">提示：要说清楚“为什么现在不追它”。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>这页故意没有展开 gateway、分布式 RPC 和每个 kernel 的实现细节，因为它的任务是先把引擎比较和源码阅读入口定住；这些主题放到更偏部署或内核的单元里更合适。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-          </div>
+      <textarea name="qvllm-vs-sglang"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。vLLM 更像围绕高性能 LLM serving 组织的推理引擎，SGLang 更强调 serving、编排和结构化输出等能力；两者都做高性能推理，但关注点不一样。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qpagedattentionlayer" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">pagedattention-layer</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b></h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qpagedattention-layer" value="对">对</label>
+      <label><input type="radio" name="qpagedattention-layer" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。PagedAttention 主要是 KV cache 管理和 attention 访问相关的技术，不是完整服务框架。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qreadfirst" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">read-first</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qread-first"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先找 scheduler、cache manager、model runner。它们通常把请求、资源和执行连成一条线。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qbenchmarkquestions" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">benchmark-questions</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qbenchmark-questions"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。至少要看模型、硬件和长度分布；很多时候还要再补并发和是否流式。</p>
+        </details>
+      </article>
         </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二组：阅读路线</h3></div>
+          <div class="quick-review">快速复盘：入口 -> 调度 -> 缓存 -> 执行 -> 指标。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="qrouteorder" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">route-order</span><span class="pill">排序</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qroute-order"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。推荐顺序是 README / docs → API 入口 → scheduler / engine step → cache manager → model runner / backend → metrics / tracing。这样最容易把一条请求路径串起来。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qsearchterms" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">search-terms</span><span class="pill">检索</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qsearch-terms"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。可以从 scheduler、kv cache、structured outputs 或 backend 这些词开始。目标是先把主循环和约束路径找出来，而不是先翻每个子目录。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qrequestpath" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">request-path</span><span class="pill">综合</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qrequest-path"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。一条可接受的路径是：请求进入 API，创建内部 request object，进入 scheduler，分配 KV cache 或 prefix cache，进入 model runner / backend，生成并采样输出，最后判断停止并释放资源。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qenginesignal" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">engine-signal</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qengine-signal"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。优先看 TTFT、TPOT / ITL、backend 回退、KV cache 占用或 preemption 计数。这样能快速定位到是入口、调度、缓存还是执行层出了问题。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三组：迁移与表达</h3></div>
+          <div class="quick-review">快速复盘：别用“感觉更强”，用“哪层更合适、为什么”。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="qpickengine" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">pick-engine</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qpick-engine"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先比较结构化输出支持、prefix cache 或 radix cache 机制、backend 兼容范围和实际 workload 下的 TTFT / TPOT / 命中率。只有这些都对齐了，选型才有意义。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qroutecodereading" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">route-code-reading</span><span class="pill">读代码</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qroute-code-reading"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。这段命令提醒你先找调度、缓存和执行路径，再看结构化输出，最后把这些路径映射到 TTFT、TPOT 和 cache usage。它不是在搜目录，是在搜阅读入口。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qonesentence" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">one-sentence</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qone-sentence"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。因为 benchmark 脱离模型、硬件、长度分布和并发上下文就没有可比性，单张图只能说明某个测试场景，不足以直接代表生产选型。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qboundarynote" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">boundary-note</span><span class="pill">边界</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qboundary-note"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。这页故意没有展开 gateway、分布式 RPC 和每个 kernel 的实现细节，因为它的任务是先把引擎比较和源码阅读入口定住；这些主题放到更偏部署或内核的单元里更合适。</p>
+        </details>
+      </article>
+        </div>
+      </div>
       </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">practice record</span>
-        </div>
-        <p>导出的记录会保留题目、分组、答案和核心复盘上下文，方便你回头看自己是把层级、路径，还是指标混在一起了。</p>
-        <div class="quality" id="quality"></div>
-        <div class="answer" id="record">还没有生成练习记录。</div>
-        <div class="actions">
-          <button type="button" class="ghost" onclick="generateRecord()">生成练习记录</button>
-          <button type="button" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
-
-      <section id="sources">
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-          <li><a href="https://docs.vllm.ai/en/latest/features/">vLLM Features</a>：支撑 vLLM 的功能入口、Structured Outputs、Tool Calling、Quantization 与相关特性总览。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.vllm.ai/en/latest/features/structured_outputs/">vLLM Structured Outputs</a>：支撑 choice、regex、json、grammar 与 guided decoding backend 的公开说明。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.vllm.ai/en/latest/features/automatic_prefix_caching/">vLLM Automatic Prefix Caching</a>：支撑 prefix cache、KV cache 复用和共享前缀的公开说明。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.sglang.ai/">SGLang Welcome</a>：支撑 SGLang 作为 high-performance serving framework 的定位。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.sglang.ai/advanced_features/structured_outputs.html">SGLang Structured Outputs</a>：支撑 json_schema、regex 和 EBNF 的公开说明。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.sglang.ai/developer_guide/benchmark_and_profiling.html">SGLang Benchmark and Profiling</a>：支撑 TTFT、TPOT、ITL、吞吐等观测语义。访问日期：2026-06-21。</li>
-          <li><a href="https://github.com/vllm-project/vllm">vLLM GitHub repository</a>：支撑项目定位、源码入口和实现范围。访问日期：2026-06-21。</li>
-          <li><a href="https://github.com/sgl-project/sglang">SGLang GitHub repository</a>：支撑项目定位、源码入口和实现范围。访问日期：2026-06-21。</li>
-        </ul>
+<ul>
+<li><a href="https://docs.vllm.ai/en/latest/features/">vLLM Features</a>：支撑 vLLM 的功能入口、Structured Outputs、Tool Calling、Quantization 与相关特性总览。访问日期：2026-06-21。</li>
+<li><a href="https://docs.vllm.ai/en/latest/features/structured_outputs/">vLLM Structured Outputs</a>：支撑 choice、regex、json、grammar 与 guided decoding backend 的公开说明。访问日期：2026-06-21。</li>
+<li><a href="https://docs.vllm.ai/en/latest/features/automatic_prefix_caching/">vLLM Automatic Prefix Caching</a>：支撑 prefix cache、KV cache 复用和共享前缀的公开说明。访问日期：2026-06-21。</li>
+<li><a href="https://docs.sglang.ai/">SGLang Welcome</a>：支撑 SGLang 作为 high-performance serving framework 的定位。访问日期：2026-06-21。</li>
+<li><a href="https://docs.sglang.ai/advanced_features/structured_outputs.html">SGLang Structured Outputs</a>：支撑 json_schema、regex 和 EBNF 的公开说明。访问日期：2026-06-21。</li>
+<li><a href="https://docs.sglang.ai/developer_guide/benchmark_and_profiling.html">SGLang Benchmark and Profiling</a>：支撑 TTFT、TPOT、ITL、吞吐等观测语义。访问日期：2026-06-21。</li>
+<li><a href="https://github.com/vllm-project/vllm">vLLM GitHub repository</a>：支撑项目定位、源码入口和实现范围。访问日期：2026-06-21。</li>
+<li><a href="https://github.com/sgl-project/sglang">SGLang GitHub repository</a>：支撑项目定位、源码入口和实现范围。访问日期：2026-06-21。</li>
+</ul>
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

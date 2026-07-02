@@ -4,274 +4,478 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>13 计划审批协议与决策权｜Claude Code 工作流</title>
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body>
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Claude Code 工作流</strong><span>13｜计划审批协议与决策权</span></div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>目标与主线</a>
-      <a href="#compare"><span class="dot"></span>两种协议</a>
-      <a href="#submit"><span class="dot"></span>提交计划</a>
-      <a href="#decide"><span class="dot"></span>lead 审批</a>
-      <a href="#fsm"><span class="dot"></span>审批状态机</a>
-      <a href="#why"><span class="dot"></span>为什么审批</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>导出学习记录</a>
-    </nav>
-    <div class="side-note">关机协议的决策权在 teammate；计划审批协议的决策权在 lead。这一反一正，是团队协议的关键。</div>
-  </aside>
-  <main>
-    <header class="hero" id="goal">
-      <div>
-        <div class="kicker">Plan approval protocol</div>
-        <h1>计划审批协议与决策权</h1>
-        <p class="muted">计划审批协议用于高风险或需要把关的任务：teammate 不能直接开干，而是先提交 plan 给 lead；lead 查看计划后批准或拒绝，并把结果写回 teammate inbox。它和关机协议结构相似，但方向相反：关机是 lead 发起、teammate 决策；计划审批是 teammate 发起、lead 决策。</p>
-        <div class="map">
-          <span class="node">teammate plan</span><span class="arrow">→</span>
-          <span class="node">plan_requests</span><span class="arrow">→</span>
-          <span class="node">lead inbox</span><span class="arrow">→</span>
-          <span class="node">approved/rejected</span><span class="arrow">→</span>
-          <span class="node">teammate inbox</span>
-        </div>
-        <p>学完本页，你应该能解释 plan request 如何创建、lead 如何审批、审批结果如何回到 teammate，以及为什么计划审批能防止队友直接执行高风险方案。</p>
+<body data-course="Claude Code 工作流" data-unit="13">
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">Claude Code 工作流</a>
+        <span class="sep">/</span>
+        <span>13</span>
       </div>
-      <div class="box soft">
-        <h3>来源材料</h3>
-        <p>视频：《Learn Claude Code 源码详解》团队协议（下）- 计划审批，开发实战分享屋，2026-03-28。</p>
-        <p>本页聚焦计划提交、lead 审批、请求状态、消息方向和决策权分配。</p>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
-    </header>
+    </div>
+  </nav>
 
-    <section id="compare">
-      <div class="head"><h2>1. 计划审批和关机协议方向相反</h2><span class="tag">decision ownership</span></div>
-      <p>团队协议的重点不是“谁发了消息”这么简单，而是谁发起请求、谁拥有决策权。关机协议中，lead 请求 teammate 关机，但 teammate 可以 approve 或 reject，因为它需要决定自己能否优雅退出。</p>
-      <p>计划审批协议相反。teammate 提出一个 plan，请 lead 审批。决策权在 lead，因为计划可能涉及高风险动作、资源使用或业务目标，必须由 leader 判断是否允许执行。</p>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>协议</th><th>发起方</th><th>决策方</th><th>批准后的动作</th><th>拒绝后的动作</th></tr></thead>
-          <tbody>
-            <tr><td>shutdown</td><td>lead</td><td>teammate</td><td>teammate 优雅退出。</td><td>teammate 继续工作，并说明原因。</td></tr>
-            <tr><td>plan approval</td><td>teammate</td><td>lead</td><td>teammate 按计划执行。</td><td>teammate 根据理由修订计划。</td></tr>
-          </tbody>
-        </table>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Plan approval protocol</div>
+      <div class="hero-meta">
+        <span class="hero-badge">13</span>
       </div>
-      <p>你现在应该能做什么：看到一个团队协议时，先画出“发起方 → 决策方 → 结果回传”的方向，而不是只看工具名。</p>
-    </section>
-
-    <section id="submit">
-      <div class="head"><h2>2. teammate 用 `plan_approval` 提交计划</h2><span class="tag">submit plan</span></div>
-      <p>示例里 lead 生成 Charlie，并让 Charlie 提交一个计划。Charlie 的 teammate loop 根据自己的 prompt 调用 `plan_approval` 工具。工具 schema 要求模型返回 `plan` 字段，这就是提交给 lead 审批的具体计划内容。</p>
-      <p>本地函数生成 request id，把请求写入 `plan_requests` 字典，初始状态 pending，并记录 from 是 Charlie。然后通过 MessageBus 向 `lead.jsonl` 写入一条消息，告诉 lead：Charlie 提交了一个 plan 等待审批。</p>
-      <div class="grid2">
-        <div class="box soft">
-          <h3>一个可审批 plan 应包含</h3>
-          <ul>
-            <li>目标：要完成什么，不做什么。</li>
-            <li>步骤：执行顺序和关键工具。</li>
-            <li>风险：可能破坏什么或卡在哪里。</li>
-            <li>回滚：失败后如何恢复。</li>
-            <li>验收：怎样判断计划执行完成。</li>
-          </ul>
-        </div>
-        <div class="box ok">
-          <h3>流程图式文字</h3>
-          <p>Charlie 生成 plan → `plan_approval` 创建 request_id → 请求进入 `plan_requests` pending → 消息写入 lead inbox → lead 读取并审批 → 状态变 approved 或 rejected → 结果写回 Charlie inbox → Charlie 执行或修订。</p>
-        </div>
+      <h1 class="hero-title">13 计划审批协议与决策权｜Claude Code 工作流</h1>
+      <p class="hero-desc">计划审批协议用于高风险或需要把关的任务：teammate 不能直接开干，而是先提交 plan 给 lead；lead 查看计划后批准或拒绝，并把结果写回 teammate inbox。它和关机协议结构相似，但方向相反：关机是 lead 发起、teammate 决策；计划审批是 teammate 发起、lead 决策。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../12_团队关机协议与FSM/学习页.html">上一节</a>
+            <a href="../14_自主Agent与看板轮询/学习页.html">下一节</a>
       </div>
-      <div class="codebar"><span class="label">正确示例：Charlie 提交计划</span><span>JSON</span></div>
-      <pre><code>{
-  "name": "plan_approval",
-  "input": {
-    "plan": "I will inspect the codebase, identify risky files, propose edits, then wait for approval before writing changes."
-  }
-}</code></pre>
-      <div class="codebar"><span class="label">逐行拆解：记录 plan request</span><span>Python</span></div>
-      <pre><code>def request_plan_approval(sender, plan):
-    request_id = str(uuid.uuid4())[:8]
-
-    with lock:
-        plan_requests[request_id] = {
-            "from": sender,
-            "plan": plan,
-            "status": "pending",
-        }
-
-    bus.send(
-        to="lead",
-        sender=sender,
-        message_type="plan_approval_request",
-        content=plan,
-        extra={"request_id": request_id},
-    )
-    return f"plan submitted for approval: {request_id}"</code></pre>
-      <p>这里的 request tracker 和关机协议很像，只是保存的是 plan request，而不是 shutdown request。</p>
-    </section>
-
-    <section id="decide">
-      <div class="head"><h2>3. lead 审批后把结果写回 teammate inbox</h2><span class="tag">approve / reject</span></div>
-      <p>lead 的 agent loop 读到 `lead.jsonl` 中的 plan request 后，请求模型判断是否 approve。视频示例把 prompt 改成 reject it，所以模型调用审批处理工具时，`approve` 是 false。于是 request status 从 pending 变成 rejected。</p>
-      <p>审批完成后，lead 会通过 MessageBus 向请求发起方发送结果。如果是 Charlie 发起，就写入 `charlie.jsonl`。这样 Charlie 下一轮 teammate loop 读取自己的 inbox 时，就能知道计划被批准还是被拒绝，以及下一步是否需要修改计划。</p>
-      <div class="codebar"><span class="label">正确示例：lead 拒绝计划</span><span>JSON</span></div>
-      <pre><code>{
-  "name": "handle_plan_approval",
-  "input": {
-    "request_id": "p19a8f2d",
-    "approve": false,
-    "reason": "The plan is too vague. Add concrete steps and risk checks."
-  }
-}</code></pre>
-      <div class="codebar"><span class="label">逐行拆解：更新审批状态并回信</span><span>Python</span></div>
-      <pre><code>def handle_plan_approval(request_id, approve, reason):
-    with lock:
-        req = plan_requests.get(request_id)
-        if not req:
-            return "unknown plan request"
-
-        req["status"] = "approved" if approve else "rejected"
-        target = req["from"]
-
-    bus.send(
-        to=target,
-        sender="lead",
-        message_type="plan_approval_response",
-        content=reason,
-        extra={"request_id": request_id, "approved": approve},
-    )
-    return f"plan {req['status']}"</code></pre>
-      <p>注意：视频里 Charlie 这个 teammate loop 很快 end_turn 了，所以回信写入了 Charlie inbox，但 Charlie 未必立刻继续处理。真实系统里 teammate 往往会持续运行，下一轮读到拒绝后修改 plan 再提交。</p>
-    </section>
-
-    <section id="fsm">
-      <div class="head"><h2>4. 审批状态机：pending → approved / rejected</h2><span class="tag">FSM</span></div>
-      <p>计划审批也是一个小型 FSM。request 创建时是 pending；lead 同意则变 approved；lead 拒绝则变 rejected。和关机协议不同的是，approved 不代表 teammate 退出，而是代表 teammate 可以继续按计划执行；rejected 则代表需要修订计划或等待新指令。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <h3>审批路径切换</h3>
-            <div class="viz-actions">
-              <button data-case="pending" class="active">提交计划</button>
-              <button data-case="approved">批准</button>
-              <button data-case="rejected">拒绝</button>
-              <button data-case="revise">修订重提</button>
-            </div>
-            <div class="state-flow">
-              <span class="state" data-state="pending">pending</span><span class="arrow">→</span>
-              <span class="state" data-state="approved">approved</span>
-              <span class="arrow">/</span>
-              <span class="state" data-state="rejected">rejected</span>
-            </div>
-          </div>
-          <div class="viz-cell">
-            <h3 id="caseTitle">Charlie 提交计划</h3>
-            <p id="caseText">Charlie 生成 plan request，状态是 pending，并把计划写入 lead inbox。</p>
-            <div class="mailbox" id="caseBox"></div>
-          </div>
-        </div>
-      </div>
-      <p>状态字段让系统不必从自然语言里猜“lead 是不是同意了”。只要看 `plan_requests[request_id].status` 就能知道当前审批结果。</p>
-    </section>
-
-    <section id="why">
-      <div class="head"><h2>5. 为什么需要计划审批</h2><span class="tag">risk gate</span></div>
-      <p>计划审批的核心价值是风险闸门。teammate 可以主动思考方案，但不能对高风险动作直接开干。它要先把 plan 发给 lead，让 lead 判断是否满足目标、是否足够具体、是否考虑了风险和回滚。</p>
-      <p>如果 plan 被批准，teammate 可以继续执行；如果被拒绝，teammate 应该读取拒绝原因，完善计划，再次提交。这样团队协作就从“直接执行”变成“先计划、再审批、再执行”。</p>
-      <div class="box soft">
-        <h3>Worked example：拒绝不是终点</h3>
-        <p>Charlie 提交“重写登录模块”的计划，但没有说明测试和回滚。lead 拒绝并写明原因：“缺少影响范围、测试步骤和回滚方案”。Charlie 下一轮读取自己的 inbox 后，不应该继续执行旧计划，而应补充新计划：限定只改认证入口、先加回归测试、保留旧路径开关、失败时回滚到原实现。这样 rejected 状态就变成提升计划质量的反馈。</p>
-      </div>
-      <div class="grid3">
-        <div class="route"><h3>保护高风险操作</h3><p>写文件、删文件、发消息、调用外部系统前先过审。</p></div>
-        <div class="route"><h3>提高计划质量</h3><p>lead 可以要求补充步骤、风险、验收和回滚。</p></div>
-        <div class="route"><h3>明确责任边界</h3><p>teammate 提案，lead 决策，结果回传。</p></div>
-      </div>
-      <div class="box warn">
-        <h3>常见坑</h3>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
         <ul>
-          <li>teammate 提交 plan 后直接执行，没有等待 lead 审批。</li>
-          <li>lead 更新状态后没有把结果发回 teammate inbox。</li>
-          <li>拒绝原因太空，teammate 无法修订计划。</li>
-          <li>多个 plan request 没有 request_id，审批结果对不上。</li>
-          <li>把 shutdown 和 plan approval 的决策方搞反。</li>
+
         </ul>
       </div>
-    </section>
+    </div>
+  </header>
 
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、基础概念</h3><p>先分清计划审批和关机协议的方向。</p></div><div class="box soft">提示：计划审批是 teammate 发起，lead 决策。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="1. 决策方"><div class="q-meta"><span class="pill">选择</span></div><h3>1. 计划审批协议中，最终决策方是谁？</h3><label><input type="radio" name="q1" value="A">A. teammate</label><br><label><input type="radio" name="q1" value="B">B. lead</label><br><label><input type="radio" name="q1" value="C">C. inbox 文件</label></div>
-          <div class="q" data-title="2. 协议方向"><div class="q-meta"><span class="pill">填空</span></div><h3>2. shutdown 是 lead 发起、______ 决策；plan approval 是 teammate 发起、______ 决策。</h3><input type="text" name="q2"></div>
-          <div class="q" data-title="3. 风险闸门"><div class="q-meta"><span class="pill">短答</span></div><h3>3. 为什么计划审批适合高风险任务？</h3><textarea name="q3"></textarea></div>
-          <div class="q" data-title="4. request id"><div class="q-meta"><span class="pill">解释</span></div><h3>4. plan request 为什么也需要 request_id？</h3><textarea name="q4"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>二、提交与审批</h3><p>追踪 Charlie 提交 plan 到 lead 回信的路径。</p></div><div class="box warn">计划提交写 lead inbox；审批结果写 teammate inbox。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="5. plan_approval"><div class="q-meta"><span class="pill">流程</span></div><h3>5. `plan_approval(plan)` 内部大致做哪 4 步？</h3><textarea name="q5"></textarea></div>
-          <div class="q" data-title="6. lead inbox"><div class="q-meta"><span class="pill">短答</span></div><h3>6. Charlie 提交计划后，lead inbox 中会出现什么？</h3><textarea name="q6"></textarea></div>
-          <div class="q" data-title="7. 审批字段"><div class="q-meta"><span class="pill">填空</span></div><h3>7. lead 处理审批时，关键输入通常是 request_id、______、______。</h3><input type="text" name="q7"></div>
-          <div class="q" data-title="8. 回信目标"><div class="q-meta"><span class="pill">机制</span></div><h3>8. lead 审批后，为什么要把结果写回请求发起方的 inbox？</h3><textarea name="q8"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、状态机与行为</h3><p>把 pending、approved、rejected 的后续动作说清。</p></div><div class="box soft">approved 表示可以执行；rejected 表示需要修订或等待。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="9. 审批状态"><div class="q-meta"><span class="pill">清单</span></div><h3>9. plan request 可能有哪些状态？</h3><textarea name="q9"></textarea></div>
-          <div class="q" data-title="10. approved含义"><div class="q-meta"><span class="pill">判断</span></div><h3>10. plan approved 后，teammate 应该退出 loop。</h3><label><input type="radio" name="q10" value="对">对</label><br><label><input type="radio" name="q10" value="错">错</label></div>
-          <div class="q" data-title="11. rejected后续"><div class="q-meta"><span class="pill">短答</span></div><h3>11. 计划被拒绝后，teammate 下一步应该怎么做？</h3><textarea name="q11"></textarea></div>
-          <div class="q" data-title="12. 空拒绝原因"><div class="q-meta"><span class="pill">诊断</span></div><h3>12. lead 只说“reject”，不说明原因，会造成什么问题？</h3><textarea name="q12"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、迁移与表达</h3><p>把计划审批协议变成可复用团队控制模式。</p></div><div class="box soft">表达重点：teammate 提案、lead 把关、状态可查、结果回传。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="13. 错误诊断"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 某 teammate 提交 plan 后没等审批就开始写文件，指出问题和修法。</h3><textarea name="q13"></textarea></div>
-          <div class="q" data-title="14. 对比关机"><div class="q-meta"><span class="pill">比较</span></div><h3>14. 用一句话区分 shutdown 和 plan approval 的决策权。</h3><textarea name="q14"></textarea></div>
-          <div class="q" data-title="15. 审批清单"><div class="q-meta"><span class="pill">设计</span></div><h3>15. lead 审批 plan 时应检查哪 5 类信息？</h3><textarea name="q15"></textarea></div>
-          <div class="q" data-title="16. 面试短答"><div class="q-meta"><span class="pill">表达</span></div><h3>16. 用 2-3 句话解释计划审批协议的工程价值。</h3><textarea name="q16"></textarea></div>
-          <div class="q full" data-title="17. 流程图"><div class="q-meta"><span class="pill">流程图</span></div><h3>17. 用文字画出 Charlie 提交计划、lead 拒绝、Charlie 收到结果的完整流程。</h3><textarea name="q17"></textarea></div>
-          <div class="q full" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：计划审批协议如何把高风险执行变成先提案再决策。</h3><div class="solve-note">请串联 teammate、plan、request_id、pending、lead inbox、approve/reject、teammate inbox、修订计划。</div><textarea name="q18"></textarea></div>
-        </div>
-      </div>
-    </section>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#compare">1. 计划审批和关机协议方向相反</a>
+      <a href="#submit">2. teammate 用 `plan_approval` 提交计划</a>
+      <a href="#decide">3. lead 审批后把结果写回 teammate inbox</a>
+      <a href="#fsm">4. 审批状态机：pending → approved / rejected</a>
+      <a href="#why">5. 为什么需要计划审批</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
 
+  <!-- Content -->
+  <article class="content">
+      <section id="compare">
+        <div class="head">
+          <h2>1. 计划审批和关机协议方向相反</h2>
+          <span class="tag">decision</span>
+        </div>
+<p>团队协议的重点谁发起请求、谁拥有决策权。关机协议中，lead 请求 teammate 关机，但 teammate 可以 approve 或 reject，因为它需要决定自己能否优雅退出。</p>
+<p>协议发起方决策方批准后的动作拒绝后的动作</p>
+<p>你现在应该能做什么：看到一个团队协议时，先画出“发起方 → 决策方 → 结果回传”的方向，而不是只看工具名。</p>
+      </section>
+      <section id="submit">
+        <div class="head">
+          <h2>2. teammate 用 `plan_approval` 提交计划</h2>
+          <span class="tag">submit</span>
+        </div>
+<p>示例里 lead 生成 Charlie，并让 Charlie 提交一个计划。Charlie 的 teammate loop 根据自己的 prompt 调用 <code>plan_approval</code> 工具。工具 schema 要求模型返回 <code>plan</code> 字段，这就是提交给 lead 审批的具体计划内容。</p>
+        <div class="box soft">
+<h3>一个可审批 plan 应包含</h3>
+<ul>
+<li>目标：要完成什么，不做什么。</li>
+<li>步骤：执行顺序和关键工具。</li>
+<li>风险：可能破坏什么或卡在哪里。</li>
+<li>回滚：失败后如何恢复。</li>
+<li>验收：怎样判断计划执行完成。</li>
+</ul>
+        </div>
+        <div class="box">
+<h3>流程图式文字</h3>
+<p>Charlie 生成 plan → <code>plan_approval</code> 创建 request_id → 请求进入 <code>plan_requests</code> pending → 消息写入 lead inbox → lead 读取并审批 → 状态变 approved 或 rejected → 结果写回 Charlie inbox → Charlie 执行或修订。</p>
+<p>正确示例：Charlie 提交计划JSON</p>
+<pre><code class="language-text">{
+ "name": "plan_approval",
+ "input": {
+ "plan": "I will inspect the codebase, identify risky files, propose edits, then wait for approval before writing changes."
+ }
+}</code></pre>
+<p>逐行拆解：记录 plan requestPython</p>
+<pre><code class="language-text">def request_plan_approval(sender, plan):
+ request_id = str(uuid.uuid4())[:8]
+
+ with lock:
+ plan_requests[request_id] = {
+ "from": sender,
+ "plan": plan,
+ "status": "pending",
+ }
+
+ bus.send(
+ to="lead",
+ sender=sender,
+ message_type="plan_approval_request",
+ content=plan,
+ extra={"request_id": request_id},
+ )
+ return f"plan submitted for approval: {request_id}"</code></pre>
+<p>这里的 request tracker 和关机协议很像，只是保存的是 plan request，而不是 shutdown request。</p>
+        </div>
+      </section>
+      <section id="decide">
+        <div class="head">
+          <h2>3. lead 审批后把结果写回 teammate inbox</h2>
+          <span class="tag">approve</span>
+        </div>
+<p>lead 的 agent loop 读到 <code>lead.jsonl</code> 中的 plan request 后，请求模型判断是否 approve。视频示例把 prompt 改成 reject it，所以模型调用审批处理工具时，<code>approve</code> 是 false。于是 request status 从 pending 变成 rejected。</p>
+<p>正确示例：lead 拒绝计划JSON</p>
+<p>逐行拆解：更新审批状态并回信Python</p>
+<p>注意：视频里 Charlie 这个 teammate loop 很快 end_turn 了，所以回信写入了 Charlie inbox，但 Charlie 未必立刻继续处理。真实系统里 teammate 往往会持续运行，下一轮读到拒绝后修改 plan 再提交。</p>
+      </section>
+      <section id="fsm">
+        <div class="head">
+          <h2>4. 审批状态机：pending → approved / rejected</h2>
+          <span class="tag">FSM</span>
+        </div>
+<p>计划审批也是一个小型 FSM。request 创建时是 pending；lead 同意则变 approved；lead 拒绝则变 rejected。和关机协议不同的是，approved 不代表 teammate 退出，而是代表 teammate 可以继续按计划执行；rejected 则代表需要修订计划或等待新指令。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>提交计划</th><th>批准</th><th>拒绝</th><th>修订重提</th></tr>
+<tr><td>pending→</td><td>approved</td><td>/</td><td>rejected</td></tr>
+        </table></div>
+<p>状态字段让系统不必从自然语言里猜“lead 是不是同意了”。只要看 <code>plan_requests[request_id].status</code> 就能知道当前审批结果。</p>
+      </section>
+      <section id="why">
+        <div class="head">
+          <h2>5. 为什么需要计划审批</h2>
+          <span class="tag">risk</span>
+        </div>
+<p>计划审批的核心价值是风险闸门。teammate 可以主动思考方案，但不能对高风险动作直接开干。它要先把 plan 发给 lead，让 lead 判断是否满足目标、是否足够具体、是否考虑了风险和回滚。</p>
+        <div class="box soft">
+<h3>Worked example：拒绝不是终点</h3>
+<p>Charlie 提交“重写登录模块”的计划，但没有说明测试和回滚。lead 拒绝并写明原因：“缺少影响范围、测试步骤和回滚方案”。Charlie 下一轮读取自己的 inbox 后，不应该继续执行旧计划，而应补充新计划：限定只改认证入口、先加回归测试、保留旧路径开关、失败时回滚到原实现。这样 rejected 状态就变成提升计划质量的反馈。</p>
+<p>保护高风险操作写文件、删文件、发消息、调用外部系统前先过审。</p>
+<p>提高计划质量lead 可以要求补充步骤、风险、验收和回滚。</p>
+<p>明确责任边界teammate 提案，lead 决策，结果回传。</p>
+        </div>
+        <div class="box warn">
+<h3>常见坑</h3>
+<ul>
+<li>teammate 提交 plan 后直接执行，没有等待 lead 审批。</li>
+<li>lead 更新状态后没有把结果发回 teammate inbox。</li>
+<li>拒绝原因太空，teammate 无法修订计划。</li>
+<li>多个 plan request 没有 request_id，审批结果对不上。</li>
+<li>把 shutdown 和 plan approval 的决策方搞反。</li>
+</ul>
+        </div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">检查理解</span>
+        </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. 计划审批协议中，最终决策方是谁？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="teammate">teammate</label>
+      <label><input type="radio" name="q?" value="lead">lead</label>
+      <label><input type="radio" name="q?" value="inbox 文件">inbox 文件</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 2. shutdown 是 lead 发起、______ 决策；plan approval 是 teammate 发起、______ 决策。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 3. 为什么计划审批适合高风险任务？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 4. plan request 为什么也需要 request_id？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、提交与审批</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">流程</span></div>
+        <h3><b>Q:</b> 5. <code>plan_approval(plan)</code> 内部大致做哪 4 步？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 6. Charlie 提交计划后，lead inbox 中会出现什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 7. lead 处理审批时，关键输入通常是 request_id、______、______。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">机制</span></div>
+        <h3><b>Q:</b> 8. lead 审批后，为什么要把结果写回请求发起方的 inbox？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、状态机与行为</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 9. plan request 可能有哪些状态？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 10. plan approved 后，teammate 应该退出 loop。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 11. 计划被拒绝后，teammate 下一步应该怎么做？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 12. lead 只说“reject”，不说明原因，会造成什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、迁移与表达</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 13. 某 teammate 提交 plan 后没等审批就开始写文件，指出问题和修法。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">比较</span></div>
+        <h3><b>Q:</b> 14. 用一句话区分 shutdown 和 plan approval 的决策权。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b> 15. lead 审批 plan 时应检查哪 5 类信息？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">表达</span></div>
+        <h3><b>Q:</b> 16. 用 2-3 句话解释计划审批协议的工程价值。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">流程图</span></div>
+        <h3><b>Q:</b> 17. 用文字画出 Charlie 提交计划、lead 拒绝、Charlie 收到结果的完整流程。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 18. 用 6-9 句话讲清楚：计划审批协议如何把高风险执行变成先提案再决策。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>导出学习记录</h2><span class="tag">self-check</span></div>
-      <p class="muted">完成练习后生成 Markdown 记录，方便保存或提交给同伴检查。</p>
-      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-const cases={
-  pending:["Charlie 提交计划","Charlie 生成 plan request，状态是 pending，并把计划写入 lead inbox。","plan_requests = {\n  'p19a8f2d': {from:'charlie', status:'pending', plan:'inspect then edit...'}\n}\n\nlead.jsonl:\n{\"type\":\"plan_approval_request\",\"from\":\"charlie\",\"request_id\":\"p19a8f2d\"}",["pending"]],
-  approved:["lead 批准计划","lead 设置 approve=true，request 状态变 approved，并把批准结果写回 Charlie inbox。","plan_requests['p19a8f2d'].status = 'approved'\n\ncharlie.jsonl:\n{\"type\":\"plan_approval_response\",\"approved\":true}",["approved"]],
-  rejected:["lead 拒绝计划","lead 设置 approve=false，状态变 rejected，并给出拒绝原因。Charlie 下一轮应读取原因并修订计划。","plan_requests['p19a8f2d'].status = 'rejected'\n\ncharlie.jsonl:\n{\"type\":\"plan_approval_response\",\"approved\":false,\"content\":\"Plan too vague.\"}",["rejected"]],
-  revise:["Charlie 修订重提","被拒后，Charlie 不应直接执行，而应根据 reason 修改 plan，再提交新的 request。","charlie reads rejection:\n- add concrete steps\n- add risk checks\n- resubmit plan_approval with new request_id",["pending"]]
-};
-function renderCase(name){const d=cases[name]||cases.pending;document.querySelectorAll("[data-case]").forEach(b=>b.classList.toggle("active",b.dataset.case===name));document.querySelectorAll("[data-state]").forEach(s=>s.classList.toggle("active",d[3].includes(s.dataset.state)));document.getElementById("caseTitle").textContent=d[0];document.getElementById("caseText").textContent=d[1];document.getElementById("caseBox").textContent=d[2]}
-document.querySelectorAll("[data-case]").forEach(btn=>btn.addEventListener("click",()=>renderCase(btn.dataset.case)));renderCase("pending");
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
-const questions=[
-  ["基础概念","1. 计划审批最终决策方。","q1","radio"],["基础概念","2. 两种协议方向。","q2","text"],["基础概念","3. 为什么适合高风险任务？","q3","text"],["基础概念","4. 为什么需要 request_id？","q4","text"],["提交审批","5. plan_approval 四步。","q5","text"],["提交审批","6. lead inbox 出现什么？","q6","text"],["提交审批","7. 审批关键字段。","q7","text"],["提交审批","8. 为什么结果写回发起方？","q8","text"],["状态行为","9. plan request 状态。","q9","text"],["状态行为","10. approved 后是否退出 loop？","q10","radio"],["状态行为","11. rejected 后续。","q11","text"],["状态行为","12. 空拒绝原因的问题。","q12","text"],["迁移表达","13. 未等审批就写文件的问题。","q13","text"],["迁移表达","14. 一句话区分决策权。","q14","text"],["迁移表达","15. lead 审批清单。","q15","text"],["迁移表达","16. 计划审批工程价值。","q16","text"],["迁移表达","17. Charlie 提交到收到拒绝流程。","q17","text"],["费曼解释","18. 计划审批如何先提案再决策。","q18","text"]
-];
-function val(q){if(q[3]==="radio"){const el=document.querySelector(`input[name="${q[2]}"]:checked`);return el?el.value:""}const el=document.querySelector(`[name="${q[2]}"]`);return el?el.value.trim():""}
-function generateRecord(){const groups={};const missing=[];questions.forEach(q=>{const v=val(q);if(!v)missing.push(q[1]);if(!groups[q[0]])groups[q[0]]=[];groups[q[0]].push({t:q[1],a:v||"（未填写）"})});let out="# 13 计划审批协议与决策权｜练习记录\n\n";Object.keys(groups).forEach(g=>{out+=`## ${g}\n\n`;groups[g].forEach(item=>{out+=`### ${item.t}\n${item.a}\n\n`})});document.getElementById("record").textContent=out;const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=val(["","","q18","text"]);const keys=["teammate","plan","request_id","lead","approve","inbox"];const lack=keys.filter(k=>!f.includes(k));if(f&&f.length<120)warnings.push("费曼解释偏短，建议讲成 6-9 句话。");if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join("、")}。`);const q=document.getElementById("quality");q.style.display="block";q.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以保存或提交检查。"}
-function copyRecord(){navigator.clipboard.writeText(document.getElementById("record").textContent).catch(()=>alert("复制失败，请手动复制。"))}
-</script>
-<script src="../assets/study-page.js"></script>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

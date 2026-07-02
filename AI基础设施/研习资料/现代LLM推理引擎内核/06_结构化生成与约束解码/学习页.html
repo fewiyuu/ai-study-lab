@@ -4,924 +4,558 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>06｜结构化生成与约束解码</title>
-  <meta name="description" content="现代 LLM 推理引擎内核第 06 单元：结构化生成、约束解码、guided decoding、JSON schema、regex 与 grammar 的工程读法。">
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="现代 LLM 推理引擎内核" data-unit="06｜结构化生成与约束解码">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>现代 LLM 推理引擎内核</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">现代 LLM 推理引擎内核</a>
+        <span class="sep">/</span>
         <span>06｜结构化生成与约束解码</span>
       </div>
-      <nav aria-label="页面导航">
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#map"><span class="dot"></span>概念骨架</a>
-        <a href="#terms"><span class="dot"></span>术语与边界</a>
-        <a href="#pipeline"><span class="dot"></span>约束怎么进 decode</a>
-        <a href="#methods"><span class="dot"></span>约束方法</a>
-        <a href="#example"><span class="dot"></span>一个小例子</a>
-        <a href="#diagnosis"><span class="dot"></span>故障实验室</a>
-        <a href="#bridge"><span class="dot"></span>资料路线</a>
-        <a href="#boundary"><span class="dot"></span>边界</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">
-        先把“约束在 decode 里怎么起作用”看明白，再看具体后端。这里先不追应用层校验、schema 修复和任务编排。
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
-    </aside>
+    </div>
+  </nav>
 
-    <main>
-      <header class="hero">
-        <div>
-          <div class="kicker">第 06 单元</div>
-          <h1>结构化生成与约束解码</h1>
-          <p>这一单元把“模型要输出 JSON、表格、枚举、工具参数或固定格式”这类需求，翻回推理引擎内部看。重点不是把输出包成漂亮格式，而是理解约束如何进入 token 选择过程，哪里会提前过滤，哪里会回退，哪里会让 decode 变慢。</p>
-          <p>本页基于 2026-06-21 可访问的公开文档：vLLM 的 Structured Outputs、SGLang 的 Structured Outputs，以及它们对应的官方仓库与示例。</p>
-        </div>
-        <div class="box soft">
-          <h3>读完后，你应该能做的事</h3>
-          <ul>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">第 06 单元</div>
+      <div class="hero-meta">
+        <span class="hero-badge">06｜结构化生成与约束解码</span>
+      </div>
+      <h1 class="hero-title">06｜结构化生成与约束解码</h1>
+      <p class="hero-desc">这一单元把“模型要输出 JSON、表格、枚举、工具参数或固定格式”这类需求，翻回推理引擎内部看。重点不是把输出包成漂亮格式，而是理解约束如何进入 token 选择过程，哪里会提前过滤，哪里会回退，哪里会让 decode 变慢。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../05_推理算子FlashAttention与量化/学习页.html">上一节</a>
+            <a href="../07_引擎对比与源码阅读路线/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
             <li>分清结构化生成、guided decoding、后验校验这三层分别在做什么。</li>
             <li>看懂 JSON schema、regex、grammar、choice 这些约束类型的适用边界。</li>
             <li>拿到一条输出错误日志时，先判断是约束设错、backend 回退，还是模型本身不稳定。</li>
-          </ul>
-          <p><a href="../05_推理算子FlashAttention与量化/学习页.html">上一单元：推理算子、FlashAttention 与量化</a></p>
-          <p><a href="../07_引擎对比与源码阅读路线/学习页.html">下一单元：引擎对比与源码阅读路线</a></p>
-        </div>
-      </header>
+        </ul>
+      </div>
+    </div>
+  </header>
 
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">先抓主线</a>
+      <a href="#map">概念骨架</a>
+      <a href="#terms">术语与边界</a>
+      <a href="#pipeline">约束怎么进 decode</a>
+      <a href="#methods">约束方法</a>
+      <a href="#case-study">把约束落到一条请求上</a>
+      <a href="#backend-trace">backend、状态机和回退</a>
+      <a href="#triage">三类失败怎么分流</a>
+      <a href="#example">一个小例子</a>
+      <a href="#diagnosis">故障实验室</a>
+      <a href="#bridge">资料路线</a>
+      <a href="#boundary">这里先不追</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
         <div class="head">
           <h2>先抓主线</h2>
-          <span class="tag">learning goals</span>
+          <span class="tag">learning</span>
         </div>
-        <div class="grid3">
-          <div class="box">
-            <h3>先看对象</h3>
-            <p>区分“输出格式”与“约束对象”。前者是你希望得到什么形状的文本，后者是 decode 过程里允许哪些 token、哪些路径、哪些结束条件。</p>
-          </div>
-          <div class="box">
-            <h3>先看位置</h3>
-            <p>约束不是在样本结束后再修一遍，而是在生成过程中影响 token 选择。这个位置一错，后面所有性能与正确性判断都会偏。</p>
-          </div>
-          <div class="box">
-            <h3>先看验证</h3>
-            <p>能输出合法 JSON 不等于能稳定生产。要继续看 schema 完整性、backend 支持、超时、回退路径和质量漂移。</p>
-          </div>
-        </div>
+<p>先看对象</p>
+<p>区分“输出格式”与“约束对象”。前者是你希望得到什么形状的文本，后者是 decode 过程里允许哪些 token、哪些路径、哪些结束条件。</p>
+<p>先看验证</p>
+<p>能输出合法 JSON 不等于能稳定生产。要继续看 schema 完整性、backend 支持、超时、回退路径和质量漂移。</p>
       </section>
-
       <section id="map">
         <div class="head">
           <h2>概念骨架</h2>
           <span class="tag">map</span>
         </div>
-        <div class="map">
-          <span class="node">prompt / 消息</span>
-          <span class="arrow">→</span>
-          <span class="node">约束来源<br>schema / regex / grammar / choice</span>
-          <span class="arrow">→</span>
-          <span class="node">guided decoding<br>token 过滤与状态推进</span>
-          <span class="arrow">→</span>
-          <span class="node">受约束的输出</span>
-        </div>
-        <p>这条链里，前半段决定“你想要什么”，中间段决定“模型此刻还能选什么”，后半段决定“结果是否真的可用”。如果你把约束只看成后处理，后面就很难解释为什么有些请求会变慢、会回退，甚至会卡住。</p>
+<p>prompt / 消息</p>
+<p>→</p>
+<p>约束来源</p>
+<p>schema / regex / grammar / choice</p>
+<p>→</p>
+<p>guided decoding</p>
+<p>token 过滤与状态推进</p>
+<p>→</p>
+<p>受约束的输出</p>
       </section>
-
       <section id="terms">
         <div class="head">
           <h2>术语与边界</h2>
           <span class="tag">terms</span>
         </div>
-        <table class="metric-table" data-export-context="结构化生成术语表" data-export-lang="table">
-          <thead>
-            <tr>
-              <th>术语</th>
-              <th>直觉解释</th>
-              <th>精确定义</th>
-              <th>容易混淆的地方</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>structured outputs</td>
-              <td>让模型输出看起来像 JSON、表格或固定标签。</td>
-              <td>用约束把生成结果限制在某种可验证结构里。</td>
-              <td>不是只在最后做字符串清洗。</td>
-            </tr>
-            <tr>
-              <td>guided decoding</td>
-              <td>一边生成，一边限制可选 token。</td>
-              <td>在采样前或采样时把不合法 token 排除掉。</td>
-              <td>不是改模型参数本身。</td>
-            </tr>
-            <tr>
-              <td>constraint backend</td>
-              <td>负责把 schema/grammar 变成可执行规则的组件。</td>
-              <td>把结构约束转成 token-level 过滤或状态机。</td>
-              <td>backend 不只影响正确性，也影响性能和兼容矩阵。</td>
-            </tr>
-            <tr>
-              <td>post-hoc validation</td>
-              <td>生成后再检查格式对不对。</td>
-              <td>在输出完成后执行解析、校验或修复。</td>
-              <td>它和 guided decoding 不是一层，不能混着说。</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>术语</th><th>直觉解释</th><th>精确定义</th><th>容易混淆的地方</th></tr>
+<tr><td>structured outputs</td><td>让模型输出看起来像 JSON、表格或固定标签。</td><td>用约束把生成结果限制在某种可验证结构里。</td><td>不是只在最后做字符串清洗。</td></tr><tr><td>guided decoding</td><td>一边生成，一边限制可选 token。</td><td>在采样前或采样时把不合法 token 排除掉。</td><td>不是改模型参数本身。</td></tr><tr><td>constraint backend</td><td>负责把 schema/grammar 变成可执行规则的组件。</td><td>把结构约束转成 token-level 过滤或状态机。</td><td>backend 不只影响正确性，也影响性能和兼容矩阵。</td></tr><tr><td>post-hoc validation</td><td>生成后再检查格式对不对。</td><td>在输出完成后执行解析、校验或修复。</td><td>它和 guided decoding 不是一层，不能混着说。</td></tr>
+        </table></div>
       </section>
-
       <section id="pipeline">
         <div class="head">
           <h2>约束怎么进 decode</h2>
           <span class="tag">pipeline</span>
         </div>
-        <p>先看一个最小闭环。模型给出 logits，约束器把不允许的 token 变成不可选，采样器在剩下的 token 里挑一个，状态机再推进一步。这里的关键不是“格式对不对”，而是“谁在改可选集合，谁在记住当前位置”。</p>
-        <div class="codebar"><span>伪代码：约束如何进入 token 选择</span></div>
-        <pre data-export-context="约束解码伪代码" data-export-lang="python"><code class="language-python">state = init_constraint_state(schema_or_regex_or_grammar)
+<p>先看一个最小闭环。模型给出 logits，约束器把不允许的 token 变成不可选，采样器在剩下的 token 里挑一个，状态机再推进一步。这里的关键“谁在改可选集合，谁在记住当前位置”。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-pipeline-1">复制</button></div>
+        <pre id="code-pipeline-1" data-export-context="代码" data-export-lang="python"><code class="language-python">state = init_constraint_state(schema_or_regex_or_grammar)
 for step in range(max_new_tokens):
-    logits = model.forward(context, state)
-    allowed = backend.valid_tokens(state, logits)
-    masked_logits = apply_mask(logits, allowed)
-    token = sample(masked_logits, temperature, top_p)
-    state = backend.advance(state, token)
-    if backend.is_finished(state, token):
-        break</code></pre>
-        <div class="formula math-block" data-export-context="约束掩码的直觉公式" data-export-lang="math">
-          <p>\(m_i = 0\) 表示 token \(i\) 允许，\(m_i = -\infty\) 表示 token \(i\) 不能选。</p>
-          <p>\(p'_i = \mathrm{softmax}((logits_i + m_i)/\tau)\) 。约束没有改模型本体，只是在采样前改了可选集合。</p>
+ logits = model.forward(context, state)
+ allowed = backend.valid_tokens(state, logits)
+ masked_logits = apply_mask(logits, allowed)
+ token = sample(masked_logits, temperature, top_p)
+ state = backend.advance(state, token)
+ if backend.is_finished(state, token):
+ break</code></pre>
         </div>
-        <div class="table-wrap">
-          <table data-export-context="约束解码状态账本" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>对象</th>
-                <th>输入前状态</th>
-                <th>输出后状态</th>
-                <th>读取什么</th>
-                <th>写入什么</th>
-                <th>错了会怎样</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>约束配置</td>
-                <td>只有 prompt 和参数。</td>
-                <td>带 schema / regex / grammar 的可执行约束。</td>
-                <td>prompt、配置、开始位置。</td>
-                <td>约束状态机、token 规则。</td>
-                <td>模型会生成合法文本，但不一定合法结构。</td>
-              </tr>
-              <tr>
-                <td>token mask</td>
-                <td>logits 还没过滤。</td>
-                <td>非法 token 已被压掉。</td>
-                <td>当前状态、词表、合法前缀。</td>
-                <td>mask 后的 logits。</td>
-                <td>会出现“看起来能采样，实际上已越界”。</td>
-              </tr>
-              <tr>
-                <td>推进状态</td>
-                <td>还停在前一个 token 后。</td>
-                <td>进入新的结构位置。</td>
-                <td>刚采样的 token、语法规则。</td>
-                <td>状态机指针、分支栈。</td>
-                <td>会在括号、字段、结束符附近卡住。</td>
-              </tr>
-              <tr>
-                <td>结束判断</td>
-                <td>还没满足收束条件。</td>
-                <td>输出被接受并结束。</td>
-                <td>state、EOS、结构闭合情况。</td>
-                <td>停止或继续。</td>
-                <td>会提前结束或无限追 token。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>对象</th><th>输入前状态</th><th>输出后状态</th><th>读取什么</th><th>写入什么</th><th>错了会怎样</th></tr>
+<tr><td>约束配置</td><td>只有 prompt 和参数。</td><td>带 schema / regex / grammar 的可执行约束。</td><td>prompt、配置、开始位置。</td><td>约束状态机、token 规则。</td><td>模型会生成合法文本，但不一定合法结构。</td></tr>
+<tr><td>token mask</td><td>logits 还没过滤。</td><td>非法 token 已被压掉。</td><td>当前状态、词表、合法前缀。</td><td>mask 后的 logits。</td><td>会出现“看起来能采样，实际上已越界”。</td></tr>
+<tr><td>推进状态</td><td>还停在前一个 token 后。</td><td>进入新的结构位置。</td><td>刚采样的 token、语法规则。</td><td>状态机指针、分支栈。</td><td>会在括号、字段、结束符附近卡住。</td></tr>
+<tr><td>结束判断</td><td>还没满足收束条件。</td><td>输出被接受并结束。</td><td>state、EOS、结构闭合情况。</td><td>停止或继续。</td><td>会提前结束或无限追 token。</td></tr>
+        </table></div>
       </section>
-
       <section id="methods">
         <div class="head">
           <h2>约束方法</h2>
           <span class="tag">methods</span>
         </div>
-        <p>vLLM 和 SGLang 都把“结构化输出”做成公开能力，但支持的约束类型、后端名字和接入方式不完全一样。学习时不要先问“谁更高级”，先问“这条约束能不能落到当前 workload 上”。</p>
-        <table class="metric-table" data-export-context="约束方法对照表" data-export-lang="table">
-          <thead>
-            <tr>
-              <th>约束类型</th>
-              <th>适合什么问题</th>
-              <th>不适合什么问题</th>
-              <th>典型工程读法</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>choice</td>
-              <td>枚举答案、有限标签、固定选项。</td>
-              <td>自由文本列表、深层嵌套结构。</td>
-              <td>把输出空间压到最小，先验证流程。</td>
-            </tr>
-            <tr>
-              <td>regex</td>
-              <td>固定格式字符串、带模式的字段、简单 JSON 片段。</td>
-              <td>复杂层级、状态很多的递归结构。</td>
-              <td>看 token 过滤和前缀状态是否稳定。</td>
-            </tr>
-            <tr>
-              <td>json schema</td>
-              <td>对象、字段、类型、必填项、数组结构。</td>
-              <td>需要开放式推理链但只约束最终答案的场景。</td>
-              <td>适合把 API 输出变成可验证合同。</td>
-            </tr>
-            <tr>
-              <td>grammar / ebnf</td>
-              <td>结构复杂、需要精确定义语法的位置。</td>
-              <td>短枚举场景，过重。</td>
-              <td>更像一台小语法机，不只是“格式化”。</td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="grid2">
-          <div class="box info">
-            <h3>vLLM 的公开路线</h3>
-            <p>公开文档里能看到 choice、regex、json、grammar、structural tag 等选项，也能看到 outlines、lm-format-enforcer、xgrammar 这类 guided decoding backend。你要先看文档支持哪种约束，再决定是否继续往源码里下钻。</p>
-          </div>
-          <div class="box soft">
-            <h3>SGLang 的公开路线</h3>
-            <p>公开文档里能看到 JSON schema、regex、EBNF 这些约束参数，也能看到不同 grammar backend。它的重点不是单一格式，而是把约束放到 serving 和 reasoning 语境里一起看。</p>
-          </div>
+<p>vLLM 和 SGLang 都把“结构化输出”做成公开能力，但支持的约束类型、后端名字和接入方式不完全一样。学习时不要先问“谁更高级”，先问“这条约束能不能落到当前 workload 上”。</p>
+        <div class="box info">
+<h3>vLLM 的公开路线</h3>
+<p>公开文档里能看到 choice、regex、json、grammar、structural tag 等选项，也能看到 outlines、lm-format-enforcer、xgrammar 这类 guided decoding backend。你要先看文档支持哪种约束，再决定是否继续往源码里下钻。</p>
         </div>
-        <div class="table-wrap">
-          <table data-export-context="约束问题与排查对照表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>现象</th>
-                <th>先看什么</th>
-                <th>说明了什么</th>
-                <th>下一步怎么做</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>字段顺序错乱</td>
-                <td>schema / grammar 的顺序约束</td>
-                <td>约束对象和 JSON 结构没有对齐</td>
-                <td>先把字段顺序收紧，再看语义质量</td>
-              </tr>
-              <tr>
-                <td>输出能 parse 但内容空洞</td>
-                <td>prompt、温度、样例</td>
-                <td>decode 成功，不代表任务成功</td>
-                <td>补输入信息，不要放松结构约束</td>
-              </tr>
-              <tr>
-                <td>backend 回退后变慢</td>
-                <td>模型、dtype、shape、context</td>
-                <td>目标 backend 没接上或被限制</td>
-                <td>对照支持矩阵和日志路径</td>
-              </tr>
-              <tr>
-                <td>合法率高但工具参数不稳</td>
-                <td>choice / schema 的边界</td>
-                <td>结构对了，字段语义还没收紧</td>
-                <td>把可选项变成更具体的枚举或字段</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="box soft">
+<h3>SGLang 的公开路线</h3>
+<p>公开文档里能看到 JSON schema、regex、EBNF 这些约束参数，也能看到不同 grammar backend。它的重点把约束放到 serving 和 reasoning 语境里一起看。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>现象</th><th>先看什么</th><th>说明了什么</th><th>下一步怎么做</th></tr>
+<tr><td>字段顺序错乱</td><td>schema / grammar 的顺序约束</td><td>约束对象和 JSON 结构没有对齐</td><td>先把字段顺序收紧，再看语义质量</td></tr>
+<tr><td>输出能 parse 但内容空洞</td><td>prompt、温度、样例</td><td>decode 成功，不代表任务成功</td><td>补输入信息，不要放松结构约束</td></tr>
+<tr><td>backend 回退后变慢</td><td>模型、dtype、shape、context</td><td>目标 backend 没接上或被限制</td><td>对照支持矩阵和日志路径</td></tr>
+<tr><td>合法率高但工具参数不稳</td><td>choice / schema 的边界</td><td>结构对了，字段语义还没收紧</td><td>把可选项变成更具体的枚举或字段</td></tr>
+</table></div>
         </div>
       </section>
-
       <section id="case-study">
         <div class="head">
           <h2>把约束落到一条请求上</h2>
-          <span class="tag">case study</span>
+          <span class="tag">case</span>
         </div>
-        <p>假设你要从一段产品反馈里抽取联系人信息，最后必须输出一个对象，字段只有 <code>name</code>、<code>company</code>、<code>email</code>。这类任务最容易暴露约束解码的真实位置：它不是在模型结束后补一个格式，而是在每一步采样前收窄 token 集合。</p>
-        <p>你可以把它想成一条小小的状态机。状态机一开始只知道“要输出对象”，还不知道字段顺序；进入第一个字段后，它才知道这一步该允许哪些字符。到字段值阶段，可选 token 会变成字符串内容、闭合引号、逗号或结束符。你看到的变化不是模型本体换了，而是采样前的 mask 在每一步被重新计算。</p>
-        <div class="table-wrap">
-          <table data-export-context="结构化生成请求账本" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>阶段</th>
-                <th>输入状态</th>
-                <th>状态变化</th>
-                <th>重点看什么</th>
-                <th>错了会怎样</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>起始</td>
-                <td>只有 prompt 和约束定义。</td>
-                <td>backend 把 schema / regex / grammar 转成可执行规则。</td>
-                <td>约束是否能被当前模型和 runtime 支持。</td>
-                <td>请求看起来合法，实际一开始就会回退。</td>
-              </tr>
-              <tr>
-                <td>对象头</td>
-                <td>还没进入字段。</td>
-                <td>允许的 token 主要围绕对象起始、字段名和分隔符。</td>
-                <td>前缀是否真的进入了结构空间。</td>
-                <td>模型会继续吐自然语言而不是结构化内容。</td>
-              </tr>
-              <tr>
-                <td>字段值</td>
-                <td>已经选定字段名。</td>
-                <td>合法 token 变成字段值本身和闭合符号。</td>
-                <td>字段类型、长度和格式限制是否过窄。</td>
-                <td>会在引号、逗号或邮箱格式附近卡住。</td>
-              </tr>
-              <tr>
-                <td>收束</td>
-                <td>对象接近完整。</td>
-                <td>状态机确认闭合并允许结束。</td>
-                <td>终止条件是否可达。</td>
-                <td>会提前停，也可能一直追 token。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="codebar"><span>一个最小请求配置</span></div>
-        <pre data-export-context="约束请求配置" data-export-lang="json"><code class="language-json">{
-  "prompt": "Extract a contact card from the paragraph.",
-  "constraint": {
-    "type": "json_schema",
-    "schema": {
-      "type": "object",
-      "required": ["name", "company", "email"],
-      "properties": {
-        "name": { "type": "string" },
-        "company": { "type": "string" },
-        "email": { "type": "string", "format": "email" }
-      }
-    }
-  }
+<p>假设你要从一段产品反馈里抽取联系人信息，最后必须输出一个对象，字段只有 <code>name</code>、<code>company</code>、<code>email</code>。这类任务最容易暴露约束解码的真实位置：它在每一步采样前收窄 token 集合。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>阶段</th><th>输入状态</th><th>状态变化</th><th>重点看什么</th><th>错了会怎样</th></tr>
+<tr><td>起始</td><td>只有 prompt 和约束定义。</td><td>backend 把 schema / regex / grammar 转成可执行规则。</td><td>约束是否能被当前模型和 runtime 支持。</td><td>请求看起来合法，实际一开始就会回退。</td></tr>
+<tr><td>对象头</td><td>还没进入字段。</td><td>允许的 token 主要围绕对象起始、字段名和分隔符。</td><td>前缀是否真的进入了结构空间。</td><td>模型会继续吐自然语言而不是结构化内容。</td></tr>
+<tr><td>字段值</td><td>已经选定字段名。</td><td>合法 token 变成字段值本身和闭合符号。</td><td>字段类型、长度和格式限制是否过窄。</td><td>会在引号、逗号或邮箱格式附近卡住。</td></tr>
+<tr><td>收束</td><td>对象接近完整。</td><td>状态机确认闭合并允许结束。</td><td>终止条件是否可达。</td><td>会提前停，也可能一直追 token。</td></tr>
+        </table></div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-case-study-1">复制</button></div>
+        <pre id="code-case-study-1" data-export-context="代码" data-export-lang="json"><code class="language-json">{
+ "prompt": "Extract a contact card from the paragraph.",
+ "constraint": {
+ "type": "json_schema",
+ "schema": {
+ "type": "object",
+ "required": ["name", "company", "email"],
+ "properties": {
+ "name": { "type": "string" },
+ "company": { "type": "string" },
+ "email": { "type": "string", "format": "email" }
+ }
+ }
+ }
 }</code></pre>
-        <div class="grid2">
-          <div class="box warn">
-            <h3>失败后果</h3>
-            <p>如果 schema 过窄，模型可能在字段名、引号或结束符附近被卡住；如果 backend 不支持当前模型或 dtype，系统可能回退到别的实现；如果你只做后验校验，token 已经花掉了，错误还是会回到用户手里。</p>
-          </div>
-          <div class="box info">
-            <h3>怎么把问题拆开</h3>
-            <p>先分清是“输出无法解析”，还是“输出可解析但语义不对”。前者多半是约束和 backend 的问题，后者才更多回到 prompt、模型和数据分布。</p>
-          </div>
         </div>
-        <p>练习区的第 5、6、8 题都是在追这条链：字段、前缀、终止条件、fallback 和状态推进。把它们串起来，你就能从一条错误日志直接回到该看哪一层。</p>
+        <div class="box info">
+<h3>怎么把问题拆开</h3>
+<p>先分清是“输出无法解析”，还是“输出可解析但语义不对”。前者多半是约束和 backend 的问题，后者才更多回到 prompt、模型和数据分布。</p>
+<p>练习区的第 5、6、8 题都是在追这条链：字段、前缀、终止条件、fallback 和状态推进。把它们串起来，你就能从一条错误日志直接回到该看哪一层。</p>
+        </div>
       </section>
-
       <section id="backend-trace">
         <div class="head">
           <h2>backend、状态机和回退</h2>
-          <span class="tag">backend trace</span>
+          <span class="tag">backend</span>
         </div>
-        <p>同样是“约束解码”，不同 backend 的工作方式不完全一样。你不用把每个实现都背下来，但要知道它们在解决什么问题：有的偏向把结构约束翻成可执行的 token 过滤，有的偏向把语法规则转成状态机，有的偏向和现成的约束库对接。工程上最重要的不是名字，而是你能不能从日志里分辨出“这次是约束对象不对、状态推进不对，还是 backend 不支持当前形状”。</p>
-        <p>一个好用的读法，是把每个 backend 都当成三层：输入约束、内部状态、输出 mask。输入约束决定它接收的是 JSON schema、regex 还是 grammar；内部状态决定它记住的是字段位置、语法栈还是前缀状态；输出 mask 决定下一步能选什么 token。三个层一旦对不上，问题就会表现成不同症状。</p>
-        <div class="table-wrap">
-          <table data-export-context="backend、状态和症状对照表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>读法</th>
-                <th>输入约束</th>
-                <th>内部状态</th>
-                <th>输出 mask</th>
-                <th>常见症状</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>schema</td>
-                <td>对象、字段、类型、数组和必填项。</td>
-                <td>当前位置在第几个字段、是否已经进入值区。</td>
-                <td>只允许当前字段需要的 token。</td>
-                <td>字段闭合、额外文本、类型错误。</td>
-              </tr>
-              <tr>
-                <td>regex</td>
-                <td>模式、分支、重复和终止条件。</td>
-                <td>当前前缀是否还在合法路径上。</td>
-                <td>把不匹配前缀的 token 过滤掉。</td>
-                <td>在某个前缀附近反复兜圈。</td>
-              </tr>
-              <tr>
-                <td>grammar</td>
-                <td>语法规则、非终结符、终止符。</td>
-                <td>解析栈、展开顺序、可归约状态。</td>
-                <td>只暴露能让语法继续前进的 token。</td>
-                <td>括号不闭合、语句卡住、结束不了。</td>
-              </tr>
-              <tr>
-                <td>choice</td>
-                <td>有限枚举和固定标签。</td>
-                <td>只要记住当前是否已经选定。</td>
-                <td>只放行极少数合法 token。</td>
-                <td>最稳，但表达空间很窄。</td>
-              </tr>
-            </tbody>
-          </table>
+<p>同样是“约束解码”，不同 backend 的工作方式不完全一样。你不用把每个实现都背下来，但要知道它们在解决什么问题：有的偏向把结构约束翻成可执行的 token 过滤，有的偏向把语法规则转成状态机，有的偏向和现成的约束库对接。工程上最重要的不是名字，而是你能不能从日志里分辨出“这次是约束对象不对、状态推进不对，还是 backend 不支持当前形状”。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>读法</th><th>输入约束</th><th>内部状态</th><th>输出 mask</th><th>常见症状</th></tr>
+<tr><td>schema</td><td>对象、字段、类型、数组和必填项。</td><td>当前位置在第几个字段、是否已经进入值区。</td><td>只允许当前字段需要的 token。</td><td>字段闭合、额外文本、类型错误。</td></tr>
+<tr><td>regex</td><td>模式、分支、重复和终止条件。</td><td>当前前缀是否还在合法路径上。</td><td>把不匹配前缀的 token 过滤掉。</td><td>在某个前缀附近反复兜圈。</td></tr>
+<tr><td>grammar</td><td>语法规则、非终结符、终止符。</td><td>解析栈、展开顺序、可归约状态。</td><td>只暴露能让语法继续前进的 token。</td><td>括号不闭合、语句卡住、结束不了。</td></tr>
+<tr><td>choice</td><td>有限枚举和固定标签。</td><td>只要记住当前是否已经选定。</td><td>只放行极少数合法 token。</td><td>最稳，但表达空间很窄。</td></tr>
+        </table></div>
+        <div class="box soft">
+<h3>为什么会回退</h3>
+<p>回退通常backend 发现当前模型、dtype、shape 或约束形状不在支持范围里。系统为了能继续服务，会换一条较保守的路。这条路能跑，但不一定保留原来那条路径的速度和约束能力。</p>
         </div>
-        <div class="grid2">
-          <div class="box soft">
-            <h3>为什么会回退</h3>
-            <p>回退通常不是“模型答错了”，而是 backend 发现当前模型、dtype、shape 或约束形状不在支持范围里。系统为了能继续服务，会换一条较保守的路。这条路能跑，但不一定保留原来那条路径的速度和约束能力。</p>
-          </div>
-          <div class="box info">
-            <h3>看日志时的顺序</h3>
-            <p>先确认约束类型，再确认 backend 名字，再确认是否 fallback，最后看输出是否在采样前就已经被 mask 改掉。顺序如果倒过来，很容易把后验错误当成前置错误。</p>
-          </div>
-        </div>
-        <div class="codebar"><span>故障分流记法</span></div>
-        <pre data-export-context="故障分流记法" data-export-lang="text"><code>1. 解析失败：先看 schema / grammar 规则是否写错。
+        <div class="box info">
+<h3>看日志时的顺序</h3>
+<p>先确认约束类型，再确认 backend 名字，再确认是否 fallback，最后看输出是否在采样前就已经被 mask 改掉。顺序如果倒过来，很容易把后验错误当成前置错误。</p>
+<p>故障分流记法</p>
+<pre><code class="language-text">1. 解析失败：先看 schema / grammar 规则是否写错。
 2. 语法卡住：先看状态是否还能推进到下一个合法前缀。
 3. backend 回退：先看模型、dtype、shape 和支持矩阵。
 4. 结果合法但不对：再回到 prompt、数据分布和任务定义。</code></pre>
-        <p>这就是本单元真正要你记住的动作：不是看到“格式问题”就一股脑改 prompt，而是先判断问题究竟出在约束定义、状态推进、backend 兼容，还是输出内容本身。</p>
+<p>这就是本单元真正要你记住的动作：先判断问题究竟出在约束定义、状态推进、backend 兼容，还是输出内容本身。</p>
+        </div>
       </section>
-
       <section id="triage">
         <div class="head">
           <h2>三类失败怎么分流</h2>
           <span class="tag">triage</span>
         </div>
-        <p>实际排障时，结构化输出最常见的三种失败看起来都像“格式坏了”。第一种是输出根本不能解析，第二种是输出卡在某个前缀上不动，第三种是系统为了兼容性偷偷回退了 backend。它们表面都表现为“结果不对”，但处理顺序完全不同。</p>
-        <p>先看最小分流法：如果 parse 失败，优先检查 schema、闭合符和额外文本；如果卡在前缀，优先检查 regex 或 grammar 是否把合法分支收得太窄；如果速度突然掉了，优先查 fallback 和支持矩阵。这个顺序能把大多数无效回滚挡在前面。</p>
-        <div class="table-wrap">
-          <table data-export-context="结构化输出失败分流表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>失败类型</th>
-                <th>最早看到的症状</th>
-                <th>最可能的根因</th>
-                <th>先做什么</th>
-                <th>后做什么</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>解析失败</td>
-                <td>输出像 JSON，但解析器报错。</td>
-                <td>schema 写错、额外文本、字段类型不稳。</td>
-                <td>检查 schema 和输出片段是否一一对应。</td>
-                <td>再看 prompt 和数据分布。</td>
-              </tr>
-              <tr>
-                <td>前缀卡住</td>
-                <td>模型在某个前缀上反复重复。</td>
-                <td>regex / grammar 太窄，终止条件太晚。</td>
-                <td>缩小规则，验证合法前缀能不能推进。</td>
-                <td>再看状态机有没有被错误推进。</td>
-              </tr>
-              <tr>
-                <td>fallback</td>
-                <td>日志里出现回退，速度明显变慢。</td>
-                <td>模型、dtype、shape 或长度不在支持矩阵里。</td>
-                <td>确认 backend 是否支持当前配置。</td>
-                <td>再比较回退后性能损失有多大。</td>
-              </tr>
-              <tr>
-                <td>语义不对</td>
-                <td>结构合法，但内容不符合任务。</td>
-                <td>任务定义、prompt 或数据分布不稳。</td>
-                <td>先保留结构，再改任务输入和数据。</td>
-                <td>最后才考虑重设约束形状。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="codebar"><span>先后顺序小抄</span></div>
-        <pre data-export-context="结构化输出排障顺序" data-export-lang="text"><code>1. 先判断 parse 失败、前缀卡住、还是 backend 回退。
+<p>实际排障时，结构化输出最常见的三种失败看起来都像“格式坏了”。第一种是输出根本不能解析，第二种是输出卡在某个前缀上不动，第三种是系统为了兼容性偷偷回退了 backend。它们表面都表现为“结果不对”，但处理顺序完全不同。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>失败类型</th><th>最早看到的症状</th><th>最可能的根因</th><th>先做什么</th><th>后做什么</th></tr>
+<tr><td>解析失败</td><td>输出像 JSON，但解析器报错。</td><td>schema 写错、额外文本、字段类型不稳。</td><td>检查 schema 和输出片段是否一一对应。</td><td>再看 prompt 和数据分布。</td></tr>
+<tr><td>前缀卡住</td><td>模型在某个前缀上反复重复。</td><td>regex / grammar 太窄，终止条件太晚。</td><td>缩小规则，验证合法前缀能不能推进。</td><td>再看状态机有没有被错误推进。</td></tr>
+<tr><td>fallback</td><td>日志里出现回退，速度明显变慢。</td><td>模型、dtype、shape 或长度不在支持矩阵里。</td><td>确认 backend 是否支持当前配置。</td><td>再比较回退后性能损失有多大。</td></tr>
+<tr><td>语义不对</td><td>结构合法，但内容不符合任务。</td><td>任务定义、prompt 或数据分布不稳。</td><td>先保留结构，再改任务输入和数据。</td><td>最后才考虑重设约束形状。</td></tr>
+        </table></div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-triage-1">复制</button></div>
+        <pre id="code-triage-1" data-export-context="代码" data-export-lang="text"><code class="language-text">1. 先判断 parse 失败、前缀卡住、还是 backend 回退。
 2. 解析失败先查 schema、字段和额外文本。
 3. 前缀卡住先查 regex / grammar / state。
 4. 回退先查模型、dtype、shape 和支持矩阵。
 5. 语义不对才回到 prompt、任务和数据分布。</code></pre>
-        <div class="grid2">
-          <div class="box warn">
-            <h3>失败后果</h3>
-            <p>如果你跳过分流，排障就会变成“哪里都改一点”。那样最常见的结果是，结构问题没解决，prompt 变复杂了，backend 也没确认，最后连日志都读不懂了。</p>
-          </div>
-          <div class="box info">
-            <h3>这段和后面练习的关系</h3>
-            <p>练习区第 5、6、8 题对应的就是这四类问题。你答题时如果能先分流，再说下一步，就说明已经把约束解码当成一条可追踪的工程路径，而不是一个格式标签。</p>
-          </div>
+        </div>
+        <div class="box info">
+<h3>这段和后面练习的关系</h3>
+<p>练习区第 5、6、8 题对应的就是这四类问题。你答题时如果能先分流，再说下一步，就说明已经把约束解码当成一条可追踪的工程路径，而不是一个格式标签。</p>
         </div>
       </section>
-
       <section id="example">
         <div class="head">
           <h2>一个小例子</h2>
           <span class="tag">example</span>
         </div>
-        <p>假设你要抽取一条联系人记录，要求输出 `<name>`, `<company>`, `<email>` 三个字段，而且 `<email>` 必须是合法邮箱。没有约束时，模型可能写成自然语言；加上 JSON schema 后，模型必须在字段、引号和类型上收束；如果再加 regex 或 grammar，连局部形式都要跟着变窄。</p>
-        <div class="codebar"><span>示意请求：先约束，再采样</span></div>
-        <pre data-export-context="示意请求体" data-export-lang="text"><code>prompt: "Extract a contact card from the paragraph."
+<p>假设你要抽取一条联系人记录，要求输出 `<code>, </code><code>, </code><code> 三个字段，而且 </code>` 必须是合法邮箱。没有约束时，模型可能写成自然语言；加上 JSON schema 后，模型必须在字段、引号和类型上收束；如果再加 regex 或 grammar，连局部形式都要跟着变窄。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-example-1">复制</button></div>
+        <pre id="code-example-1" data-export-context="代码" data-export-lang="text"><code class="language-text">prompt: "Extract a contact card from the paragraph."
 constraint:
-  type: json_schema
-  schema:
-    type: object
-    required: ["name", "company", "email"]
-    properties:
-      name: { type: string }
-      company: { type: string }
-      email: { type: string, format: email }</code></pre>
-        <div class="shape-tracer" data-shape-tracer>
-          <div class="trace-lines">
-            <button type="button" class="trace-line" data-trace-step="prompt">
-              <span>prompt 进入</span>
-              <em>用户段落 + schema</em>
-            </button>
-            <button type="button" class="trace-line" data-trace-step="mask">
-              <span>合法 token 集合</span>
-              <em>字段、引号、逗号和收尾符</em>
-            </button>
-            <button type="button" class="trace-line" data-trace-step="advance">
-              <span>状态推进</span>
-              <em>字段顺序、层级、结束条件</em>
-            </button>
-            <button type="button" class="trace-line" data-trace-step="accept">
-              <span>输出验收</span>
-              <em>结构闭合后再判内容</em>
-            </button>
-          </div>
-          <div class="trace-canvas">
-            <div class="tensor-card" data-trace-target="prompt">
-              <b>输入阶段</b>
-              <span>同一段文本和 schema 一起进入 backend。</span>
-              <p>这时约束还只是规则说明，不是 token 过滤。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="mask">
-              <b>过滤阶段</b>
-              <span>合法前缀决定哪些 token 能留下。</span>
-              <p>如果这里漏掉一个引号或冒号，后面就会在解析处炸掉。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="advance">
-              <b>推进阶段</b>
-              <span>每采样一个 token，状态机都要更新一次。</span>
-              <p>对象、字段和数组位置都依赖这一步。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="accept">
-              <b>接受阶段</b>
-              <span>只有结构闭合且满足结束条件，结果才算稳定。</span>
-              <p>这时再看邮箱格式和字段内容是否真的合格。</p>
-            </div>
-          </div>
+ type: json_schema
+ schema:
+ type: object
+ required: ["name", "company", "email"]
+ properties:
+ name: { type: string }
+ company: { type: string }
+ email: { type: string, format: email }</code></pre>
+<p>第一步</p>
+<p>先让 schema 说清结构，不要先急着优化 prompt 文案。</p>
         </div>
-        <div class="grid3">
-          <div class="box">
-            <h3>第一步</h3>
-            <p>先让 schema 说清结构，不要先急着优化 prompt 文案。</p>
-          </div>
-          <div class="box soft">
-            <h3>第二步</h3>
-            <p>再确认 backend 能否把 schema 变成 token 级规则，而不是只做后验解析。</p>
-          </div>
-          <div class="box info">
-            <h3>第三步</h3>
-            <p>最后再看输出质量。合法结构只是门槛，不代表内容已经准确。</p>
-          </div>
-        </div>
+<p>第二步</p>
+<p>再确认 backend 能否把 schema 变成 token 级规则，而不是只做后验解析。</p>
         <div class="box warn">
-          <h3>为什么这个例子有用</h3>
-          <p>它把“约束对象”“结构对象”“输出对象”分开了。只要你能把这三层拆开，后面遇到 tool call、枚举、JSON、表格，判断就会快很多。</p>
+<h3>为什么这个例子有用</h3>
+<p>它把“约束对象”“结构对象”“输出对象”分开了。只要你能把这三层拆开，后面遇到 tool call、枚举、JSON、表格，判断就会快很多。</p>
+<p>换句话说，结构化生成把允许的路径收窄。你在这里看见的是一个请求如何被 schema 牵住；你在后面的引擎单元里会继续看见，这根绳子会落到哪个 backend、哪段状态机、哪条日志。</p>
         </div>
-        <p>换句话说，结构化生成不是把文本变漂亮，而是把允许的路径收窄。你在这里看见的是一个请求如何被 schema 牵住；你在后面的引擎单元里会继续看见，这根绳子会落到哪个 backend、哪段状态机、哪条日志。</p>
       </section>
-
       <section id="diagnosis">
         <div class="head">
           <h2>故障实验室</h2>
-          <span class="tag">terminal lab</span>
+          <span class="tag">terminal</span>
         </div>
-        <p>先不要急着调 prompt。很多结构化输出问题，真正的第一步是判断：你是在和 schema 打架，和 backend 打架，还是和模型本身打架。</p>
-        <div class="terminal-lab" data-terminal-lab>
-          <div class="terminal-controls">
-            <button type="button" class="ghost" data-terminal-case="schema">Schema 不匹配</button>
-            <button type="button" class="ghost" data-terminal-case="regex">Regex 卡住</button>
-            <button type="button" class="ghost" data-terminal-case="reasoning">推理模型只吐思考段</button>
-            <button type="button" class="ghost" data-terminal-case="fallback">Backend 回退</button>
-          </div>
-          <div class="terminal-output"></div>
-          <template data-terminal-output="schema">
-            <pre>症状：输出很像 JSON，但解析报错。
-先看：schema 是否把必填字段、数组层级、类型约束写清了。
-下一步：找字段缺失、引号错误、额外文本、对象闭合不完整。</pre>
-          </template>
-          <template data-terminal-output="regex">
-            <pre>症状：模型在某个前缀上反复兜圈，token 迟迟不结束。
-先看：regex 是否把合法分支写得太窄，或者终止条件太晚。
-下一步：换成更小的模式，先验证前缀推进是否正常。</pre>
-          </template>
-          <template data-terminal-output="reasoning">
-            <pre>症状：你想要的答案在 content，结果只在 reasoning_content。
-先看：这个模型是否把推理段和最终答案分开输出。
-下一步：检查约束应该放在答案段，还是要在 reasoning 后再应用。</pre>
-          </template>
-          <template data-terminal-output="fallback">
-            <pre>症状：结构化输出变慢，或者日志里出现 fallback。
-先看：约束 backend 是否支持当前模型、dtype、shape 和上下文长度。
-下一步：不要先怪 sampler，先确认走的是不是目标 backend。</pre>
-          </template>
-        </div>
+<p>先不要急着调 prompt。很多结构化输出问题，真正的第一步是判断：你是在和 schema 打架，和 backend 打架，还是和模型本身打架。</p>
       </section>
-
       <section id="bridge">
         <div class="head">
           <h2>资料路线</h2>
           <span class="tag">bridge</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>先看什么</h3>
-            <p>先看 vLLM 的 Structured Outputs 页面，再看它的 OpenAI-compatible 或示例页面；接着看 SGLang 的 Structured Outputs 页面，再看 frontend language 里对应的 schema / regex / EBNF 例子。这样能先把用户层语义和 decode 层语义对齐。</p>
-          </div>
-          <div class="box">
-            <h3>再看什么</h3>
-            <p>如果你要做工程选型，再回到各自的 GitHub 仓库，看 README、支持矩阵、benchmark 和 issue 里的边界说明。不要只看一张截图就下结论。</p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先看什么</h3>
+<p>先看 vLLM 的 Structured Outputs 页面，再看它的 OpenAI-compatible 或示例页面；接着看 SGLang 的 Structured Outputs 页面，再看 frontend language 里对应的 schema / regex / EBNF 例子。这样能先把用户层语义和 decode 层语义对齐。</p>
         </div>
-        <div class="codebar"><span>阅读顺序备忘</span></div>
-        <pre data-export-context="阅读顺序备忘" data-export-lang="text"><code>1. 先把结构化输出和 guided decoding 的公开文档读完。
+        <div class="box">
+<h3>再看什么</h3>
+<p>如果你要做工程选型，再回到各自的 GitHub 仓库，看 README、支持矩阵、benchmark 和 issue 里的边界说明。不要只看一张截图就下结论。</p>
+<p>阅读顺序备忘</p>
+<pre><code class="language-text">1. 先把结构化输出和 guided decoding 的公开文档读完。
 2. 再看后端名字、约束类型、支持的模型和已知限制。
 3. 然后找一个最小请求，确认输出在 decode 时被约束。
 4. 最后才读源码里的 backend、state machine、parser 和回退路径。</code></pre>
+        </div>
+      </div>
       </section>
-
       <section id="boundary">
         <div class="head">
           <h2>这里先不追</h2>
           <span class="tag">boundary</span>
         </div>
-        <div class="grid3">
-          <div class="box soft">
-            <h3>不展开应用层修复</h3>
-            <p>后验修复、字符串清洗、JSON 重试和业务 schema 兜底，放到更上层的服务设计里看。</p>
-          </div>
-          <div class="box info">
-            <h3>不展开全部 backend</h3>
-            <p>这里先理解约束是怎样参与 decode 的，不把每个 backend 的实现细节都摊开。</p>
-          </div>
-          <div class="box warn">
-            <h3>不展开 agent 编排</h3>
-            <p>工具路由、思考段拆分、工作流控制和最终答案策略，留给后面的系统阅读路线。</p>
-          </div>
-        </div>
+<p>不展开应用层修复</p>
+<p>后验修复、字符串清洗、JSON 重试和业务 schema 兜底处理，放到更上层的服务设计里看。</p>
+<p>不展开 agent 编排</p>
+<p>工具路由、思考段拆分、工作流控制和最终答案策略，留给后面的系统阅读路线。</p>
       </section>
-
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>一组：术语和边界</h3>
-              <p class="muted">先把定义拎准，再谈工程动作。</p>
-            </div>
-            <div class="quick-review">快速复盘：结构化生成是目标，guided decoding 是过程，post-hoc validation 是另一层。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="structured-vs-posthoc" data-group="术语和边界" data-title="structured outputs 和 post-hoc validation 的区别是什么？" data-answer="B">
-              <div class="q-meta"><span class="pill" data-type="single-choice">单选</span><span class="pill">边界</span></div>
-              <p><b>1. structured outputs 和 post-hoc validation 的区别是什么？</b></p>
-              <label><input type="radio" name="structured-vs-posthoc" value="A">A. 它们都是生成后清洗文本</label><br>
-              <label><input type="radio" name="structured-vs-posthoc" value="B">B. 前者在生成过程中约束 token，后者在生成后再检查</label><br>
-              <label><input type="radio" name="structured-vs-posthoc" value="C">C. 前者只影响 tokenizer</label>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>展开反馈</summary>
-                <p>这里要分清时机。structured outputs 改的是 decode 路径，post-hoc validation 改的是输出完成后的检查流程。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q" data-question="constraint-position" data-group="术语和边界" data-title="判断正误：约束解码只是把模型输出包一层 JSON 再解析。" data-answer="错">
-              <div class="q-meta"><span class="pill" data-type="true-false">判断</span><span class="pill">decode</span></div>
-              <p><b>2. 判断正误：约束解码只是把模型输出包一层 JSON 再解析。</b></p>
-              <label><input type="radio" name="constraint-position" value="对">对</label><br>
-              <label><input type="radio" name="constraint-position" value="错">错</label>
-              <p class="hint">提示：看 token 选择是在什么时候被改掉的。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>展开反馈</summary>
-                <p>如果只是最后解析，那你只是在做后处理。guided decoding 的关键是提前把非法 token 排掉。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q short" data-question="constraint-types" data-group="术语和边界" data-title="SGLang 公开文档里常见的三个约束参数是什么？">
-              <div class="q-meta"><span class="pill" data-type="fill">填空</span><span class="pill">SGLang</span></div>
-              <p><b>3. SGLang 公开文档里常见的三个约束参数是什么？</b></p>
-              <input type="text" name="constraint-types" data-answer="json_schema; regex; ebnf" placeholder="按三个关键词写，顺序不限。">
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>展开反馈</summary>
-                <p>这里要抓的是参数名，不是解释。三个关键词分别是 JSON schema、regex 和 EBNF。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q short" data-question="vllm-backends" data-group="术语和边界" data-title="vLLM Structured Outputs 文档里提到的三类 guided decoding backend 是什么？">
-              <div class="q-meta"><span class="pill" data-type="fill">填空</span><span class="pill">vLLM</span></div>
-              <p><b>4. vLLM Structured Outputs 文档里提到的三类 guided decoding backend 更接近哪一组？</b></p>
-              <label><input type="radio" name="vllm-backends" value="A">A. outlines / lm-format-enforcer / xgrammar</label><br>
-              <label><input type="radio" name="vllm-backends" value="B">B. ray / triton / flashinfer</label><br>
-              <label><input type="radio" name="vllm-backends" value="C">C. fp8 / int4 / bf16</label>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>展开反馈</summary>
-                <p>先记 backend 名字，再回去看它们分别支持什么约束、适配什么模型和场景。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-          </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一组：术语和边界</h3></div>
+          <div class="quick-review">快速复盘：结构化生成是目标，guided decoding 是过程，post-hoc validation 是另一层。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="qstructuredvsposthoc" data-group="" data-title="" data-answer="前者在生成过程中约束 token，后者在生成后再检查">
+        <div class="q-meta"><span class="pill">structured-vs-posthoc</span><span class="pill">单选</span></div>
+        <h3><b>Q:</b></h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>二组：路径和故障</h3>
-              <p class="muted">把症状放回 decode、backend 和约束状态里。</p>
-            </div>
-            <div class="quick-review">快速复盘：先问“约束对象是什么”，再问“谁在改 token 集合”。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q full" data-question="json-failure" data-group="路径和故障" data-title="案例：输出看起来像 JSON，但解析总是失败。你会先查哪三件事？">
-              <div class="q-meta"><span class="pill" data-type="diagnosis">诊断</span><span class="pill">JSON</span></div>
-              <p><b>5. 案例：输出看起来像 JSON，但解析总是失败。你会先查哪三件事？</b></p>
-              <textarea name="json-failure" placeholder="写出你会先查的三项，按顺序说。"></textarea>
-              <p class="solve-note">提示：从 schema 完整性、额外文本、字段类型三个方向开刀。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>先看 schema 是否把必填字段、类型和嵌套写清；再看输出里有没有额外自然语言；最后看字段值是不是被模型写成了不合法类型。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q full" data-question="regex-loop" data-group="路径和故障" data-title="案例：regex 约束下模型一直兜圈，不肯停。你怎么缩小范围？">
-              <div class="q-meta"><span class="pill" data-type="diagnosis">诊断</span><span class="pill">regex</span></div>
-              <p><b>6. 案例：regex 约束下模型一直兜圈，不肯停。你怎么缩小范围？</b></p>
-              <textarea name="regex-loop" placeholder="至少包含前缀、终止条件、合法分支三个点。"></textarea>
-              <p class="solve-note">提示：先怀疑规则太窄，再怀疑终止条件太晚，最后再看 backend 是否回退。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>先把 regex 缩到一个更小的子集，验证前缀能否推进；再确认终止条件是否真的可达；如果还是卡住，再看 backend 是否把约束状态搞乱了。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q full" data-question="reasoning-output" data-group="路径和故障" data-title="案例：你要的是最终答案，结果内容跑到 reasoning_content。你会怎么判断这个问题归谁？">
-              <div class="q-meta"><span class="pill" data-type="scenario">场景</span><span class="pill">reasoning</span></div>
-              <p><b>7. 案例：你要的是最终答案，结果内容跑到 reasoning_content。你会怎么判断这个问题归谁？</b></p>
-              <textarea name="reasoning-output" placeholder="先判断模型输出通道，再判断约束应该放在哪一段。"></textarea>
-              <p class="solve-note">提示：这不是单纯的格式错误，要先看 reasoning 段和 answer 段是否被分开处理。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>先确认模型是否把 reasoning 和 final answer 分开输出；如果是，就要看约束到底应该应用在答案段，还是在 reasoning 结束后再进入结构化输出。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q full" data-question="backend-fallback" data-group="路径和故障" data-title="案例：结构化输出忽然变慢，日志里还出现 fallback。下一步你怎么排？">
-              <div class="q-meta"><span class="pill" data-type="diagnosis">诊断</span><span class="pill">backend</span></div>
-              <p><b>8. 案例：结构化输出忽然变慢，日志里还出现 fallback。下一步你怎么排？</b></p>
-              <textarea name="backend-fallback" placeholder="写出你会先确认的三个条件。"></textarea>
-              <p class="solve-note">提示：模型、dtype、shape、上下文长度和 backend 支持范围都要看。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>先确认 backend 是否支持当前模型和 dtype，再看 shape / head size / context length 是否触发回退，最后再比对慢的是 constraint 生成还是原始 decode。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-          </div>
-        </div>
+      <div class="choices">
+      <label><input type="radio" name="qstructured-vs-posthoc" value="它们都是生成后清洗文本">它们都是生成后清洗文本</label>
+      <label><input type="radio" name="qstructured-vs-posthoc" value="前者在生成过程中约束 token，后者在生成后再检查">前者在生成过程中约束 token，后者在生成后再检查</label>
+      <label><input type="radio" name="qstructured-vs-posthoc" value="前者只影响 tokenizer">前者只影响 tokenizer</label>
+      </div>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>三组：迁移与表达</h3>
-              <p class="muted">把概念讲成工程判断。</p>
-            </div>
-            <div class="quick-review">快速复盘：能不能把“约束对象、执行位置、故障现象”讲成一句话。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q full" data-question="code-reading" data-group="迁移与表达" data-title="读这段伪代码，说出它在做什么。">
-              <div class="q-meta"><span class="pill" data-type="code reading">读代码</span><span class="pill">decode</span></div>
-              <p><b>9. 读这段伪代码，说出它在做什么。</b></p>
-              <div class="codebar"><span>伪代码片段</span></div>
-              <pre data-export-context="约束解码伪代码复盘" data-export-lang="python"><code class="language-python">allowed = backend.valid_tokens(state, logits)
-masked_logits = apply_mask(logits, allowed)
-token = sample(masked_logits, temperature, top_p)
-state = backend.advance(state, token)</code></pre>
-              <textarea name="code-reading" placeholder="先说对象，再说动作，再说失败会怎样。"></textarea>
-              <p class="solve-note">提示：必须提到“合法 token 集合”和“状态推进”两个点。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>这段代码先计算当前状态下哪些 token 允许，再把非法 token 的 logits 压掉，随后在剩下的 token 里采样，并把状态推进到下一步。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q" data-question="short-explain" data-group="迁移与表达" data-title="用一句话解释 guided decoding。">
-              <div class="q-meta"><span class="pill" data-type="explain">解释</span><span class="pill">概念</span></div>
-              <p><b>10. 用一句话解释 guided decoding。</b></p>
-              <textarea name="short-explain" placeholder="限制在 60 字以内。"></textarea>
-              <p class="solve-note">提示：一句话里要同时说到“生成过程中”与“限制 token”。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>guided decoding 是在生成过程中用规则约束 token 选择，让输出沿着指定结构前进，而不是生成完后再补格式。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q full" data-question="experiment-design" data-group="迁移与表达" data-title="如果你要比较 schema、regex、grammar 三种约束，你会怎么做实验？">
-              <div class="q-meta"><span class="pill" data-type="design">设计</span><span class="pill">实验</span></div>
-              <p><b>11. 如果你要比较 schema、regex、grammar 三种约束，你会怎么做实验？</b></p>
-              <textarea name="experiment-design" placeholder="写出对照组、指标和先排除的变量。"></textarea>
-              <p class="solve-note">提示：至少要同时记录合法率、延迟、回退和输出质量。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>至少设 baseline、schema、regex、grammar 四组，同时记录合法率、TTFT、TPOT、回退次数和内容质量。这样才能看出约束收益是不是被性能开销吃掉。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-            <div class="q full" data-question="boundary-note" data-group="迁移与表达" data-title="指出一个本单元故意没有展开的内容，并说明为什么。">
-              <div class="q-meta"><span class="pill" data-type="boundary">边界</span><span class="pill">开放</span></div>
-              <p><b>12. 指出一个本单元故意没有展开的内容，并说明为什么。</b></p>
-              <textarea name="boundary-note" placeholder="例如后验修复、业务校验、agent 编排、长链路工具调用。"></textarea>
-              <p class="solve-note">提示：要说清楚“为什么现在先不看它”。</p>
-              <button type="button" class="check">检查</button>
-              <div class="feedback"></div>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>这页故意不展开后验修复和业务校验，因为它们属于应用层；本页先把 decode 时的约束位置和 backend 逻辑讲清楚。</p>
-                <button type="button" class="reveal">收起反馈</button>
-              </details>
-            </div>
-          </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>前者在生成过程中约束 token，后者在生成后再检查。这里要分清时机。structured outputs 改的是 decode 路径，post-hoc validation 改的是输出完成后的检查流程。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qconstraintposition" data-group="" data-title="" data-answer="错">
+        <div class="q-meta"><span class="pill">constraint-position</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b></h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qconstraint-position" value="对">对</label>
+      <label><input type="radio" name="qconstraint-position" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>错。如果只是最后解析，那你只是在做后处理。guided decoding 的关键是提前把非法 token 排掉。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qconstrainttypes" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">constraint-types</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qconstraint-types"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。这里要抓的是参数名，不是解释。三个关键词分别是 JSON schema、regex 和 EBNF。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qvllmbackends" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">vllm-backends</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b></h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qvllm-backends" value="outlines / lm-format-enforcer / xgrammar">outlines / lm-format-enforcer / xgrammar</label>
+      <label><input type="radio" name="qvllm-backends" value="ray / triton / flashinfer">ray / triton / flashinfer</label>
+      <label><input type="radio" name="qvllm-backends" value="fp8 / int4 / bf16">fp8 / int4 / bf16</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先记 backend 名字，再回去看它们分别支持什么约束、适配什么模型和场景。</p>
+        </details>
+      </article>
         </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二组：路径和故障</h3></div>
+          <div class="quick-review">快速复盘：先问“约束对象是什么”，再问“谁在改 token 集合”。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="qjsonfailure" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">json-failure</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qjson-failure"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先看 schema 是否把必填字段、类型和嵌套写清；再看输出里有没有额外自然语言；最后看字段值是不是被模型写成了不合法类型。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qregexloop" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">regex-loop</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qregex-loop"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先把 regex 缩到一个更小的子集，验证前缀能否推进；再确认终止条件是否真的可达；如果还是卡住，再看 backend 是否把约束状态搞乱了。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qreasoningoutput" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">reasoning-output</span><span class="pill">场景</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qreasoning-output"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先确认模型是否把 reasoning 和 final answer 分开输出；如果是，就要看约束到底应该应用在答案段，还是在 reasoning 结束后再进入结构化输出。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qbackendfallback" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">backend-fallback</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qbackend-fallback"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先确认 backend 是否支持当前模型和 dtype，再看 shape / head size / context length 是否触发回退，最后再比对慢的是 constraint 生成还是原始 decode。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三组：迁移与表达</h3></div>
+          <div class="quick-review">快速复盘：能不能把“约束对象、执行位置、故障现象”讲成一句话。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="qcodereading" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">code-reading</span><span class="pill">读代码</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qcode-reading"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。这段代码先计算当前状态下哪些 token 允许，再把非法 token 的 logits 压掉，随后在剩下的 token 里采样，并把状态推进到下一步。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qshortexplain" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">short-explain</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qshort-explain"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。guided decoding 是在生成过程中用规则约束 token 选择，让输出沿着指定结构前进，而不是生成完后再补格式。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qexperimentdesign" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">experiment-design</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qexperiment-design"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。至少设 baseline、schema、regex、grammar 四组，同时记录合法率、TTFT、TPOT、回退次数和内容质量。这样才能看出约束收益是不是被性能开销吃掉。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qboundarynote" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">boundary-note</span><span class="pill">边界</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qboundary-note"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。这页故意不展开后验修复和业务校验，因为它们属于应用层；本页先把 decode 时的约束位置和 backend 逻辑讲清楚。</p>
+        </details>
+      </article>
+        </div>
+      </div>
       </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">practice record</span>
-        </div>
-        <p>导出的记录会保留题目、分组、答案和核心复盘上下文，方便你后面回头看自己到底是把约束对象、执行位置还是故障现象混掉了。</p>
-        <div class="quality" id="quality"></div>
-        <div class="answer" id="record">还没有生成练习记录。</div>
-        <div class="actions">
-          <button type="button" class="ghost" onclick="generateRecord()">生成练习记录</button>
-          <button type="button" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
-
-      <section id="sources">
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-          <li><a href="https://docs.vllm.ai/en/latest/features/structured_outputs/">vLLM Structured Outputs</a>：支撑 choice、regex、json、grammar、structural tag 与 guided decoding backend 的公开说明。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.vllm.ai/en/v0.8.4/getting_started/examples/structured_outputs.html">vLLM Structured Outputs examples</a>：支撑 guided decoding 示例、Choice、Regex、JSON schema、Grammar 的示意。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.sglang.ai/advanced_features/structured_outputs.html">SGLang Structured Outputs</a>：支撑 json_schema、regex、EBNF 与 grammar backend 的公开说明。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.sglang.ai/references/frontend/frontend_tutorial.html">SGLang Frontend Language</a>：支撑前端语言里结构化输出、regex schema 与工具相关示例。访问日期：2026-06-21。</li>
-          <li><a href="https://github.com/vllm-project/vllm">vLLM GitHub repository</a>：支撑项目定位、源码入口和实现范围。访问日期：2026-06-21。</li>
-          <li><a href="https://github.com/sgl-project/sglang">SGLang GitHub repository</a>：支撑项目定位、源码入口和实现范围。访问日期：2026-06-21。</li>
-        </ul>
+<ul>
+<li><a href="https://docs.vllm.ai/en/latest/features/structured_outputs/">vLLM Structured Outputs</a>：支撑 choice、regex、json、grammar、structural tag 与 guided decoding backend 的公开说明。访问日期：2026-06-21。</li>
+<li><a href="https://docs.vllm.ai/en/v0.8.4/getting_started/examples/structured_outputs.html">vLLM Structured Outputs examples</a>：支撑 guided decoding 示例、Choice、Regex、JSON schema、Grammar 的示意。访问日期：2026-06-21。</li>
+<li><a href="https://docs.sglang.ai/advanced_features/structured_outputs.html">SGLang Structured Outputs</a>：支撑 json_schema、regex、EBNF 与 grammar backend 的公开说明。访问日期：2026-06-21。</li>
+<li><a href="https://docs.sglang.ai/references/frontend/frontend_tutorial.html">SGLang Frontend Language</a>：支撑前端语言里结构化输出、regex schema 与工具相关示例。访问日期：2026-06-21。</li>
+<li><a href="https://github.com/vllm-project/vllm">vLLM GitHub repository</a>：支撑项目定位、源码入口和实现范围。访问日期：2026-06-21。</li>
+<li><a href="https://github.com/sgl-project/sglang">SGLang GitHub repository</a>：支撑项目定位、源码入口和实现范围。访问日期：2026-06-21。</li>
+</ul>
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

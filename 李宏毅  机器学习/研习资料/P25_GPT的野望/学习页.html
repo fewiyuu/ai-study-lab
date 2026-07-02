@@ -4,398 +4,633 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P25｜GPT 的野望</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="GPT,autoregressive language model,next token prediction,Transformer decoder,masked self-attention,in-context learning,few-shot,one-shot,zero-shot,prompt,self-supervised speech,superb">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>GPT 的野望</strong><span>P25。GPT 用 next-token prediction 训练，却想靠 prompt 直接做各种任务。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#next"><span class="dot"></span>Next-token</a>
-      <a href="#decoder"><span class="dot"></span>Decoder 架构</a>
-      <a href="#generate"><span class="dot"></span>生成能力</a>
-      <a href="#incontext"><span class="dot"></span>In-context</a>
-      <a href="#scale"><span class="dot"></span>规模与效果</a>
-      <a href="#beyond"><span class="dot"></span>视觉与语音</a>
-      <a href="#share"><span class="dot"></span>速查例题</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：GPT 训练时只学“根据前文预测下一个 token”，使用时却能把任务说明和例子也当成前文。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P25</div>
-        <h1>GPT：预测下一个 token，长出任务泛化野心</h1>
-        <p>BERT 的核心训练任务是填空。GPT 的核心训练任务更简单直接：给前面的 token，预测下一个 token。把这个动作在大量文本上重复，模型就学会了语言续写。使用时，只要把模型刚生成的 token 接回输入，再预测下一个，就能不断产生文章。</p>
-        <p>更狂的地方是 in-context learning。GPT 不一定要像 BERT 那样接一个分类头再 fine-tune。我们可以把任务说明、几个例子和新问题都写进 prompt，让模型把答案当作“接下来应该出现的文字”补出来。这就是 zero-shot、one-shot、few-shot 的直觉。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释 GPT 的 next-token prediction 如何构成自监督训练。</li>
-          <li>说明 GPT 为什么像 Transformer decoder，并使用 masked self-attention。</li>
-          <li>区分生成、fine-tuning 与 in-context learning。</li>
-          <li>解释 zero-shot、one-shot、few-shot prompt 的差别。</li>
-          <li>说明自监督学习不只适用于文字，也能用于视觉和语音。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">map</span></div>
-      <p>GPT 的主线是自回归语言模型。训练时，模型看到 <code>BOS</code>，预测第一个 token；看到 <code>BOS + 第一个 token</code>，预测第二个 token；以此类推。每一步都是一个词表分类问题，target 来自原始句子本身，所以仍然是 self-supervised learning。</p>
-      <p>架构上，GPT 类似 Transformer decoder，但拿掉 encoder-decoder cross-attention，只保留 masked self-attention。Masked 的意思是预测当前位置时不能偷看未来 token。使用上，GPT 可以直接生成文字，也可以通过 prompt 给任务描述和范例，让模型在上下文中“领会”要做什么。</p>
-      <div class="map">
-        <span class="node">text corpus</span><span class="arrow">→</span>
-        <span class="node">next token loss</span><span class="arrow">→</span>
-        <span class="node">decoder LM</span><span class="arrow">→</span>
-        <span class="node">generation</span><span class="arrow">→</span>
-        <span class="node">prompt</span><span class="arrow">→</span>
-        <span class="node">in-context learning</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P25</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把 GPT 的训练和使用都解释成“补完前文”的问题。</p></div>
-    </section>
-
-    <section id="next">
-      <div class="head"><h2>Next-token Prediction：每一步都是分类</h2><span class="tag">autoregressive</span></div>
-      <p>假设训练句子是“台湾大学”。GPT 会构造多个训练步：给 <code>BOS</code> 预测“台”；给 <code>BOS 台</code> 预测“湾”；给 <code>BOS 台湾</code> 预测“大”；给 <code>BOS 台湾大</code> 预测“学”。每一步都用 hidden vector 经过 linear layer 和 softmax，得到下一个 token 的概率分布。</p>
-      <p>这里的 label 不需要人工标注，因为下一个 token 就在原始文本里。模型训练目标是让正确下一个 token 的概率变高，通常用 cross entropy loss。大量句子不断重复这个过程，模型就学会语言的局部和长程模式。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：训练步如何移动</h3>
-            <div class="slider-row"><label for="stepSlider">训练步</label><input id="stepSlider" type="range" min="0" max="3" value="0"><strong id="stepOut">1</strong></div>
-            <div class="tokens" id="nextTokens"></div>
-          </div>
-          <div class="viz-note">
-            <h3 id="nextTitle">预测第一个 token</h3>
-            <p id="nextText">模型只看到 BOS，目标是预测“台”。未来 token 在训练目标里，但不能作为输入偷看。</p>
-          </div>
-        </div>
+      <h1 class="hero-title">P25｜GPT 的野望</h1>
+      <p class="hero-desc">BERT 的核心训练任务是填空。GPT 的核心训练任务更简单直接：给前面的 token，预测下一个 token。把这个动作在大量文本上重复，模型就学会了语言续写。使用时，只要把模型刚生成的 token 接回输入，再预测下一个，就能不断产生文章。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P24_BERT奇闻轶事/学习页.html">上一节</a>
+            <a href="../P26_有效使用自督导式模型/学习页.html">下一节</a>
       </div>
-      <div class="formula">
-        Training objective:<br>
-        maximize P(token_t | token_1, ..., token_{t-1})
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>给任意一句话，拆出 GPT 的多个 next-token 训练样本。</p></div>
-    </section>
-
-    <section id="decoder">
-      <div class="head"><h2>GPT 架构：像 Decoder，但没有 Cross-attention</h2><span class="tag">decoder-only</span></div>
-      <p>Transformer decoder 原本有 masked self-attention、encoder-decoder cross-attention 和 feed-forward 等部分。GPT 类模型更像 decoder-only：没有 encoder 输入，因此也不需要 cross-attention。它只在已经生成或已经给定的前文上做 masked self-attention。</p>
-      <p>Masked self-attention 的作用是防止偷看未来。训练时整句都在内存里，但预测第 t 个 token 时，模型只能 attend 到它之前的位置。如果让它看到未来 token，next-token prediction 就会变成抄答案，训练目标失去意义。</p>
-      <div class="grid3">
-        <div class="box soft"><h3>保留</h3><p>Masked self-attention、feed-forward、残差、normalization。</p></div>
-        <div class="box warn"><h3>拿掉</h3><p>Encoder-decoder cross-attention，因为没有 encoder 侧输入。</p></div>
-        <div class="box info"><h3>结果</h3><p>模型只能根据前文建模，天然适合生成。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说明 GPT 为什么不能在预测时看到未来 token。</p></div>
-    </section>
-
-    <section id="generate">
-      <div class="head"><h2>生成能力：预测一次，再接回去预测下一次</h2><span class="tag">generation</span></div>
-      <p>训练完成后，GPT 可以生成文字。给它一段 prompt，它输出下一个 token 的分布。选出一个 token 后，把这个 token 接到 prompt 后面，再预测下一个。不断重复，就能产生句子、段落甚至文章。</p>
-      <p>这也是 GPT 早期让人印象深刻的地方：模型可以续写看起来像新闻的文本。课程提到 GPT-2 的经典“独角兽假新闻”例子，说明语言模型不只是分类器，而是能生成长文本的模型。</p>
-      <p>但生成不等于真实。模型学习的是文本分布，可能产生流畅但虚构的内容。理解 GPT 时要同时看到它的强大续写能力和事实可靠性的风险。</p>
-      <div class="grid2">
-        <div class="box soft"><h3>训练时</h3><p>看真实前文，预测真实下一个 token。</p></div>
-        <div class="box warn"><h3>生成时</h3><p>看 prompt 和自己生成的前文，继续预测；错误也可能被接着放大。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么 next-token prediction 可以变成长文本生成。</p></div>
-    </section>
-
-    <section id="incontext">
-      <div class="head"><h2>In-context Learning：不改参数，只改上下文</h2><span class="tag">prompting</span></div>
-      <p>BERT 的典型用法是 fine-tuning：接任务头，使用标注资料更新参数。GPT 也可以这样做，但 GPT 论文中更强调一种更狂的用法：把任务说明和几个范例直接写进 prompt，不做梯度下降，不更新模型参数，让模型从上下文中推断任务格式。</p>
-      <p>Few-shot learning 指 prompt 里给几个例子；one-shot 给一个例子；zero-shot 只给任务说明不给例子。这里的 “learning” 不是传统训练，没有 optimizer，没有 parameter update。它更像考试说明：先告诉模型要做什么，再看它能不能接着补出答案。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：zero / one / few-shot prompt</h3>
-            <div class="tabs">
-              <button type="button" data-shot="zero" class="active">zero-shot</button>
-              <button type="button" data-shot="one">one-shot</button>
-              <button type="button" data-shot="few">few-shot</button>
-            </div>
-            <div class="prompt" id="promptBox"></div>
-          </div>
-          <div class="viz-note">
-            <h3 id="promptTitle">Zero-shot</h3>
-            <p id="promptText">只有任务说明，没有示范。模型要直接根据说明补出答案。</p>
-          </div>
-        </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>判断一个 GPT 使用方式是在 fine-tuning，还是 in-context learning。</p></div>
-    </section>
-
-    <section id="scale">
-      <div class="head"><h2>规模与效果：大模型让 in-context 更像样，但不万能</h2><span class="tag">scaling</span></div>
-      <p>GPT-3 论文测试了不同大小模型在多任务上的 zero-shot、one-shot、few-shot 表现。总体趋势是模型越大，平均表现越好；few-shot 通常又比 zero-shot 更强。这个结果支持了一个直觉：大规模预训练模型更容易从 prompt 里读懂任务。</p>
-      <p>但课程也提醒：不是每个任务都成功。有些任务，例如简单算术，模型可能表现出一定能力；有些需要严密逻辑推理的任务表现很差。把平均正确率从二十几提升到五十几，算不算真正“会了”，仍然见仁见智。</p>
-      <p>所以 GPT 的野望是：用同一个巨大语言模型，通过上下文完成许多任务。但入门时要记住边界：它不是传统意义上针对每个任务训练过，也不是所有任务都能可靠解决。</p>
-      <div class="grid3">
-        <div class="box soft"><h3>Zero-shot</h3><p>只给说明，最难。</p></div>
-        <div class="box info"><h3>One-shot</h3><p>给一个示范，格式更清楚。</p></div>
-        <div class="box warn"><h3>Few-shot</h3><p>给多个示范，效果常更好，但仍不保证可靠。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么模型变大和示范变多通常提升 in-context 表现，但不能保证所有任务成功。</p></div>
-    </section>
-
-    <section id="beyond">
-      <div class="head"><h2>文字之外：视觉和语音也能自监督</h2><span class="tag">beyond text</span></div>
-      <p>课程最后提醒：BERT 和 GPT 只是 self-supervised learning 的一部分，而且主要属于 prediction 路线。自监督学习不只用于文字，也用于 computer vision 和 speech。视觉里有 contrastive learning、BYOL 等方法；语音里可以做“语音版 BERT”：遮住声音片段再预测，也可以做“语音版 GPT”：预测接下来会出现的语音。</p>
-      <p>文字领域有 GLUE 这样的 benchmark，可以用多任务评估预训练模型。语音领域也需要类似工具。课程提到 SUPERB：Speech processing Universal PERformance Benchmark，目标是用多个任务测试语音自监督模型的能力，包括内容、说话人、语气、语义等维度。</p>
-      <p>这一段的学习目标是扩展视野：自监督的核心不是文字，而是“能否从资料本身构造任务”。不同模态的任务形式不同，但理念相通。</p>
-      <div class="grid3">
-        <div class="box info"><h3>Text</h3><p>MLM、next-token prediction。</p></div>
-        <div class="box soft"><h3>Vision</h3><p>对比学习、遮挡重建、BYOL 等。</p></div>
-        <div class="box warn"><h3>Speech</h3><p>遮住语音、预测未来语音、SUPERB benchmark。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把自监督学习迁移到文字以外的资料类型来思考。</p></div>
-    </section>
-
-    <section id="share">
-      <div class="head"><h2>公开分享速查：一句话看懂 GPT</h2><span class="tag">quick reference</span></div>
-      <div class="grid2">
-        <div class="box soft">
-          <h3>核心直觉</h3>
-          <p>GPT 的训练任务很窄：永远只问“前文之后最可能出现什么 token”。但如果前文里放入任务说明、格式示范和问题，模型的续写动作就会表现得像在做翻译、分类、摘要或问答。</p>
-          <p>所以 GPT 的强项不是多了一个神秘任务头，而是把许多任务都改写成“把后面的文字补出来”。</p>
-        </div>
-        <div class="box warn">
-          <h3>Worked example</h3>
-          <p>Prompt：<code>情绪分类。句子：这家店再也不去了。答案：</code></p>
-          <p>模型不是先调用一个情绪分类器，而是在预测“答案：”后最合理的 token。若训练中见过大量类似语言模式，它可能续写“负面”。这就是把分类任务转成语言续写。</p>
-        </div>
-      </div>
-      <table class="metric-table">
-        <tr><th>术语</th><th>精确定义</th><th>容易混的点</th></tr>
-        <tr><td>Next-token prediction</td><td>给定前文，预测词表中下一个 token 的概率分布。</td><td>不是一次生成整篇文章；长文本来自逐步预测并接回上下文。</td></tr>
-        <tr><td>Masked self-attention</td><td>当前位置只能看自己之前的 token，不能看未来。</td><td>这里的 mask 是因果遮罩，不是 BERT 那种把词换成 [MASK]。</td></tr>
-        <tr><td>In-context learning</td><td>通过 prompt 中的说明和示例让模型完成任务，不更新参数。</td><td>看到 few-shot 不代表做了 fine-tuning；示例只是上下文。</td></tr>
-        <tr><td>Zero/one/few-shot</td><td>分别对应不给示例、给一个示例、给多个示例。</td><td>它们描述的是 prompt 里有多少示例，不是训练集大小。</td></tr>
-      </table>
-      <div class="box info">
-        <h3>小检查表</h3>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
         <ul>
-          <li>解释 GPT 时，先说训练目标，再说生成循环。</li>
-          <li>遇到 prompt 例子，先判断是否更新参数；不更新就是 in-context。</li>
-          <li>评价能力时，区分“能续写出格式正确答案”和“答案事实可靠”。</li>
+
         </ul>
       </div>
-    </section>
+    </div>
+  </header>
 
-    <section id="code">
-      <div class="head"><h2>最小代码：next-token loss 与 prompt</h2><span class="tag">minimal code</span></div>
-      <p>下面伪代码展示 GPT 训练和 in-context 使用的差别：训练会更新参数，prompt 使用不更新参数。</p>
-      <div class="codebar"><span class="label">正确示例：next-token training</span><span class="kind">pseudo python</span></div>
-      <pre><code>tokens = [BOS, <span class="str">"台"</span>, <span class="str">"湾"</span>, <span class="str">"大"</span>, <span class="str">"学"</span>]
-hidden = gpt(tokens[:-<span class="num">1</span>])          <span class="cmt"># cannot see future tokens</span>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#next">Next-token Prediction：每一步都是分类</a>
+      <a href="#decoder">GPT 架构：像 Decoder，但没有 Cross-attention</a>
+      <a href="#generate">生成能力：预测一次，再接回去预测下一次</a>
+      <a href="#incontext">In-context Learning：不改参数，只改上下文</a>
+      <a href="#scale">规模与效果：大模型让 in-context 更像样，但不万能</a>
+      <a href="#beyond">文字之外：视觉和语音也能自监督</a>
+      <a href="#share">公开分享速查：一句话看懂 GPT</a>
+      <a href="#code">最小代码：next-token loss 与 prompt</a>
+      <a href="#mistakes">常见误区与修正</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">map</span>
+        </div>
+<p>GPT 的主线是自回归语言模型。训练时，模型看到 <code>BOS</code>，预测第一个 token；看到 <code>BOS + 第一个 token</code>，预测第二个 token；以此类推。每一步都是一个词表分类问题，target 来自原始句子本身，所以仍然是 self-supervised learning。</p>
+<p>text corpus→</p>
+<p>next token loss→</p>
+<p>decoder LM→</p>
+<p>generation→</p>
+<p>prompt→</p>
+<p>in-context learning</p>
+      </section>
+      <section id="next">
+        <div class="head">
+          <h2>Next-token Prediction：每一步都是分类</h2>
+          <span class="tag">autoregressive</span>
+        </div>
+<p>假设训练句子是“台湾大学”。GPT 会构造多个训练步：给 <code>BOS</code> 预测“台”；给 <code>BOS 台</code> 预测“湾”；给 <code>BOS 台湾</code> 预测“大”；给 <code>BOS 台湾大</code> 预测“学”。每一步都用 hidden vector 经过 linear layer 和 softmax，得到下一个 token 的概率分布。</p>
+<p>小交互：训练步如何移动</p>
+<p>训练步<b>1</b></p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+Training objective:
+ maximize P(token_t | token_1, ..., token_{t-1})
+$$
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>给任意一句话，拆出 GPT 的多个 next-token 训练样本。</p>
+        </div>
+      </section>
+      <section id="decoder">
+        <div class="head">
+          <h2>GPT 架构：像 Decoder，但没有 Cross-attention</h2>
+          <span class="tag">decoder-only</span>
+        </div>
+<p>Transformer decoder 原本有 masked self-attention、encoder-decoder cross-attention 和 feed-forward 等部分。GPT 类模型更像 decoder-only：没有 encoder 输入，因此也不需要 cross-attention。它只在已经生成或已经给定的前文上做 masked self-attention。</p>
+<p>保留Masked self-attention、feed-forward、残差、normalization。</p>
+<p>拿掉Encoder-decoder cross-attention，因为没有 encoder 侧输入。</p>
+<p>结果模型只能根据前文建模，天然适合生成。</p>
+      </section>
+      <section id="generate">
+        <div class="head">
+          <h2>生成能力：预测一次，再接回去预测下一次</h2>
+          <span class="tag">generation</span>
+        </div>
+<p>训练完成后，GPT 可以生成文字。给它一段 prompt，它输出下一个 token 的分布。选出一个 token 后，把这个 token 接到 prompt 后面，再预测下一个。不断重复，就能产生句子、段落甚至文章。</p>
+<p>但生成不等于真实。模型学习的是文本分布，可能产生流畅但虚构的内容。理解 GPT 时要同时看到它的强大续写能力和事实可靠性的风险。</p>
+        <div class="box warn">
+<h3>生成时</h3>
+<p>看 prompt 和自己生成的前文，继续预测；错误也可能被接着放大。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释为什么 next-token prediction 可以变成长文本生成。</p>
+        </div>
+      </section>
+      <section id="incontext">
+        <div class="head">
+          <h2>In-context Learning：不改参数，只改上下文</h2>
+          <span class="tag">prompting</span>
+        </div>
+<p>BERT 的典型用法是 fine-tuning：接任务头，使用标注资料更新参数。GPT 也可以这样做，但 GPT 论文中更强调一种更狂的用法：把任务说明和几个范例直接写进 prompt，不做梯度下降，不更新模型参数，让模型从上下文中推断任务格式。</p>
+<p>小交互：zero / one / few-shot prompt</p>
+<p>Zero-shot</p>
+<p>只有任务说明，没有示范。模型要直接根据说明补出答案。</p>
+      </section>
+      <section id="scale">
+        <div class="head">
+          <h2>规模与效果：大模型让 in-context 更像样，但不万能</h2>
+          <span class="tag">scaling</span>
+        </div>
+<p>GPT-3 论文测试了不同大小模型在多任务上的 zero-shot、one-shot、few-shot 表现。总体趋势是模型越大，平均表现越好；few-shot 通常又比 zero-shot 更强。这个结果支持了一个直觉：大规模预训练模型更容易从 prompt 里读懂任务。</p>
+<p>所以 GPT 的野望是：用同一个巨大语言模型，通过上下文完成许多任务。但入门时要记住边界：它不是传统意义上针对每个任务训练过，也不是所有任务都能可靠解决。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释为什么模型变大和示范变多通常提升 in-context 表现，但不能保证所有任务成功。</p>
+        </div>
+      </section>
+      <section id="beyond">
+        <div class="head">
+          <h2>文字之外：视觉和语音也能自监督</h2>
+          <span class="tag">beyond</span>
+        </div>
+<p>课程最后提醒：BERT 和 GPT 只是 self-supervised learning 的一部分，而且主要属于 prediction 路线。自监督学习不只用于文字，也用于 computer vision 和 speech。视觉里有 contrastive learning、BYOL 等方法；语音里可以做“语音版 BERT”：遮住声音片段再预测，也可以做“语音版 GPT”：预测接下来会出现的语音。</p>
+<p>这一段的学习目标是扩展视野：自监督的核心不是文字，而是“能否从资料本身构造任务”。不同模态的任务形式不同，但理念相通。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>把自监督学习迁移到文字以外的资料类型来思考。</p>
+        </div>
+      </section>
+      <section id="share">
+        <div class="head">
+          <h2>公开分享速查：一句话看懂 GPT</h2>
+          <span class="tag">quick</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>核心直觉</h3>
+<p>GPT 的训练任务很窄：永远只问“前文之后最可能出现什么 token”。但如果前文里放入任务说明、格式示范和问题，模型的续写动作就会表现得像在做翻译、分类、摘要或问答。</p>
+<p>所以 GPT 的强项把许多任务都改写成“把后面的文字补出来”。</p>
+        </div>
+        <div class="box warn">
+<h3>Worked example</h3>
+<p>Prompt：<code>情绪分类。句子：这家店再也不去了。答案：</code></p>
+<p>模型在预测“答案：”后最合理的 token。若训练中见过大量类似语言模式，它可能续写“负面”。这就是把分类任务转成语言续写。</p>
+<table class="metric-table">
+<tr><th>术语</th><th>精确定义</th><th>容易混的点</th></tr>
+<tr><td>Next-token prediction</td><td>给定前文，预测词表中下一个 token 的概率分布。</td><td>不是一次生成整篇文章；长文本来自逐步预测并接回上下文。</td></tr>
+<tr><td>Masked self-attention</td><td>当前位置只能看自己之前的 token，不能看未来。</td><td>这里的 mask 是因果遮罩，不是 BERT 那种把词换成 [MASK]。</td></tr>
+<tr><td>In-context learning</td><td>通过 prompt 中的说明和示例让模型完成任务，不更新参数。</td><td>看到 few-shot 不代表做了 fine-tuning；示例只是上下文。</td></tr>
+<tr><td>Zero/one/few-shot</td><td>分别对应不给示例、给一个示例、给多个示例。</td><td>它们描述的是 prompt 里有多少示例，不是训练集大小。</td></tr>
+</table>
+        </div>
+        <div class="box info">
+<h3>小检查表</h3>
+<ul>
+<li>解释 GPT 时，先说训练目标，再说生成循环。</li>
+<li>遇到 prompt 例子，先判断是否更新参数；不更新就是 in-context。</li>
+<li>评价能力时，区分“能续写出格式正确答案”和“答案事实可靠”。</li>
+</ul>
+        </div>
+      </div>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：next-token loss 与 prompt</h2>
+          <span class="tag">minimal</span>
+        </div>
+<p>下面伪代码展示 GPT 训练和 in-context 使用的差别：训练会更新参数，prompt 使用不更新参数。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">tokens = [BOS, "台", "湾", "大", "学"]
+hidden = gpt(tokens[:-1]) # cannot see future tokens
 logits = linear(hidden)
-loss = cross_entropy(logits, tokens[<span class="num">1</span>:])
+loss = cross_entropy(logits, tokens[1:])
 update(gpt.parameters, loss)</code></pre>
-      <div class="codebar"><span class="label">正确示例：in-context use</span><span class="kind">prompt</span></div>
-      <pre><code>Translate English to French.
+<p>正确示例：in-context useprompt</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text">Translate English to French.
 cat =&gt; chat
 dog =&gt; chien
 cheese =&gt;</code></pre>
-      <div class="codebar error"><span class="label">错误示例：把 in-context learning 当成参数更新</span><span class="kind">pseudo</span></div>
-      <pre><code><span class="cmt"># 错误理解：few-shot prompt 会用梯度下降更新 GPT 参数。</span>
+<p>错误示例：把 in-context learning 当成参数更新pseudo</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-3">复制</button></div>
+        <pre id="code-code-3" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误理解：few-shot prompt 会用梯度下降更新 GPT 参数。
 prompt = examples + question
 loss = compute_loss(prompt)
 update(gpt.parameters, loss)
 
-<span class="cmt"># 修正：in-context learning 只改变输入上下文，不改变模型参数。</span></code></pre>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>看一个 GPT 工作流时，判断是否真的训练了模型参数。</p></div>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区与修正</h2><span class="tag">pitfalls</span></div>
+# 修正：in-context learning 只改变输入上下文，不改变模型参数。</code></pre>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与修正</h2>
+          <span class="tag">pitfalls</span>
+        </div>
       <div class="grid2">
-        <div class="box redsoft"><h3>误区 1：GPT 和 BERT 训练目标一样</h3><p>错因：都属于自监督。后果：混淆填空和续写。修法：BERT 做 MLM，GPT 做 next-token prediction。</p></div>
-        <div class="box redsoft"><h3>误区 2：GPT 预测下一个 token 时可以看完整句子</h3><p>错因：忘记 masked self-attention。后果：训练目标变成抄答案。修法：只能看当前位置之前的 token。</p></div>
-        <div class="box redsoft"><h3>误区 3：In-context learning 等于 fine-tuning</h3><p>错因：看到 few-shot 就以为训练。后果：误解参数没有更新。修法：prompt 示例只是上下文，模型参数不变。</p></div>
-        <div class="box redsoft"><h3>误区 4：Zero-shot 表现不好代表 GPT 完全没学会语言</h3><p>错因：把任务说明能力和语言模型能力混为一谈。后果：评价过度。修法：看任务、prompt、模型规模和评估方式。</p></div>
-        <div class="box redsoft"><h3>误区 5：模型越大一定会解决所有推理任务</h3><p>错因：只看 scaling trend。后果：忽略逻辑推理仍可能很差。修法：区分平均提升和具体任务可靠性。</p></div>
-        <div class="box redsoft"><h3>误区 6：自监督学习只属于 NLP</h3><p>错因：本节主要讲 BERT/GPT。后果：忽略视觉和语音应用。修法：抓住“从资料自身造任务”的通用核心。</p></div>
+        <div class="box redsoft">
+<h3>误区 1：GPT 和 BERT 训练目标一样</h3>
+<p>错因：都属于自监督。后果：混淆填空和续写。修法：BERT 做 MLM，GPT 做 next-token prediction。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 2：GPT 预测下一个 token 时可以看完整句子</h3>
+<p>错因：忘记 masked self-attention。后果：训练目标变成抄答案。修法：只能看当前位置之前的 token。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 3：In-context learning 等于 fine-tuning</h3>
+<p>错因：看到 few-shot 就以为训练。后果：误解参数没有更新。修法：prompt 示例只是上下文，模型参数不变。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 4：Zero-shot 表现不好代表 GPT 完全没学会语言</h3>
+<p>错因：把任务说明能力和语言模型能力混为一谈。后果：评价过度。修法：看任务、prompt、模型规模和评估方式。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 5：模型越大一定会解决所有推理任务</h3>
+<p>错因：只看 scaling trend。后果：忽略逻辑推理仍可能很差。修法：区分平均提升和具体任务可靠性。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 6：自监督学习只属于 NLP</h3>
+<p>错因：本节主要讲 BERT/GPT。后果：忽略视觉和语音应用。修法：抓住“从资料自身造任务”的通用核心。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>用“训练目标、注意力可见范围、使用时是否更新参数”三点区分 GPT 和其他模型。</p>
+        </div>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>用“训练目标、注意力可见范围、使用时是否更新参数”三点区分 GPT 和其他模型。</p></div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 questions</span></div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>做题前先抓住主线</strong><p>P25 的核心是：GPT 用 next-token prediction 训练 decoder-only LM，再通过 prompt 做生成和 in-context learning。</p></div>
-        <div class="review-card"><strong>自检重点</strong><ul><li>能不能拆 next-token 样本？</li><li>能不能解释 masked self-attention？</li><li>能不能区分 few-shot prompt 与 fine-tuning？</li></ul></div>
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>A. GPT 训练目标</h3></div>
+          <div class="quick-review">quick review GPT 看前文预测下一个 token；每一步都是词表分类；target 来自原文本。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 1. 用自己的话解释 GPT 的 next-token prediction。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">拆解</span></div>
+        <h3><b>Q:</b> 2. 对句子“台湾大学”，列出前两个 GPT 训练步。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 3. GPT 更像 Transformer 的哪一部分？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="Decoder-only，去掉 cross-attention。">Decoder-only，去掉 cross-attention。</label>
+      <label><input type="radio" name="q?" value="Encoder-only，和 BERT 完全一样。">Encoder-only，和 BERT 完全一样。</label>
+      <label><input type="radio" name="q?" value="GAN generator。">GAN generator。</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>A. GPT 训练目标</h3><p>先检查你是否能把自回归训练讲清。</p></div><div class="quick-review"><b>quick review</b>GPT 看前文预测下一个 token；每一步都是词表分类；target 来自原文本。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="1"><div class="q-meta"><span class="pill">简答</span><span class="pill">next-token</span></div><h3>1. 用自己的话解释 GPT 的 next-token prediction。</h3><textarea data-answer="true" placeholder="写出：给前文，预测下一个 token。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="2"><div class="q-meta"><span class="pill">拆解</span><span class="pill">训练样本</span></div><h3>2. 对句子“台湾大学”，列出前两个 GPT 训练步。</h3><textarea data-answer="true" placeholder="例如 BOS -> 台；BOS 台 -> 湾。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="3"><div class="q-meta"><span class="pill">选择</span><span class="pill">架构</span></div><h3>3. GPT 更像 Transformer 的哪一部分？</h3><div class="choices"><label><input type="radio" name="q3" value="a">Decoder-only，去掉 cross-attention。</label><label><input type="radio" name="q3" value="b">Encoder-only，和 BERT 完全一样。</label><label><input type="radio" name="q3" value="c">GAN generator。</label></div></div>
-          <div class="q" data-role="homework" data-qid="4"><div class="q-meta"><span class="pill">解释</span><span class="pill">mask</span></div><h3>4. GPT 为什么需要 masked self-attention？</h3><textarea data-answer="true" placeholder="说明预测时不能看未来 token。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="5"><div class="q-meta"><span class="pill">辨析</span><span class="pill">BERT/GPT</span></div><h3>5. BERT 的 MLM 和 GPT 的 next-token prediction 有什么核心差异？</h3><textarea data-answer="true" placeholder="BERT 看左右文填空；GPT 看前文续写。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="6"><div class="q-meta"><span class="pill">生成</span><span class="pill">循环</span></div><h3>6. 为什么预测下一个 token 的模型可以生成长文章？</h3><textarea data-answer="true" placeholder="说明生成 token 接回上下文再继续预测。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 4. GPT 为什么需要 masked self-attention？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">辨析</span></div>
+        <h3><b>Q:</b> 5. BERT 的 MLM 和 GPT 的 next-token prediction 有什么核心差异？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">生成</span></div>
+        <h3><b>Q:</b> 6. 为什么预测下一个 token 的模型可以生成长文章？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>B. In-context Learning</h3><p>检查你是否能区分 prompt 使用和参数训练。</p></div><div class="quick-review"><b>quick review</b>Zero-shot 只有说明；one-shot 有一个例子；few-shot 有多个例子。In-context 不做梯度更新。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="7"><div class="q-meta"><span class="pill">简答</span><span class="pill">定义</span></div><h3>7. 什么是 in-context learning？它和 fine-tuning 最大差别是什么？</h3><textarea data-answer="true" placeholder="写出是否更新模型参数。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="8"><div class="q-meta"><span class="pill">选择</span><span class="pill">few-shot</span></div><h3>8. Prompt 里给了 5 个英法翻译例子，再让 GPT 翻译 cheese。这属于什么？</h3><div class="choices"><label><input type="radio" name="q8" value="a">Few-shot in-context learning。</label><label><input type="radio" name="q8" value="b">从头预训练。</label><label><input type="radio" name="q8" value="c">WGAN 训练。</label></div></div>
-          <div class="q" data-role="homework" data-qid="9"><div class="q-meta"><span class="pill">对比</span><span class="pill">shots</span></div><h3>9. Zero-shot、one-shot、few-shot 分别给模型什么信息？</h3><textarea data-answer="true" placeholder="分别写出说明和例子数量。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="10"><div class="q-meta"><span class="pill">诊断</span><span class="pill">错误示例</span></div><h3>10. 错误示例：few-shot prompt 会通过 gradient descent 更新 GPT 参数。指出问题。</h3><textarea data-answer="true" placeholder="问题：...；正确理解：..."></textarea></div>
-          <div class="q" data-role="homework" data-qid="11"><div class="q-meta"><span class="pill">解释</span><span class="pill">任务说明</span></div><h3>11. 为什么 GPT 可以把“Translate English to French...”当成任务说明？</h3><textarea data-answer="true" placeholder="从它把整段 prompt 当上下文续写回答。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="12"><div class="q-meta"><span class="pill">边界</span><span class="pill">可靠性</span></div><h3>12. 为什么 in-context learning 表现提升不等于所有任务都可靠解决？</h3><textarea data-answer="true" placeholder="从任务差异、逻辑推理、平均正确率回答。"></textarea></div>
+        <div class="group-head">
+          <div><h3>B. In-context Learning</h3></div>
+          <div class="quick-review">quick review Zero-shot 只有说明；one-shot 有一个例子；few-shot 有多个例子。In-context 不做梯度更新。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 7. 什么是 in-context learning？它和 fine-tuning 最大差别是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 8. Prompt 里给了 5 个英法翻译例子，再让 GPT 翻译 cheese。这属于什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="Few-shot in-context learning。">Few-shot in-context learning。</label>
+      <label><input type="radio" name="q?" value="从头预训练。">从头预训练。</label>
+      <label><input type="radio" name="q?" value="WGAN 训练。">WGAN 训练。</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>C. 扩展与边界</h3><p>最后检查你是否能把自监督思想迁移到文字之外。</p></div><div class="quick-review"><b>quick review</b>BERT/GPT 只是 prediction 路线的一部分；视觉和语音也能做自监督任务。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="13"><div class="q-meta"><span class="pill">简答</span><span class="pill">scale</span></div><h3>13. GPT-3 实验中，模型规模变大和 few-shot 示例对表现有什么总体影响？</h3><textarea data-answer="true" placeholder="写出一般趋势和边界。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="14"><div class="q-meta"><span class="pill">应用</span><span class="pill">语音</span></div><h3>14. 如何设计一个“语音版 BERT”的自监督任务？</h3><textarea data-answer="true" placeholder="例如遮住一段语音，让模型预测被遮住部分。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="15"><div class="q-meta"><span class="pill">应用</span><span class="pill">语音 GPT</span></div><h3>15. 如何设计一个“语音版 GPT”的自监督任务？</h3><textarea data-answer="true" placeholder="例如预测接下来会出现的语音讯号。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="16"><div class="q-meta"><span class="pill">Benchmark</span><span class="pill">SUPERB</span></div><h3>16. SUPERB 这类 benchmark 想评估语音模型的哪些面向？</h3><textarea data-answer="true" placeholder="内容、说话人、语气、语义等。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="17"><div class="q-meta"><span class="pill">总结</span><span class="pill">自监督</span></div><h3>17. 为什么说 BERT/GPT 只是 self-supervised learning 的一小块？</h3><textarea data-answer="true" placeholder="从其他路线、视觉、语音回答。"></textarea></div>
-          <div class="q full" data-role="homework" data-qid="18"><div class="q-meta"><span class="pill">费曼题</span><span class="pill">完整主线</span></div><h3>18. 费曼题：用 260-420 字讲清 P25：GPT 如何用 next-token prediction 自监督训练，为什么像 decoder-only，如何生成文字，in-context learning 与 fine-tuning 有何不同，zero/one/few-shot 如何工作，以及自监督如何扩展到视觉和语音。</h3><textarea data-answer="true" placeholder="要求：讲成因果链，不要只列术语。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对比</span></div>
+        <h3><b>Q:</b> 9. Zero-shot、one-shot、few-shot 分别给模型什么信息？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 10. 错误示例：few-shot prompt 会通过 gradient descent 更新 GPT 参数。指出问题。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 11. 为什么 GPT 可以把“Translate English to French...”当成任务说明？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">边界</span></div>
+        <h3><b>Q:</b> 12. 为什么 in-context learning 表现提升不等于所有任务都可靠解决？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>D. 低摩擦核对与迁移</h3><p>用很短的判断题确认边界，再把 GPT 思路迁移到新任务。</p></div><div class="quick-review"><b>quick review</b>先问“是否更新参数”，再问“任务是否被写成续写”。</div></div>
+        <div class="group-head">
+          <div><h3>C. 扩展与边界</h3></div>
+          <div class="quick-review">quick review BERT/GPT 只是 prediction 路线的一部分；视觉和语音也能做自监督任务。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="19"><div class="q-meta"><span class="pill">判断</span><span class="pill">低摩擦</span></div><h3>19. Prompt 里给 3 个示例，但没有梯度下降。这是 fine-tuning 吗？</h3><div class="choices"><label><input type="radio" name="q19" value="不是，这是 few-shot in-context learning。">不是，这是 few-shot in-context learning。</label><label><input type="radio" name="q19" value="是，因为有 3 个训练样本。">是，因为有 3 个训练样本。</label></div></div>
-          <div class="q" data-role="homework" data-qid="20"><div class="q-meta"><span class="pill">填空</span><span class="pill">低摩擦</span></div><h3>20. GPT 训练时不能看未来 token，这个限制由什么机制实现？</h3><input type="text" data-answer="true" placeholder="写出一个术语即可。"></div>
-          <div class="q" data-role="homework" data-qid="21"><div class="q-meta"><span class="pill">迁移</span><span class="pill">任务改写</span></div><h3>21. 把“判断一句客服留言是否需要人工介入”改写成 GPT 可续写的 prompt。</h3><textarea data-answer="true" placeholder="至少包含任务说明、可选答案格式和一条待判断留言。"></textarea></div>
-          <div class="q" data-role="homework" data-qid="22"><div class="q-meta"><span class="pill">迁移</span><span class="pill">风险</span></div><h3>22. 这个客服 prompt 即使能跑，仍然要检查哪两类风险？</h3><textarea data-answer="true" placeholder="例如事实/语义误判、边界样本、格式漂移、敏感场景误放行。"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 13. GPT-3 实验中，模型规模变大和 few-shot 示例对表现有什么总体影响？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">应用</span></div>
+        <h3><b>Q:</b> 14. 如何设计一个“语音版 BERT”的自监督任务？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">应用</span></div>
+        <h3><b>Q:</b> 15. 如何设计一个“语音版 GPT”的自监督任务？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Benchmark</span></div>
+        <h3><b>Q:</b> 16. SUPERB 这类 benchmark 想评估语音模型的哪些面向？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">总结</span></div>
+        <h3><b>Q:</b> 17. 为什么说 BERT/GPT 只是 self-supervised learning 的一小块？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼题</span></div>
+        <h3><b>Q:</b> 18. 费曼题：用 260-420 字讲清 P25：GPT 如何用 next-token prediction 自监督训练，为什么像 decoder-only，如何生成文字，in-context learning 与 fine-tuning 有何不同，zero/one/few-shot 如何工作，以及自监督如何扩展到视觉和语音。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>D. 低摩擦核对与迁移</h3></div>
+          <div class="quick-review">quick review 先问“是否更新参数”，再问“任务是否被写成续写”。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 19. Prompt 里给 3 个示例，但没有梯度下降。这是 fine-tuning 吗？</h3>
 
+      <div class="choices">
+      <label><input type="radio" name="q?" value="不是，这是 few-shot in-context learning。">不是，这是 few-shot in-context learning。</label>
+      <label><input type="radio" name="q?" value="是，因为有 3 个训练样本。">是，因为有 3 个训练样本。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 20. GPT 训练时不能看未来 token，这个限制由什么机制实现？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 21. 把“判断一句客服留言是否需要人工介入”改写成 GPT 可续写的 prompt。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 22. 这个客服 prompt 即使能跑，仍然要检查哪两类风险？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>生成练习记录</h2><span class="tag">record</span></div>
-      <p>完成练习后生成 Markdown 记录。建议标出你最容易混的点：next-token、masked attention、few-shot、in-context 或 fine-tuning。</p>
-      <div class="quality" id="qualityBox"></div>
-      <div class="answer" id="answerBox">还没有生成记录。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" onclick="generateRecord()">生成记录</button>
-        <button type="button" class="ghost" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-  const $ = (id) => document.getElementById(id);
+      </ul>
+    </section>
+  </article>
 
-  function updateProgress(){
-    const h = document.documentElement;
-    const max = h.scrollHeight - h.clientHeight;
-    const pct = max > 0 ? h.scrollTop / max * 100 : 0;
-    $("readProgress").style.width = pct + "%";
-  }
-  document.addEventListener("scroll", updateProgress, {passive:true});
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-  const chars = ["台","湾","大","学"];
-  function renderNext(){
-    const step = Number($("stepSlider").value);
-    $("stepOut").textContent = String(step + 1);
-    const seen = ["BOS"].concat(chars.slice(0, step));
-    const target = chars[step];
-    const future = chars.slice(step + 1);
-    $("nextTokens").innerHTML = [
-      ...seen.map(x => `<span class="tok">${x}</span>`),
-      `<span class="tok next">target: ${target}</span>`,
-      ...future.map(x => `<span class="tok future">${x}</span>`)
-    ].join("");
-    $("nextTitle").textContent = `预测 ${target}`;
-    $("nextText").textContent = `模型看到 ${seen.join(" ")}，目标是预测“${target}”。后面的 token 在这一训练步不可见。`;
-  }
-
-  const prompts = {
-    zero: {
-      title:"Zero-shot",
-      text:"只有任务说明，没有示范。模型要直接根据说明补出答案。",
-      body:"Translate English to French.\ncheese =>"
-    },
-    one: {
-      title:"One-shot",
-      text:"给一个示范，模型从一个例子里推断输出格式和任务。",
-      body:"Translate English to French.\ncat => chat\ncheese =>"
-    },
-    few: {
-      title:"Few-shot",
-      text:"给多个示范，任务格式更明确，通常比 zero-shot 稳定。",
-      body:"Translate English to French.\ncat => chat\ndog => chien\napple => pomme\ncheese =>"
-    }
-  };
-  function renderPrompt(mode){
-    document.querySelectorAll(".tabs button").forEach(btn => btn.classList.toggle("active", btn.dataset.shot === mode));
-    $("promptTitle").textContent = prompts[mode].title;
-    $("promptText").textContent = prompts[mode].text;
-    $("promptBox").textContent = prompts[mode].body;
-  }
-
-  $("stepSlider").addEventListener("input", renderNext);
-  document.querySelectorAll(".tabs button").forEach(btn => btn.addEventListener("click", () => renderPrompt(btn.dataset.shot)));
-  renderNext();
-  renderPrompt("zero");
-
-  function collectAnswer(q){
-    const checked = q.querySelector("input[type=radio]:checked, input[type=checkbox]:checked");
-    const text = Array.from(q.querySelectorAll("textarea[data-answer], input[type=text][data-answer]")).map(el => el.value.trim()).filter(Boolean).join("\n");
-    if(checked && text) return `${checked.parentElement.textContent.trim()}\n${text}`;
-    if(checked) return checked.parentElement.textContent.trim();
-    if(text) return text;
-    return "（未作答）";
-  }
-
-  function generateRecord(){
-    const blocks = Array.from(document.querySelectorAll('[data-role="homework"]'));
-    const lines = [];
-    let empty = 0;
-    lines.push("# P25 GPT 的野望｜练习记录");
-    lines.push("");
-    lines.push(`生成时间：${new Date().toLocaleString()}`);
-    lines.push("");
-    blocks.forEach((q, idx) => {
-      const title = q.querySelector("h3").innerText.replace(/\s+/g, " ").trim();
-      const ans = collectAnswer(q);
-      if(ans === "（未作答）") empty++;
-      lines.push(`## ${idx + 1}. ${title}`);
-      lines.push(ans);
-      lines.push("");
-    });
-    const feynmanCard = blocks.find(q => /费曼题/.test(q.querySelector("h3")?.innerText || "")) || blocks[blocks.length - 1];
-    const feynman = feynmanCard.querySelector("textarea")?.value.trim() || "";
-    const notes = [];
-    if(empty > 0) notes.push(`还有 ${empty} 题未作答。`);
-    if(feynman.length > 0 && feynman.length < 180) notes.push("费曼题偏短，建议补上 next-token、decoder、in-context 和跨模态自监督的完整链路。");
-    if(!/next|token|预测|下一个|自回归/i.test(feynman)) notes.push("费曼题里建议明确写出 next-token prediction。");
-    if(!/decoder|mask|attention|未来/i.test(feynman)) notes.push("费曼题里建议明确写出 decoder-only 与 masked self-attention。");
-    if(!/context|prompt|few|zero|one|微调|fine/i.test(feynman)) notes.push("费曼题里建议明确写出 in-context learning 与 fine-tuning 的区别。");
-    $("qualityBox").style.display = notes.length ? "block" : "none";
-    $("qualityBox").textContent = notes.join("\n");
-    $("answerBox").textContent = lines.join("\n");
-  }
-
-  function copyRecord(){
-    navigator.clipboard.writeText($("answerBox").textContent);
-  }
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

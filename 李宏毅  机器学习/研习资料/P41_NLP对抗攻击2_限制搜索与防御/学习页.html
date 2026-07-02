@@ -4,473 +4,517 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P41｜NLP 对抗攻击 2：限制、搜索与防御</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="NLP adversarial constraint,Levenshtein distance,POS consistency,perplexity,semantic similarity,greedy search,word importance ranking,TextFooler,BERT-Attack,universal trigger">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>限制、搜索与防御</strong><span>P41。攻击样本不只要骗模型，还要像一个合理句子。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#constraint"><span class="dot"></span>Constraint</a>
-      <a href="#overlap"><span class="dot"></span>Overlap</a>
-      <a href="#grammar"><span class="dot"></span>Grammar</a>
-      <a href="#semantic"><span class="dot"></span>Semantic</a>
-      <a href="#viz"><span class="dot"></span>阈值交互</a>
-      <a href="#search"><span class="dot"></span>Search</a>
-      <a href="#methods"><span class="dot"></span>经典方法</a>
-      <a href="#trigger"><span class="dot"></span>Universal Trigger</a>
-      <a href="#defense"><span class="dot"></span>防御与评估</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：如果 constraint 不可靠，攻击可能只是骗过了约束模型，而不是找到真正合理的对抗样本。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P41</div>
-        <h1>文本攻击最难的，不是改字，而是改得合理</h1>
-        <p>P38 讲了 NLP 对抗样本的 goal 和 transformation。P41 续上剩下两件事：constraint 和 search method。constraint 决定一个改写是否仍然合理，例如字面改动不能太多、文法要对、语义要接近。search method 决定如何在大量候选改写中找出既满足限制、又能让模型失败的句子。</p>
-        <p>这一节还整合几个经典方法：TextFooler、BERT-Attack、universal adversarial trigger，并讨论防御。最关键的反思是：文本攻击的评估很依赖语义相似度模型、文法检查器等外部工具；如果这些工具不可靠，我们可能误以为攻击成功，其实只是生成了不合理句子。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>说出 NLP 对抗样本常见 constraint。</li>
-          <li>解释 Levenshtein、POS、perplexity、semantic similarity 的角色。</li>
-          <li>比较 greedy search、importance ranking、genetic algorithm。</li>
-          <li>概括 TextFooler、BERT-Attack 和 universal trigger。</li>
-          <li>说明 NLP 攻击防御与评估为什么困难。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
-      <p>一个合格 NLP adversarial example 不是“模型错了就好”。它必须满足任务相关限制：如果任务要求语义保持，改写后语义不能变；如果文法重要，句子不能明显不通；如果要求小改动，overlap 或 edit distance 要受控。</p>
-      <p>search method 则处理组合爆炸。一个句子有很多位置，每个位置有很多候选词，全部穷举不可行。于是常用 greedy、word importance ranking、beam search、genetic algorithm 等近似方法。</p>
-      <div class="map">
-        <span class="node">候选改写</span>
-        <span class="node">限制过滤</span>
-        <span class="node">重要性排序</span>
-        <span class="node">搜索组合</span>
-        <span class="node">防御评估</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P41</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把 P41 理解成：在“骗模型”和“保持合理文本”之间做搜索。</p></div>
-    </section>
-
-    <section id="constraint">
-      <div class="head"><h2>Constraint：什么样的改写才算合理</h2><span class="tag">CONSTRAINT</span></div>
-      <p>constraint 和任务 goal 强相关。情感分类通常要求语义和情绪保持；句法任务要求结构不变；某些任务还要求文法正确、改动比例低、词性一致。没有 constraint，攻击可以把负面评论直接改成正面句子，那模型判断变化就不再说明脆弱性。</p>
-      <p>课程中 constraint 大致分三类：overlap，检查改动幅度；grammar，检查文法和词性；semantic similarity，检查语义相似。它们都只是近似，不能完全替代人类判断。</p>
-      <div class="grid3">
-        <div class="box info"><h3>Overlap</h3><p>改了多少字符或词，改动比例是否过大。</p></div>
-        <div class="box info"><h3>Grammar</h3><p>词性是否一致，句子是否符合文法。</p></div>
-        <div class="box info"><h3>Semantics</h3><p>原句和改写后句子语义是否足够接近。</p></div>
+      <h1 class="hero-title">P41｜NLP 对抗攻击 2：限制、搜索与防御</h1>
+      <p class="hero-desc">P38 讲了 NLP 对抗样本的 goal 和 transformation。P41 续上剩下两件事：constraint 和 search method。constraint 决定一个改写是否仍然合理，例如字面改动不能太多、文法要对、语义要接近。search method 决定如何在大量候选改写中找出既满足限制、又能让模型失败的句子。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P40_对抗攻击2_黑箱攻击与防御/学习页.html">上一节</a>
+            <a href="../P42_NLP对抗攻击3_生成式攻击与防御/学习页.html">下一节</a>
       </div>
-      <p><strong>现在你应该能做什么：</strong>看到一个攻击样本时，先问它满足哪些 constraint，而不是只看模型是否被攻破。</p>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="overlap">
-      <div class="head"><h2>Overlap：改动幅度不能太大</h2><span class="tag">OVERLAP</span></div>
-      <p>character-level 扰动常用 Levenshtein distance，也就是 edit distance。它衡量从一个字符串变到另一个字符串需要多少次插入、删除、替换等操作。例如 <code>kitten</code> 到另一个字符串的距离可以用递归或动态规划计算。</p>
-      <p>word-level 攻击常用更改词比例，例如总共 5 个词改了 1 个，就有 20% 的词被扰动。这个比例越低，通常越符合“小改动”的要求。但它也不保证语义保持：改掉一个关键否定词，比例很低，语义却可能完全反转。</p>
-      <table class="metric-table">
-        <tr><th>指标</th><th>适合场景</th><th>局限</th></tr>
-        <tr><td>Levenshtein distance</td><td>字符级 swap、delete、insert、substitute。</td><td>只看字面编辑，不懂语义。</td></tr>
-        <tr><td>修改词比例</td><td>word-level substitution。</td><td>少量关键改动也可能改变标签。</td></tr>
-      </table>
-      <p><strong>现在你应该能做什么：</strong>解释为什么 overlap 是必要但不充分的限制。</p>
-    </section>
+        </ul>
+      </div>
+    </div>
+  </header>
 
-    <section id="grammar">
-      <div class="head"><h2>Grammar：词性和文法要撑得住</h2><span class="tag">GRAMMAR</span></div>
-      <p>POS consistency 检查替换前后词性是否一致。例如 <code>recommend</code> 是动词，替换成 <code>advocate</code> 仍是动词，通常比较合理；替换成 <code>recommendation</code> 变成名词，句子 <code>I highly recommendation it</code> 明显不通。</p>
-      <p>词性一致还可以更严格：都是动词是否还要保持时态一致？这取决于任务和 constraint 设计。若时态变化会造成文法错误，就应更严格。</p>
-      <p>另一类方法是使用 LanguageTool 之类文法检查器，或用 language model 的 perplexity 衡量句子自然度。perplexity 越高通常表示句子越不自然，但不同工具、阈值和语言模型都会影响结果。</p>
-      <p><strong>现在你应该能做什么：</strong>判断一个替换是否违反文法，并能说出 POS 检查和 perplexity 检查各自的作用。</p>
-    </section>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#constraint">Constraint：什么样的改写才算合理</a>
+      <a href="#overlap">Overlap：改动幅度不能太大</a>
+      <a href="#grammar">Grammar：词性和文法要撑得住</a>
+      <a href="#semantic">Semantic Similarity：最关键，也最危险的限制</a>
+      <a href="#viz">动手观察：阈值一改，合格样本就变了</a>
+      <a href="#search">Search Method：在候选组合里找成功路径</a>
+      <a href="#methods">经典方法：TextFooler 与 BERT-Attack</a>
+      <a href="#trigger">Universal Trigger：一句固定触发词，攻击很多输入</a>
+      <a href="#defense">防御与评估：攻击有用，但评估要谨慎</a>
+      <a href="#code">最小代码：约束过滤 + 重要性搜索</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
 
-    <section id="semantic">
-      <div class="head"><h2>Semantic Similarity：最关键，也最危险的限制</h2><span class="tag">SEMANTICS</span></div>
-      <p>许多任务要求改写后语义保持。简单做法是比较被替换词在 embedding space 的距离，例如 cosine similarity；更常见的是用 Universal Sentence Encoder 等 sentence encoder，把原句和改写句编码成向量，再计算句向量相似度。</p>
-      <p>难点在于阈值。阈值太低，会放过语义明显变化的句子；阈值太高，会过滤掉许多合理改写，攻击成功率下降。更深的问题是：sentence encoder 本身也可能被攻击或误判。若我们用一个不可靠的语义模型做 constraint，最后可能只是骗过了 constraint model。</p>
-      <div class="box redsoft"><h3>关键警告</h3><p>“语义相似度高”是模型判断，不是人类真理。报告 NLP 攻击时，最好结合人工评估或更严格的多指标检查。</p></div>
-      <p><strong>现在你应该能做什么：</strong>解释为什么 semantic similarity 是 NLP 攻击评估中最重要、也最容易出问题的一环。</p>
-    </section>
-
-    <section id="viz">
-      <div class="head"><h2>动手观察：阈值一改，合格样本就变了</h2><span class="tag">INTERACTIVE</span></div>
-      <p>下面模拟三个候选改写。你可以调节语义相似度阈值，观察哪些候选会被 constraint 接受。注意：攻击潜力高但语义不稳的候选，未必是合格样本。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div id="candidateList"></div>
-          <div>
-            <div class="slider-row"><label for="semTh">语义阈值</label><input id="semTh" type="range" min="0.50" max="0.95" step="0.01" value="0.82"><span id="semThVal">0.82</span></div>
-            <div class="slider-row"><label for="editTh">最大改词率</label><input id="editTh" type="range" min="0.10" max="0.60" step="0.01" value="0.30"><span id="editThVal">0.30</span></div>
-            <div class="barrow"><span>通过数量</span><div class="bar"><div class="fill green" id="passBar"></div></div><span id="passVal">0</span></div>
-            <p class="viz-note" id="constraintNote">阈值不是纯技术细节，它会直接改变攻击样本质量和成功率。</p>
-          </div>
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">MAP</span>
         </div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>说明 constraint threshold 会同时影响攻击成功率和样本可信度。</p>
-    </section>
-
-    <section id="search">
-      <div class="head"><h2>Search Method：在候选组合里找成功路径</h2><span class="tag">SEARCH</span></div>
-      <p>最简单的 greedy search 会枚举候选 perturbation，测试每个候选让模型输出变化多少，选择最强的那个替换。如果攻击还没成功，就继续选择下一个候选。它直接、易实现，但可能陷入局部最优。</p>
-      <p>更常用的是 greedy search with word importance ranking。先估计每个词对模型判断的重要性，例如删掉或替换该词后目标类别概率变化多少；再优先攻击最重要的词。这样搜索空间更小，攻击效率更高。</p>
-      <p>genetic algorithm 则把一句改写看成一个个体，通过选择、交叉、突变逐步进化出成功样本。它搜索能力强，但通常很慢。beam search 也有人使用，可以保留多个候选路径，但 beam 越大计算成本越高。</p>
-      <table class="metric-table">
-        <tr><th>方法</th><th>直觉</th><th>优缺点</th></tr>
-        <tr><td>Greedy</td><td>每步选当前最强候选。</td><td>快，但可能局部最优。</td></tr>
-        <tr><td>Importance ranking</td><td>先攻击最重要的词。</td><td>常用，效率好。</td></tr>
-        <tr><td>Beam search</td><td>保留多个候选路径。</td><td>更全面但更贵。</td></tr>
-        <tr><td>Genetic algorithm</td><td>用进化方式搜索句子。</td><td>慢，但能探索复杂组合。</td></tr>
-      </table>
-      <p><strong>现在你应该能做什么：</strong>解释为什么 NLP 攻击需要 search method，而不能只生成候选就结束。</p>
-    </section>
-
-    <section id="methods">
-      <div class="head"><h2>经典方法：TextFooler 与 BERT-Attack</h2><span class="tag">METHODS</span></div>
-      <p>TextFooler 的典型流程是：先计算词重要性；对重要词产生候选替换；用 POS、语义相似度等 constraint 过滤；再用 greedy search 逐步替换，直到模型预测改变。它代表了“word-level substitution + importance ranking + constraints”的经典路线。</p>
-      <p>BERT-Attack 则使用 BERT 产生候选替换。它会考虑上下文，让候选更自然；但仍需要 constraint 检查，避免语言模型给出语境合理但语义偏移的词。课程强调，BERT 不是魔法，候选生成和语义保持仍是两回事。</p>
-      <div class="grid2">
-        <div class="box info"><h3>TextFooler</h3><p>重点在词重要性排序、同义候选、POS 与句向量相似度过滤。</p></div>
-        <div class="box warn"><h3>BERT-Attack</h3><p>重点在上下文化候选生成，但仍需过滤和搜索。</p></div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>把 TextFooler 和 BERT-Attack 都拆回四要素框架中说明。</p>
-    </section>
-
-    <section id="trigger">
-      <div class="head"><h2>Universal Trigger：一句固定触发词，攻击很多输入</h2><span class="tag">TRIGGER</span></div>
-      <p>universal adversarial trigger 是一种固定字符串。把它加到很多不同输入前面或后面，都能让模型朝攻击者希望的方向输出。它像图像中的 universal perturbation，只是作用在文本上。</p>
-      <p>训练 trigger 时，可以初始化一串 token，然后把带 trigger 的样本丢进模型，计算目标 loss，再对 trigger token 的 embedding 做梯度，选择能让目标 loss 下降最多的替换 token。反复更新后，就得到一个通用触发字符串。</p>
-      <p>这个想法和 prompt/prefix tuning 有相似结构：固定模型，通过学习一个 prefix 改变模型行为。不同点是，prefix tuning 用于让模型完成好任务；universal trigger 则用于诱导不希望的输出。</p>
-      <p><strong>现在你应该能做什么：</strong>解释 universal trigger 为什么危险，以及它和 prompt tuning 的结构相似处。</p>
-    </section>
-
-    <section id="defense">
-      <div class="head"><h2>防御与评估：攻击有用，但评估要谨慎</h2><span class="tag">DEFENSE</span></div>
-      <p>NLP defense 常见路线包括 adversarial training、data augmentation、拼写修正、输入检测、模型鲁棒性增强等。核心思想和图像类似：用攻击样本暴露 failure mode，再把这些困难样本用于训练或测试。</p>
-      <p>但 NLP 评估更依赖人类语义。一个攻击若把 fake news 改成真正不像原句的内容，即使骗过模型，也不能说明模型脆弱。课程问答中也强调：攻击样本最重要的价值之一，是帮助模型部署者发现 failure mode，例如模型依赖罕见词、拼写、伪相关或语义相似度工具的漏洞。</p>
-      <p>所以好的评估应该同时报告 attack success rate、修改比例、语义相似度、文法指标、人工评估结果，以及在防御后的 clean accuracy 和 robust accuracy。只报告攻击成功率是不够的。</p>
-      <table class="metric-table">
-        <tr><th>指标</th><th>看什么</th><th>为什么重要</th></tr>
-        <tr><td>Attack success rate</td><td>模型被攻破比例。</td><td>衡量攻击强度。</td></tr>
-        <tr><td>Modification rate</td><td>改动多少词或字符。</td><td>衡量扰动大小。</td></tr>
-        <tr><td>Semantic similarity</td><td>语义是否保持。</td><td>避免伪攻击。</td></tr>
-        <tr><td>Human evaluation</td><td>人类是否认可改写。</td><td>弥补自动指标缺陷。</td></tr>
-        <tr><td>Clean / robust accuracy</td><td>正常与攻击输入表现。</td><td>评估防御是否牺牲正常性能。</td></tr>
-      </table>
-      <p><strong>现在你应该能做什么：</strong>设计 NLP 攻击评估时，不只看成功率，还会检查样本质量和防御后的准确率权衡。</p>
-    </section>
-
-    <section id="code">
-      <div class="head"><h2>最小代码：约束过滤 + 重要性搜索</h2><span class="tag">CODE</span></div>
-      <p>下面是一个简化版 TextFooler 风格流程：先给词排序，再逐个尝试候选替换，过滤不合格样本，最后选择最能降低正确类概率的候选。</p>
-      <div class="codebar"><span class="label">正确示例：importance ranking + constraints</span><span class="kind">Python-like</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">attack_sentence</span>(model, sentence, label):
-    ranking = rank_words_by_importance(model, sentence, label)
-    current = sentence
-    <span class="kw">for</span> pos <span class="kw">in</span> ranking:
-        candidates = generate_substitutes(current, pos)
-        valid = []
-        <span class="kw">for</span> cand <span class="kw">in</span> candidates:
-            <span class="kw">if</span> same_pos(current, cand, pos) <span class="kw">and</span> semantic_sim(sentence, cand) &gt; <span class="num">0.82</span>:
-                valid.append(cand)
-        current = pick_best_by_model_score(model, valid, label)
-        <span class="kw">if</span> model.predict(current) != label:
-            <span class="kw">return</span> current
-    <span class="kw">return</span> None</code></pre>
-      <div class="codebar error"><span class="label">错误示例：只用语义模型，不做人类检查</span><span class="kind">Evaluation bug</span></div>
-      <pre><code><span class="cmt"># 错误示例：相似度模型给高分，就直接断言语义一定保持。</span>
-<span class="kw">if</span> semantic_sim(original, proposal) &gt; <span class="num">0.82</span>:
-    accept(proposal)</code></pre>
-      <p>自动相似度只是近似。尤其当研究目标是证明模型脆弱时，需要更谨慎地验证 proposal 是否真的保持人类标签。</p>
-      <p><strong>现在你应该能做什么：</strong>读懂一个 NLP 攻击算法的流程，并指出 constraint 和 search 分别在哪一步起作用。</p>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+<p>一个合格 NLP adversarial example 不是“模型错了就好”。它必须满足任务相关限制：如果任务要求语义保持，改写后语义不能变；如果文法重要，句子不能明显不通；如果要求小改动，overlap 或 edit distance 要受控。</p>
+<p>候选改写</p>
+<p>限制过滤</p>
+<p>重要性排序</p>
+<p>搜索组合</p>
+<p>防御评估</p>
+      </section>
+      <section id="constraint">
+        <div class="head">
+          <h2>Constraint：什么样的改写才算合理</h2>
+          <span class="tag">CONSTRAINT</span>
+        </div>
+<p>constraint 和任务 goal 强相关。情感分类通常要求语义和情绪保持；句法任务要求结构不变；某些任务还要求文法正确、改动比例低、词性一致。没有 constraint，攻击可以把负面评论直接改成正面句子，那模型判断变化就不再说明脆弱性。</p>
+<p>Overlap改了多少字符或词，改动比例是否过大。</p>
+<p>Grammar词性是否一致，句子是否符合文法。</p>
+<p>Semantics原句和改写后句子语义是否足够接近。</p>
+      </section>
+      <section id="overlap">
+        <div class="head">
+          <h2>Overlap：改动幅度不能太大</h2>
+          <span class="tag">OVERLAP</span>
+        </div>
+<p>character-level 扰动常用 Levenshtein distance，也就是 edit distance。它衡量从一个字符串变到另一个字符串需要多少次插入、删除、替换等操作。例如 <code>kitten</code> 到另一个字符串的距离可以用递归或动态规划计算。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>指标</th><th>适合场景</th><th>局限</th></tr>
+<tr><td>Levenshtein distance</td><td>字符级 swap、delete、insert、substitute。</td><td>只看字面编辑，不懂语义。</td></tr><tr><td>修改词比例</td><td>word-level substitution。</td><td>少量关键改动也可能改变标签。</td></tr>
+        </table></div>
+<p><b>现在你应该能做什么：</b>解释为什么 overlap 是必要但不充分的限制。</p>
+      </section>
+      <section id="grammar">
+        <div class="head">
+          <h2>Grammar：词性和文法要撑得住</h2>
+          <span class="tag">GRAMMAR</span>
+        </div>
+<p>POS consistency 检查替换前后词性是否一致。例如 <code>recommend</code> 是动词，替换成 <code>advocate</code> 仍是动词，通常比较合理；替换成 <code>recommendation</code> 变成名词，句子 <code>I highly recommendation it</code> 明显不通。</p>
+<p>另一类方法是使用 LanguageTool 之类文法检查器，或用 language model 的 perplexity 衡量句子自然度。perplexity 越高通常表示句子越不自然，但不同工具、阈值和语言模型都会影响结果。</p>
+      </section>
+      <section id="semantic">
+        <div class="head">
+          <h2>Semantic Similarity：最关键，也最危险的限制</h2>
+          <span class="tag">SEMANTICS</span>
+        </div>
+<p>许多任务要求改写后语义保持。简单做法是比较被替换词在 embedding space 的距离，例如 cosine similarity；更常见的是用 Universal Sentence Encoder 等 sentence encoder，把原句和改写句编码成向量，再计算句向量相似度。</p>
+        <div class="box redsoft">
+<h3>关键警告</h3>
+<p>“语义相似度高”是模型判断，不是人类真理。报告 NLP 攻击时，最好结合人工评估或更严格的多指标检查。</p>
+<p><b>现在你应该能做什么：</b>解释为什么 semantic similarity 是 NLP 攻击评估中最重要、也最容易出问题的一环。</p>
+        </div>
+      </section>
+      <section id="viz">
+        <div class="head">
+          <h2>动手观察：阈值一改，合格样本就变了</h2>
+          <span class="tag">INTERACTIVE</span>
+        </div>
+<p>下面模拟三个候选改写。你可以调节语义相似度阈值，观察哪些候选会被 constraint 接受。注意：攻击潜力高但语义不稳的候选，未必是合格样本。</p>
+<p><b>现在你应该能做什么：</b>说明 constraint threshold 会同时影响攻击成功率和样本可信度。</p>
+      </section>
+      <section id="search">
+        <div class="head">
+          <h2>Search Method：在候选组合里找成功路径</h2>
+          <span class="tag">SEARCH</span>
+        </div>
+<p>最简单的 greedy search 会枚举候选 perturbation，测试每个候选让模型输出变化多少，选择最强的那个替换。如果攻击还没成功，就继续选择下一个候选。它直接、易实现，但可能陷入局部最优。</p>
+<p>genetic algorithm 则把一句改写看成一个个体，通过选择、交叉、突变逐步进化出成功样本。它搜索能力强，但通常很慢。beam search 也有人使用，可以保留多个候选路径，但 beam 越大计算成本越高。</p>
+<p><b>现在你应该能做什么：</b>解释为什么 NLP 攻击需要 search method，而不能只生成候选就结束。</p>
+      </section>
+      <section id="methods">
+        <div class="head">
+          <h2>经典方法：TextFooler 与 BERT-Attack</h2>
+          <span class="tag">METHODS</span>
+        </div>
+<p>TextFooler 的典型流程是：先计算词重要性；对重要词产生候选替换；用 POS、语义相似度等 constraint 过滤；再用 greedy search 逐步替换，直到模型预测改变。它代表了“word-level substitution + importance ranking + constraints”的经典路线。</p>
+        <div class="box info">
+<h3>TextFooler</h3>
+<p>重点在词重要性排序、同义候选、POS 与句向量相似度过滤。</p>
+        </div>
+        <div class="box warn">
+<h3>BERT-Attack</h3>
+<p>重点在上下文化候选生成，但仍需过滤和搜索。</p>
+<p><b>现在你应该能做什么：</b>把 TextFooler 和 BERT-Attack 都拆回四要素框架中说明。</p>
+        </div>
+      </section>
+      <section id="trigger">
+        <div class="head">
+          <h2>Universal Trigger：一句固定触发词，攻击很多输入</h2>
+          <span class="tag">TRIGGER</span>
+        </div>
+<p>universal adversarial trigger 是一种固定字符串。把它加到很多不同输入前面或后面，都能让模型朝攻击者希望的方向输出。它像图像中的 universal perturbation，只是作用在文本上。</p>
+<p>这个想法和 prompt/prefix tuning 有相似结构：固定模型，通过学习一个 prefix 改变模型行为。不同点是，prefix tuning 用于让模型完成好任务；universal trigger 则用于诱导不希望的输出。</p>
+      </section>
+      <section id="defense">
+        <div class="head">
+          <h2>防御与评估：攻击有用，但评估要谨慎</h2>
+          <span class="tag">DEFENSE</span>
+        </div>
+<p>NLP defense 常见路线包括 adversarial training、data augmentation、拼写修正、输入检测、模型鲁棒性增强等。核心思想和图像类似：用攻击样本暴露 failure mode，再把这些困难样本用于训练或测试。</p>
+<p>所以好的评估应该同时报告 attack success rate、修改比例、语义相似度、文法指标、人工评估结果，以及在防御后的 clean accuracy 和 robust accuracy。只报告攻击成功率是不够的。</p>
+<p><b>现在你应该能做什么：</b>设计 NLP 攻击评估时，不只看成功率，还会检查样本质量和防御后的准确率权衡。</p>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：约束过滤 + 重要性搜索</h2>
+          <span class="tag">CODE</span>
+        </div>
+<p>下面是一个简化版 TextFooler 风格流程：先给词排序，再逐个尝试候选替换，过滤不合格样本，最后选择最能降低正确类概率的候选。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">def attack_sentence(model, sentence, label):
+ ranking = rank_words_by_importance(model, sentence, label)
+ current = sentence
+ for pos in ranking:
+ candidates = generate_substitutes(current, pos)
+ valid = []
+ for cand in candidates:
+ if same_pos(current, cand, pos) and semantic_sim(sentence, cand) &gt; 0.82:
+ valid.append(cand)
+ current = pick_best_by_model_score(model, valid, label)
+ if model.predict(current) != label:
+ return current
+ return None</code></pre>
+<p>错误示例：只用语义模型，不做人类检查Evaluation bug</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误示例：相似度模型给高分，就直接断言语义一定保持。
+if semantic_sim(original, proposal) &gt; 0.82:
+ accept(proposal)</code></pre>
+<p>自动相似度只是近似。尤其当研究目标是证明模型脆弱时，需要更谨慎地验证 proposal 是否真的保持人类标签。</p>
+        </div>
+<p><b>现在你应该能做什么：</b>读懂一个 NLP 攻击算法的流程，并指出 constraint 和 search 分别在哪一步起作用。</p>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答建议</strong><p>回答时把每个方法拆回四要素：goal、transformation、constraint、search method。</p></div>
-        <div class="review-card"><strong>自检标准</strong><p>你能解释“攻击成功率高但样本不合理”为什么是问题，就掌握了本节。</p></div>
-      </div>
 
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>一、Constraint</h3><p>确认合理改写的标准。</p></div>
-          <div class="quick-review"><b>快速回顾</b>overlap、grammar、semantic similarity 是三大常见限制。</div>
+          <div><h3>一、Constraint</h3></div>
+          <div class="quick-review">快速回顾 overlap、grammar、semantic similarity 是三大常见限制。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q01" data-title="constraint 作用">
-            <div class="q-meta"><span class="pill">Q01</span><span class="pill">解释</span></div>
-            <h3>NLP adversarial example 为什么必须有 constraint？没有 constraint 会出现什么问题？</h3>
-            <textarea placeholder="从语义改变、伪攻击回答。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q02" data-title="Levenshtein">
-            <div class="q-meta"><span class="pill">Q02</span><span class="pill">概念</span></div>
-            <h3>Levenshtein distance 衡量什么？它适合检查哪类 perturbation？</h3>
-            <div class="choices">
-              <label><input type="radio" name="p41q02" value="衡量字符级编辑距离，适合检查插入、删除、替换、交换等字符扰动。">衡量字符级编辑距离，适合检查插入、删除、替换、交换等字符扰动。</label>
-              <label><input type="radio" name="p41q02" value="衡量句子语义相似度，适合判断情绪标签是否改变。">衡量句子语义相似度，适合判断情绪标签是否改变。</label>
-              <label><input type="radio" name="p41q02" value="衡量模型 confidence，适合决定攻击是否成功。">衡量模型 confidence，适合决定攻击是否成功。</label>
-            </div>
-          </div>
-          <div class="q" data-role="homework" data-qid="q03" data-title="POS">
-            <div class="q-meta"><span class="pill">Q03</span><span class="pill">诊断</span></div>
-            <h3>为什么把 <code>recommend</code> 换成 <code>recommendation</code> 通常会违反 POS consistency？</h3>
-            <textarea placeholder="动词变名词，句子文法不通。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q04" data-title="perplexity">
-            <div class="q-meta"><span class="pill">Q04</span><span class="pill">解释</span></div>
-            <h3>language model perplexity 可以怎样帮助检查文法或自然度？它有什么局限？</h3>
-            <textarea placeholder="自然度近似；不保证语义保持。"></textarea>
-          </div>
-        </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q01</span></div>
+        <h3><b>Q:</b> NLP adversarial example 为什么必须有 constraint？没有 constraint 会出现什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q02</span></div>
+        <h3><b>Q:</b> Levenshtein distance 衡量什么？它适合检查哪类 perturbation？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="衡量字符级编辑距离，适合检查插入、删除、替换、交换等字符扰动。">衡量字符级编辑距离，适合检查插入、删除、替换、交换等字符扰动。</label>
+      <label><input type="radio" name="q?" value="衡量句子语义相似度，适合判断情绪标签是否改变。">衡量句子语义相似度，适合判断情绪标签是否改变。</label>
+      <label><input type="radio" name="q?" value="衡量模型 confidence，适合决定攻击是否成功。">衡量模型 confidence，适合决定攻击是否成功。</label>
       </div>
 
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q03</span></div>
+        <h3><b>Q:</b> 为什么把 <code>recommend</code> 换成 <code>recommendation</code> 通常会违反 POS consistency？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q04</span></div>
+        <h3><b>Q:</b> language model perplexity 可以怎样帮助检查文法或自然度？它有什么局限？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>二、语义相似与阈值</h3><p>训练你对自动指标保持谨慎。</p></div>
-          <div class="quick-review"><b>快速回顾</b>sentence encoder 相似度是近似，不是人类真理。</div>
+          <div><h3>二、语义相似与阈值</h3></div>
+          <div class="quick-review">快速回顾 sentence encoder 相似度是近似，不是人类真理。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q05" data-title="word similarity">
-            <div class="q-meta"><span class="pill">Q05</span><span class="pill">对照</span></div>
-            <h3>比较 word embedding 相似度和 sentence encoder 相似度，它们分别检查什么层级？</h3>
-            <input type="text" data-label="word embedding 相似度" placeholder="检查词级候选是否接近。">
-            <input type="text" data-label="sentence encoder 相似度" placeholder="检查整句语义是否接近。">
-          </div>
-          <div class="q" data-role="homework" data-qid="q06" data-title="threshold">
-            <div class="q-meta"><span class="pill">Q06</span><span class="pill">推理</span></div>
-            <h3>语义相似度阈值设太低或太高分别会造成什么后果？</h3>
-            <textarea placeholder="太低放过语义漂移；太高攻击成功率下降。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q07" data-title="constraint model">
-            <div class="q-meta"><span class="pill">Q07</span><span class="pill">辨析</span></div>
-            <h3>为什么说攻击可能只是骗过了 constraint model，而不是真正找到合理改写？</h3>
-            <textarea placeholder="自动语义模型可能误判相似度。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q08" data-title="human evaluation">
-            <div class="q-meta"><span class="pill">Q08</span><span class="pill">应用</span></div>
-            <h3>什么时候你会要求加入人工评估？人工评估应检查哪些问题？</h3>
-            <textarea placeholder="语义是否保持、文法是否自然、标签是否不变。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q05</span></div>
+        <h3><b>Q:</b> 比较 word embedding 相似度和 sentence encoder 相似度，它们分别检查什么层级？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q06</span></div>
+        <h3><b>Q:</b> 语义相似度阈值设太低或太高分别会造成什么后果？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q07</span></div>
+        <h3><b>Q:</b> 为什么说攻击可能只是骗过了 constraint model，而不是真正找到合理改写？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q08</span></div>
+        <h3><b>Q:</b> 什么时候你会要求加入人工评估？人工评估应检查哪些问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>三、Search 与经典方法</h3><p>把候选组合变成可执行算法。</p></div>
-          <div class="quick-review"><b>快速回顾</b>search method 在候选空间中寻找成功样本。</div>
+          <div><h3>三、Search 与经典方法</h3></div>
+          <div class="quick-review">快速回顾 search method 在候选空间中寻找成功样本。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q09" data-title="greedy">
-            <div class="q-meta"><span class="pill">Q09</span><span class="pill">解释</span></div>
-            <h3>greedy search 在文本攻击中如何选择下一步替换？</h3>
-            <textarea placeholder="选当前最能改变模型输出的候选。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q10" data-title="importance ranking">
-            <div class="q-meta"><span class="pill">Q10</span><span class="pill">概念</span></div>
-            <h3>word importance ranking 为什么能提高搜索效率？</h3>
-            <textarea placeholder="优先攻击对预测影响最大的词。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q11" data-title="genetic">
-            <div class="q-meta"><span class="pill">Q11</span><span class="pill">对照</span></div>
-            <h3>genetic algorithm 相比 greedy search 有什么优势和代价？</h3>
-            <textarea placeholder="探索复杂组合，但很慢。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q12" data-title="TextFooler">
-            <div class="q-meta"><span class="pill">Q12</span><span class="pill">流程</span></div>
-            <h3>用四要素框架概括 TextFooler。</h3>
-            <input type="text" data-label="goal" placeholder="让分类器输出错误。">
-            <input type="text" data-label="transformation" placeholder="同义词或近义候选替换。">
-            <input type="text" data-label="constraint" placeholder="词性、语义相似度、自然度等限制。">
-            <input type="text" data-label="search" placeholder="按词重要性逐步替换。">
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q09</span></div>
+        <h3><b>Q:</b> greedy search 在文本攻击中如何选择下一步替换？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q10</span></div>
+        <h3><b>Q:</b> word importance ranking 为什么能提高搜索效率？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q11</span></div>
+        <h3><b>Q:</b> genetic algorithm 相比 greedy search 有什么优势和代价？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q12</span></div>
+        <h3><b>Q:</b> 用四要素框架概括 TextFooler。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>四、Trigger、防御与评估</h3><p>把攻击视角用于找 failure mode。</p></div>
-          <div class="quick-review"><b>快速回顾</b>universal trigger 是固定字符串；防御要同时看 clean 和 robust。</div>
+          <div><h3>四、Trigger、防御与评估</h3></div>
+          <div class="quick-review">快速回顾 universal trigger 是固定字符串；防御要同时看 clean 和 robust。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q13" data-title="BERT-Attack">
-            <div class="q-meta"><span class="pill">Q13</span><span class="pill">概念</span></div>
-            <h3>BERT-Attack 使用 BERT 产生候选有什么好处？为什么仍需要 constraint？</h3>
-            <textarea placeholder="上下文化候选；但不保证语义不变。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q14" data-title="universal trigger">
-            <div class="q-meta"><span class="pill">Q14</span><span class="pill">解释</span></div>
-            <h3>什么是 universal adversarial trigger？它和 prompt/prefix tuning 有什么结构相似处？</h3>
-            <textarea placeholder="固定字符串；固定模型、学习前缀改变输出。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q15" data-title="defense">
-            <div class="q-meta"><span class="pill">Q15</span><span class="pill">应用</span></div>
-            <h3>NLP 模型可以用哪些方式做 defense？列出至少三种。</h3>
-            <textarea placeholder="adversarial training、data augmentation、拼写修正、输入检测等。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q16" data-title="metrics">
-            <div class="q-meta"><span class="pill">Q16</span><span class="pill">错误示例</span></div>
-            <h3>错误示例：只报告 attack success rate，不报告语义相似度和人工评估。这个实验报告缺什么？</h3>
-            <textarea placeholder="缺样本质量、语义保持、文法、clean/robust accuracy。"></textarea>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q17" data-title="费曼题">
-            <div class="q-meta"><span class="pill">Q17</span><span class="pill">费曼题</span></div>
-            <h3>请用 8-12 句话向同学讲清楚：为什么 NLP 攻击中的 constraint 和 search method 同样重要？</h3>
-            <textarea placeholder="要求串起：候选改写、语义/文法限制、搜索组合、伪攻击风险、经典方法。"></textarea>
-            <div class="solve-note">提示：重点讲“模型错了但句子不合理”不算好攻击。</div>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q18" data-title="完整评估方案">
-            <div class="q-meta"><span class="pill">Q18</span><span class="pill">综合</span></div>
-            <h3>设计一个 NLP adversarial attack 评估方案。请包含攻击目标、transformation、constraint、search、自动指标、人工评估和 defense 后的 clean/robust accuracy。</h3>
-            <textarea placeholder="写成实验计划。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q13</span></div>
+        <h3><b>Q:</b> BERT-Attack 使用 BERT 产生候选有什么好处？为什么仍需要 constraint？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q14</span></div>
+        <h3><b>Q:</b> 什么是 universal adversarial trigger？它和 prompt/prefix tuning 有什么结构相似处？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q15</span></div>
+        <h3><b>Q:</b> NLP 模型可以用哪些方式做 defense？列出至少三种。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q16</span></div>
+        <h3><b>Q:</b> 错误示例：只报告 attack success rate，不报告语义相似度和人工评估。这个实验报告缺什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q17</span></div>
+        <h3><b>Q:</b> 请用 8-12 句话向同学讲清楚：为什么 NLP 攻击中的 constraint 和 search method 同样重要？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q18</span></div>
+        <h3><b>Q:</b> 设计一个 NLP adversarial attack 评估方案。请包含攻击目标、transformation、constraint、search、自动指标、人工评估和 defense 后的 clean/robust accuracy。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
-
+      </section>
     <section id="export">
-      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
-      <p>完成练习后，生成一份 Markdown 记录。它会保留完整题干和你的回答，方便自学检查或分享给读者参考。</p>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" onclick="generateRecord()">生成记录</button>
-        <button type="button" class="ghost" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
-      <div class="quality" id="qualityBox"></div>
-      <pre class="answer" id="recordOutput">还没有生成记录。</pre>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-  const $ = (id) => document.getElementById(id);
-  const cands = [
-    {text:'I highly command it.', sem:0.86, edit:0.25, grammar:true, attack:0.62},
-    {text:'I highly recommendation it.', sem:0.83, edit:0.25, grammar:false, attack:0.80},
-    {text:'I strongly dislike it.', sem:0.42, edit:0.50, grammar:true, attack:0.95}
-  ];
+      </ul>
+    </section>
+  </article>
 
-  function updateProgress(){
-    const doc = document.documentElement;
-    const max = doc.scrollHeight - doc.clientHeight;
-    const pct = max > 0 ? (doc.scrollTop / max) * 100 : 0;
-    $('readProgress').style.width = pct + '%';
-  }
-  document.addEventListener('scroll', updateProgress);
-  updateProgress();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-  const navLinks = Array.from(document.querySelectorAll('nav a'));
-  const sections = navLinks.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
-  const observer = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if(entry.isIntersecting){
-        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id));
-      }
-    });
-  }, {rootMargin:'-30% 0px -65% 0px'});
-  sections.forEach(sec => observer.observe(sec));
-
-  function updateConstraints(){
-    const semTh = parseFloat($('semTh').value);
-    const editTh = parseFloat($('editTh').value);
-    $('semThVal').textContent = semTh.toFixed(2);
-    $('editThVal').textContent = editTh.toFixed(2);
-    let pass = 0;
-    $('candidateList').innerHTML = '';
-    cands.forEach(c => {
-      const ok = c.sem >= semTh && c.edit <= editTh && c.grammar;
-      if(ok) pass += 1;
-      const div = document.createElement('div');
-      div.className = 'candidate ' + (ok ? 'pass' : 'fail');
-      div.innerHTML = '<strong>' + c.text + '</strong><br>语义 ' + c.sem.toFixed(2) + ' / 改词率 ' + c.edit.toFixed(2) + ' / 文法 ' + (c.grammar ? '通过' : '失败') + ' / 攻击潜力 ' + c.attack.toFixed(2) + '<br>' + (ok ? '通过 constraint' : '未通过 constraint');
-      $('candidateList').appendChild(div);
-    });
-    $('passVal').textContent = String(pass);
-    $('passBar').style.width = (pass / cands.length * 100) + '%';
-    $('constraintNote').textContent = pass === 0
-      ? '阈值过严时，没有候选能通过，攻击可能失败。'
-      : pass === cands.length
-        ? '阈值过松时，不合理候选也可能混入，攻击质量下降。'
-        : '当前阈值过滤掉部分高攻击潜力但不合理的候选。';
-  }
-  ['semTh','editTh'].forEach(id => $(id).addEventListener('input', updateConstraints));
-  updateConstraints();
-
-  function collectAnswer(card){
-    const parts = [];
-    const checked = Array.from(card.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(input => {
-      const label = input.closest('label');
-      return label ? label.innerText.trim() : input.value;
-    });
-    if(checked.length) parts.push('选择：' + checked.join('；'));
-    const selects = Array.from(card.querySelectorAll('select')).map(select => {
-      const option = select.options[select.selectedIndex];
-      const value = option && option.value ? option.textContent.trim() : '';
-      const label = select.dataset.label || select.getAttribute('aria-label') || '下拉选择';
-      return value ? label + '：' + value : '';
-    }).filter(Boolean);
-    if(selects.length) parts.push(selects.join('\n'));
-    const texts = Array.from(card.querySelectorAll('textarea,input[type="text"]')).map(el => {
-      const value = el.value.trim();
-      const label = el.dataset.label || el.getAttribute('aria-label') || '';
-      return value ? (label ? label + '：' + value : value) : '';
-    }).filter(Boolean);
-    if(texts.length) parts.push(texts.join('\n'));
-    return parts.join('\n').trim();
-  }
-
-  function generateRecord(){
-    const cards = Array.from(document.querySelectorAll(".q[data-role='homework']"));
-    const lines = [];
-    let answered = 0;
-    lines.push('# P41 NLP 对抗攻击 2：限制、搜索与防御 - 练习记录');
-    lines.push('');
-    lines.push('## 完成情况');
-    cards.forEach((card, idx) => {
-      const title = card.dataset.title || ('题目 ' + (idx + 1));
-      const question = card.querySelector('h3')?.innerText.trim() || title;
-      const answer = collectAnswer(card);
-      if(answer) answered += 1;
-      lines.push('');
-      lines.push('### Q' + String(idx + 1).padStart(2, '0') + ' ' + title);
-      lines.push('');
-      lines.push('题目：' + question);
-      lines.push('');
-      lines.push(answer ? answer : '（未作答）');
-    });
-    const missing = cards.length - answered;
-    const quality = [];
-    quality.push('已作答：' + answered + ' / ' + cards.length);
-    if(missing > 0) quality.push('还有 ' + missing + ' 题未作答。');
-    if(!$('qualityBox').style.display || $('qualityBox').style.display === 'none') $('qualityBox').style.display = 'block';
-    $('qualityBox').textContent = quality.join('\n');
-    $('recordOutput').textContent = lines.join('\n');
-  }
-
-  async function copyRecord(){
-    const text = $('recordOutput').textContent;
-    if(!text || text === '还没有生成记录。') generateRecord();
-    try{
-      await navigator.clipboard.writeText($('recordOutput').textContent);
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '已复制练习记录。';
-    }catch(err){
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '复制失败，请手动选中下方记录。';
-    }
-  }
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

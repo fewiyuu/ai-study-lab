@@ -4,732 +4,688 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LLM 基础 10｜延迟、成本、可靠性约束：把上线账算清</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="LLM 基础与应用工程" data-unit="10｜延迟、成本、可靠性约束">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>LLM 基础与应用工程</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">LLM 基础与应用工程</a>
+        <span class="sep">/</span>
         <span>10｜延迟、成本、可靠性约束</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../09_Agent最小流程/学习页.html"><span class="dot"></span>上一节</a>
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#overview"><span class="dot"></span>先抓主线</a>
-        <a href="#ledger"><span class="dot"></span>状态账本</a>
-        <a href="#latency"><span class="dot"></span>延迟拆解</a>
-        <a href="#cost"><span class="dot"></span>成本估算</a>
-        <a href="#reliability"><span class="dot"></span>可靠性与回退</a>
-        <a href="#cases"><span class="dot"></span>三个场景</a>
-        <a href="#workflow"><span class="dot"></span>上线动作</a>
-        <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
-        <a href="#boundary"><span class="dot"></span>边界</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">先看请求路径和状态账本，再看成本和回退。延迟、成本、可靠性不是三张独立表，而是同一条请求的三次检查。</div>
-    </aside>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">production constraints</div>
-          <h1>LLM 基础 10｜延迟、成本、可靠性约束：把上线账算清</h1>
-          <p>这一页把 09 页的 Agent 循环收束到上线时最常见的三笔账：一次请求要等多久、花多少、出错时能不能稳住。你会先拆请求路径和状态账本，再决定要不要压缩上下文、先返回一部分、加缓存、限流、回退，或者把高风险动作交给人工。这里先看单次请求和短链路，不展开分布式 tracing、容量规划和自动扩缩容。</p>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">production constraints</div>
+      <div class="hero-meta">
+        <span class="hero-badge">10｜延迟、成本、可靠性约束</span>
+      </div>
+      <h1 class="hero-title">LLM 基础 10｜延迟、成本、可靠性约束：把上线账算清</h1>
+      <p class="hero-desc">这一页把 09 页的 Agent 循环收束到上线时最常见的三笔账：一次请求要等多久、花多少、出错时能不能稳住。你会先拆请求路径和状态账本，再决定要不要压缩上下文、先返回一部分、加缓存、限流、回退，或者把高风险动作交给人工。这里先看单次请求和短链路，不展开分布式 tracing、容量规划和自动扩缩容。</p>
+      <div class="course-links">
+            <a href="../09_Agent最小流程/学习页.html">上一节：Agent 最小流程</a>
+            <a href="../index.html">课程地图</a>
+            <a href="../08_RAG最小流程/学习页.html">回看 08：RAG 最小流程</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>拆出一次 LLM 请求里排队、上下文、模型、工具和重试的延迟来源，并知道先看哪一段。</li>
+            <li>用输入 token、输出 token、工具调用和重试次数估算单次成本，而不是只看答案对不对。</li>
+            <li>为超时、限流、schema 错误、旧缓存和高风险动作设计回退，而不是把失败直接抛给用户。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
 
-          <div class="course-links">
-            <a href="../09_Agent最小流程/学习页.html">上一节：Agent 最小流程</a><a href="../index.html">课程地图</a><a href="../08_RAG最小流程/学习页.html">回看 08：RAG 最小流程</a>
-          </div>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#overview">先抓主线</a>
+      <a href="#ledger">状态账本</a>
+      <a href="#latency">延迟拆解</a>
+      <a href="#cost">成本估算</a>
+      <a href="#reliability">可靠性与回退</a>
+      <a href="#cases">三个场景</a>
+      <a href="#replay">客服摘要回放</a>
+      <a href="#ratelimit">429 退避演练</a>
+      <a href="#workflow">上线动作</a>
+      <a href="#diagnosis">误区诊断</a>
+      <a href="#boundary">边界</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">goals</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>先把这页的范围定住</h3>
+<p>你在 09 页已经把 Agent 循环跑起来了。这里继续往前一步，问的是这条循环在真实流量里能不能撑住。慢，用户会走；贵，功能放不大；不稳，失败会直接落到用户身上。</p>
+<p>最有用的顺序是：先找最重的一段，再决定是否压缩上下文、并行工具、先返回部分结果、用缓存，或者把高风险动作转人工。先做这个顺序，再看模型准不准。</p>
+        </div>
+        <div class="box">
+<h3>本页不追的内容</h3>
+<ul>
+<li>不展开分布式 tracing、队列系统和容量规划。</li>
+<li>不写某个供应商的价格表，也不把单价当成固定常量。</li>
+<li>不讲自动扩缩容、A/B 实验和复杂 SRE 流程。</li>
+<li>不把“回答快”当成唯一目标，延迟、成本和可靠性要一起看。</li>
+</ul>
+        </div>
+      </div>
+      </section>
+      <section id="overview">
+        <div class="head">
+          <h2>先抓主线</h2>
+          <span class="tag">flow</span>
+        </div>
+<p>这条链路是一条带预算的读写链。用户发起请求后，系统先看路由和预算，再拼上下文、调用模型、查工具、做后验检查，最后决定返回、回退还是转人工。每一段都可能是瓶颈，也都可能写坏状态。</p>
+<p>路由用户意图、风险标记、预算选择快路径/普通路径/高风险路径该转人工的动作被自动执行</p>
+<p>上下文拼接证据块、历史消息、缓存prompt 长度、证据顺序慢、贵、旧材料混进来</p>
+<p>模型生成上下文、输出长度限制答案草稿、工具请求输出太长、参数不稳</p>
+<p>回退与重试error_code、timeout、retry_countfallback、handoff、backoff无限重试、用户一直等</p>
+<p>收尾阶段耗时、成本估算日志、告警、结果后面只剩“失败/成功”两种模糊结论</p>
+      </section>
+      <section id="ledger">
+        <div class="head">
+          <h2>状态账本</h2>
+          <span class="tag">ledger</span>
+        </div>
+<p>这页里的状态只看每一轮请求必须读写什么。账本写错了，慢、贵、不稳就会一起出现。先看对象，再看读写，再看症状。</p>
+<p><code>request_meta</code>用户、场景、风险级别要走快路径还是高风险路径路由选择该转人工的动作被直接放行</p>
+<p><code>context_budget</code>剩余 token、目标长度当前上下文和证据量裁剪、压缩、早返回上下文越堆越长，延迟和成本一起涨</p>
+<p><code>cache_entry</code>缓存键、版本、过期时间是否命中、是否仍然新鲜命中或重算结果旧政策、旧答案、错用户复用</p>
+<p><code>risk_flags</code>写入动作、外部消息、退款承诺是否需要确认或人工复核handoff、stop、confirm自动发出不该发的消息</p>
+<p><code>observability</code>空或上一轮日志摘要阶段耗时、错误码、重试数日志、告警、跟踪 id出了问题只剩“失败”两个字</p>
+      </section>
+      <section id="latency">
+        <div class="head">
+          <h2>延迟拆解</h2>
+          <span class="tag">latency</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先找最长的一段</h3>
+<p>客服摘要为什么会卡六秒，通常某一段在拖尾：排队、上下文拼接、模型生成、工具调用或重试。先把总延迟拆开，才能知道该删哪段。</p>
+<p>$$T_{total} \approx T_{queue} + T_{context} + T_{model} + T_{tool} + T_{retry}$$</p>
+<p><code>T_{queue}</code> 是排队时间，<code>T_{context}</code> 是拼接和压缩上下文的时间，<code>T_{model}</code> 是模型生成时间，<code>T_{tool}</code> 是工具调用和等待返回的时间，<code>T_{retry}</code> 是重试带来的额外时间。</p>
         </div>
         <div class="box soft">
-          <h3>读完本页应该能做什么</h3>
-          <ul>
-  <li>拆出一次 LLM 请求里排队、上下文、模型、工具和重试的延迟来源，并知道先看哪一段。</li>
-  <li>用输入 token、输出 token、工具调用和重试次数估算单次成本，而不是只看答案对不对。</li>
-  <li>为超时、限流、schema 错误、旧缓存和高风险动作设计回退，而不是把失败直接抛给用户。</li>
-</ul>
-
-        </div>
-      </div>
-
-      <section id="goals">
-  <div class="head"><h2>学习目标</h2><span class="tag">goals</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>先把这页的范围定住</h3>
-      <p>你在 09 页已经把 Agent 循环跑起来了。这里继续往前一步，问的是这条循环在真实流量里能不能撑住。慢，用户会走；贵，功能放不大；不稳，失败会直接落到用户身上。</p>
-      <p>最有用的顺序是：先找最重的一段，再决定是否压缩上下文、并行工具、先返回部分结果、用缓存，或者把高风险动作转人工。先做这个顺序，再看模型准不准。</p>
-    </div>
-    <div class="box">
-      <h3>本页不追的内容</h3>
-      <ul>
-        <li>不展开分布式 tracing、队列系统和容量规划。</li>
-        <li>不写某个供应商的价格表，也不把单价当成固定常量。</li>
-        <li>不讲自动扩缩容、A/B 实验和复杂 SRE 流程。</li>
-        <li>不把“回答快”当成唯一目标，延迟、成本和可靠性要一起看。</li>
-      </ul>
-    </div>
-  </div>
-</section>
-
-<section id="overview">
-  <div class="head"><h2>先抓主线</h2><span class="tag">flow</span></div>
-  <p>这条链路是一条带预算的读写链。用户发起请求后，系统先看路由和预算，再拼上下文、调用模型、查工具、做后验检查，最后决定返回、回退还是转人工。每一段都可能是瓶颈，也都可能写坏状态。</p>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button class="trace-line active" data-trace-step="step-request"><code>request</code><span>请求进入和路由判断</span></button>
-      <button class="trace-line" data-trace-step="step-context"><code>context</code><span>拼上下文和压缩证据</span></button>
-      <button class="trace-line" data-trace-step="step-model"><code>model</code><span>模型生成和工具选择</span></button>
-      <button class="trace-line" data-trace-step="step-fallback"><code>fallback</code><span>回退、重试和转人工</span></button>
-      <button class="trace-line" data-trace-step="step-return"><code>return</code><span>记录结果并返回</span></button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="step-request">
-        <b>请求输入</b><span>user intent、SLA、risk_flags、cache_key</span><p>先读用户想做什么，再决定是走快路径、普通路径，还是高风险路径。这里漏掉路由，后面再快也会走错路。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-context">
-        <b>上下文处理</b><span>retrieved chunks、history、budget_left、freshness</span><p>这里写的是 prompt 的长度和证据的粒度。上下文越长，拼接、清洗和生成都更慢，也更容易把旧材料带进来。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-model">
-        <b>模型与工具</b><span>draft、tool_call、retry_count、error_code</span><p>模型只是提出下一步。真正决定能不能查库、能不能发消息、要不要重试的，是程序侧的校验和边界。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-fallback">
-        <b>回退判断</b><span>timeout、429、schema_error、handoff</span><p>失败不是同一种事。限流、超时、解析失败、旧缓存和高风险动作，处理方式不一样，不能一把梭。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-return">
-        <b>输出收口</b><span>log_id、latency_ms、cost_estimate、final_state</span><p>返回前要把关键字段留下。没有日志和阶段耗时，后面只会看到“结果慢”或“结果错”，看不到原因。</p>
-      </div>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="请求路径表" data-export-lang="table">
-      <thead><tr><th>阶段</th><th>主要读取</th><th>主要写入</th><th>错了的症状</th></tr></thead>
-      <tbody>
-        <tr><td>路由</td><td>用户意图、风险标记、预算</td><td>选择快路径/普通路径/高风险路径</td><td>该转人工的动作被自动执行</td></tr>
-        <tr><td>上下文拼接</td><td>证据块、历史消息、缓存</td><td>prompt 长度、证据顺序</td><td>慢、贵、旧材料混进来</td></tr>
-        <tr><td>模型生成</td><td>上下文、输出长度限制</td><td>答案草稿、工具请求</td><td>输出太长、参数不稳</td></tr>
-        <tr><td>回退与重试</td><td>error_code、timeout、retry_count</td><td>fallback、handoff、backoff</td><td>无限重试、用户一直等</td></tr>
-        <tr><td>收口</td><td>阶段耗时、成本估算</td><td>日志、告警、结果</td><td>后面只剩“失败/成功”两种模糊结论</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="ledger">
-  <div class="head"><h2>状态账本</h2><span class="tag">ledger</span></div>
-  <p>这页里的状态只看每一轮请求必须读写什么。账本写错了，慢、贵、不稳就会一起出现。先看对象，再看读写，再看症状。</p>
-  <div class="table-wrap">
-    <table data-export-context="状态账本" data-export-lang="table">
-      <thead><tr><th>对象</th><th>进入本轮前</th><th>本轮读取</th><th>本轮写入</th><th>错了会怎样</th></tr></thead>
-      <tbody>
-        <tr><td><code>request_meta</code></td><td>用户、场景、风险级别</td><td>要走快路径还是高风险路径</td><td>路由选择</td><td>该转人工的动作被直接放行</td></tr>
-        <tr><td><code>context_budget</code></td><td>剩余 token、目标长度</td><td>当前上下文和证据量</td><td>裁剪、压缩、早返回</td><td>上下文越堆越长，延迟和成本一起涨</td></tr>
-        <tr><td><code>cache_entry</code></td><td>缓存键、版本、过期时间</td><td>是否命中、是否仍然新鲜</td><td>命中或重算结果</td><td>旧政策、旧答案、错用户复用</td></tr>
-        <tr><td><code>risk_flags</code></td><td>写入动作、外部消息、退款承诺</td><td>是否需要确认或人工复核</td><td>handoff、stop、confirm</td><td>自动发出不该发的消息</td></tr>
-        <tr><td><code>observability</code></td><td>空或上一轮日志摘要</td><td>阶段耗时、错误码、重试数</td><td>日志、告警、跟踪 id</td><td>出了问题只剩“失败”两个字</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="box info">
-    <h3>先看账本，再看答案</h3>
-    <p>同样是“答对了”，一种可能是缓存命中，一种可能是花了三次重试才答对。账本能告诉你这次请求到底读了什么、写了什么、有没有把旧状态带进去。</p>
-  </div>
-</section>
-
-<section id="latency">
-  <div class="head"><h2>延迟拆解</h2><span class="tag">latency</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>先找最长的一段</h3>
-      <p>客服摘要为什么会卡六秒，通常不是因为一句话太长，而是某一段在拖尾：排队、上下文拼接、模型生成、工具调用或重试。先把总延迟拆开，才能知道该删哪段。</p>
-      <div class="math-block" data-export-context="延迟公式" data-export-lang="math">
-        $$T_{total} \approx T_{queue} + T_{context} + T_{model} + T_{tool} + T_{retry}$$
-        <p><code>T_{queue}</code> 是排队时间，<code>T_{context}</code> 是拼接和压缩上下文的时间，<code>T_{model}</code> 是模型生成时间，<code>T_{tool}</code> 是工具调用和等待返回的时间，<code>T_{retry}</code> 是重试带来的额外时间。</p>
-      </div>
-    </div>
-    <div class="box soft">
-      <h3>先量时，再动手</h3>
-      <div class="codebar"><span>record-stage-times.py</span><button class="copy" data-copy="latency-code">复制</button></div>
-      <pre id="latency-code" data-export-context="延迟计时骨架" data-export-lang="python"><code class="language-python">stage_ms = {}
+<h3>先量时，再动手</h3>
+<p>record-stage-times.py复制</p>
+<pre><code class="language-python">stage_ms = {}
 stage_ms["queue"] = wait_queue(req)
 stage_ms["context"] = build_context(req)
 stage_ms["model"] = run_model(req)
 stage_ms["tool"] = call_tools(req)
 stage_ms["retry"] = retry_if_needed(req)
 total_ms = sum(stage_ms.values())</code></pre>
-      <p>先把每一段记下来，再决定是压上下文、减少串行工具、还是把结果先流式返回。没有这张表，只靠感觉很容易把力气花错地方。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="延迟分段表" data-export-lang="table">
-      <thead><tr><th>分段</th><th>常见触发</th><th>最先看什么</th><th>先做什么</th></tr></thead>
-      <tbody>
-        <tr><td>排队</td><td>并发高、限流、资源忙</td><td>429、队列长度、请求峰值</td><td>限流、退避、分流</td></tr>
-        <tr><td>上下文</td><td>历史太长、证据太多</td><td>prompt 长度、chunk 数</td><td>压缩、过滤、少塞无关历史</td></tr>
-        <tr><td>模型生成</td><td>输出太长、模型太大</td><td>输出 token、首 token 时间</td><td>限制字数、先出第一屏</td></tr>
-        <tr><td>工具调用</td><td>串行查库、外部系统慢</td><td>工具耗时、返回码</td><td>并行、缓存、缩小工具面</td></tr>
-        <tr><td>重试</td><td>盲重试、失败没分类</td><td>retry_count、error_code</td><td>先分错，再决定是否重试</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="cost">
-  <div class="head"><h2>成本估算</h2><span class="tag">cost</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>成本要同时看 token、输出、工具调用、重试和人工复核</h3>
-      <p>一条请求的成本通常来自四处：输入 token、输出 token、工具调用和重试。要是还需要人工复核，人工时间也要算进去。单次看起来不贵，放大到真实流量时就会变成预算问题。</p>
-      <div class="math-block" data-export-context="成本公式" data-export-lang="math">
-        $$C_{total} \approx n_{in}p_{in} + n_{out}p_{out} + n_{tool}p_{tool} + n_{retry}p_{retry} + n_{human}p_{human}$$
-        <p><code>n_{in}</code>、<code>n_{out}</code>、<code>n_{tool}</code>、<code>n_{retry}</code> 和 <code>n_{human}</code> 分别是输入 token、输出 token、工具调用、重试次数和人工复核次数。<code>p_*</code> 是各自的单次成本。</p>
-      </div>
-    </div>
-    <div class="box soft">
-      <h3>先压哪一项</h3>
-      <div class="codebar"><span>estimate_cost.py</span><button class="copy" data-copy="cost-code">复制</button></div>
-      <pre id="cost-code" data-export-context="成本估算骨架" data-export-lang="python"><code class="language-python">estimated_cost = (
-    in_tokens * p_in
-    + out_tokens * p_out
-    + tool_calls * p_tool
-    + retries * p_retry
-    + human_reviews * p_human
-)</code></pre>
-      <p>限制输出长度压的是输出 token；缓存压的是重复请求；减少重试压的是重复调用；路由到更小的模型压的是生成成本。不要拿一种手段去解决所有成本问题。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="成本来源表" data-export-lang="table">
-      <thead><tr><th>动作</th><th>主要压哪一项</th><th>常见副作用</th><th>适合什么场景</th></tr></thead>
-      <tbody>
-        <tr><td>压缩上下文</td><td>输入 token、上下文处理时间</td><td>可能丢掉证据</td><td>历史长、噪声多</td></tr>
-        <tr><td>限制输出长度</td><td>输出 token、生成时间</td><td>回答可能不完整</td><td>摘要、提要、固定字段</td></tr>
-        <tr><td>缓存</td><td>重复计算和重复工具调用</td><td>过期、错用户、版本不一致</td><td>稳定问题、重复问题</td></tr>
-        <tr><td>路由到小模型</td><td>生成成本</td><td>复杂任务质量可能掉</td><td>简单分类、短答</td></tr>
-        <tr><td>减少重试</td><td>重复 token 和重复工具调用</td><td>短暂错误可能不再自动恢复</td><td>错误可分类、失败可控</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="reliability">
-  <div class="head"><h2>可靠性与回退</h2><span class="tag">reliability</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>可靠性要看失败之后的动作</h3>
-      <p>可靠性看的是失败时系统有没有清楚的下一步。超时、限流、schema 错误、旧缓存和高风险动作，不该用同一套处理。先把错误码读出来，再决定重试、降级、回退还是转人工。</p>
-    </div>
-    <div class="box soft">
-      <h3>故障实验</h3>
-      <div class="terminal-lab" data-terminal-lab>
-        <div class="terminal-controls">
-          <button class="ghost active" data-terminal-case="timeout">超时</button>
-          <button class="ghost" data-terminal-case="rate-limit">限流</button>
-          <button class="ghost" data-terminal-case="schema">解析错</button>
-          <button class="ghost" data-terminal-case="cache">旧缓存</button>
+<p>先把每一段记下来，再决定是压上下文、减少串行工具、还是把结果先流式返回。没有这张表，只靠感觉很容易把力气花错地方。</p>
+<p>分段常见触发最先看什么先做什么</p>
+<p>排队并发高、限流、资源忙429、队列长度、请求峰值限流、退避、分流</p>
+<p>上下文历史太长、证据太多prompt 长度、chunk 数压缩、过滤、少塞无关历史</p>
+<p>模型生成输出太长、模型太大输出 token、首 token 时间限制字数、先出第一屏</p>
+<p>工具调用串行查库、外部系统慢工具耗时、返回码并行、缓存、缩小工具面</p>
+<p>重试盲重试、失败没分类retry_count、error_code先分错，再决定是否重试</p>
         </div>
-        <pre class="terminal-output" aria-live="polite">case: 超时
-log: stage=context_ms=880, model_ms=4020, tool_ms=0
-symptom: 第一屏一直不出来，最后才失败
-next: 先看是不是上下文过长或链路串行，必要时先流式返回或转人工
-fix: 压缩输入、设置超时、提前回退</pre>
-        <template data-terminal-output="timeout">case: 超时
-log: stage=context_ms=880, model_ms=4020, tool_ms=0
-symptom: 第一屏一直不出来，最后才失败
-next: 先看是不是上下文过长或链路串行，必要时先流式返回或转人工
-fix: 压缩输入、设置超时、提前回退</template>
-        <template data-terminal-output="rate-limit">case: 限流
-log: status=429, retry_count=4
-symptom: 一直重试，用户和服务都更忙
-next: 先降并发，再做有限重试和退避
-fix: backoff、限流、分流到小路径</template>
-        <template data-terminal-output="schema">case: 解析错
-log: error_code=schema_error, raw_output={...}
-symptom: 内容看起来像答案，程序却接不住
-next: 先查输出格式和字段约束
-fix: 收紧 schema，失败就安全停止或重来一次</template>
-        <template data-terminal-output="cache">case: 旧缓存
-log: cache_hit=true, fresh_until=昨天
-symptom: 用户拿到过期政策或旧结果
-next: 先看 cache_key、版本和权限
-fix: 加过期时间、版本号和权限边界</template>
       </div>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="故障归因表" data-export-lang="table">
-      <thead><tr><th>症状</th><th>先看哪里</th><th>常见误判</th><th>修法</th></tr></thead>
-      <tbody>
-        <tr><td>用户一直等</td><td>阶段耗时、上下文长度、工具串行</td><td>只换更大的模型</td><td>压上下文、先流式、并行工具</td></tr>
-        <tr><td>账单变高</td><td>输出 token、重试次数、工具调用</td><td>只盯输入 token</td><td>限制输出、缓存、减少重试</td></tr>
-        <tr><td>总是 429</td><td>并发和退避策略</td><td>盲重试会自己修好</td><td>降并发、退避、路由分流</td></tr>
-        <tr><td>结果里有旧政策</td><td>cache_key、版本、fresh_until</td><td>缓存本身坏了</td><td>给缓存加过期和权限边界</td></tr>
-        <tr><td>退款/补偿被自动发出</td><td>risk_flags、handoff、确认流程</td><td>以为回答写得更稳就行</td><td>默认转人工或显式确认</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
+      </section>
+      <section id="cost">
+        <div class="head">
+          <h2>成本估算</h2>
+          <span class="tag">cost</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>成本要同时看 token、输出、工具调用、重试和人工复核</h3>
+<p>一条请求的成本通常来自四处：输入 token、输出 token、工具调用和重试。要是还需要人工复核，人工时间也要算进去。单次看起来不贵，放大到真实流量时就会变成预算问题。</p>
+<p>$$C_{total} \approx n_{in}p_{in} + n_{out}p_{out} + n_{tool}p_{tool} + n_{retry}p_{retry} + n_{human}p_{human}$$</p>
+<p><code>n_{in}</code>、<code>n_{out}</code>、<code>n_{tool}</code>、<code>n_{retry}</code> 和 <code>n_{human}</code> 分别是输入 token、输出 token、工具调用、重试次数和人工复核次数。<code>p_*</code> 是各自的单次成本。</p>
+        </div>
+        <div class="box soft">
+<h3>先压哪一项</h3>
+<p>estimate_cost.py复制</p>
+<pre><code class="language-python">estimated_cost = (
+ in_tokens * p_in
+ + out_tokens * p_out
+ + tool_calls * p_tool
+ + retries * p_retry
+ + human_reviews * p_human
+)</code></pre>
+<p>限制输出长度压的是输出 token；缓存压的是重复请求；减少重试压的是重复调用；路由到更小的模型压的是生成成本。不要拿一种手段去解决所有成本问题。</p>
+<p>动作主要压哪一项常见副作用适合什么场景</p>
+<p>压缩上下文输入 token、上下文处理时间可能丢掉证据历史长、噪声多</p>
+<p>限制输出长度输出 token、生成时间回答可能不完整摘要、提要、固定字段</p>
+<p>缓存重复计算和重复工具调用过期、错用户、版本不一致稳定问题、重复问题</p>
+<p>路由到小模型生成成本复杂任务质量可能掉简单分类、短答</p>
+<p>减少重试重复 token 和重复工具调用短暂错误可能不再自动恢复错误可分类、失败可控</p>
+        </div>
+      </div>
+      </section>
+      <section id="reliability">
+        <div class="head">
+          <h2>可靠性与回退</h2>
+          <span class="tag">reliability</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>可靠性要看失败之后的动作</h3>
+<p>可靠性看的是失败时系统有没有清楚的下一步。超时、限流、schema 错误、旧缓存和高风险动作，不该用同一套处理。先把错误码读出来，再决定重试、降级、回退还是转人工。</p>
+        </div>
+        <div class="box soft">
+<h3>故障实验</h3>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>超时</th><th>限流</th><th>解析错</th><th>旧缓存</th></tr>
+<tr><td>case: 超时</td><td>log: stage=context_ms=880, model_ms=4020, tool_ms=0</td><td>symptom: 第一屏一直不出来，最后才失败</td><td>next: 先看是不是上下文过长或链路串行，必要时先流式返回或转人工</td></tr>
+<tr><td>fix: 压缩输入、设置超时、提前回退</td><td>case: 超时</td><td>log: stage=context_ms=880, model_ms=4020, tool_ms=0</td><td>symptom: 第一屏一直不出来，最后才失败</td></tr>
+<tr><td>next: 先看是不是上下文过长或链路串行，必要时先流式返回或转人工</td><td>fix: 压缩输入、设置超时、提前回退</td><td>case: 限流</td><td>log: status=429, retry_count=4</td></tr>
+<tr><td>symptom: 一直重试，用户和服务都更忙</td><td>next: 先降并发，再做有限重试和退避</td><td>fix: backoff、限流、分流到小路径</td><td>case: 解析错</td></tr>
+<tr><td>log: error_code=schema_error, raw_output={...}</td><td>symptom: 内容看起来像答案，程序却接不住</td><td>next: 先查输出格式和字段约束</td><td>fix: 收紧 schema，失败就安全停止或重来一次</td></tr>
+<tr><td>case: 旧缓存</td><td>log: cache_hit=true, fresh_until=昨天</td><td>symptom: 用户拿到过期政策或旧结果</td><td>next: 先看 cache_key、版本和权限</td></tr>
+</table></div>
+<p>fix: 加过期时间、版本号和权限边界</p>
+<p>症状先看哪里常见误判修法</p>
+<p>用户一直等阶段耗时、上下文长度、工具串行只换更大的模型压上下文、先流式、并行工具</p>
+<p>账单变高输出 token、重试次数、工具调用只盯输入 token限制输出、缓存、减少重试</p>
+<p>总是 429并发和退避策略盲重试会自己修好降并发、退避、路由分流</p>
+<p>结果里有旧政策cache_key、版本、fresh_until缓存本身坏了给缓存加过期和权限边界</p>
+<p>退款/补偿被自动发出risk_flags、handoff、确认流程以为回答写得更稳就行默认转人工或显式确认</p>
+        </div>
+      </div>
+      </section>
+      <section id="cases">
+        <div class="head">
+          <h2>三个场景</h2>
+          <span class="tag">cases</span>
+        </div>
+<p>同一套技术，放到不同业务里，优先级会变。客服摘要、知识问答和退款工单，不该用同一条线去判断“好不好”。先看场景，再决定延迟、成本和可靠性各让多少。</p>
+<p>知识库问答</p>
+<p>目标是快、稳、能回指来源。适合缓存、检索和流式输出，但资料过旧时要能拒答或更新。</p>
+<p>场景先保什么可以省什么最先加的护栏</p>
+      </section>
+      <section id="replay">
+        <div class="head">
+          <h2>客服摘要回放</h2>
+          <span class="tag">trace</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>把一条请求拆开看</h3>
+<p>假设坐席要把最近 12 分钟的对话压成三条要点，并附上一个下一步动作。这个请求看起来只是“写一段摘要”，实际会经过路由、拼历史、检索、模型生成、格式校验、写日志、必要时回退或转人工。只要其中一段出问题，用户感受到的就“卡住了”“贵了”“错动作发出去了”。</p>
+<p>这类请求适合拿来做回放，因为它把三种问题放在同一条链上：上下文太长会拖慢第一屏，输出太长会抬高成本，结果格式或权限不稳会把失败推到后面。你只要能把这一条链看清，后面再遇到知识问答、工单分流、自动回复，判断顺序就不会乱。</p>
+<ul>
+<li>先确认这是不是高风险请求，是否允许直接执行写动作。</li>
+<li>再看缓存能不能直接命中，是否需要重新拼上下文。</li>
+<li>然后量每一段耗时，找出最慢的那一段，而不是先换模型。</li>
+<li>最后看错误码和回退出口，保证失败能被接住。</li>
+</ul>
+        </div>
+        <div class="box soft">
+<h3>最小预算表</h3>
+<p>阶段先看什么预算怎么花常见失手</p>
+<p>路由风险级别、任务类型高风险动作先留后手把写动作当成普通答复</p>
+<p>拼历史会话长度、检索块、权限保留必要证据，删掉噪声把无关历史一起塞进 prompt</p>
+<p>生成输出长度、首 token 时间先拿到第一屏，再补后续一口气追求完整答案，等太久</p>
+<p>校验schema、字段、写入动作先拦住错格式和高风险写入看到像答案就直接放行</p>
+<p>回退error_code、retry_count有限重试、退避、转人工把所有失败都当成临时波动</p>
+        </div>
+        <div class="box">
+<h3>回放代码</h3>
+<p>trace_request.py复制</p>
+<pre><code class="language-python">def trace_request(req):
+ log("start", req.id, req.kind, req.risk)
+ if cache_hit(req) and cache_fresh(req):
+ return cache_answer(req)
 
-<section id="cases">
-  <div class="head"><h2>三个场景</h2><span class="tag">cases</span></div>
-  <p>同一套技术，放到不同业务里，优先级会变。客服摘要、知识问答和退款工单，不该用同一条线去判断“好不好”。先看场景，再决定延迟、成本和可靠性各让多少。</p>
-  <div class="grid3">
-    <div class="box">
-      <h3>客服自动摘要</h3>
-      <p>目标是让坐席先看到关键信息。可以接受短暂流式返回，但不能把旧会话、错用户或不完整状态带进去。</p>
-    </div>
-    <div class="box">
-      <h3>知识库问答</h3>
-      <p>目标是快、稳、能回指来源。适合缓存、检索和流式输出，但资料过旧时要能拒答或更新。</p>
-    </div>
-    <div class="box">
-      <h3>退款工单</h3>
-      <p>目标不是快，而是别出错。可以慢一点，但高风险动作必须先确认，最好默认转人工。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="场景优先级表" data-export-lang="table">
-      <thead><tr><th>场景</th><th>先保什么</th><th>可以省什么</th><th>最先加的护栏</th></tr></thead>
-      <tbody>
-        <tr><td>客服自动摘要</td><td>第一屏、事实准确</td><td>长篇解释</td><td>摘要字段约束、超时回退</td></tr>
-        <tr><td>知识库问答</td><td>来源可追、答案不编</td><td>重复检索和重复生成</td><td>缓存、版本号、引用</td></tr>
-        <tr><td>退款工单</td><td>别自动做错事</td><td>一点点延迟</td><td>人工确认、权限校验、审计日志</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
+ ctx = load_context(req)
+ stage_ms = {}
+ stage_ms["context"] = time_block("context", lambda: ctx)
+ draft = run_model(req, ctx)
+ stage_ms["model"] = draft.latency_ms
 
-<section id="replay">
-  <div class="head"><h2>客服摘要回放</h2><span class="tag">trace</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>把一条请求拆开看</h3>
-      <p>假设坐席要把最近 12 分钟的对话压成三条要点，并附上一个下一步动作。这个请求看起来只是“写一段摘要”，实际会经过路由、拼历史、检索、模型生成、格式校验、写日志、必要时回退或转人工。只要其中一段出问题，用户感受到的就不是“模型答错了”，而是“卡住了”“贵了”“错动作发出去了”。</p>
-      <p>这类请求适合拿来做回放，因为它把三种问题放在同一条链上：上下文太长会拖慢第一屏，输出太长会抬高成本，结果格式或权限不稳会把失败推到后面。你只要能把这一条链看清，后面再遇到知识问答、工单分流、自动回复，判断顺序就不会乱。</p>
-      <ul>
-        <li>先确认这是不是高风险请求，是否允许直接执行写动作。</li>
-        <li>再看缓存能不能直接命中，是否需要重新拼上下文。</li>
-        <li>然后量每一段耗时，找出最慢的那一段，而不是先换模型。</li>
-        <li>最后看错误码和回退出口，保证失败能被接住。</li>
-      </ul>
-    </div>
-    <div class="box soft">
-      <h3>最小预算表</h3>
-      <table data-export-context="客服摘要预算表" data-export-lang="table">
-        <thead><tr><th>阶段</th><th>先看什么</th><th>预算怎么花</th><th>常见失手</th></tr></thead>
-        <tbody>
-          <tr><td>路由</td><td>风险级别、任务类型</td><td>高风险动作先留后手</td><td>把写动作当成普通答复</td></tr>
-          <tr><td>拼历史</td><td>会话长度、检索块、权限</td><td>保留必要证据，删掉噪声</td><td>把无关历史一起塞进 prompt</td></tr>
-          <tr><td>生成</td><td>输出长度、首 token 时间</td><td>先拿到第一屏，再补后续</td><td>一口气追求完整答案，等太久</td></tr>
-          <tr><td>校验</td><td>schema、字段、写入动作</td><td>先拦住错格式和高风险写入</td><td>看到像答案就直接放行</td></tr>
-          <tr><td>回退</td><td>error_code、retry_count</td><td>有限重试、退避、转人工</td><td>把所有失败都当成临时波动</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <div class="grid2">
-    <div class="box">
-      <h3>回放代码</h3>
-      <div class="codebar"><span>trace_request.py</span><button class="copy" data-copy="replay-code">复制</button></div>
-      <pre id="replay-code" data-export-context="客服摘要回放代码" data-export-lang="python"><code class="language-python">def trace_request(req):
-    log("start", req.id, req.kind, req.risk)
-    if cache_hit(req) and cache_fresh(req):
-        return cache_answer(req)
+ if draft.error_code == "429":
+ return fallback(req, "rate-limit")
+ if draft.schema_error or draft.risk == "write":
+ return request_human_review(req, draft)
 
-    ctx = load_context(req)
-    stage_ms = {}
-    stage_ms["context"] = time_block("context", lambda: ctx)
-    draft = run_model(req, ctx)
-    stage_ms["model"] = draft.latency_ms
+ save_log(req, stage_ms, draft.cost_estimate)
+ return draft</code></pre>
+<p>这段代码最重要的点在于，它把阶段耗时、错误码、缓存命中和回退出口放进了同一个流程。这样做以后，排障时能直接问：是缓存错了、上下文太长、模型太慢，还是失败后没有出口。</p>
+        </div>
+        <div class="box soft">
+<h3>三种动作的后果</h3>
+<p>动作主要改变副作用适合什么时候用</p>
+<p>压缩上下文减少输入 token 和拼接时间可能丢掉一部分证据历史长、噪声多、上下文明显超标</p>
+<p>流式输出让第一屏更早出现总计算量未必下降用户先要看到结果，再补后续</p>
+<p>加缓存减少重复请求和重复工具调用要管过期、权限和版本重复问题多、答案稳定、可复用</p>
+<p>转人工把高风险动作挡住人工成本会上升退款、补偿、写入外部系统</p>
+        </div>
+        <div class="box soft">
+<h3>失败路径怎么读</h3>
+<p>如果请求在六秒左右才出字，先别急着换模型。先看它是卡在拼历史、外部工具，还是等重试。拼历史慢，通常意味着上下文和检索块太多；工具慢，通常意味着串行调用或外部系统响应差；重试慢，通常意味着错误分类不清，失败被重复放大。三类慢的修法不同，所以第一步是把它们分开记。</p>
+<p>排障时最值得留下的几个能复算的字段：<code>request_id</code>、<code>stage</code>、<code>latency_ms</code>、<code>error_code</code>、<code>cache_hit</code>、<code>retry_count</code>、<code>risk_flag</code>。字段一旦齐，后面才知道要压上下文、换路径、改退避，还是补人工确认。</p>
+<p>字段为什么要留看不到会怎样</p>
+<p><code>request_id</code>把同一条请求串起来日志散成几段，没法回放</p>
+<p><code>stage</code>知道慢在路由、上下文、生成还是回退只能说“整体慢”</p>
+<p><code>latency_ms</code>知道是哪一段拖尾无法比较两次优化前后</p>
+<p><code>error_code</code>区分 429、timeout、schema、权限把不同故障当成一类</p>
+<p><code>cache_hit</code>判断是不是重复请求不知道慢是不是因为重复算</p>
+<p><code>retry_count</code>看失败有没有被放大看不出重试在抬高成本</p>
+<p>如果你把这一组字段补进日志，后面的监控才会有用。没有它们，监控页只能告诉你“今天好像慢了”，却没法指出该改路由、上下文、重试，还是人工确认。</p>
+        </div>
+        <div class="box info">
+<h3>这个回放要你记住什么</h3>
+<ol>
+<li>先找最慢的一段，不要先把锅甩给模型。</li>
+<li>先看错误码和状态账本，不要只看最终答案。</li>
+<li>先确认失败有没有被接住，再看它有没有跑出来。</li>
+<li>先判断高风险动作要不要留人工确认，再谈自动化程度。</li>
+</ol>
+<p>把这条链看明白以后，后面的优化顺序就会很具体：该压的压上下文，该省的省缓存，该拦的拦高风险写入，该补的补日志和监控。它就是你每次排障时都能直接拿出来用的判断顺序。</p>
+        </div>
+      </div>
+      </section>
+      <section id="ratelimit">
+        <div class="head">
+          <h2>429 退避演练</h2>
+          <span class="tag">backoff</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>把限流当成一条可复算的链</h3>
+<p>高峰期里很常见的一种情况是：第一轮请求撞到 429，第二轮重试还在同一波峰里，第三轮又把用户等候时间拉长。这个时候，继续加重试次数只会让成本更高。更合理的做法，是先看限流信号，再决定要不要退避、降并发、分流到小路径，或者直接切到稍后再试。</p>
+<p>这类问题适合单独练，因为它把三件事放在一起了：延迟会因为等待拉长，成本会因为重复调用抬高，可靠性会因为错误被反复放大而变差。你只要会读 429、retry_count、queue_depth 和 backoff_ms，就能判断自己是在救火，还是在重复踩同一个坑。</p>
+<ul>
+<li>先封顶重试次数，避免限流被放大成多次计费。</li>
+<li>再把退避节奏和并发闸门绑在一起，别只改一个参数。</li>
+<li>如果错误持续出现，就切到人工或稍后再试，不要继续刷请求。</li>
+</ul>
+        </div>
+        <div class="box soft">
+<h3>退避节奏表</h3>
+<p>轮次等待读什么写什么风险</p>
+<p>第 1 次200msstatus=429retry_count=1继续撞到同一波峰</p>
+<p>第 2 次600msqueue_depthbackoff_ms=600用户仍然等</p>
+<div class="code-example">
+<div class="codebar"><span>第 3 次1800ms错误是否持续handoff=true重复花钱，结果还不稳</span><span>backoff_plan.py复制</span></div>
+<pre><code class="language-python">def next_delay(retry_count, queue_depth):
+ base = 200
+ delay = base * (retry_count + 1) ** 2
+ if queue_depth &gt; 50:
+ delay += 300
+ return min(delay, 2000)</code></pre>
+</div>
+        </div>
+        <div class="box info">
+<h3>失败后果和练习入口</h3>
+<p>盲重试会把一次限流变成多次排队、多次计费和更晚的失败。对用户来说，这更慢、更贵、结果还不稳定。把 429 处理清楚，后面才谈得上整体可靠性。</p>
+<p>你可以直接拿上一节的时序表和这里的退避表对照：如果 queue_depth 已经很高，就不该继续把请求往同一条路径上送；如果 retry_count 已经到顶，就该转人工或稍后再试。练习时，先复算一遍等待时间，再判断该不该继续重试。</p>
+        </div>
+      </div>
+      </section>
+      <section id="workflow">
+        <div class="head">
+          <h2>上线动作</h2>
+          <span class="tag">workflow</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先写顺序，再写 prompt</h3>
+<p>上线最容易漏掉的是顺序：先查缓存还是先拼上下文，先记录错误还是先重试，先流式还是先等完整结果。顺序一乱，副作用就会跟着乱。</p>
+<p>serve_request.py复制</p>
+<pre><code class="language-python">def serve_request(req):
+ budget = plan_budget(req)
+ if cache_hit(req) and cache_fresh(req):
+ return cache_answer(req)
 
-    if draft.error_code == "429":
-        return fallback(req, "rate-limit")
-    if draft.schema_error or draft.risk == "write":
-        return request_human_review(req, draft)
+ chunks = load_context(req)
+ if budget.too_tight:
+ chunks = compress(chunks)
 
-    save_log(req, stage_ms, draft.cost_estimate)
-    return draft</code></pre>
-      <p>这段代码最重要的点在于，它把阶段耗时、错误码、缓存命中和回退出口放进了同一个流程。这样做以后，排障时能直接问：是缓存错了、上下文太长、模型太慢，还是失败后没有出口。</p>
-    </div>
-    <div class="box soft">
-      <h3>三种动作的后果</h3>
-      <table data-export-context="客服摘要动作对比" data-export-lang="table">
-        <thead><tr><th>动作</th><th>主要改变</th><th>副作用</th><th>适合什么时候用</th></tr></thead>
-        <tbody>
-          <tr><td>压缩上下文</td><td>减少输入 token 和拼接时间</td><td>可能丢掉一部分证据</td><td>历史长、噪声多、上下文明显超标</td></tr>
-          <tr><td>流式输出</td><td>让第一屏更早出现</td><td>总计算量未必下降</td><td>用户先要看到结果，再补后续</td></tr>
-          <tr><td>加缓存</td><td>减少重复请求和重复工具调用</td><td>要管过期、权限和版本</td><td>重复问题多、答案稳定、可复用</td></tr>
-          <tr><td>转人工</td><td>把高风险动作挡住</td><td>人工成本会上升</td><td>退款、补偿、写入外部系统</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <div class="box soft">
-    <h3>失败路径怎么读</h3>
-    <p>如果请求在六秒左右才出字，先别急着换模型。先看它是卡在拼历史、外部工具，还是等重试。拼历史慢，通常意味着上下文和检索块太多；工具慢，通常意味着串行调用或外部系统响应差；重试慢，通常意味着错误分类不清，失败被重复放大。三类慢的修法不同，所以第一步是把它们分开记。</p>
-    <p>排障时最值得留下的不是一整段自然语言，而是几个能复算的字段：<code>request_id</code>、<code>stage</code>、<code>latency_ms</code>、<code>error_code</code>、<code>cache_hit</code>、<code>retry_count</code>、<code>risk_flag</code>。字段一旦齐，后面才知道要压上下文、换路径、改退避，还是补人工确认。</p>
-    <table data-export-context="失败路径字段表" data-export-lang="table">
-      <thead><tr><th>字段</th><th>为什么要留</th><th>看不到会怎样</th></tr></thead>
-      <tbody>
-        <tr><td><code>request_id</code></td><td>把同一条请求串起来</td><td>日志散成几段，没法回放</td></tr>
-        <tr><td><code>stage</code></td><td>知道慢在路由、上下文、生成还是回退</td><td>只能说“整体慢”</td></tr>
-        <tr><td><code>latency_ms</code></td><td>知道是哪一段拖尾</td><td>无法比较两次优化前后</td></tr>
-        <tr><td><code>error_code</code></td><td>区分 429、timeout、schema、权限</td><td>把不同故障当成一类</td></tr>
-        <tr><td><code>cache_hit</code></td><td>判断是不是重复请求</td><td>不知道慢是不是因为重复算</td></tr>
-        <tr><td><code>retry_count</code></td><td>看失败有没有被放大</td><td>看不出重试在抬高成本</td></tr>
-      </tbody>
-    </table>
-    <p>如果你把这一组字段补进日志，后面的监控才会有用。没有它们，监控页只能告诉你“今天好像慢了”，却没法指出该改路由、上下文、重试，还是人工确认。</p>
-  </div>
-  <div class="box info">
-    <h3>这个回放要你记住什么</h3>
-    <ol>
-      <li>先找最慢的一段，不要先把锅甩给模型。</li>
-      <li>先看错误码和状态账本，不要只看最终答案。</li>
-      <li>先确认失败有没有被接住，再看它有没有跑出来。</li>
-      <li>先判断高风险动作要不要留人工确认，再谈自动化程度。</li>
-    </ol>
-    <p>把这条链看明白以后，后面的优化顺序就会很具体：该压的压上下文，该省的省缓存，该拦的拦高风险写入，该补的补日志和监控。它就是你每次排障时都能直接拿出来用的判断顺序。</p>
-  </div>
-</section>
+ result = call_model(req, chunks)
+ if result.timeout:
+ return fallback(req, "timeout")
+ if result.schema_error or result.risk == "write":
+ return request_human_review(req, result)
 
-<section id="ratelimit">
-  <div class="head"><h2>429 退避演练</h2><span class="tag">backoff</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>把限流当成一条可复算的链</h3>
-      <p>高峰期里很常见的一种情况是：第一轮请求撞到 429，第二轮重试还在同一波峰里，第三轮又把用户等候时间拉长。这个时候，继续加重试次数只会让成本更高。更合理的做法，是先看限流信号，再决定要不要退避、降并发、分流到小路径，或者直接切到稍后再试。</p>
-      <p>这类问题适合单独练，因为它把三件事放在一起了：延迟会因为等待拉长，成本会因为重复调用抬高，可靠性会因为错误被反复放大而变差。你只要会读 429、retry_count、queue_depth 和 backoff_ms，就能判断自己是在救火，还是在重复踩同一个坑。</p>
-      <ul>
-        <li>先封顶重试次数，避免限流被放大成多次计费。</li>
-        <li>再把退避节奏和并发闸门绑在一起，别只改一个参数。</li>
-        <li>如果错误持续出现，就切到人工或稍后再试，不要继续刷请求。</li>
-      </ul>
-    </div>
-    <div class="box soft">
-      <h3>退避节奏表</h3>
-      <table data-export-context="429退避节奏表" data-export-lang="table">
-        <thead><tr><th>轮次</th><th>等待</th><th>读什么</th><th>写什么</th><th>风险</th></tr></thead>
-        <tbody>
-          <tr><td>第 1 次</td><td>200ms</td><td>status=429</td><td>retry_count=1</td><td>继续撞到同一波峰</td></tr>
-          <tr><td>第 2 次</td><td>600ms</td><td>queue_depth</td><td>backoff_ms=600</td><td>用户仍然等</td></tr>
-          <tr><td>第 3 次</td><td>1800ms</td><td>错误是否持续</td><td>handoff=true</td><td>重复花钱，结果还不稳</td></tr>
-        </tbody>
-      </table>
-      <div class="codebar"><span>backoff_plan.py</span><button class="copy" data-copy="backoff-code">复制</button></div>
-      <pre id="backoff-code" data-export-context="429退避代码" data-export-lang="python"><code class="language-python">def next_delay(retry_count, queue_depth):
-    base = 200
-    delay = base * (retry_count + 1) ** 2
-    if queue_depth &gt; 50:
-        delay += 300
-    return min(delay, 2000)</code></pre>
-    </div>
-  </div>
-  <div class="box info">
-    <h3>失败后果和练习入口</h3>
-    <p>盲重试会把一次限流变成多次排队、多次计费和更晚的失败。对用户来说，这不是“系统更努力”，而是更慢、更贵、结果还不稳定。把 429 处理清楚，后面才谈得上整体可靠性。</p>
-    <p>你可以直接拿上一节的时序表和这里的退避表对照：如果 queue_depth 已经很高，就不该继续把请求往同一条路径上送；如果 retry_count 已经到顶，就该转人工或稍后再试。练习时，先复算一遍等待时间，再判断该不该继续重试。</p>
-  </div>
-</section>
-
-<section id="workflow">
-  <div class="head"><h2>上线动作</h2><span class="tag">workflow</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>先写顺序，再写 prompt</h3>
-      <p>上线最容易漏掉的是顺序：先查缓存还是先拼上下文，先记录错误还是先重试，先流式还是先等完整结果。顺序一乱，副作用就会跟着乱。</p>
-      <div class="codebar"><span>serve_request.py</span><button class="copy" data-copy="serve-request">复制</button></div>
-      <pre id="serve-request" data-export-context="请求处理骨架" data-export-lang="python"><code class="language-python">def serve_request(req):
-    budget = plan_budget(req)
-    if cache_hit(req) and cache_fresh(req):
-        return cache_answer(req)
-
-    chunks = load_context(req)
-    if budget.too_tight:
-        chunks = compress(chunks)
-
-    result = call_model(req, chunks)
-    if result.timeout:
-        return fallback(req, "timeout")
-    if result.schema_error or result.risk == "write":
-        return request_human_review(req, result)
-
-    persist_log(req, chunks, result)
-    return result</code></pre>
-    </div>
-    <div class="box soft">
-      <h3>每一步都在读写什么</h3>
-      <p>缓存命中会减少成本，但前提是 key 对、版本对、权限也对。上下文压缩能省时间和钱，但会牺牲一部分证据。转人工看起来慢，却能把高风险动作挡住。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="请求处理读写表" data-export-lang="table">
-      <thead><tr><th>步骤</th><th>读</th><th>写</th><th>副作用</th><th>错了的症状</th></tr></thead>
-      <tbody>
-        <tr><td>查缓存</td><td>cache_key、fresh_until、permission</td><td>命中结果</td><td>减少重复计算</td><td>旧答案、错用户复用</td></tr>
-        <tr><td>拼上下文</td><td>历史、检索结果、预算</td><td>prompt 片段</td><td>改变后续模型输入</td><td>上下文过长，延迟升高</td></tr>
-        <tr><td>调用模型</td><td>prompt、长度限制</td><td>答案草稿、工具请求</td><td>生成 token、可能触发工具</td><td>输出太长、格式不稳</td></tr>
-        <tr><td>处理失败</td><td>error_code、retry_count</td><td>backoff、fallback、handoff</td><td>增加或抑制重试</td><td>无限重试、一直卡住</td></tr>
-        <tr><td>记录日志</td><td>阶段耗时、结果</td><td>log_id、metrics</td><td>给后续排障留下证据</td><td>只剩“成功/失败”两种模糊结论</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="diagnosis">
-  <div class="head"><h2>误区诊断</h2><span class="tag">diagnosis</span></div>
-  <p>这张表的顺序很重要：先看阶段，再看错误码，再看缓存和重试，最后才看 prompt。只改 prompt，通常只会把症状挪开。</p>
-  <div class="table-wrap">
-    <table data-export-context="误区诊断表" data-export-lang="table">
-      <thead><tr><th>症状</th><th>优先看哪里</th><th>常见误判</th><th>修法</th></tr></thead>
-      <tbody>
-        <tr><td>平均延迟不高，但用户说慢</td><td>P95/P99 和阶段耗时</td><td>只看平均值</td><td>找尾部最慢的一段，先动那段</td></tr>
-        <tr><td>成本突然上去</td><td>输出 token、重试、工具调用</td><td>只看输入 token</td><td>限制输出、压重试、加缓存</td></tr>
-        <tr><td>旧政策被发给用户</td><td>cache_key、版本、fresh_until</td><td>以为缓存本身坏了</td><td>给缓存加过期和权限边界</td></tr>
-        <tr><td>日志只有“失败”</td><td>error_code、stage、latency_ms</td><td>改 prompt 就够了</td><td>先补日志字段，再谈优化</td></tr>
-        <tr><td>退款/补偿自动发出</td><td>risk_flags、handoff、confirm</td><td>回答写得更稳就能解决</td><td>默认转人工或显式确认</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="box info">
-    <h3>排障顺序</h3>
-    <ol>
-      <li>先看是哪一段慢，或者是哪一类失败。</li>
-      <li>再看 error_code、retry_count、cache_key 和 risk_flags。</li>
-      <li>最后才看 prompt、文案和模型选择。</li>
-    </ol>
-  </div>
-</section>
-
-<section id="boundary">
-  <div class="head"><h2>边界</h2><span class="tag">boundary</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>这里先不追的概念</h3>
-      <p>分布式 tracing、容量规划、自动扩缩容、队列理论、A/B 实验这些东西都会在更大的系统课里回来。现在先把单条主链路的账算清。</p>
-    </div>
-    <div class="box soft">
-      <h3>下一步动手</h3>
-      <p>给自己的功能先补四个字段：<code>timeout</code>、<code>cache_key</code>、<code>error_code</code>、<code>fallback</code>。如果有写外部系统、退款、发消息这类动作，再加一层人工确认。这样就已经有了第一版生产边界。</p>
-    </div>
-  </div>
-</section>
-
-
+ persist_log(req, chunks, result)
+ return result</code></pre>
+        </div>
+        <div class="box soft">
+<h3>每一步都在读写什么</h3>
+<p>缓存命中会减少成本，但前提是 key 对、版本对、权限也对。上下文压缩能省时间和钱，但会牺牲一部分证据。转人工看起来慢，却能把高风险动作挡住。</p>
+<p>步骤读写副作用错了的症状</p>
+<p>查缓存cache_key、fresh_until、permission命中结果减少重复计算旧答案、错用户复用</p>
+<p>拼上下文历史、检索结果、预算prompt 片段改变后续模型输入上下文过长，延迟升高</p>
+<p>调用模型prompt、长度限制答案草稿、工具请求生成 token、可能触发工具输出太长、格式不稳</p>
+<p>处理失败error_code、retry_countbackoff、fallback、handoff增加或抑制重试无限重试、一直卡住</p>
+<p>记录日志阶段耗时、结果log_id、metrics给后续排障留下证据只剩“成功/失败”两种模糊结论</p>
+        </div>
+      </div>
+      </section>
+      <section id="diagnosis">
+        <div class="head">
+          <h2>误区诊断</h2>
+          <span class="tag">diagnosis</span>
+        </div>
+<p>这张表的顺序很重要：先看阶段，再看错误码，再看缓存和重试，最后才看 prompt。只改 prompt，通常只会把症状挪开。</p>
+<p>平均延迟不高，但用户说慢P95/P99 和阶段耗时只看平均值找尾部最慢的一段，先动那段</p>
+<p>成本突然上去输出 token、重试、工具调用只看输入 token限制输出、压重试、加缓存</p>
+<p>旧政策被发给用户cache_key、版本、fresh_until以为缓存本身坏了给缓存加过期和权限边界</p>
+<p>日志只有“失败”error_code、stage、latency_ms改 prompt 就够了先补日志字段，再谈优化</p>
+<p>退款/补偿自动发出risk_flags、handoff、confirm回答写得更稳就能解决默认转人工或显式确认</p>
+      </section>
+      <section id="boundary">
+        <div class="head">
+          <h2>边界</h2>
+          <span class="tag">boundary</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>这里先不追的概念</h3>
+<p>分布式 tracing、容量规划、自动扩缩容、队列理论、A/B 实验这些东西都会在更大的系统课里回来。现在先把单条主链路的账算清。</p>
+        </div>
+        <div class="box soft">
+<h3>下一步动手</h3>
+<p>给自己的功能先补四个字段：<code>timeout</code>、<code>cache_key</code>、<code>error_code</code>、<code>fallback</code>。如果有写外部系统、退款、发消息这类动作，再加一层人工确认。这样就已经有了第一版生产边界。</p>
+        </div>
+      </div>
+      </section>
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-intro">
-  <div class="box soft">
-    <h3>练习目标</h3>
-    <p>这组题只看一件事：你能不能把一条请求拆成可量时、可算账、可回退的几段。客观题可以直接检查，开放题按参考答案自查，不要只写空泛结论。</p>
-  </div>
-  <div class="box">
-    <h3>作答提醒</h3>
-    <p>答题时按“先看哪一段、为什么慢、怎么压、失败时怎么办”来写。不要先讲抽象结论，再回头找证据。</p>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>一、概念边界</h3><p>先分清慢、贵、不稳分别看什么。</p></div>
-    <div class="quick-review"><b>复习</b>三类约束常常一起变坏，不能只盯一个指标。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q1" data-group="concept" data-title="三类约束" data-answer="延迟、成本、可靠性" data-explain="这三项常常一起变坏，不能分开看。">
-      <div class="q-meta"><span class="pill">choice</span></div>
-      <h3>1. LLM 功能上线时，最先要一起看的三类约束是什么？</h3>
-      <div class="choices">
-        <label><input type="radio" name="q1" value="延迟、成本、可靠性">延迟、成本、可靠性</label>
-        <label><input type="radio" name="q1" value="美观、标题、字号">美观、标题、字号</label>
-        <label><input type="radio" name="q1" value="上下文、分词、Embedding">上下文、分词、Embedding</label>
+      <div class="practice-intro">
+      <div class="box soft">
+<h3>练习目标</h3>
+<p>这组题只看一件事：你能不能把一条请求拆成可量时、可算账、可回退的几段。客观题可以直接检查，开放题按参考答案自查，不要只写空泛结论。</p>
       </div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q2" data-group="concept" data-title="流式输出是否降总成本" data-answer="错" data-explain="流式输出能让用户更早看到结果，但总 token 和工具调用没变时，成本不一定下降。">
-      <div class="q-meta"><span class="pill">true/false</span></div>
-      <h3>2. 流式输出一定会减少总成本。</h3>
-      <div class="choices">
-        <label><input type="radio" name="q2" value="对">对</label>
-        <label><input type="radio" name="q2" value="错">错</label>
+      <div class="box">
+<h3>作答提醒</h3>
+<p>答题时按“先看哪一段、为什么慢、怎么压、失败时怎么办”来写。不要先讲抽象结论，再回头找证据。</p>
       </div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q short" data-question="q3" data-group="concept" data-title="P95 含义" data-answer="5%">
-      <div class="q-meta"><span class="pill">fill</span></div>
-      <h3>3. P95 关注的是最慢约 ______ 的请求。</h3>
-      <input type="text" name="q3" placeholder="填一个百分比">
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>二、延迟拆解</h3><p>先找最长的一段，再决定要不要压上下文、并行工具或先返回。</p></div>
-    <div class="quick-review"><b>复习</b>慢请求通常不是单一原因，先量时，再动手。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q4" data-group="latency" data-title="先做什么" data-answer="先把延迟拆成排队、上下文、模型、工具、重试几段" data-explain="先分段，才知道该删哪一段、并哪一段或回退哪一段。">
-      <div class="q-meta"><span class="pill">choice</span></div>
-      <h3>4. 如果一条请求很慢，最先该做什么？</h3>
-      <div class="choices">
-        <label><input type="radio" name="q4" value="先把延迟拆成排队、上下文、模型、工具、重试几段">先把延迟拆成排队、上下文、模型、工具、重试几段</label>
-        <label><input type="radio" name="q4" value="立刻换成更长的 prompt">立刻换成更长的 prompt</label>
-        <label><input type="radio" name="q4" value="把所有日志关掉">把所有日志关掉</label>
       </div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q short" data-question="q5" data-group="latency" data-title="公式项" data-answer="T_context,上下文">
-      <div class="q-meta"><span class="pill">fill</span></div>
-      <h3>5. 延迟公式里，<code>T_context</code> 对应上下文拼接和压缩。</h3>
-      <input type="text" name="q5" placeholder="填公式项">
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q short full" data-question="q6" data-group="latency" data-title="流式输出边界">
-      <div class="q-meta"><span class="pill">synthesis</span></div>
-      <h3>6. 流式输出能改善什么，不能改善什么？</h3>
-      <p class="solve-note">先说第一屏能不能更早出来，再说总计算量、输入 token、工具调用和尾部延迟有没有变。</p>
-      <textarea name="q6" placeholder="按“能改善 / 不能改善 / 什么时候没用”来写"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>好答案会说：流式输出主要改善感知延迟，让用户更早看到第一屏；它不自动减少输入 token、模型计算量或外部工具等待。若慢点在排队、检索、权限检查或串行工具，流式只能让结果更早露出一部分，不会把总时长变短。写得更好的答案还能补一句：高风险动作和 schema 错误也不能靠流式解决。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>三、成本与回退</h3><p>成本看 token、工具、重试和人工复核，可靠性看失败时有没有清楚的下一步。</p></div>
-    <div class="quick-review"><b>复习</b>重试、缓存和限流都能改账，但各自有副作用。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q7" data-group="cost" data-title="成本来源" data-answer="重试一次" data-explain="重试会重复消耗输入、输出和工具调用。">
-      <div class="q-meta"><span class="pill">choice</span></div>
-      <h3>7. 下列哪一项通常会直接抬高单次请求的成本？</h3>
-      <div class="choices">
-        <label><input type="radio" name="q7" value="重试一次">重试一次</label>
-        <label><input type="radio" name="q7" value="缩短日志字段">缩短日志字段</label>
-        <label><input type="radio" name="q7" value="提前显示第一屏">提前显示第一屏</label>
-      </div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q8" data-group="cost" data-title="429 处理" data-answer="有限重试并做退避，同时降低并发" data-explain="429 表示限流，不是“多跑几次就会好”。">
-      <div class="q-meta"><span class="pill">choice</span></div>
-      <h3>8. 看到 429 时，最合理的第一步通常是什么？</h3>
-      <div class="choices">
-        <label><input type="radio" name="q8" value="立刻无限重试">立刻无限重试</label>
-        <label><input type="radio" name="q8" value="有限重试并做退避，同时降低并发">有限重试并做退避，同时降低并发</label>
-        <label><input type="radio" name="q8" value="把错误码吞掉">把错误码吞掉</label>
-      </div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q short full" data-question="q9" data-group="cost" data-title="缓存边界">
-      <div class="q-meta"><span class="pill">synthesis</span></div>
-      <h3>9. 为什么缓存要同时看过期时间和权限边界？</h3>
-      <p class="solve-note">回答里至少要提到旧答案、错用户复用和版本变化这三件事中的两件。</p>
-      <textarea name="q9" placeholder="先说缓存解决什么，再说它会在哪里出错"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>好答案会说：缓存能省重复计算，但必须有过期时间，不然旧政策、旧价格或旧状态会被继续返回；还必须有权限边界，不然一个用户的结果可能被另一个用户复用。写得更完整的答案会补上版本号或 fresh_until，说明数据新鲜度和权限都是缓存的一部分。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>四、日志与迁移</h3><p>日志要能解释路径，不只是给出结论。</p></div>
-    <div class="quick-review"><b>复习</b>先看阶段和错误码，再看 prompt。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q short" data-question="q10" data-group="logs" data-title="代码副作用" data-answer="写日志,记录排障材料">
-      <div class="q-meta"><span class="pill">code reading</span></div>
-      <h3>10. 代码里 <code>persist_log(req, chunks, result)</code> 的副作用是什么？</h3>
-      <input type="text" name="q10" placeholder="写出它会做的事">
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q11" data-group="logs" data-title="缺失字段" data-answer="error_code" data-explain="没有错误码，就分不清超时、限流、schema 还是权限。">
-      <div class="q-meta"><span class="pill">choice</span></div>
-      <h3>11. 如果日志里只有“失败”，你最先该补什么字段？</h3>
-      <div class="choices">
-        <label><input type="radio" name="q11" value="error_code">error_code</label>
-        <label><input type="radio" name="q11" value="hero">hero</label>
-        <label><input type="radio" name="q11" value="标题">标题</label>
-      </div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q full" data-question="q12" data-group="transfer" data-title="客服摘要 SLO">
-      <div class="q-meta"><span class="pill">synthesis</span></div>
-      <h3>12. 为“客服自动摘要”写 3 条 SLO 或监控指标。</h3>
-      <p class="solve-note">可以写延迟、解析成功率、回退率、缓存命中率、人工接管率中的任意三项，但要说清它们为什么重要。</p>
-      <textarea name="q12" placeholder="先写指标，再写为什么它们能暴露问题"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>评分要点</summary>
-        <p>参考答案可以包含：P95 总延迟、JSON 解析成功率、摘要字段缺失率、缓存命中率、转人工率、超时率。好的答案会把指标和业务后果连起来，例如“P95 超过 4 秒坐席就开始等”“解析失败率上升说明 schema 或输出长度有问题”“转人工率飙升说明模型或权限边界在退化”。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-      </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、概念边界</h3></div>
+          <div class="quick-review">复习 三类约束常常一起变坏，不能只盯一个指标。 --></div>
         </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="延迟、成本、可靠性">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 1. LLM 功能上线时，最先要一起看的三类约束是什么？</h3>
 
-      <section id="sources">
+      <div class="choices">
+      <label><input type="radio" name="q1" value="延迟、成本、可靠性">延迟、成本、可靠性</label>
+      <label><input type="radio" name="q1" value="美观、标题、字号">美观、标题、字号</label>
+      <label><input type="radio" name="q1" value="上下文、分词、Embedding">上下文、分词、Embedding</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>延迟、成本、可靠性。这三项常常一起变坏，不能分开看。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="错">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> 2. 流式输出一定会减少总成本。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>错。流式输出能让用户更早看到结果，但总 token 和工具调用没变时，成本不一定下降。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="5%">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 3. P95 关注的是最慢约 ______ 的请求。</h3>
+
+
+      <textarea name="q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>5%</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、延迟拆解</h3></div>
+          <div class="quick-review">复习 慢请求通常不是单一原因，先量时，再动手。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="先把延迟拆成排队、上下文、模型、工具、重试几段">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 4. 如果一条请求很慢，最先该做什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q4" value="先把延迟拆成排队、上下文、模型、工具、重试几段">先把延迟拆成排队、上下文、模型、工具、重试几段</label>
+      <label><input type="radio" name="q4" value="立刻换成更长的 prompt">立刻换成更长的 prompt</label>
+      <label><input type="radio" name="q4" value="把所有日志关掉">把所有日志关掉</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>先把延迟拆成排队、上下文、模型、工具、重试几段。先分段，才知道该删哪一段、并哪一段或回退哪一段。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="T_context,上下文">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 5. 延迟公式里，<code>T_context</code> 对应上下文拼接和压缩。</h3>
+
+
+      <textarea name="q5"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>T_context,上下文</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 6. 流式输出能改善什么，不能改善什么？</h3>
+
+
+      <textarea name="q6"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案会说：流式输出主要改善感知延迟，让用户更早看到第一屏；它不自动减少输入 token、模型计算量或外部工具等待。若慢点在排队、检索、权限检查或串行工具，流式只能让结果更早露出一部分，不会把总时长变短。写得更好的答案还能补一句：高风险动作和 schema 错误也不能靠流式解决。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、成本与回退</h3></div>
+          <div class="quick-review">复习 重试、缓存和限流都能改账，但各自有副作用。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="重试一次">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 7. 下列哪一项通常会直接抬高单次请求的成本？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q7" value="重试一次">重试一次</label>
+      <label><input type="radio" name="q7" value="缩短日志字段">缩短日志字段</label>
+      <label><input type="radio" name="q7" value="提前显示第一屏">提前显示第一屏</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>重试一次。重试会重复消耗输入、输出和工具调用。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="有限重试并做退避，同时降低并发">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 8. 看到 429 时，最合理的第一步通常是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q8" value="立刻无限重试">立刻无限重试</label>
+      <label><input type="radio" name="q8" value="有限重试并做退避，同时降低并发">有限重试并做退避，同时降低并发</label>
+      <label><input type="radio" name="q8" value="把错误码吞掉">把错误码吞掉</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>有限重试并做退避，同时降低并发。429 表示限流，不是“多跑几次就会好”。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 9. 为什么缓存要同时看过期时间和权限边界？</h3>
+
+
+      <textarea name="q9"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案会说：缓存能省重复计算，但必须有过期时间，不然旧政策、旧价格或旧状态会被继续返回；还必须有权限边界，不然一个用户的结果可能被另一个用户复用。写得更完整的答案会补上版本号或 fresh_until，说明数据新鲜度和权限都是缓存的一部分。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、日志与迁移</h3></div>
+          <div class="quick-review">复习 先看阶段和错误码，再看 prompt。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="写日志,记录排障材料">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">code reading</span></div>
+        <h3><b>Q:</b> 10. 代码里 <code>persist_log(req, chunks, result)</code> 的副作用是什么？</h3>
+
+
+      <textarea name="q10"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>写日志,记录排障材料</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="error_code">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 11. 如果日志里只有“失败”，你最先该补什么字段？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q11" value="error_code">error_code</label>
+      <label><input type="radio" name="q11" value="hero">hero</label>
+      <label><input type="radio" name="q11" value="标题">标题</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>error_code。没有错误码，就分不清超时、限流、schema 还是权限。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 12. 为“客服自动摘要”写 3 条 SLO 或监控指标。</h3>
+
+
+      <textarea name="q12"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。参考答案可以包含：P95 总延迟、JSON 解析成功率、摘要字段缺失率、缓存命中率、转人工率、超时率。好的答案会把指标和业务后果连起来，例如“P95 超过 4 秒坐席就开始等”“解析失败率上升说明 schema 或输出长度有问题”“转人工率飙升说明模型或权限边界在退化”。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-  <li><a href="../09_Agent最小流程/学习页.html">上一节《Agent 最小流程》</a>：这页承接工具循环和状态写回，说明它们一旦上线就会变成延迟、成本和可靠性问题。</li>
-  <li><a href="../index.html">课程地图</a>：确认本页位于 09 之后，承担把 Agent 链路收束到生产约束的位置。</li>
-  <li><a href="https://developers.openai.com/api/docs/pricing">OpenAI API Docs: Pricing</a>：支持输入 token、输出 token 和请求结构的成本估算。</li>
-  <li><a href="https://developers.openai.com/api/docs/guides/rate-limits">OpenAI API Docs: Rate limits</a>：支持 429、限流和退避重试的处理方式。</li>
-  <li><a href="https://developers.openai.com/api/docs/guides/streaming-responses">OpenAI API Docs: Streaming responses</a>：支持流式输出改善感知延迟的判断。</li>
-  <li><a href="https://developers.openai.com/api/docs/guides/error-codes">OpenAI API Docs: Error codes</a>：支持把超时、解析错误、限流和权限问题分开处理。</li>
-  <li><a href="https://developers.openai.com/api/docs/guides/flex-processing">OpenAI API Docs: Flex processing</a>：支持把长请求、柔性处理和超时边界分开看。</li>
-  <li><a href="https://developers.openai.com/api/docs/guides/production-best-practices">OpenAI API Docs: Production best practices</a>：支持上线时先补超时、日志、回退和告警，而不是只看离线效果。</li>
+<ul>
+<li><a href="../09_Agent最小流程/学习页.html">上一节《Agent 最小流程》</a>：这页承接工具循环和状态写回，说明它们一旦上线就会变成延迟、成本和可靠性问题。</li>
+<li><a href="../index.html">课程地图</a>：确认本页位于 09 之后，承担把 Agent 链路收束到生产约束的位置。</li>
+<li><a href="https://developers.openai.com/api/docs/pricing">OpenAI API Docs: Pricing</a>：支持输入 token、输出 token 和请求结构的成本估算。</li>
+<li><a href="https://developers.openai.com/api/docs/guides/rate-limits">OpenAI API Docs: Rate limits</a>：支持 429、限流和退避重试的处理方式。</li>
+<li><a href="https://developers.openai.com/api/docs/guides/streaming-responses">OpenAI API Docs: Streaming responses</a>：支持流式输出改善感知延迟的判断。</li>
+<li><a href="https://developers.openai.com/api/docs/guides/error-codes">OpenAI API Docs: Error codes</a>：支持把超时、解析错误、限流和权限问题分开处理。</li>
+<li><a href="https://developers.openai.com/api/docs/guides/flex-processing">OpenAI API Docs: Flex processing</a>：支持把长请求、柔性处理和超时边界分开看。</li>
+<li><a href="https://developers.openai.com/api/docs/guides/production-best-practices">OpenAI API Docs: Production best practices</a>：支持上线时先补超时、日志、回退和告警，而不是只看离线效果。</li>
 </ul>
-
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

@@ -4,1035 +4,724 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>08｜生产故障与选型清单</title>
-  <meta name="description" content="LLM Serving 架构与请求调度第 08 单元：把 TTFT、TPOT、排队、OOM、冷启动和回滚条件放进同一张故障与选型清单。">
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="LLM Serving 架构与请求调度" data-unit="第 08 单元｜生产故障与选型清单">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>LLM Serving 架构与请求调度</strong>
-        <span>第 08 单元</span>
-      </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#position"><span class="dot"></span>课程位置</a>
-        <a href="#map"><span class="dot"></span>故障地图</a>
-        <a href="#terms"><span class="dot"></span>术语与误区</a>
-        <a href="#diagnostics"><span class="dot"></span>故障诊断</a>
-        <a href="#cases"><span class="dot"></span>故障案例</a>
-        <a href="#choice"><span class="dot"></span>选型清单</a>
-        <a href="#mistakes"><span class="dot"></span>常见错误</a>
-        <a href="#bridge"><span class="dot"></span>下一步</a>
-        <a href="#boundary"><span class="dot"></span>边界</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">先按症状找层，再按层选框架；最后才决定要不要加 GPU、换引擎或回滚发布。</div>
-    </aside>
 
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">故障与选型</div>
-          <h1>生产故障与选型清单</h1>
-          <p>这一节把前面几层装回真实线上场景：TTFT、TPOT、排队、OOM、冷启动、灰度回滚，最后收成一张能直接拿去排障的清单。你会先判断问题落在哪一层，再决定该看入口、路由、执行，还是发布流程。</p>
-          <div class="course-links">
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">LLM Serving 架构与请求调度</a>
+        <span class="sep">/</span>
+        <span>第 08 单元｜生产故障与选型清单</span>
+      </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">故障与选型</div>
+      <div class="hero-meta">
+        <span class="hero-badge">第 08 单元｜生产故障与选型清单</span>
+      </div>
+      <h1 class="hero-title">08｜生产故障与选型清单</h1>
+      <p class="hero-desc">这一节把前面几层装回真实线上场景：TTFT、TPOT、排队、OOM、冷启动、灰度回滚，最后收成一张能直接拿去排障的清单。你会先判断问题落在哪一层，再决定该看入口、路由、执行，还是发布流程。</p>
+      <div class="course-links">
             <a href="../07_Ray_Serve_LLM与部署形态/学习页.html">上一节：Ray Serve LLM 与部署形态</a>
             <a href="../index.html">课程地图</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>读完本页应该能做什么</h3>
-          <ul>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
             <li>看到慢请求时，先把 TTFT、TPOT、排队、冷启动分到不同层。</li>
             <li>说清 vLLM、SGLang、TensorRT-LLM、Ray Serve LLM 各自解决哪一层问题。</li>
             <li>写出一条可执行的上线检查、灰度条件或回滚阈值。</li>
-          </ul>
-        </div>
+        </ul>
       </div>
+    </div>
+  </header>
 
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#position">课程位置</a>
+      <a href="#map">故障地图</a>
+      <a href="#terms">术语与误区</a>
+      <a href="#diagnostics">故障诊断</a>
+      <a href="#cases">故障案例</a>
+      <a href="#ledger">灰度账本</a>
+      <a href="#playbook">动作桥</a>
+      <a href="#choice">选型清单</a>
+      <a href="#mistakes">常见错误</a>
+      <a href="#bridge">下一步</a>
+      <a href="#practice">练习</a>
+      <a href="#boundary">边界</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
         <div class="head">
           <h2>学习目标</h2>
           <span class="tag">goal</span>
         </div>
-        <div class="grid">
-          <div class="box soft">
-            <h3>先把故障分层</h3>
-            <p>学完后，你要能把一个 ticket 分成入口接纳、路由副本、执行引擎、发布回滚四层。TTFT 变差，不等于模型一定变慢；TPOT 变差，也不等于入口一定有问题。先分层，后下结论。</p>
-          </div>
-          <div class="box info">
-            <h3>再把框架放回职责边界</h3>
-            <p>你要能把 vLLM、SGLang、TensorRT-LLM、Ray Serve LLM 放进同一张图里，不再用“哪个最好”这种空问题判断，而是按服务编排、结构化生成、极致性能、平台交付来选。</p>
-          </div>
-          <div class="box warn">
-            <h3>最后把判断落到动作</h3>
-            <p>你要能写出一个回滚条件、一个灰度门禁和一个上线检查表。能看见问题，还要能知道下一步该限流、回滚、预热，还是换一层去查。</p>
-          </div>
+      <div class="grid">
+        <div class="box soft">
+<h3>先把故障分层</h3>
+<p>学完后，你要能把一个 ticket 分成入口接纳、路由副本、执行引擎、发布回滚四层。TTFT 变差，不等于模型一定变慢；TPOT 变差，也不等于入口一定有问题。先分层，后下结论。</p>
         </div>
-        <div class="box soft" style="margin-top:12px;">
-          <p><strong>你现在应该能做什么：</strong>拿到一条生产故障，不先问“模型是不是坏了”，而是先问“它卡在入口、路由、执行，还是发布”。</p>
+        <div class="box info">
+<h3>再把框架放回职责边界</h3>
+<p>你要能把 vLLM、SGLang、TensorRT-LLM、Ray Serve LLM 放进同一张图里，不再用“哪个最好”这种空问题判断，而是按服务编排、结构化生成、极致性能、平台交付来选。</p>
         </div>
+        <div class="box warn">
+<h3>最后把判断落到动作</h3>
+<p>你要能写出一个回滚条件、一个灰度门禁和一个上线检查表。能看见问题，还要能知道下一步该限流、回滚、预热，还是换一层去查。</p>
+        </div>
+        <div class="box soft">
+<p><b>你现在应该能做什么：</b>拿到一条生产故障，不先问“模型是先问“它卡在入口、路由、执行，还是发布”。</p>
+        </div>
+      </div>
       </section>
-
       <section id="position">
         <div class="head">
           <h2>课程位置</h2>
           <span class="tag">route</span>
         </div>
-        <div class="grid">
-          <div class="box soft">
-            <h3>这节课收什么</h3>
-            <p>前面几节已经把请求生命周期、流式返回、队列、路由、自动伸缩、SLO 和部署形态拆开了。这里不再重复每个层的定义，而是把它们收拢到故障现场和选型现场里。</p>
-          </div>
-          <div class="box info">
-            <h3>这节课不展开什么</h3>
-            <p>不展开 CUDA kernel、完整 Kubernetes 平台、模型训练流水线，也不展开 benchmark 设计细节。那些内容会在别的笔记里单独展开；这里先把线上责任边界说清。</p>
-          </div>
+      <div class="grid">
+        <div class="box soft">
+<h3>这节课收什么</h3>
+<p>前面几节已经把请求生命周期、流式返回、队列、路由、自动伸缩、SLO 和部署形态拆开了。这里不再重复每个层的定义，而是把它们收拢到故障现场和选型现场里。</p>
         </div>
+        <div class="box info">
+<h3>这节课不展开什么</h3>
+<p>不展开 CUDA kernel、完整 Kubernetes 平台、模型训练流水线，也不展开 benchmark 设计细节。那些内容会在别的笔记里单独展开；这里先把线上责任边界说清。</p>
+        </div>
+      </div>
       </section>
-
       <section id="map">
         <div class="head">
           <h2>故障地图</h2>
           <span class="tag">map</span>
         </div>
-        <div class="table-wrap">
-          <table data-export-context="故障四层路径" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>层</th>
-                <th>先读什么</th>
-                <th>会写什么</th>
-                <th>坏了时最先看到什么</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>入口接纳</td>
-                <td>请求大小、租户、超时、流式标记、队列深度</td>
-                <td>接收、等待、拒绝、回压信号</td>
-                <td>TTFT 拉长，或者请求直接被挡在前面</td>
-              </tr>
-              <tr>
-                <td>路由副本</td>
-                <td>健康副本、队列长度、前缀相似度、ongoing requests</td>
-                <td>副本选择、负载信号、扩缩容提示</td>
-                <td>一边排队，一边有副本空着</td>
-              </tr>
-              <tr>
-                <td>执行引擎</td>
-                <td>模型配置、权重、engine kwargs、KV cache</td>
-                <td>token 流、GPU 绑定、执行状态</td>
-                <td>首 token 正常，后续 token 变慢，或者直接 OOM</td>
-              </tr>
-              <tr>
-                <td>发布回滚</td>
-                <td>镜像、权重、热身状态、灰度比例、错误率</td>
-                <td>放量、回滚、继续预热、保留旧副本</td>
-                <td>新副本上线了，真实请求却开始抖</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="shape-tracer" data-shape-tracer data-export-context="故障分层追踪图" data-export-lang="text">
-          <div class="trace-lines">
-            <button class="trace-line active" type="button" data-trace-step="ttft">
-              <code>TTFT 先升</code><span>先看入口、排队和 prefill</span>
-            </button>
-            <button class="trace-line" type="button" data-trace-step="tpot">
-              <code>TPOT 先升</code><span>先看 decode、batch 和 KV cache</span>
-            </button>
-            <button class="trace-line" type="button" data-trace-step="queue">
-              <code>排队先涨</code><span>先看接纳、路由和副本健康</span>
-            </button>
-            <button class="trace-line" type="button" data-trace-step="release">
-              <code>冷启动先涨</code><span>先看发布、热身和切流节奏</span>
-            </button>
-          </div>
-          <div class="trace-canvas">
-            <div class="tensor-card active" data-trace-target="ttft">
-              <b>第一判断</b>
-              <span>入口或 prefill</span>
-              <p>读队列等待、请求大小和首 token 之前的耗时，写下一个检查点：接纳阈值、热身状态和预填充压力。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="tpot">
-              <b>第一判断</b>
-              <span>decode 或 cache</span>
-              <p>读后续 token 间隔、batch size、输出长度和显存压力，写下一个检查点：decode 路径和缓存命中。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="queue">
-              <b>第一判断</b>
-              <span>接纳与路由</span>
-              <p>读副本健康、路由偏斜和 ongoing requests，写下一个检查点：是该改路由，还是该限流。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="release">
-              <b>第一判断</b>
-              <span>发布节奏</span>
-              <p>读热身结果、灰度比例和旧副本保留状态，写下一个检查点：先保留旧路径，再判断是否继续放量。</p>
-            </div>
-          </div>
-        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>层</th><th>先读什么</th><th>会写什么</th><th>坏了时最先看到什么</th></tr>
+<tr><td>入口接纳</td><td>请求大小、租户、超时、流式标记、队列深度</td><td>接收、等待、拒绝、回压信号</td><td>TTFT 拉长，或者请求直接被挡在前面</td></tr>
+<tr><td>路由副本</td><td>健康副本、队列长度、前缀相似度、ongoing requests</td><td>副本选择、负载信号、扩缩容提示</td><td>一边排队，一边有副本空着</td></tr>
+<tr><td>执行引擎</td><td>模型配置、权重、engine kwargs、KV cache</td><td>token 流、GPU 绑定、执行状态</td><td>首 token 正常，后续 token 变慢，或者直接 OOM</td></tr>
+<tr><td>发布回滚</td><td>镜像、权重、热身状态、灰度比例、错误率</td><td>放量、回滚、继续预热、保留旧副本</td><td>新副本上线了，真实请求却开始抖</td></tr>
+        </table></div>
         <div class="box soft">
-          <p><strong>你现在应该能做什么：</strong>看到一个慢请求时，先把它放进“入口、路由、执行、发布”四层中的某一层，再决定下一步查什么。</p>
+<p><b>你现在应该能做什么：</b>看到一个慢请求时，先把它放进“入口、路由、执行、发布”四层中的某一层，再决定下一步查什么。</p>
         </div>
       </section>
-
       <section id="terms">
         <div class="head">
           <h2>术语与误区</h2>
           <span class="tag">terms</span>
         </div>
-        <div class="table-wrap">
-          <table data-export-context="术语与误区对照表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>术语</th>
-                <th>先这样理解</th>
-                <th>最常见的误读</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>TTFT</td>
-                <td>从请求进来，到第一个 token 出来之前的时间。</td>
-                <td>把它和总生成时间混成一件事。</td>
-              </tr>
-              <tr>
-                <td>TPOT</td>
-                <td>首 token 之后，每个 token 平均花多久。</td>
-                <td>以为 TTFT 好了，整体就一定好了。</td>
-              </tr>
-              <tr>
-                <td>prefill</td>
-                <td>先把输入上下文读进来并构造状态。</td>
-                <td>把它当成“只是读一下 prompt”。</td>
-              </tr>
-              <tr>
-                <td>decode</td>
-                <td>在已有状态上继续吐出后续 token。</td>
-                <td>把 decode 的慢归到入口。</td>
-              </tr>
-              <tr>
-                <td>KV cache</td>
-                <td>保存中间状态，减少重复计算。</td>
-                <td>以为只要开了 cache，排队和冷启动就会自己消失。</td>
-              </tr>
-              <tr>
-                <td>replica</td>
-                <td>服务的一个实例，可能背后挂着多张 GPU。</td>
-                <td>把 replica 直接等同于 GPU 数。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>术语</th><th>先这样理解</th><th>最常见的误读</th></tr>
+<tr><td>TTFT</td><td>从请求进来，到第一个 token 出来之前的时间。</td><td>把它和总生成时间混成一件事。</td></tr>
+<tr><td>TPOT</td><td>首 token 之后，每个 token 平均花多久。</td><td>以为 TTFT 好了，整体就一定好了。</td></tr>
+<tr><td>prefill</td><td>先把输入上下文读进来并构造状态。</td><td>把它当成“只是读一下 prompt”。</td></tr>
+<tr><td>decode</td><td>在已有状态上继续吐出后续 token。</td><td>把 decode 的慢归到入口。</td></tr>
+<tr><td>KV cache</td><td>保存中间状态，减少重复计算。</td><td>以为只要开了 cache，排队和冷启动就会自己消失。</td></tr>
+<tr><td>replica</td><td>服务的一个实例，可能背后挂着多张 GPU。</td><td>把 replica 直接等同于 GPU 数。</td></tr>
+        </table></div>
         <div class="box warn">
-          <p><strong>先记住这一句：</strong>OpenAI-compatible 只是入口协议接得上，不代表所有后端行为、缓存策略、流式细节都完全一样。</p>
-          <p><strong>你现在应该能做什么：</strong>听到“TTFT 变差”时，先追问是入口、prefill、队列，还是热身；听到“TPOT 变差”时，先追问是 decode、batch，还是 cache。</p>
+<p><b>先记住这一句：</b>OpenAI-compatible 只是入口协议接得上，不代表所有后端行为、缓存策略、流式细节都完全一样。</p>
+<p><b>你现在应该能做什么：</b>听到“TTFT 变差”时，先追问是入口、prefill、队列，还是热身；听到“TPOT 变差”时，先追问是 decode、batch，还是 cache。</p>
         </div>
       </section>
-
       <section id="diagnostics">
         <div class="head">
           <h2>故障诊断</h2>
           <span class="tag">diagnosis</span>
         </div>
-        <div class="terminal-lab" data-terminal-lab data-export-context="故障快照" data-export-lang="text">
-          <div class="terminal-controls">
-            <button class="ghost active" type="button" data-terminal-case="ttft">TTFT 慢</button>
-            <button class="ghost" type="button" data-terminal-case="tpot">TPOT 慢</button>
-            <button class="ghost" type="button" data-terminal-case="queue">排队涨</button>
-          </div>
-          <pre class="terminal-output" aria-live="polite">现象：p95 TTFT 明显变高，但 TPOT 基本不变。
-先看：入口排队、预热状态、prefill 压力。
-再看：是不是请求太长，或者新副本还没热起来。</pre>
-          <template data-terminal-output="ttft">现象：p95 TTFT 明显变高，但 TPOT 基本不变。
-先看：入口排队、预热状态、prefill 压力。
-再看：是不是请求太长，或者新副本还没热起来。</template>
-          <template data-terminal-output="tpot">现象：首 token 还算快，但后续 token 间隔拉长。
-先看：decode、batch size、输出长度、KV cache 压力。
-再看：是不是个别长请求拖慢了后半段。</template>
-          <template data-terminal-output="queue">现象：GPU 利用率没满，但请求开始排队。
-先看：接纳策略、路由偏斜、副本健康和租户配额。
-再看：别先盯 GPU 表，先看请求有没有真的送到合适副本。</template>
-        </div>
-
-        <div class="grid">
-          <div class="box soft">
-            <h3>第一层判断：先看什么</h3>
-            <ul>
-              <li>TTFT 先升，通常先看入口和 prefill。</li>
-              <li>TPOT 先升，通常先看 decode 和 cache。</li>
-              <li>排队先涨，通常先看接纳、路由和副本健康。</li>
-              <li>冷启动先涨，通常先看发布、热身和切流节奏。</li>
-            </ul>
-          </div>
-          <div class="box info">
-            <h3>第二层判断：别先做什么</h3>
-            <p>别一看到慢就先加 GPU。很多问题出在入口、路由、热身、版本切换或缓存局部性上。你先分层，再决定是扩容、限流、改路由，还是回滚。</p>
-          </div>
-        </div>
-
-        <div class="codebar"><span>故障分层伪代码</span><button class="copy" data-copy="triage-code">复制</button></div>
-        <pre id="triage-code" data-export-context="故障分层伪代码" data-export-lang="python"><code class="language-python">def triage(ttft_p95, tpot_p95, queue_wait_p95, cold_start_rate, oom_rate):
-    if ttft_p95 > 2.0 and tpot_p95 <= 0.05:
-        if queue_wait_p95 > 1.0:
-            return "ingress / queue / routing"
-        if cold_start_rate > 0.1:
-            return "rollout / warmup"
-        return "prefill or admission"
-    if tpot_p95 > 0.05:
-        return "decode / batch / cache"
-    if oom_rate > 0:
-        return "capacity or model size"
-    return "keep watching"</code></pre>
-
         <div class="box soft">
-          <p><strong>你现在应该能做什么：</strong>把一条 ticket 先归到“入口、路由、执行、发布”中的一层，再继续看细指标，不再靠猜。</p>
+<h3>第一层判断：先看什么</h3>
+<ul>
+<li>TTFT 先升，通常先看入口和 prefill。</li>
+<li>TPOT 先升，通常先看 decode 和 cache。</li>
+<li>排队先涨，通常先看接纳、路由和副本健康。</li>
+<li>冷启动先涨，通常先看发布、热身和切流节奏。</li>
+</ul>
+        </div>
+        <div class="box info">
+<h3>第二层判断：别先做什么</h3>
+<p>别一看到慢就先加 GPU。很多问题出在入口、路由、热身、版本切换或缓存局部性上。你先分层，再决定是扩容、限流、改路由，还是回滚。</p>
+<p>故障分层伪代码复制</p>
+<pre><code class="language-python">def triage(ttft_p95, tpot_p95, queue_wait_p95, cold_start_rate, oom_rate):
+ if ttft_p95 &gt; 2.0 and tpot_p95 &lt;= 0.05:
+ if queue_wait_p95 &gt; 1.0:
+ return "ingress / queue / routing"
+ if cold_start_rate &gt; 0.1:
+ return "rollout / warmup"
+ return "prefill or admission"
+ if tpot_p95 &gt; 0.05:
+ return "decode / batch / cache"
+ if oom_rate &gt; 0:
+ return "capacity or model size"
+ return "keep watching"</code></pre>
+        </div>
+        <div class="box soft">
+<p><b>你现在应该能做什么：</b>把一条 ticket 先归到“入口、路由、执行、发布”中的一层，再继续看细指标，不再靠猜。</p>
         </div>
       </section>
-
       <section id="cases">
         <div class="head">
           <h2>故障案例</h2>
           <span class="tag">cases</span>
         </div>
-        <div class="grid">
-          <div class="box soft">
-            <h3>案例 1：TTFT 高，TPOT 稳</h3>
-            <p>这类情况常见于入口队列变长、请求太长、或者新副本热身没完成。你先看的是接纳、排队和 prefill，而不是先去改 decode 参数。</p>
-          </div>
-          <div class="box soft">
-            <h3>案例 2：首 token 还行，后续 token 变慢</h3>
-            <p>这类情况常见于 decode、batch 混合、KV cache 压力，或者极长输出把后半段拖慢。你先看 TPOT、输出长度和缓存压力，再决定要不要调 batch 或换引擎。</p>
-          </div>
-          <div class="box soft">
-            <h3>案例 3：GPU 利用率没满，却开始排队</h3>
-            <p>这类情况常见于路由偏斜、接纳策略过严、租户配额不平衡，或者某些副本没有真正接到流量。你先看路由和副本账本，而不是先看 GPU 面板。</p>
-          </div>
+      <div class="grid">
+        <div class="box soft">
+<h3>案例 1：TTFT 高，TPOT 稳</h3>
+<p>这类情况常见于入口队列变长、请求太长、或者新副本热身没完成。你先看的是接纳、排队和 prefill，而不是先去改 decode 参数。</p>
         </div>
-
-        <div class="table-wrap" style="margin-top:12px;">
-          <table data-export-context="故障快照判读表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>现象</th>
-                <th>最先查什么</th>
-                <th>先做什么动作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>TTFT 高、TPOT 稳</td>
-                <td>入口队列、prefill、热身</td>
-                <td>看能不能先限流、缩短队列或延长热身</td>
-              </tr>
-              <tr>
-                <td>首 token 快、后续 token 慢</td>
-                <td>decode、cache、batch</td>
-                <td>看 TPOT、输出长度和 cache 命中</td>
-              </tr>
-              <tr>
-                <td>排队上涨、GPU 利用率不高</td>
-                <td>接纳、路由、副本健康</td>
-                <td>先查路由偏斜，再看是否需要放量或限流</td>
-              </tr>
-              <tr>
-                <td>新副本上线后抖动</td>
-                <td>灰度、热身、旧副本保留</td>
-                <td>先保留旧路径，别急着把流量全切过去</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="box soft">
+<h3>案例 2：首 token 还行，后续 token 变慢</h3>
+<p>这类情况常见于 decode、batch 混合、KV cache 压力，或者极长输出把后半段拖慢。你先看 TPOT、输出长度和缓存压力，再决定要不要调 batch 或换引擎。</p>
         </div>
-
+        <div class="box soft">
+<h3>案例 3：GPU 利用率没满，却开始排队</h3>
+<p>这类情况常见于路由偏斜、接纳策略过严、租户配额不平衡，或者某些副本没有真正接到流量。你先看路由和副本账本，而不是先看 GPU 面板。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>现象</th><th>最先查什么</th><th>先做什么动作</th></tr>
+<tr><td>TTFT 高、TPOT 稳</td><td>入口队列、prefill、热身</td><td>看能不能先限流、缩短队列或延长热身</td></tr>
+<tr><td>首 token 快、后续 token 慢</td><td>decode、cache、batch</td><td>看 TPOT、输出长度和 cache 命中</td></tr>
+<tr><td>排队上涨、GPU 利用率不高</td><td>接纳、路由、副本健康</td><td>先查路由偏斜，再看是否需要放量或限流</td></tr>
+<tr><td>新副本上线后抖动</td><td>灰度、热身、旧副本保留</td><td>先保留旧路径，别急着把流量全切过去</td></tr>
+</table></div>
+        </div>
         <div class="box warn">
-          <p><strong>你现在应该能做什么：</strong>看到一条故障描述时，先把它翻译成“症状、最先查的层、第一动作”三句话。</p>
+<p><b>你现在应该能做什么：</b>看到一条故障描述时，先把它翻译成“症状、最先查的层、第一动作”三句话。</p>
         </div>
+      </div>
       </section>
-
       <section id="ledger">
         <div class="head">
           <h2>灰度账本</h2>
           <span class="tag">rollout</span>
         </div>
-        <div class="grid">
-          <div class="box soft">
-            <h3>一条真实的切流现场</h3>
-            <p>某团队把单机 vLLM 迁到 Ray Serve LLM。健康检查先通过了，控制台也显示新副本已经上线，只有一件事没变好：真实请求一切过去，TTFT 就抬头，队列也开始涨。问题不在“模型不能跑”，而在“热身、路由、切流和回滚”没有一起变。</p>
-            <p>这类故障最容易骗过人，因为它会先给你一个看起来正常的表象。新副本活着，旧副本也还活着，看板上甚至还有绿色勾。但如果你没把流量账本摊开，就会把“已启动”误当成“已可用”。</p>
-          </div>
-          <div class="box info">
-            <h3>这张账本要记什么</h3>
-            <p>它记的不是抽象“健康”，而是四个可核对的状态：新副本是不是已经吃到真实请求，旧副本是不是还在提供回退路径，路由是不是把流量切得太快，热身是不是已经让首 token 的代价降下来。账本不清，放量和回滚都会乱。</p>
-          </div>
+      <div class="grid">
+        <div class="box soft">
+<h3>一条真实的切流现场</h3>
+<p>某团队把单机 vLLM 迁到 Ray Serve LLM。健康检查先通过了，控制台也显示新副本已经上线，只有一件事没变好：真实请求一切过去，TTFT 就抬头，队列也开始涨。问题不在“模型不能跑”，而在“热身、路由、切流和回滚”没有一起变。</p>
+<p>这类故障最容易骗过人，因为它会先给你一个看起来正常的表象。新副本活着，旧副本也还活着，看板上甚至还有绿色勾。但如果你没把流量账本摊开，就会把“已启动”误当成“已可用”。</p>
         </div>
-        <div class="table-wrap" style="margin-top:12px;">
-          <table data-export-context="灰度账本总表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>层</th>
-                <th>发布前</th>
-                <th>发布后</th>
-                <th>读什么</th>
-                <th>写什么</th>
-                <th>坏了会怎样</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>镜像与权重</td>
-                <td>旧版本已热</td>
-                <td>新版本加载中</td>
-                <td>镜像标签、权重位置、加载进度</td>
-                <td>显存占用、模型状态</td>
-                <td>冷启动把 TTFT 拉高</td>
-              </tr>
-              <tr>
-                <td>路由与副本</td>
-                <td>旧副本接流量</td>
-                <td>新副本开始接流量</td>
-                <td>健康状态、前缀相似度、队列深度</td>
-                <td>副本选择、流量比例、等待时间</td>
-                <td>新旧副本同时忙或同时闲</td>
-              </tr>
-              <tr>
-                <td>热身与缓存</td>
-                <td>缓存热、请求稳</td>
-                <td>缓存半热、首批流量已切</td>
-                <td>首 token 统计、cache 命中、prefill 代价</td>
-                <td>热身完成标记、放量节奏</td>
-                <td>看起来上线成功，实际上用户先遇到抖动</td>
-              </tr>
-              <tr>
-                <td>回滚与保底</td>
-                <td>旧路径还在</td>
-                <td>旧路径可能被提前清理</td>
-                <td>错误率、TTFT、队列、旧副本存活</td>
-                <td>回滚、限流、保留旧副本</td>
-                <td>一旦新副本抖了，却没有安全退路</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="box info">
+<h3>这张账本要记什么</h3>
+<p>它记的四个可核对的状态：新副本是不是已经吃到真实请求，旧副本是不是还在提供回退路径，路由是不是把流量切得太快，热身是不是已经让首 token 的代价降下来。账本不清，放量和回滚都会乱。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>层</th><th>发布前</th><th>发布后</th><th>读什么</th><th>写什么</th><th>坏了会怎样</th></tr>
+<tr><td>镜像与权重</td><td>旧版本已热</td><td>新版本加载中</td><td>镜像标签、权重位置、加载进度</td><td>显存占用、模型状态</td><td>冷启动把 TTFT 拉高</td></tr>
+<tr><td>路由与副本</td><td>旧副本接流量</td><td>新副本开始接流量</td><td>健康状态、前缀相似度、队列深度</td><td>副本选择、流量比例、等待时间</td><td>新旧副本同时忙或同时闲</td></tr>
+<tr><td>热身与缓存</td><td>缓存热、请求稳</td><td>缓存半热、首批流量已切</td><td>首 token 统计、cache 命中、prefill 代价</td><td>热身完成标记、放量节奏</td><td>看起来上线成功，实际上用户先遇到抖动</td></tr>
+<tr><td>回滚与保底</td><td>旧路径还在</td><td>旧路径可能被提前清理</td><td>错误率、TTFT、队列、旧副本存活</td><td>回滚、限流、保留旧副本</td><td>一旦新副本抖了，却没有安全退路</td></tr>
+</table></div>
+<p>灰度闸门伪代码复制</p>
+<pre><code class="language-python">def gate_rollout(ttft_p95, queue_wait_p95, tpot_p95, warmup_ok, old_path_alive):
+ if not warmup_ok:
+ return "hold: keep old path"
+ if ttft_p95 &gt; 2.0 and queue_wait_p95 &gt; 1.0:
+ return "slow ramp: do not push traffic too fast"
+ if tpot_p95 &gt; 0.05:
+ return "inspect decode/cache before cutting over"
+ if not old_path_alive:
+ return "hold: do not drain the fallback path"
+ return "shift a little more traffic"</code></pre>
         </div>
-        <div class="codebar"><span>灰度闸门伪代码</span><button class="copy" data-copy="rollout-gate">复制</button></div>
-        <pre id="rollout-gate" data-export-context="灰度闸门伪代码" data-export-lang="python"><code class="language-python">def gate_rollout(ttft_p95, queue_wait_p95, tpot_p95, warmup_ok, old_path_alive):
-    if not warmup_ok:
-        return "hold: keep old path"
-    if ttft_p95 > 2.0 and queue_wait_p95 > 1.0:
-        return "slow ramp: do not push traffic too fast"
-    if tpot_p95 > 0.05:
-        return "inspect decode/cache before cutting over"
-    if not old_path_alive:
-        return "hold: do not drain the fallback path"
-    return "shift a little more traffic"</code></pre>
-        <div class="grid">
-          <div class="box warn">
-            <h3>如果你继续放量，会发生什么</h3>
-            <p>如果 TTFT 已经在抬头，你还继续把流量往新副本推，常见结果不是“系统更快了”，而是更多请求叠进队列，首 token 继续拖长。等你再想回头时，旧路径可能已经被你自己清空了，回退会比继续放量更慢。</p>
-          </div>
-          <div class="box info">
-            <h3>如果你回滚太晚，会发生什么</h3>
-            <p>回滚慢一步，错误率和等待时间都会继续烧错误预算。更麻烦的是，旧副本如果已经被 drain 掉，你失去的不是一个版本，而是一条安全退路。上线门禁的作用，就是把这类损失关在门里，而不是等它扩到用户那边。</p>
-          </div>
+        <div class="box warn">
+<h3>如果你继续放量，会发生什么</h3>
+<p>如果 TTFT 已经在抬头，你还继续把流量往新副本推，常见结果更多请求叠进队列，首 token 继续拖长。等你再想回头时，旧路径可能已经被你自己清空了，回退会比继续放量更慢。</p>
+        </div>
+        <div class="box info">
+<h3>如果你回滚太晚，会发生什么</h3>
+<p>回滚慢一步，错误率和等待时间都会继续烧错误预算。更麻烦的是，旧副本如果已经被 drain 掉，你失去的一条安全退路。上线门禁的作用，就是把这类损失关在门里，而不是等它扩到用户那边。</p>
         </div>
         <div class="box soft">
-          <p><strong>你现在应该能做什么：</strong>拿到一次灰度异常时，先问“新副本真吃流量了吗、旧副本还在吗、热身结束了吗、切流太快了吗”，再决定继续放量还是回滚。</p>
+<p><b>你现在应该能做什么：</b>拿到一次灰度异常时，先问“新副本真吃流量了吗、旧副本还在吗、热身结束了吗、切流太快了吗”，再决定继续放量还是回滚。</p>
         </div>
+      </div>
       </section>
-
       <section id="playbook">
         <div class="head">
           <h2>动作桥</h2>
           <span class="tag">operation</span>
         </div>
-        <div class="grid">
-          <div class="box soft">
-            <h3>把一条慢请求变成一个决策</h3>
-            <p>假设你在值班，图上出现的是这样的组合：TTFT p95 从 1.3s 升到 4.8s，TPOT 基本平稳，queue_wait 在涨，GPU util 只有 55%，同时新副本刚刚开始吃流量。这个组合说明问题不在 decode，也不在“GPU 不够忙”，而在入口接纳、路由、热身和切流节奏。</p>
-            <p>这时如果你还继续放量，队列会继续长，首 token 还会被拖慢；如果你先加 GPU，却没把路由和热身问题看清，新的副本也只是换一种方式继续排队。先把症状翻译成层，再做动作，才不会把资源花在错误方向上。</p>
-          </div>
-          <div class="box info">
-            <h3>动作顺序要怎么排</h3>
-            <p>第一步看队列和路由，确认新副本是不是在真实接流量；第二步看热身和 cache，确认首 token 的代价有没有真正降下来；第三步看旧路径是否还在，确认回滚和限流还有退路。只有这三步都说得通，才继续放量。</p>
-          </div>
+      <div class="grid">
+        <div class="box soft">
+<h3>把一条慢请求变成一个决策</h3>
+<p>假设你在值班，图上出现的是这样的组合：TTFT p95 从 1.3s 升到 4.8s，TPOT 基本平稳，queue_wait 在涨，GPU util 只有 55%，同时新副本刚刚开始吃流量。这个组合说明问题不在 decode，也不在“GPU 不够忙”，而在入口接纳、路由、热身和切流节奏。</p>
+<p>这时如果你还继续放量，队列会继续长，首 token 还会被拖慢；如果你先加 GPU，却没把路由和热身问题看清，新的副本也只是换一种方式继续排队。先把症状翻译成层，再做动作，才不会把资源花在错误方向上。</p>
         </div>
-        <div class="box soft" style="margin-top:12px;" data-export-context="看板到动作的读法" data-export-lang="text">
-          <h3>把看板翻成值班记录</h3>
-          <p>值班时最容易犯的错，是把看板只读成“红了还是绿了”。更有用的读法，是把它翻成一句句可以执行的话。TTFT 在涨，说明先看入口和预热；queue_wait 在涨，说明先看接纳和路由；TPOT 在涨，说明先看 decode 和 cache；冷启动在涨，说明先保留旧路径，不要立刻清掉回退窗口。</p>
-          <p>这不是给看板增加一句漂亮解释，而是把它变成 runbook 的入口。谁接到报警，谁就知道先开哪几条曲线、先看哪段时间窗、先决定是限流、回滚、扩容，还是继续观察。动作如果不在这里被写清，后面的讨论就会停留在“感觉像模型慢了”这一类空话上。</p>
-          <p>你可以把这页想成一个最小闭环：症状进入，层级分开，动作排队，最后回到结果。这个闭环里最关键的不是“判断快”，而是“不要把错误动作先做了”。一旦把 GPU util 误当成唯一信号，或者把热身未完成误当成正常上线，你就会把真正该保护的退路提前清掉。</p>
-          <table data-export-context="值班记录映射表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>看板读数</th>
-                <th>你先写进记录</th>
-                <th>你先执行什么</th>
-                <th>这一步在防什么错</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>TTFT p95 连续上升</td>
-                <td>入口、预热、prefill</td>
-                <td>先限流或减慢切流</td>
-                <td>防止把入口拥塞误判成 decode 问题</td>
-              </tr>
-              <tr>
-                <td>queue_wait 持续上升</td>
-                <td>接纳、路由、副本健康</td>
-                <td>先查路由偏斜和副本分布</td>
-                <td>防止只看 GPU util 就匆忙加副本</td>
-              </tr>
-              <tr>
-                <td>TPOT 变差</td>
-                <td>decode、batch、KV cache</td>
-                <td>先看后续 token 的节奏，再调引擎</td>
-                <td>防止把后半段拖慢误成首 token 问题</td>
-              </tr>
-              <tr>
-                <td>新副本上线后抖动</td>
-                <td>热身、旧路径、灰度比例</td>
-                <td>先保留旧副本，降低放量速度</td>
-                <td>防止把回滚窗口自己清掉</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="codebar"><span>runbook 判定伪代码</span><button class="copy" data-copy="runbook-code">复制</button></div>
-        <pre id="runbook-code" data-export-context="runbook 判定伪代码" data-export-lang="python"><code class="language-python">def runbook_step(ttft_p95, queue_wait_p95, tpot_p95, warmup_ok, rollback_path):
-    if ttft_p95 > 2.0 and queue_wait_p95 > 1.0:
-        return "先写进记录：入口排队。先做：限流、减慢切流、确认热身。"
-    if tpot_p95 > 0.05:
-        return "先写进记录：后续 token 变慢。先做：查 decode、batch、cache。"
-    if not warmup_ok:
-        return "先写进记录：热身未完成。先做：保留旧副本，不要清掉回滚窗口。"
-    if not rollback_path:
-        return "先写进记录：回退路径不足。先做：恢复旧路径，再继续放量。"
-    return "先继续观察，别急着扩容"</code></pre>
-        <div class="table-wrap" style="margin-top:12px;">
-          <table data-export-context="故障到动作映射表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>症状</th>
-                <th>你先看什么</th>
-                <th>第一动作</th>
-                <th>如果看错层，会怎样</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>TTFT 上升，TPOT 稳</td>
-                <td>队列、路由、热身</td>
-                <td>先限流或减慢切流，再查 prefill</td>
-                <td>你会把入口问题误当成引擎问题</td>
-              </tr>
-              <tr>
-                <td>TPOT 上升，TTFT 稳</td>
-                <td>decode、batch、KV cache</td>
-                <td>先看后续 token 的节奏，再调 batch 或换引擎</td>
-                <td>你会把后半段拖慢误认为请求一开始就慢</td>
-              </tr>
-              <tr>
-                <td>排队上涨，GPU util 不高</td>
-                <td>接纳、路由、副本健康</td>
-                <td>先查路由偏斜和副本分布，再决定是否扩容</td>
-                <td>你会在路由还没修好时白白加副本</td>
-              </tr>
-              <tr>
-                <td>新副本上线后抖动</td>
-                <td>热身、旧路径、灰度比例</td>
-                <td>先保留旧副本，降低放量速度</td>
-                <td>你会把回滚窗口自己清掉</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="codebar"><span>故障到动作伪代码</span><button class="copy" data-copy="action-bridge-code">复制</button></div>
-        <pre id="action-bridge-code" data-export-context="故障到动作伪代码" data-export-lang="python"><code class="language-python">def next_action(ttft_p95, tpot_p95, queue_wait_p95, gpu_util, warmup_ok, old_path_alive):
-    if ttft_p95 > 2.0 and tpot_p95 <= 0.05:
-        if queue_wait_p95 > 1.0:
-            return "先限流，先查接纳和路由"
-        if not warmup_ok:
-            return "先保留旧副本，延长热身"
-        return "先看 prefill 和首包写出"
-    if tpot_p95 > 0.05:
-        return "先看 decode、batch 和 cache"
-    if gpu_util < 0.6 and queue_wait_p95 > 0.8:
-        return "先查副本分布和接纳，不要先加 GPU"
-    if not old_path_alive:
-        return "先恢复回滚路径，再放量"
-    return "继续监控，不要直接放量"</code></pre>
-        <div class="grid">
-          <div class="box warn">
-            <h3>失败后果</h3>
-            <p>如果你把“TTFT 高、TPOT 稳”误判成 decode 问题，通常会先调错旋钮，排队还在涨，用户也还在等。相反，如果你先把队列和热身看清，再决定是否限流或回滚，损失会小得多。这个判断顺序就是这页真正要你带走的动作。</p>
-            <p>同样地，如果 queue_wait 明明在涨，你却只盯 GPU util，最后往往会把真正该改的路由权重和接纳阈值留在原地。结果是副本越加越多，排队却没有真的消失。看板不该只是一个“有没有事”的标签，它应该直接指向下一步检查。</p>
-          </div>
-          <div class="box info">
-            <h3>练习时怎么用这段</h3>
-            <p>你可以直接拿自己服务里的一个慢请求，按“症状、第一层、第一动作、错误后果”四列重写一遍。能把这四列写顺，说明你已经不只是知道名词，而是能把故障变成操作。</p>
-            <p>如果你愿意再往前一步，就把这四列搬到团队的值班手册里：每个症状都写清先看哪条曲线、先做什么动作、做完之后再看什么。这样下次有人再看相同的看板，就不用从零讨论。</p>
-          </div>
+        <div class="box info">
+<h3>动作顺序要怎么排</h3>
+<p>第一步看队列和路由，确认新副本是不是在真实接流量；第二步看热身和 cache，确认首 token 的代价有没有真正降下来；第三步看旧路径是否还在，确认回滚和限流还有退路。只有这三步都说得通，才继续放量。</p>
         </div>
         <div class="box soft">
-          <p><strong>你现在应该能做什么：</strong>看到一条灰度异常，先把它写成“症状 → 第一层 → 第一动作 → 错误后果”四步，再决定继续放量还是回滚。</p>
+<h3>把看板翻成值班记录</h3>
+<p>值班时最容易犯的错，是把看板只读成“红了还是绿了”。更有用的读法，是把它翻成一句句可以执行的话。TTFT 在涨，说明先看入口和预热；queue_wait 在涨，说明先看接纳和路由；TPOT 在涨，说明先看 decode 和 cache；冷启动在涨，说明先保留旧路径，不要立刻清掉回退窗口。</p>
+<p>这把它变成 runbook 的入口。谁接到报警，谁就知道先开哪几条曲线、先看哪段时间窗、先决定是限流、回滚、扩容，还是继续观察。动作如果不在这里被写清，后面的讨论就会停留在“感觉像模型慢了”这一类空话上。</p>
+<p>你可以把这页想成一个最小闭环：症状进入，层级分开，动作排队，最后回到结果。这个闭环里最关键的“不要把错误动作先做了”。一旦把 GPU util 误当成唯一信号，或者把热身未完成误当成正常上线，你就会把真正该保护的退路提前清掉。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>看板读数</th><th>你先写进记录</th><th>你先执行什么</th><th>这一步在防什么错</th></tr>
+<tr><td>TTFT p95 连续上升</td><td>入口、预热、prefill</td><td>先限流或减慢切流</td><td>防止把入口拥塞误判成 decode 问题</td></tr>
+<tr><td>queue_wait 持续上升</td><td>接纳、路由、副本健康</td><td>先查路由偏斜和副本分布</td><td>防止只看 GPU util 就匆忙加副本</td></tr>
+<tr><td>TPOT 变差</td><td>decode、batch、KV cache</td><td>先看后续 token 的节奏，再调引擎</td><td>防止把后半段拖慢误成首 token 问题</td></tr>
+<tr><td>新副本上线后抖动</td><td>热身、旧路径、灰度比例</td><td>先保留旧副本，降低放量速度</td><td>防止把回滚窗口自己清掉</td></tr>
+</table></div>
+<p>runbook 判定伪代码复制</p>
+<pre><code class="language-python">def runbook_step(ttft_p95, queue_wait_p95, tpot_p95, warmup_ok, rollback_path):
+ if ttft_p95 &gt; 2.0 and queue_wait_p95 &gt; 1.0:
+ return "先写进记录：入口排队。先做：限流、减慢切流、确认热身。"
+ if tpot_p95 &gt; 0.05:
+ return "先写进记录：后续 token 变慢。先做：查 decode、batch、cache。"
+ if not warmup_ok:
+ return "先写进记录：热身未完成。先做：保留旧副本，不要清掉回滚窗口。"
+ if not rollback_path:
+ return "先写进记录：回退路径不足。先做：恢复旧路径，再继续放量。"
+ return "先继续观察，别急着扩容"</code></pre>
+<p>症状</p>
+<p>你先看什么</p>
+<p>第一动作</p>
+<p>如果看错层，会怎样</p>
+<p>TTFT 上升，TPOT 稳</p>
+<p>队列、路由、热身</p>
+<p>先限流或减慢切流，再查 prefill</p>
+<p>你会把入口问题误当成引擎问题</p>
+<p>TPOT 上升，TTFT 稳</p>
+<p>decode、batch、KV cache</p>
+<p>先看后续 token 的节奏，再调 batch 或换引擎</p>
+<p>你会把后半段拖慢误认为请求一开始就慢</p>
+<p>排队上涨，GPU util 不高</p>
+<p>接纳、路由、副本健康</p>
+<p>先查路由偏斜和副本分布，再决定是否扩容</p>
+<p>你会在路由还没修好时白白加副本</p>
+<p>新副本上线后抖动</p>
+<p>热身、旧路径、灰度比例</p>
+<p>先保留旧副本，降低放量速度</p>
+<p>你会把回滚窗口自己清掉</p>
+<p>故障到动作伪代码复制</p>
+<pre><code class="language-python">def next_action(ttft_p95, tpot_p95, queue_wait_p95, gpu_util, warmup_ok, old_path_alive):
+ if ttft_p95 &gt; 2.0 and tpot_p95 &lt;= 0.05:
+ if queue_wait_p95 &gt; 1.0:
+ return "先限流，先查接纳和路由"
+ if not warmup_ok:
+ return "先保留旧副本，延长热身"
+ return "先看 prefill 和首包写出"
+ if tpot_p95 &gt; 0.05:
+ return "先看 decode、batch 和 cache"
+ if gpu_util &lt; 0.6 and queue_wait_p95 &gt; 0.8:
+ return "先查副本分布和接纳，不要先加 GPU"
+ if not old_path_alive:
+ return "先恢复回滚路径，再放量"
+ return "继续监控，不要直接放量"</code></pre>
         </div>
+        <div class="box warn">
+<h3>失败后果</h3>
+<p>如果你把“TTFT 高、TPOT 稳”误判成 decode 问题，通常会先调错旋钮，排队还在涨，用户也还在等。相反，如果你先把队列和热身看清，再决定是否限流或回滚，损失会小得多。这个判断顺序就是这页真正要你带走的动作。</p>
+<p>同样地，如果 queue_wait 明明在涨，你却只盯 GPU util，最后往往会把真正该改的路由权重和接纳阈值留在原地。结果是副本越加越多，排队却没有真的消失。看板不该只是一个“有没有事”的标签，它应该直接指向下一步检查。</p>
+        </div>
+        <div class="box info">
+<h3>练习时怎么用这段</h3>
+<p>你可以直接拿自己服务里的一个慢请求，按“症状、第一层、第一动作、错误后果”四列重写一遍。能把这四列写顺，说明你已经不只是知道名词，而是能把故障变成操作。</p>
+<p>如果你愿意再往前一步，就把这四列搬到团队的值班手册里：每个症状都写清先看哪条曲线、先做什么动作、做完之后再看什么。这样下次有人再看相同的看板，就不用从零讨论。</p>
+        </div>
+        <div class="box soft">
+<p><b>你现在应该能做什么：</b>看到一条灰度异常，先把它写成“症状 → 第一层 → 第一动作 → 错误后果”四步，再决定继续放量还是回滚。</p>
+        </div>
+      </div>
       </section>
-
       <section id="choice">
         <div class="head">
           <h2>选型清单</h2>
           <span class="tag">choice</span>
         </div>
-        <div class="grid">
-          <div class="box soft">
-            <h3>先问问题层级，再问框架名</h3>
-            <p>如果问题主要在服务编排、多副本、灰度和自动伸缩，先看 Ray Serve LLM。如果问题主要在结构化生成和受约束输出，先看 SGLang。如果问题主要在固定模型和 NVIDIA 栈上的极致性能，先看 TensorRT-LLM。如果你只是想先把服务跑起来并保持通用吞吐，vLLM 仍然是最直接的起点。</p>
-          </div>
-        </div>
-        <div class="choice-matrix">
-          <article class="choice-card">
-            <h3>vLLM</h3>
-            <p class="fit">适合：快速上线、OpenAI 兼容服务、通用高吞吐部署。</p>
-            <ul>
-              <li>先看在线 serving、调度、prefix cache 和指标暴露。</li>
-              <li>先验证真实 prompt / output 分布，不要只看默认 benchmark。</li>
-              <li>不擅长的地方：服务治理、灰度、多模型编排仍要补一层。</li>
-            </ul>
-          </article>
-          <article class="choice-card">
-            <h3>SGLang</h3>
-            <p class="fit">适合：结构化生成、复杂推理程序、受约束输出。</p>
-            <ul>
-              <li>先看 runtime、OpenAI 兼容接口、router 和结构化输出能力。</li>
-              <li>先验证你的程序式生成是否真能带来收益。</li>
-              <li>不擅长的地方：团队要自己补足生产运维经验。</li>
-            </ul>
-          </article>
-          <article class="choice-card">
-            <h3>TensorRT-LLM</h3>
-            <p class="fit">适合：固定模型、NVIDIA GPU 栈、追求极致性能。</p>
-            <ul>
-              <li>先看 engine build、executor、batching、KV cache 和部署流程。</li>
-              <li>先验证驱动、CUDA、TensorRT 版本和回滚成本。</li>
-              <li>不擅长的地方：模型变化频繁时，维护复杂度会上升。</li>
-            </ul>
-          </article>
-          <article class="choice-card">
-            <h3>Ray Serve LLM</h3>
-            <p class="fit">适合：多模型部署、多副本、自动伸缩、灰度和 Python / Ray 生态。</p>
-            <ul>
-              <li>先看 LLMConfig、deployment、replica、autoscaling 和路由。</li>
-              <li>先确认底层引擎是谁，再谈服务编排。</li>
-              <li>不擅长的地方：它解决服务层问题，不会自动消除底层引擎瓶颈。</li>
-            </ul>
-          </article>
-        </div>
-        <div class="table-wrap" style="margin-top:12px;">
-          <table data-export-context="框架选型清单" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>你的主问题</th>
-                <th>优先看谁</th>
-                <th>必须验证什么</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>先把服务跑起来，保持通用吞吐</td>
-                <td>vLLM</td>
-                <td>TTFT、TPOT、队列、显存和错误率</td>
-              </tr>
-              <tr>
-                <td>结构化 JSON、工具调用、复杂约束输出</td>
-                <td>SGLang</td>
-                <td>结构化输出成功率、TPOT 抖动、复杂请求是否拖慢普通请求</td>
-              </tr>
-              <tr>
-                <td>固定模型、固定硬件、追求极限性能</td>
-                <td>TensorRT-LLM</td>
-                <td>构建流程、版本兼容、量化精度、吞吐回归</td>
-              </tr>
-              <tr>
-                <td>多模型、多副本、自动伸缩、灰度发布</td>
-                <td>Ray Serve LLM</td>
-                <td>副本级队列、路由、冷启动和集群运维</td>
-              </tr>
-            </tbody>
-          </table>
+      <div class="grid">
+        <div class="box soft">
+<h3>先问问题层级，再问框架名</h3>
+<p>如果问题主要在服务编排、多副本、灰度和自动伸缩，先看 Ray Serve LLM。如果问题主要在结构化生成和受约束输出，先看 SGLang。如果问题主要在固定模型和 NVIDIA 栈上的极致性能，先看 TensorRT-LLM。如果你只是想先把服务跑起来并保持通用吞吐，vLLM 仍然是最直接的起点。</p>
+<p>vLLM</p>
+<p>适合：快速上线、OpenAI 兼容服务、通用高吞吐部署。</p>
+<p>先看在线 serving、调度、prefix cache 和指标暴露。</p>
+<p>先验证真实 prompt / output 分布，不要只看默认 benchmark。</p>
+<p>不擅长的地方：服务治理、灰度、多模型编排仍要补一层。</p>
+<p>SGLang</p>
+<p>适合：结构化生成、复杂推理程序、受约束输出。</p>
+<p>先看 runtime、OpenAI 兼容接口、router 和结构化输出能力。</p>
+<p>先验证你的程序式生成是否真能带来收益。</p>
+<p>不擅长的地方：团队要自己补足生产运维经验。</p>
+<p>TensorRT-LLM</p>
+<p>适合：固定模型、NVIDIA GPU 栈、追求极致性能。</p>
+<p>先看 engine build、executor、batching、KV cache 和部署流程。</p>
+<p>先验证驱动、CUDA、TensorRT 版本和回滚成本。</p>
+<p>不擅长的地方：模型变化频繁时，维护复杂度会上升。</p>
+<p>Ray Serve LLM</p>
+<p>适合：多模型部署、多副本、自动伸缩、灰度和 Python / Ray 生态。</p>
+<p>先看 LLMConfig、deployment、replica、autoscaling 和路由。</p>
+<p>先确认底层引擎是谁，再谈服务编排。</p>
+<p>不擅长的地方：它解决服务层问题，不会自动消除底层引擎瓶颈。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>你的主问题</th><th>优先看谁</th><th>必须验证什么</th></tr>
+<tr><td>先把服务跑起来，保持通用吞吐</td><td>vLLM</td><td>TTFT、TPOT、队列、显存和错误率</td></tr>
+<tr><td>结构化 JSON、工具调用、复杂约束输出</td><td>SGLang</td><td>结构化输出成功率、TPOT 抖动、复杂请求是否拖慢普通请求</td></tr>
+<tr><td>固定模型、固定硬件、追求极限性能</td><td>TensorRT-LLM</td><td>构建流程、版本兼容、量化精度、吞吐回归</td></tr>
+<tr><td>多模型、多副本、自动伸缩、灰度发布</td><td>Ray Serve LLM</td><td>副本级队列、路由、冷启动和集群运维</td></tr>
+</table></div>
         </div>
         <div class="box info">
-          <p><strong>你现在应该能做什么：</strong>不再问“哪个框架最好”，而是先问“我的主问题在服务层、生成控制层，还是性能层”。</p>
+<p><b>你现在应该能做什么：</b>不再问“哪个框架最好”，而是先问“我的主问题在服务层、生成控制层，还是性能层”。</p>
         </div>
+      </div>
       </section>
-
       <section id="mistakes">
         <div class="head">
           <h2>常见错误</h2>
           <span class="tag">debug</span>
         </div>
-        <div class="grid">
-          <div class="box bad">
-            <h3>错误 1：只看 QPS 和平均延迟</h3>
-            <p>QPS 一样，不代表输入长度和输出长度一样。TTFT、TPOT、queue wait 和 token 分布不拆开，容量评审会偏掉。</p>
-          </div>
-          <div class="box bad">
-            <h3>错误 2：看到慢，就直接加 GPU</h3>
-            <p>很多故障出在接纳、路由、热身或切流节奏上。你如果先加 GPU，可能只是在把错误放大。</p>
-          </div>
-          <div class="box bad">
-            <h3>错误 3：把 OpenAI-compatible 当成完全一致</h3>
-            <p>接口形状接上了，不等于后端行为、缓存策略、流式细节和错误码都一样。上线前要按版本复查。</p>
-          </div>
-          <div class="box bad">
-            <h3>错误 4：把 Ray Serve LLM 当成推理内核</h3>
-            <p>Ray Serve LLM 解决的是服务编排、路由和伸缩，不是 token 采样和 GPU 内核优化。把层搞反，选型就会跑偏。</p>
-          </div>
-          <div class="box bad">
-            <h3>错误 5：发布只换镜像，不看热身和回滚</h3>
-            <p>新副本上线只是启动成功，不等于真实请求已经稳定。灰度要保留旧副本，等 canary 过了再放量。</p>
-          </div>
-          <div class="box bad">
-            <h3>错误 6：benchmark 当成承诺</h3>
-            <p>公开 benchmark 的硬件、模型、输入分布和并发未必等于你的生产流量。选型必须有自己的回归集。</p>
-          </div>
+      <div class="grid">
+        <div class="box">
+<h3>错误 1：只看 QPS 和平均延迟</h3>
+<p>QPS 一样，不代表输入长度和输出长度一样。TTFT、TPOT、queue wait 和 token 分布不拆开，容量评审会偏掉。</p>
         </div>
+        <div class="box">
+<h3>错误 2：看到慢，就直接加 GPU</h3>
+<p>很多故障出在接纳、路由、热身或切流节奏上。你如果先加 GPU，可能只是在把错误放大。</p>
+        </div>
+        <div class="box">
+<h3>错误 3：把 OpenAI-compatible 当成完全一致</h3>
+<p>接口形状接上了，不等于后端行为、缓存策略、流式细节和错误码都一样。上线前要按版本复查。</p>
+        </div>
+        <div class="box">
+<h3>错误 4：把 Ray Serve LLM 当成推理内核</h3>
+<p>Ray Serve LLM 解决的是服务编排、路由和伸缩，不是 token 采样和 GPU 内核优化。把层搞反，选型就会跑偏。</p>
+        </div>
+        <div class="box">
+<h3>错误 5：发布只换镜像，不看热身和回滚</h3>
+<p>新副本上线只是启动成功，不等于真实请求已经稳定。灰度要保留旧副本，等 canary 过了再放量。</p>
+        </div>
+        <div class="box">
+<h3>错误 6：benchmark 当成承诺</h3>
+<p>公开 benchmark 的硬件、模型、输入分布和并发未必等于你的生产流量。选型必须有自己的回归集。</p>
+        </div>
+      </div>
       </section>
-
       <section id="bridge">
         <div class="head">
           <h2>下一步</h2>
           <span class="tag">bridge</span>
         </div>
-        <div class="grid">
-          <div class="box soft">
-            <h3>如果你已经在值班</h3>
-            <p>先开 TTFT、TPOT、queue wait、错误率和冷启动这几条曲线，再看路由和副本健康。先判断是哪一层，再决定是限流、改路由、预热，还是回滚。</p>
-          </div>
-          <div class="box soft">
-            <h3>如果你正在选型</h3>
-            <p>先按主问题分层：服务编排、结构化生成、极致性能、平台交付。框架名只是答案的一部分，真正重要的是这层要读什么、写什么、验证什么。</p>
-          </div>
+      <div class="grid">
+        <div class="box soft">
+<h3>如果你已经在值班</h3>
+<p>先开 TTFT、TPOT、queue wait、错误率和冷启动这几条曲线，再看路由和副本健康。先判断是哪一层，再决定是限流、改路由、预热，还是回滚。</p>
         </div>
-        <div class="table-wrap" style="margin-top:12px;">
-          <table data-export-context="下一步动作表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>看到什么</th>
-                <th>先打开什么</th>
-                <th>下一动作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>TTFT 先升</td>
-                <td>入口、排队、prefill、热身</td>
-                <td>先限流或延长热身，再看是不是接纳阈值太松</td>
-              </tr>
-              <tr>
-                <td>TPOT 先升</td>
-                <td>decode、batch、KV cache</td>
-                <td>先看后续 token 的耗时，再决定要不要调 batch 或换引擎</td>
-              </tr>
-              <tr>
-                <td>排队先涨</td>
-                <td>接纳、路由、副本健康</td>
-                <td>先查路由偏斜，再判断是改路由还是扩副本</td>
-              </tr>
-              <tr>
-                <td>冷启动先涨</td>
-                <td>镜像、权重、热身、灰度</td>
-                <td>先保留旧路径，别急着把流量全切过去</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="box soft">
+<h3>如果你正在选型</h3>
+<p>先按主问题分层：服务编排、结构化生成、极致性能、平台交付。框架名只是答案的一部分，真正重要的是这层要读什么、写什么、验证什么。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>看到什么</th><th>先打开什么</th><th>下一动作</th></tr>
+<tr><td>TTFT 先升</td><td>入口、排队、prefill、热身</td><td>先限流或延长热身，再看是不是接纳阈值太松</td></tr>
+<tr><td>TPOT 先升</td><td>decode、batch、KV cache</td><td>先看后续 token 的耗时，再决定要不要调 batch 或换引擎</td></tr>
+<tr><td>排队先涨</td><td>接纳、路由、副本健康</td><td>先查路由偏斜，再判断是改路由还是扩副本</td></tr>
+<tr><td>冷启动先涨</td><td>镜像、权重、热身、灰度</td><td>先保留旧路径，别急着把流量全切过去</td></tr>
+</table></div>
         </div>
         <div class="box warn">
-          <p><strong>先知道，先别追：</strong>这里先不追 CUDA kernel、完整 K8s 平台、benchmark 设计和训练产物更新。它们会在别的笔记里回来；这页先负责把线上故障和选型说清楚。</p>
-          <p><strong>你现在应该能做什么：</strong>拿到一个生产问题，先写出“症状 → 第一层 → 第一动作”，再继续深入。</p>
+<p><b>先知道，先别追：</b>这里先不追 CUDA kernel、完整 K8s 平台、benchmark 设计和训练产物更新。它们会在别的笔记里回来；这页先负责把线上故障和选型说清楚。</p>
+<p><b>你现在应该能做什么：</b>拿到一个生产问题，先写出“症状 → 第一层 → 第一动作”，再继续深入。</p>
         </div>
+      </div>
       </section>
-
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-intro">
-          <div class="box soft">
-            <h3>作答目标</h3>
-            <p>这组题不考背名词，重点是看你能不能把一个故障或者选型拆成层、状态和动作。优先写出你先看什么、为什么先看它，再写下一步动作。</p>
-          </div>
-          <div class="box info">
-            <h3>检查重点</h3>
-            <p>先确认对象有没有分层，状态有没有说清，选择有没有给出理由。开放题用评分要点自查，不要靠硬匹配整段自然语言。</p>
-          </div>
+      <div class="practice-intro">
+      <div class="box soft">
+<h3>作答目标</h3>
+<p>这组题不考背名词，重点是看你能不能把一个故障或者选型拆成层、状态和动作。优先写出你先看什么、为什么先看它，再写下一步动作。</p>
+      </div>
+      <div class="box info">
+<h3>检查重点</h3>
+<p>先确认对象有没有分层，状态有没有说清，选择有没有给出理由。开放题用评分要点自查，不要靠硬匹配整段自然语言。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、症状识别</h3></div>
+          <div class="quick-review">先判断这条症状是卡在入口、路由、执行，还是发布。别把首 token 之前和之后混成一层。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="入口接纳、队列和 prefill">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> TTFT p95 上升、TPOT 基本没变时，先看哪层？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>一、症状识别</h3>
-              <p>先把 TTFT、TPOT、排队和冷启动分开。</p>
-            </div>
-            <div class="quick-review">先判断这条症状是卡在入口、路由、执行，还是发布。别把首 token 之前和之后混成一层。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q1" data-group="一、症状识别" data-title="TTFT 先升时先看哪层？" data-answer="A" data-explain="TTFT 先看入口接纳、排队和 prefill，而不是先猜 decode 有问题。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">TTFT</span></div>
-              <h3>TTFT p95 上升、TPOT 基本没变时，先看哪层？</h3>
-              <label><input type="radio" name="q1" value="A">A. 入口接纳、队列和 prefill</label>
-              <label><input type="radio" name="q1" value="B">B. decode 采样和后续 token 间隔</label>
-              <label><input type="radio" name="q1" value="C">C. 模型训练轮数和 loss 曲线</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">先看第一个 token 之前发生了什么。</p>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q1" value="入口接纳、队列和 prefill">入口接纳、队列和 prefill</label>
+      <label><input type="radio" name="q1" value="decode 采样和后续 token 间隔">decode 采样和后续 token 间隔</label>
+      <label><input type="radio" name="q1" value="模型训练轮数和 loss 曲线">模型训练轮数和 loss 曲线</label>
+      </div>
 
-            <div class="q" data-question="q2" data-group="一、症状识别" data-title="OpenAI-compatible 是否等于后端完全一致？" data-answer="false" data-explain="协议兼容只说明入口形状接得上，不说明所有后端行为都一样。">
-              <div class="q-meta"><span class="pill">true/false</span><span class="pill">协议</span></div>
-              <h3>判断：OpenAI-compatible 等于后端行为完全一致。</h3>
-              <label><input type="radio" name="q2" value="true">对</label>
-              <label><input type="radio" name="q2" value="false">错</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">入口形状相同，不代表缓存、流式和错误码也相同。</p>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>入口接纳、队列和 prefill。TTFT 先看入口接纳、排队和 prefill，而不是先猜 decode 有问题。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="false">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> 判断：OpenAI-compatible 等于后端行为完全一致。</h3>
 
-            <div class="q short" data-question="q3" data-group="一、症状识别" data-title="慢请求先卡在哪个词？">
-              <div class="q-meta"><span class="pill">fill</span><span class="pill">queue</span></div>
-              <h3>填空：如果慢请求先卡在队列，你先看的词是 ______。</h3>
-              <input type="text" name="q3" data-answer="队列等待,排队等待,queue wait" placeholder="写出一个最贴切的词">
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">写你最先查的那个状态，不要写一长串分析。</p>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      </div>
 
-            <div class="q full" data-question="q4" data-group="一、症状识别" data-title="TTFT 和 TPOT 的判断顺序" >
-              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">distinction</span></div>
-              <h3>把 TTFT 慢和 TPOT 慢的判断顺序写出来</h3>
-              <p class="solve-note">回答时至少写出：先看什么、后看什么、为什么这两个顺序不一样。</p>
-              <textarea name="q4" placeholder="例如：TTFT 慢先看入口、队列和 prefill；TPOT 慢先看 decode、batch 和 KV cache。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>好答案会把“首 token 之前”和“首 token 之后”分开。TTFT 慢先看入口接纳、队列、prefill 和热身；TPOT 慢先看 decode、batch、KV cache 和输出长度。只写“模型慢了”不够。</p>
-              </details>
-            </div>
-          </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>false。协议兼容只说明入口形状接得上，不说明所有后端行为都一样。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 填空：如果慢请求先卡在队列，你先看的词是 ______。</h3>
+
+
+      <textarea name="q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 把 TTFT 慢和 TPOT 慢的判断顺序写出来</h3>
+
+
+      <textarea name="q4"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案会把“首 token 之前”和“首 token 之后”分开。TTFT 慢先看入口接纳、队列、prefill 和热身；TPOT 慢先看 decode、batch、KV cache 和输出长度。只写“模型慢了”不够。</p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>二、路径与状态</h3>
-              <p>把接纳、路由、副本健康和回滚放回同一张账本里。</p>
-            </div>
-            <div class="quick-review">如果 GPU 没满却排队，先看路由和接纳，不要先跳到模型本体。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q5" data-group="二、路径与状态" data-title="GPU 利用率不高却排队时先看什么？" data-answer="A" data-explain="队列涨而 GPU 没满，先查接纳、路由和副本健康。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">queue</span></div>
-              <h3>GPU 利用率不高，但请求开始排队。你先看哪组因素？</h3>
-              <label><input type="radio" name="q5" value="A">A. 接纳策略、路由偏斜、副本健康</label>
-              <label><input type="radio" name="q5" value="B">B. 采样温度、top_p、重复惩罚</label>
-              <label><input type="radio" name="q5" value="C">C. 训练轮数、验证集大小、loss 曲线</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">资源没满，不代表请求已经走对了路。</p>
-            </div>
-
-            <div class="q short" data-question="q6" data-group="二、路径与状态" data-title="缓存亲和冲突时先保什么？">
-              <div class="q-meta"><span class="pill">fill</span><span class="pill">tradeoff</span></div>
-              <h3>填空：缓存亲和和排队时长冲突时，先保护的指标是 ____。</h3>
-              <input type="text" name="q6" data-answer="ttft" placeholder="写出一个核心指标">
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">这里先保用户最先感受到的那个时间。</p>
-            </div>
-
-            <div class="q full" data-question="q7" data-group="二、路径与状态" data-title="写一个回滚条件" >
-              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">recovery</span></div>
-              <h3>写一个你会放进值班手册的回滚条件</h3>
-              <p class="solve-note">回答时至少说清：触发条件、先做什么动作、为什么不先盲目加副本。</p>
-              <textarea name="q7" placeholder="例如：TTFT p95 连续 10 分钟高于阈值并且队列持续增长，先限流或回滚，再判断是入口拥塞还是引擎问题。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>好答案会同时写出阈值、动作顺序和理由。像“TTFT p95 连续 10 分钟高于阈值且队列不断增长，先限流或回滚，再查入口和引擎”这样的答案就比较完整。</p>
-              </details>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、路径与状态</h3></div>
+          <div class="quick-review">如果 GPU 没满却排队，先看路由和接纳，不要先跳到模型本体。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="接纳策略、路由偏斜、副本健康">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> GPU 利用率不高，但请求开始排队。你先看哪组因素？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>三、框架选型</h3>
-              <p>把框架名换成问题层级，再做判断。</p>
-            </div>
-            <div class="quick-review">先问“我到底要解决哪一层”，再问“哪个框架更顺手”。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q8" data-group="三、框架选型" data-title="Ray Serve LLM 更像哪类问题？" data-answer="B" data-explain="Ray Serve LLM 主要负责服务编排、多副本、自动伸缩和灰度。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">编排</span></div>
-              <h3>Ray Serve LLM 更像哪类问题？</h3>
-              <label><input type="radio" name="q8" value="A">A. 只做 token 采样和 GPU 内核优化</label>
-              <label><input type="radio" name="q8" value="B">B. 服务编排、多副本、自动伸缩和灰度</label>
-              <label><input type="radio" name="q8" value="C">C. 只负责训练和评测数据管理</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">看它是在管服务层，还是在管引擎层。</p>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q5" value="接纳策略、路由偏斜、副本健康">接纳策略、路由偏斜、副本健康</label>
+      <label><input type="radio" name="q5" value="采样温度、top_p、重复惩罚">采样温度、top_p、重复惩罚</label>
+      <label><input type="radio" name="q5" value="训练轮数、验证集大小、loss 曲线">训练轮数、验证集大小、loss 曲线</label>
+      </div>
 
-            <div class="q" data-question="q9" data-group="三、框架选型" data-title="SGLang 更像哪类问题？" data-answer="A" data-explain="SGLang 更接近结构化生成、受约束输出和程序式控制。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">生成控制</span></div>
-              <h3>SGLang 更像哪类问题？</h3>
-              <label><input type="radio" name="q9" value="A">A. 结构化生成、受约束输出、程序式控制</label>
-              <label><input type="radio" name="q9" value="B">B. 多租户灰度发布和路由编排</label>
-              <label><input type="radio" name="q9" value="C">C. 只想把 QPS 拉高一点</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">先看它更靠近生成控制，还是更靠近平台调度。</p>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>接纳策略、路由偏斜、副本健康。队列涨而 GPU 没满，先查接纳、路由和副本健康。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 填空：缓存亲和和排队时长冲突时，先保护的指标是 ____。</h3>
 
-            <div class="q" data-question="q10" data-group="三、框架选型" data-title="TensorRT-LLM 更适合哪种场景？" data-answer="A" data-explain="TensorRT-LLM 更适合固定模型、NVIDIA GPU 栈和极致性能目标。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">性能</span></div>
-              <h3>TensorRT-LLM 更适合哪种场景？</h3>
-              <label><input type="radio" name="q10" value="A">A. 固定模型、NVIDIA GPU 栈、追求极致性能</label>
-              <label><input type="radio" name="q10" value="B">B. 多模型灰度和统一服务编排</label>
-              <label><input type="radio" name="q10" value="C">C. 只要一个 OpenAI 兼容 HTTP 外壳</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">这类问题先看硬件和性能边界。</p>
-            </div>
 
-            <div class="q full" data-question="q11" data-group="三、框架选型" data-title="给一个多模型 API 组合" >
-              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">组合</span></div>
-              <h3>给一个多模型 API 组合，并说明入口、编排、引擎、后端各自做什么</h3>
-              <p class="solve-note">题目里有普通聊天、结构化 JSON 输出、企业租户隔离和灰度发布。回答时至少写出每一层的职责，再说明为什么要这样分。</p>
-              <textarea name="q11" placeholder="例如：Ray Serve LLM 负责编排和灰度，vLLM 负责通用推理，SGLang 只在结构化输出更重时加入，KubeRay 负责集群交付..."></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>好答案会把层级分清：Ray Serve LLM 解决服务编排、路由和伸缩；vLLM 解决通用推理；SGLang 适合结构化生成更重的场景；KubeRay / RayService 适合集群交付。只说“我选某个框架，因为它更快”不够。</p>
-              </details>
-            </div>
-          </div>
+      <textarea name="q6"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 写一个你会放进值班手册的回滚条件</h3>
+
+
+      <textarea name="q7"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案会同时写出阈值、动作顺序和理由。像“TTFT p95 连续 10 分钟高于阈值且队列不断增长，先限流或回滚，再查入口和引擎”这样的答案就比较完整。</p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>四、上线复盘</h3>
-              <p>把现象、门禁和回滚条件连起来。</p>
-            </div>
-            <div class="quick-review">先写阈值，再写动作，最后写原因。这个顺序比“我觉得”更有用。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q full" data-question="q12" data-group="四、上线复盘" data-title="写一个发布回滚阈值" >
-              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">rollback</span></div>
-              <h3>写一个上线回滚阈值，并说明第一动作</h3>
-              <p class="solve-note">回答时至少说清：什么指标触发、先做什么动作、为什么不该先盲目放量。</p>
-              <textarea name="q12" placeholder="例如：TTFT p95 连续 10 分钟高于阈值且错误率上升，先保留旧副本并回滚，再查热身和路由。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>好答案会同时写出触发条件、动作顺序和理由。比如“TTFT p95 连续 10 分钟高于阈值且错误率上升，先保留旧副本并回滚，再查入口、路由和热身”就比较完整。</p>
-              </details>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、框架选型</h3></div>
+          <div class="quick-review">先问“我到底要解决哪一层”，再问“哪个框架更顺手”。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="服务编排、多副本、自动伸缩和灰度">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Ray Serve LLM 更像哪类问题？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q8" value="只做 token 采样和 GPU 内核优化">只做 token 采样和 GPU 内核优化</label>
+      <label><input type="radio" name="q8" value="服务编排、多副本、自动伸缩和灰度">服务编排、多副本、自动伸缩和灰度</label>
+      <label><input type="radio" name="q8" value="只负责训练和评测数据管理">只负责训练和评测数据管理</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>服务编排、多副本、自动伸缩和灰度。Ray Serve LLM 主要负责服务编排、多副本、自动伸缩和灰度。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="结构化生成、受约束输出、程序式控制">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> SGLang 更像哪类问题？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q9" value="结构化生成、受约束输出、程序式控制">结构化生成、受约束输出、程序式控制</label>
+      <label><input type="radio" name="q9" value="多租户灰度发布和路由编排">多租户灰度发布和路由编排</label>
+      <label><input type="radio" name="q9" value="只想把 QPS 拉高一点">只想把 QPS 拉高一点</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>结构化生成、受约束输出、程序式控制。SGLang 更接近结构化生成、受约束输出和程序式控制。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="固定模型、NVIDIA GPU 栈、追求极致性能">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> TensorRT-LLM 更适合哪种场景？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q10" value="固定模型、NVIDIA GPU 栈、追求极致性能">固定模型、NVIDIA GPU 栈、追求极致性能</label>
+      <label><input type="radio" name="q10" value="多模型灰度和统一服务编排">多模型灰度和统一服务编排</label>
+      <label><input type="radio" name="q10" value="只要一个 OpenAI 兼容 HTTP 外壳">只要一个 OpenAI 兼容 HTTP 外壳</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>固定模型、NVIDIA GPU 栈、追求极致性能。TensorRT-LLM 更适合固定模型、NVIDIA GPU 栈和极致性能目标。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 给一个多模型 API 组合，并说明入口、编排、引擎、后端各自做什么</h3>
+
+
+      <textarea name="q11"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案会把层级分清：Ray Serve LLM 解决服务编排、路由和伸缩；vLLM 解决通用推理；SGLang 适合结构化生成更重的场景；KubeRay / RayService 适合集群交付。只说“我选某个框架，因为它更快”不够。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、上线复盘</h3></div>
+          <div class="quick-review">先写阈值，再写动作，最后写原因。这个顺序比“我觉得”更有用。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 写一个上线回滚阈值，并说明第一动作</h3>
+
+
+      <textarea name="q12"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案会同时写出触发条件、动作顺序和理由。比如“TTFT p95 连续 10 分钟高于阈值且错误率上升，先保留旧副本并回滚，再查入口、路由和热身”就比较完整。</p>
+        </details>
+      </article>
+        </div>
+      </div>
       </section>
-
       <section id="boundary">
         <div class="head">
           <h2>边界</h2>
           <span class="tag">boundary</span>
         </div>
         <div class="box warn">
-          <p>这页只处理生产故障和选型清单，不展开 CUDA kernel、完整 Kubernetes 平台、训练产物更新、benchmark 套件设计，也不展开提示词工程。它们当然重要，但不该抢走这页的主线。</p>
-          <p>如果你接下来要做的是平台化部署，下一步应该回到 Ray Serve / KubeRay 文档；如果你要做的是性能极限优化，下一步应该回到引擎和 GPU 这条线。</p>
+<p>这页只处理生产故障和选型清单，不展开 CUDA kernel、完整 Kubernetes 平台、训练产物更新、benchmark 套件设计，也不展开提示词工程。它们当然重要，但不该抢走这页的主线。</p>
+<p>如果你接下来要做的是平台化部署，下一步应该回到 Ray Serve / KubeRay 文档；如果你要做的是性能极限优化，下一步应该回到引擎和 GPU 这条线。</p>
         </div>
       </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
-        </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
-
-      <section id="sources">
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <div class="source-list">
-          <div class="source-card">
-            <a href="../index.html">课程地图</a>
-            <p>用于确认这一节在整个课程里的位置：它收束前面的请求生命周期、路由、伸缩和部署形态。</p>
-          </div>
-          <div class="source-card">
-            <a href="https://docs.ray.io/en/latest/serve/llm/index.html">Ray Serve LLM 文档</a>
-            <p>用于服务编排、OpenAI 兼容入口、自动伸缩、指标和整体服务层定位。</p>
-          </div>
-          <div class="source-card">
-            <a href="https://docs.ray.io/en/latest/serve/key-concepts.html">Ray Serve Key Concepts</a>
-            <p>用于 deployment、replica、application、DeploymentHandle 等服务层基础概念。</p>
-          </div>
-          <div class="source-card">
-            <a href="https://docs.ray.io/en/latest/serve/autoscaling-guide.html">Ray Serve Autoscaling</a>
-            <p>用于 ongoing requests、autoscaling_config、队列和扩缩容判断。</p>
-          </div>
-          <div class="source-card">
-            <a href="https://docs.vllm.ai/en/latest/serving/online_serving/">vLLM Online Serving</a>
-            <p>用于 vLLM 的 OpenAI 兼容 HTTP server、在线 serving 和服务侧参数边界。</p>
-          </div>
-          <div class="source-card">
-            <a href="https://docs.sglang.ai/docs/basic_usage/openai_api_completions">SGLang OpenAI-Compatible APIs</a>
-            <p>用于 OpenAI 兼容接口、launch_server、结构化生成和 runtime 相关语汇。</p>
-          </div>
-          <div class="source-card">
-            <a href="https://nvidia.github.io/TensorRT-LLM/latest/quick-start-guide.html">TensorRT-LLM Quick Start Guide</a>
-            <p>用于 trtllm-serve、OpenAI compatible server、预量化模型和高性能部署边界。</p>
-          </div>
-          <div class="source-card">
-            <a href="https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/rayservice.html">RayService / KubeRay 文档</a>
-            <p>用于 Kubernetes 上的声明式部署形态和 Ray Serve 应用交付方式。</p>
-          </div>
-        </div>
-        <div class="box info" style="margin-top:12px;">
-          <p>版本边界按 2026-06-22 的公开文档整理。框架迭代很快，正式上线前要按当前版本再核对一次。</p>
-        </div>
+
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

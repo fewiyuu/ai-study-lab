@@ -4,503 +4,676 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P27｜语音与影像上的自督导式学习模型</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="speech self-supervised learning,vision self-supervised learning,generative,predictive,contrastive learning,SimCLR,wav2vec 2.0,BYOL,VICReg,negative example,collapse">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>语音与影像上的自督导式学习模型</strong><span>P27。把 BERT/GPT 的想法带到声音和图片，再看为什么会出现对比、bootstrap 和正则化路线。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#transfer"><span class="dot"></span>跨模态直觉</a>
-      <a href="#bench"><span class="dot"></span>语音与影像任务</a>
-      <a href="#generative"><span class="dot"></span>生成式方法</a>
-      <a href="#predictive"><span class="dot"></span>预测式方法</a>
-      <a href="#contrastive"><span class="dot"></span>对比学习</a>
-      <a href="#bootstrap"><span class="dot"></span>无负例路线</a>
-      <a href="#regularization"><span class="dot"></span>正则化路线</a>
-      <a href="#share"><span class="dot"></span>速查例题</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：语音和影像也能从未标注资料里造任务，但不能机械照搬文字方法，要考虑连续讯号、细节过多、负例选择和表示崩塌。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P27</div>
-        <h1>语音和影像，也能自己给自己出题</h1>
-        <p>文字里的 BERT 和 GPT 已经说明：只要能从资料本身构造训练目标，就可以不靠人工标签学到有用表示。语音和影像也能这样做。给模型大量未标注声音或图片，让它学出一排 representation，再用少量标注资料接下游模型，就能做语音辨识、唤醒词、说话人任务、影像辨识、物件侦测、分割等任务。</p>
-        <p>难点在于声音和图片不像文字 token 那样离散、干净。相邻语音 frame 太像，mask 一个 frame 只会学到内插；图片和声音包含大量细节，完整生成太难；对比学习需要选负例，负例太简单学不到东西，太难又可能把同类拉开。P27 的重点就是看这些方法如何绕过这些问题。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释语音版 BERT/GPT 和文字版的相同点与差异。</li>
-          <li>说明 SUPERB 和影像多任务评估为什么重要。</li>
-          <li>区分 generative、predictive、contrastive、bootstrap、regularization 五类方法。</li>
-          <li>解释 wav2vec 2.0 为什么可以从 BERT 和对比学习角度理解。</li>
-          <li>说明 BYOL/VICReg 如何在没有负例时避免 collapse。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
-      <p>自督导式学习的共同核心是：没有人工标签，也要从资料内部造出监督信号。文字中，BERT 盖住 token 让模型填空，GPT 根据前文预测下一个 token。语音中，可以盖住一段声音让模型还原，也可以根据前面的声音预测较远之后的声音。影像中，可以盖住 patch、预测 pixel、判断旋转角度，或让同一张图不同增强版本的表示接近。</p>
-      <p>语音和影像的特殊之处让方法分化成五类。第一类 generative 试着还原原始讯号或被 mask 的部分。第二类 predictive 不一定还原原讯号，而是预测旋转、相对位置、cluster id 等更容易的目标。第三类 contrastive 不直接生成东西，而是让正样本表示接近、负样本表示远离。第四类 bootstrap 避开负例，用 teacher/student 和 stop-gradient 训练。第五类 regularization 用 variance/covariance 约束防止所有表示变成一样。</p>
-      <div class="map">
-        <span class="node">未标注声音/图片</span>
-        <span class="node">自造任务</span>
-        <span class="node">学 representation</span>
-        <span class="node">少量标注适配</span>
-        <span class="node">多任务评估</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P27</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把“自督导”解释成从资料本身造题，而不是只背某一个模型名字。</p></div>
-    </section>
-
-    <section id="transfer">
-      <div class="head"><h2>从文字迁移到语音和影像</h2><span class="tag">TRANSFER</span></div>
-      <p>文字版 BERT 的输入是一串 token，输出是一串向量，每个 token 对应一个 representation。语音版 BERT 的输入是一段声音讯号，通常先变成一排 acoustic feature，然后输出一排向量。下游语音辨识模型可以吃这些向量，把它们转成文字。若没有这种预训练表示，端到端语音辨识往往需要成千上万小时的标注声音；有了语音版 BERT，研究者会挑战用十分钟、几十分钟标注资料做适配。</p>
-      <p>影像也类似。预训练模型先在大量未标注图片上学 representation，再把表示用于影像辨识、物件侦测、语义分割、视觉导航等任务。课程中特别强调一个惊人的现象：某些影像自督导模型在下游任务上可以超过用大规模标注资料监督训练得到的基准。这并不是说标签永远没用，而是说明未标注资料中的结构本身已经很有学习价值。</p>
-      <div class="grid3">
-        <div class="box info"><h3>文字</h3><p>输入 token 序列，遮住 token 或预测下一个 token，学语言表示。</p></div>
-        <div class="box soft"><h3>语音</h3><p>输入连续声音 feature，遮住一段时间或预测未来 frame，学内容、说话人、情感等表示。</p></div>
-        <div class="box warn"><h3>影像</h3><p>输入图片或 patch，预测变换、相对位置、cluster 或拉近增强视图，学视觉表示。</p></div>
+      <h1 class="hero-title">P27｜语音与影像上的自督导式学习模型</h1>
+      <p class="hero-desc">文字里的 BERT 和 GPT 已经说明：只要能从资料本身构造训练目标，就可以不靠人工标签学到有用表示。语音和影像也能这样做。给模型大量未标注声音或图片，让它学出一排 representation，再用少量标注资料接下游模型，就能做语音辨识、唤醒词、说话人任务、影像辨识、物件侦测、分割等任务。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P26_有效使用自督导式模型/学习页.html">上一节</a>
+            <a href="../P28_自编码器基本概念/学习页.html">下一节</a>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说明“语音版 BERT”不是拿文字模型直接读声音，而是用类似训练目标学声音表示。</p></div>
-    </section>
-
-    <section id="bench">
-      <div class="head"><h2>多任务评估：SUPERB 与影像下游任务</h2><span class="tag">BENCHMARK</span></div>
-      <p>文字领域有 GLUE 这样的 benchmark，用多个自然语言处理任务评估预训练模型。语音领域也有类似思路：SUPERB 是 Speech processing Universal PERformance Benchmark，用一系列任务测试语音自督导模型的能力。任务不仅有语音辨识，也包括 keyword spotting、说话人辨识、说话人验证、情感辨识、语音翻译、语音增强、语音分离等。</p>
-      <p>这很重要，因为一个表示如果只在单一任务上好，可能只是学到了窄线索。比如只做语音辨识，模型可能偏向内容信息；若还要做说话人验证、情感辨识和语音增强，就能检查它是否保留了更多层次的信息。影像领域也是一样，不能只看 image classification，还要看 object detection、semantic segmentation、navigation 等任务。</p>
-      <table class="metric-table">
-        <tr><th>模态</th><th>典型任务</th><th>评估意义</th></tr>
-        <tr><td>语音</td><td>辨识、唤醒词、说话人、情绪、翻译、增强、分离</td><td>检查表示是否覆盖内容、说话人、语气和语义</td></tr>
-        <tr><td>影像</td><td>分类、侦测、分割、导航</td><td>检查表示是否能迁移到不同视觉粒度</td></tr>
-        <tr><td>文字</td><td>分类、推理、问答、相似度</td><td>检查语言表示是否能支持不同文本任务</td></tr>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么自督导模型不能只靠一个下游任务判断好坏。</p></div>
-    </section>
-
-    <section id="generative">
-      <div class="head"><h2>生成式方法：直接还原被遮住或未来的讯号</h2><span class="tag">GENERATIVE</span></div>
-      <p>生成式方法最接近文字版 BERT/GPT。语音版 BERT 可以把声音某些片段 mask 掉，要求模型还原被盖住的部分；代表例子包括 Mockingjay。语音版 GPT 可以给前面的声音讯号，预测未来某个时间点的声音；代表例子包括 APC。影像也可以把 pixel 拉成序列，预测下一个 pixel，或 mask 一部分 pixel 再还原。</p>
-      <p>但照搬会出问题。语音 feature 相邻帧高度相似，如果只 mask 一个 frame，模型用左右邻居内插就能猜出来，学不到更高层的语音结构。所以语音中通常要 mask 一整段连续 feature，或者预测距离当前更远的未来 frame。影像和语音还包含大量低层细节，要求模型完整还原原始讯号很难，也不一定是下游任务最需要的能力。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：mask 多长才有学习价值</h3>
-            <div class="slider-row"><label for="maskLen">连续 mask 长度</label><input id="maskLen" type="range" min="1" max="8" value="3"><strong id="maskLenOut">3</strong></div>
-            <div class="tokens" id="maskTokens"></div>
-          </div>
-          <div class="viz-note">
-            <h3 id="maskTitle">中等难度</h3>
-            <p id="maskText">连续遮住几段 feature 后，模型不能只靠简单内插解决问题，较可能学到语音内容或结构。</p>
-          </div>
-        </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说明为什么语音中 mask 一个 frame 太容易，通常要 mask 一整段。</p></div>
-    </section>
-
-    <section id="predictive">
-      <div class="head"><h2>预测式方法：不还原原讯号，预测更简单的目标</h2><span class="tag">PREDICTIVE</span></div>
-      <p>如果还原声音或图片太复杂，可以设计一个更简单但有用的预测任务。影像中常见例子是 rotation prediction：把图片旋转 0、90、180、270 度，让模型判断旋转角度。另一个例子是 context prediction：从大图切出两个 patch，让模型判断第二个 patch 在第一个 patch 的哪个方向。这些任务迫使模型理解物体方向、局部结构和空间关系。</p>
-      <p>语音也可以设计类似任务，比如给同一句话里切出的两段声音，让模型判断它们相距多远。更通用的做法是先把连续 acoustic feature 做 clustering 或 quantization，把复杂向量变成 discrete cluster id，再让模型预测被 mask 位置的 cluster id。HuBERT、BEST-RQ、DeepCluster 都属于这类思路的代表：目标不是生成原始讯号，而是预测一个简化后的符号或聚类标签。</p>
-      <div class="mini-flow">
-        <div>原始讯号<small>声音/图片细节很多</small></div>
-        <div>变换或聚类<small>旋转、相对位置、cluster</small></div>
-        <div>预测目标<small>角度、方向、id</small></div>
-        <div>学习表示<small>抽出结构信息</small></div>
-        <div>下游使用<small>分类/辨识/分割</small></div>
-      </div>
-      <div class="grid2">
-        <div class="box info"><h3>好处</h3><p>目标比还原原始讯号更简单，训练更稳定，也可能更贴近下游任务需要的抽象结构。</p></div>
-        <div class="box warn"><h3>风险</h3><p>预测任务需要领域知识。太简单学不到东西，太偏门又可能学到和下游无关的线索。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>给一个新的声音或图片任务，尝试设计一个不用人工标签的小预测任务。</p></div>
-    </section>
-
-    <section id="contrastive">
-      <div class="head"><h2>对比学习：不生成，只拉近正样本、推远负样本</h2><span class="tag">CONTRASTIVE</span></div>
-      <p>contrastive learning 的目标不是还原东西，而是塑造 representation 空间。对同一张图片做两次 data augmentation，得到两个视图，它们被当作 positive pair，表示要接近。来自不同图片的视图被当作 negative pair，表示要远离。SimCLR 就是这一路线的经典方法，常用 random crop、color distortion、Gaussian blur 等增强，其中 random crop 往往很关键。</p>
-      <p>语音里也有类似路线，例如 CPC、wav2vec、vq-wav2vec 和 wav2vec 2.0。wav2vec 2.0 看起来复杂：前端 encoder 把声音变成表示，中间有 quantization 产生 discrete target，后端 Transformer 吃 continuous representation，在 mask 位置预测正确的 discrete target，并把若干错误 target 当作负例压低。换个角度看，它和 BERT 很像：BERT 在 mask 位置预测正确 token；wav2vec 2.0 在 mask 位置预测正确的语音离散单位，只是负例太多时用抽样近似。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：负例难度</h3>
-            <div class="tabs">
-              <button type="button" data-neg="easy" class="active">太简单</button>
-              <button type="button" data-neg="good">合适</button>
-              <button type="button" data-neg="hard">太困难</button>
-            </div>
-            <div class="scatter" id="scatterBox"></div>
-          </div>
-          <div class="viz-note">
-            <h3 id="negTitle">太简单的负例</h3>
-            <p id="negText">如果猫的负例是天空或海，模型可能只学颜色差异就能分开，表示不一定学到物体结构。</p>
-          </div>
-        </div>
-      </div>
-      <div class="formula">
-        对比学习的判断：positive pair 距离小；negative pair 距离大。<br>
-        难点：负例不能太简单，也不能把真实同类误当成负例强行拉开。
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么 SimCLR 的数据增强和负例选择会直接影响学到的表示。</p></div>
-    </section>
-
-    <section id="bootstrap">
-      <div class="head"><h2>Bootstrap：只用正样本，靠非对称路径避免 collapse</h2><span class="tag">BOOTSTRAP</span></div>
-      <p>如果不想选负例，能不能只让 positive pair 接近？直接这样做会 collapse：模型可以对所有输入输出同一个零向量，正样本当然都很接近，但表示完全没用了。bootstrap 路线试图在不用负例的情况下避免 collapse，代表方法包括 BYOL、SimSiam，以及语音/影像/文字都可用的 data2vec。</p>
-      <p>BYOL 的结构像 teacher/student。两张增强视图分别走两条路径：一边通常 stop-gradient，另一边有 predictor，并且只更新 student 路径；然后用 moving average 慢慢更新 teacher。SimSiam 进一步说明 moving average 不一定必要，但 predictor 和 stop-gradient 很关键。课程里也提醒：这类方法为什么不 collapse 仍然不是初学者能用一句话完全解释的事，但实验上这些机制确实很重要。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：是否有防 collapse 机制</h3>
-            <div class="tabs">
-              <button type="button" data-boot="plain" class="active">只有正样本</button>
-              <button type="button" data-boot="byol">BYOL 风格</button>
-              <button type="button" data-boot="vic">加 variance</button>
-            </div>
-            <div class="scatter" id="bootBox"></div>
-          </div>
-          <div class="viz-note">
-            <h3 id="bootTitle">容易 collapse</h3>
-            <p id="bootText">如果训练目标只要求正样本接近，模型可以把所有输入都输出同一个向量。</p>
-          </div>
-        </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说清楚 BYOL 为什么不是“简单去掉负例”，而是加入了非对称网络和 stop-gradient。</p></div>
-    </section>
-
-    <section id="regularization">
-      <div class="head"><h2>正则化路线：直接约束表示不要塌掉</h2><span class="tag">REGULARIZATION</span></div>
-      <p>另一条避开负例的路线是加正则化。VICReg 的名字来自 Variance-Invariance-Covariance Regularization。invariance 是让同一图片的不同增强版本表示接近；variance 是要求一个 batch 中每个表示维度都有足够变化，避免所有样本输出同一个向量；covariance 是让不同维度减少冗余，让 latent space 被更充分使用。</p>
-      <p>课程中特别强调 variance 很关键。只有 invariance 会 collapse；加上 variance，就能强制表示在不同样本之间保持差异。covariance 可以让不同维度不要学成重复信息，但没有 covariance 时模型仍可能训练起来。Barlow Twins 和 VICReg 都属于这个方向，语音里也有类似方法。</p>
-      <table class="metric-table">
-        <tr><th>约束</th><th>直觉</th><th>防止什么问题</th></tr>
-        <tr><td>Invariance</td><td>同一样本不同增强视图要接近</td><td>学到增强不变的表示</td></tr>
-        <tr><td>Variance</td><td>不同样本在每个维度上要有足够变化</td><td>防止全部输出同一个向量</td></tr>
-        <tr><td>Covariance</td><td>不同维度之间不要高度重复</td><td>减少维度冗余，展开表示空间</td></tr>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释 VICReg 里三个词分别负责什么，而不是只背缩写。</p></div>
-    </section>
-
-    <section id="share">
-      <div class="head"><h2>公开分享速查：跨模态自监督怎么选</h2><span class="tag">quick reference</span></div>
-      <div class="grid2">
-        <div class="box soft">
-          <h3>核心直觉</h3>
-          <p>文字、语音、影像都可以自监督，但任务不能机械照搬。文字 token 离散，next-token 很自然；语音和影像连续且细节多，直接重建可能太难，预测太近又可能太容易。</p>
-          <p>方法演化的主线是：先尝试生成或预测，再用对比学习关注表示相似性，最后用 bootstrap 或正则化绕开负例选择。</p>
-        </div>
-        <div class="box warn">
-          <h3>Worked example</h3>
-          <p>语音若只预测下一个 10ms frame，模型可能学到平滑内插，而不是语义。更好的任务可以遮住一整段，或预测更远位置的离散单位，让模型必须利用上下文和内容结构。</p>
-          <p>影像若完整重建每个像素，模型可能沉迷纹理细节；对比或增强不变性目标更容易把注意力放在物体和语义表示上。</p>
-        </div>
-      </div>
-      <table class="metric-table">
-        <tr><th>方法</th><th>直觉</th><th>主要风险</th></tr>
-        <tr><td>Generative</td><td>重建被遮住或未来的原始信号。</td><td>信号太细，任务太难或学到低层细节。</td></tr>
-        <tr><td>Predictive</td><td>预测离散单位、未来表示或较简化目标。</td><td>目标太近会变成平滑内插。</td></tr>
-        <tr><td>Contrastive</td><td>拉近正样本，推远负样本。</td><td>负例选错会把同类样本推开。</td></tr>
-        <tr><td>Bootstrap</td><td>用 teacher/student 非对称路径只学正样本。</td><td>若没有 stop-gradient、predictor 等设计，容易 collapse。</td></tr>
-        <tr><td>Regularization</td><td>用 variance/covariance 等约束保持表示展开。</td><td>只做 invariance 不够，仍可能所有样本输出同向量。</td></tr>
-      </table>
-      <div class="box info">
-        <h3>选择检查表</h3>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
         <ul>
-          <li>先问资料是离散 token、连续语音，还是高维影像。</li>
-          <li>再问训练目标是否太容易、太难，或会鼓励复制无关细节。</li>
-          <li>使用无负例方法时，必须说明靠什么机制防止 collapse。</li>
+
         </ul>
       </div>
-    </section>
+    </div>
+  </header>
 
-    <section id="code">
-      <div class="head"><h2>最小代码：几类目标函数怎么长</h2><span class="tag">MINIMAL CODE</span></div>
-      <p>下面伪代码只看训练目标。重点是区分“生成原讯号”“预测离散目标”“拉近/推远表示”和“防 collapse 约束”。</p>
-      <div class="codebar"><span class="label">正确示例：语音 mask 一整段</span><span class="kind">pseudo python</span></div>
-      <pre><code>features = acoustic_frontend(wave)
-masked = mask_contiguous_span(features, span_len=<span class="num">8</span>)
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#transfer">从文字迁移到语音和影像</a>
+      <a href="#bench">多任务评估：SUPERB 与影像下游任务</a>
+      <a href="#generative">生成式方法：直接还原被遮住或未来的讯号</a>
+      <a href="#predictive">预测式方法：不还原原讯号，预测更简单的目标</a>
+      <a href="#contrastive">对比学习：不生成，只拉近正样本、推远负样本</a>
+      <a href="#bootstrap">Bootstrap：只用正样本，靠非对称路径避免 collapse</a>
+      <a href="#regularization">正则化路线：直接约束表示不要塌掉</a>
+      <a href="#share">公开分享速查：跨模态自监督怎么选</a>
+      <a href="#code">最小代码：几类目标函数怎么长</a>
+      <a href="#mistakes">常见误区与修正</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">MAP</span>
+        </div>
+<p>自督导式学习的共同核心是：没有人工标签，也要从资料内部造出监督信号。文字中，BERT 盖住 token 让模型填空，GPT 根据前文预测下一个 token。语音中，可以盖住一段声音让模型还原，也可以根据前面的声音预测较远之后的声音。影像中，可以盖住 patch、预测 pixel、判断旋转角度，或让同一张图不同增强版本的表示接近。</p>
+<p>未标注声音/图片</p>
+<p>自造任务</p>
+<p>学 representation</p>
+<p>少量标注适配</p>
+<p>多任务评估</p>
+      </section>
+      <section id="transfer">
+        <div class="head">
+          <h2>从文字迁移到语音和影像</h2>
+          <span class="tag">TRANSFER</span>
+        </div>
+<p>文字版 BERT 的输入是一串 token，输出是一串向量，每个 token 对应一个 representation。语音版 BERT 的输入是一段声音讯号，通常先变成一排 acoustic feature，然后输出一排向量。下游语音辨识模型可以吃这些向量，把它们转成文字。若没有这种预训练表示，端到端语音辨识往往需要成千上万小时的标注声音；有了语音版 BERT，研究者会挑战用十分钟、几十分钟标注资料做适配。</p>
+<p>文字输入 token 序列，遮住 token 或预测下一个 token，学语言表示。</p>
+<p>语音输入连续声音 feature，遮住一段时间或预测未来 frame，学内容、说话人、情感等表示。</p>
+<p>影像输入图片或 patch，预测变换、相对位置、cluster 或拉近增强视图，学视觉表示。</p>
+      </section>
+      <section id="bench">
+        <div class="head">
+          <h2>多任务评估：SUPERB 与影像下游任务</h2>
+          <span class="tag">BENCHMARK</span>
+        </div>
+<p>文字领域有 GLUE 这样的 benchmark，用多个自然语言处理任务评估预训练模型。语音领域也有类似思路：SUPERB 是 Speech processing Universal PERformance Benchmark，用一系列任务测试语音自督导模型的能力。任务不仅有语音辨识，也包括 keyword spotting、说话人辨识、说话人验证、情感辨识、语音翻译、语音增强、语音分离等。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>模态</th><th>典型任务</th><th>评估意义</th></tr>
+<tr><td>语音</td><td>辨识、唤醒词、说话人、情绪、翻译、增强、分离</td><td>检查表示是否覆盖内容、说话人、语气和语义</td></tr><tr><td>影像</td><td>分类、侦测、分割、导航</td><td>检查表示是否能迁移到不同视觉粒度</td></tr><tr><td>文字</td><td>分类、推理、问答、相似度</td><td>检查语言表示是否能支持不同文本任务</td></tr>
+        </table></div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释为什么自督导模型不能只靠一个下游任务判断好坏。</p>
+        </div>
+      </section>
+      <section id="generative">
+        <div class="head">
+          <h2>生成式方法：直接还原被遮住或未来的讯号</h2>
+          <span class="tag">GENERATIVE</span>
+        </div>
+<p>生成式方法最接近文字版 BERT/GPT。语音版 BERT 可以把声音某些片段 mask 掉，要求模型还原被盖住的部分；代表例子包括 Mockingjay。语音版 GPT 可以给前面的声音讯号，预测未来某个时间点的声音；代表例子包括 APC。影像也可以把 pixel 拉成序列，预测下一个 pixel，或 mask 一部分 pixel 再还原。</p>
+<p>小交互：mask 多长才有学习价值</p>
+<p>连续 mask 长度<b>3</b></p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>说明为什么语音中 mask 一个 frame 太容易，通常要 mask 一整段。</p>
+        </div>
+      </section>
+      <section id="predictive">
+        <div class="head">
+          <h2>预测式方法：不还原原讯号，预测更简单的目标</h2>
+          <span class="tag">PREDICTIVE</span>
+        </div>
+<p>如果还原声音或图片太复杂，可以设计一个更简单但有用的预测任务。影像中常见例子是 rotation prediction：把图片旋转 0、90、180、270 度，让模型判断旋转角度。另一个例子是 context prediction：从大图切出两个 patch，让模型判断第二个 patch 在第一个 patch 的哪个方向。这些任务迫使模型理解物体方向、局部结构和空间关系。</p>
+<p>原始讯号声音/图片细节很多</p>
+<p>变换或聚类旋转、相对位置、cluster</p>
+<p>预测目标角度、方向、id</p>
+<p>学习表示抽出结构信息</p>
+<p>下游使用分类/辨识/分割</p>
+        <div class="box warn">
+<h3>风险</h3>
+<p>预测任务需要领域知识。太简单学不到东西，太偏门又可能学到和下游无关的线索。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>给一个新的声音或图片任务，尝试设计一个不用人工标签的小预测任务。</p>
+        </div>
+      </section>
+      <section id="contrastive">
+        <div class="head">
+          <h2>对比学习：不生成，只拉近正样本、推远负样本</h2>
+          <span class="tag">CONTRASTIVE</span>
+        </div>
+<p>contrastive learning 的目标塑造 representation 空间。对同一张图片做两次 data augmentation，得到两个视图，它们被当作 positive pair，表示要接近。来自不同图片的视图被当作 negative pair，表示要远离。SimCLR 就是这一路线的经典方法，常用 random crop、color distortion、Gaussian blur 等增强，其中 random crop 往往很关键。</p>
+<p>小交互：负例难度</p>
+<p>太简单的负例</p>
+<p>如果猫的负例是天空或海，模型可能只学颜色差异就能分开，表示不一定学到物体结构。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释为什么 SimCLR 的数据增强和负例选择会直接影响学到的表示。</p>
+        </div>
+      </section>
+      <section id="bootstrap">
+        <div class="head">
+          <h2>Bootstrap：只用正样本，靠非对称路径避免 collapse</h2>
+          <span class="tag">BOOTSTRAP</span>
+        </div>
+<p>如果不想选负例，能不能只让 positive pair 接近？直接这样做会 collapse：模型可以对所有输入输出同一个零向量，正样本当然都很接近，但表示完全没用了。bootstrap 路线试图在不用负例的情况下避免 collapse，代表方法包括 BYOL、SimSiam，以及语音/影像/文字都可用的 data2vec。</p>
+<p>小交互：是否有防 collapse 机制</p>
+<p>容易 collapse</p>
+<p>如果训练目标只要求正样本接近，模型可以把所有输入都输出同一个向量。</p>
+      </section>
+      <section id="regularization">
+        <div class="head">
+          <h2>正则化路线：直接约束表示不要塌掉</h2>
+          <span class="tag">REGULARIZATION</span>
+        </div>
+<p>另一条避开负例的路线是加正则化。VICReg 的名字来自 Variance-Invariance-Covariance Regularization。invariance 是让同一图片的不同增强版本表示接近；variance 是要求一个 batch 中每个表示维度都有足够变化，避免所有样本输出同一个向量；covariance 是让不同维度减少冗余，让 latent space 被更充分使用。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>约束</th><th>直觉</th><th>防止什么问题</th></tr>
+<tr><td>Invariance</td><td>同一样本不同增强视图要接近</td><td>学到增强不变的表示</td></tr><tr><td>Variance</td><td>不同样本在每个维度上要有足够变化</td><td>防止全部输出同一个向量</td></tr><tr><td>Covariance</td><td>不同维度之间不要高度重复</td><td>减少维度冗余，展开表示空间</td></tr>
+        </table></div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释 VICReg 里三个词分别负责什么，而不是只背缩写。</p>
+        </div>
+      </section>
+      <section id="share">
+        <div class="head">
+          <h2>公开分享速查：跨模态自监督怎么选</h2>
+          <span class="tag">quick</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>核心直觉</h3>
+<p>文字、语音、影像都可以自监督，但任务不能机械照搬。文字 token 离散，next-token 很自然；语音和影像连续且细节多，直接重建可能太难，预测太近又可能太容易。</p>
+<p>方法演化的主线是：先尝试生成或预测，再用对比学习关注表示相似性，最后用 bootstrap 或正则化绕开负例选择。</p>
+        </div>
+        <div class="box warn">
+<h3>Worked example</h3>
+<p>语音若只预测下一个 10ms frame，模型可能学到平滑内插，而不是语义。更好的任务可以遮住一整段，或预测更远位置的离散单位，让模型必须利用上下文和内容结构。</p>
+<p>影像若完整重建每个像素，模型可能沉迷纹理细节；对比或增强不变性目标更容易把注意力放在物体和语义表示上。</p>
+<table class="metric-table">
+<tr><th>方法</th><th>直觉</th><th>主要风险</th></tr>
+<tr><td>Generative</td><td>重建被遮住或未来的原始信号。</td><td>信号太细，任务太难或学到低层细节。</td></tr>
+<tr><td>Predictive</td><td>预测离散单位、未来表示或较简化目标。</td><td>目标太近会变成平滑内插。</td></tr>
+<tr><td>Contrastive</td><td>拉近正样本，推远负样本。</td><td>负例选错会把同类样本推开。</td></tr>
+<tr><td>Bootstrap</td><td>用 teacher/student 非对称路径只学正样本。</td><td>若没有 stop-gradient、predictor 等设计，容易 collapse。</td></tr>
+<tr><td>Regularization</td><td>用 variance/covariance 等约束保持表示展开。</td><td>只做 invariance 不够，仍可能所有样本输出同向量。</td></tr>
+</table>
+        </div>
+        <div class="box info">
+<h3>选择检查表</h3>
+<ul>
+<li>先问资料是离散 token、连续语音，还是高维影像。</li>
+<li>再问训练目标是否太容易、太难，或会鼓励复制无关细节。</li>
+<li>使用无负例方法时，必须说明靠什么机制防止 collapse。</li>
+</ul>
+        </div>
+      </div>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：几类目标函数怎么长</h2>
+          <span class="tag">MINIMAL</span>
+        </div>
+<p>下面伪代码只看训练目标。重点是区分“生成原讯号”“预测离散目标”“拉近/推远表示”和“防 collapse 约束”。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">features = acoustic_frontend(wave)
+masked = mask_contiguous_span(features, span_len=8)
 hidden = speech_encoder(masked)
 loss = reconstruct_loss(hidden[mask_pos], features[mask_pos])</code></pre>
-      <div class="codebar"><span class="label">正确示例：对比学习目标</span><span class="kind">pseudo python</span></div>
-      <pre><code>view1 = augment(image)
+<p>正确示例：对比学习目标pseudo python</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text">view1 = augment(image)
 view2 = augment(image)
 z1 = encoder(view1)
 z2 = encoder(view2)
 positive = similarity(z1, z2)
 negative = similarity(z1, z_from_other_images)
 loss = make_positive_high_and_negative_low(positive, negative)</code></pre>
-      <div class="codebar error"><span class="label">错误示例：只拉近正样本，没有任何防 collapse 机制</span><span class="kind">pseudo</span></div>
-      <pre><code><span class="cmt"># 错误：模型可以对所有输入输出 zero vector。</span>
+<p>错误示例：只拉近正样本，没有任何防 collapse 机制pseudo</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-3">复制</button></div>
+        <pre id="code-code-3" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误：模型可以对所有输入输出 zero vector。
 z1 = encoder(augment(x))
 z2 = encoder(augment(x))
 loss = distance(z1, z2)
 
-<span class="cmt"># 修正：加入负例，或使用 predictor + stop-gradient，或加入 variance/covariance 约束。</span></code></pre>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>看到一个自督导目标函数时，先判断它到底在还原、预测、对比，还是用约束防止表示塌掉。</p></div>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区与修正</h2><span class="tag">PITFALLS</span></div>
+# 修正：加入负例，或使用 predictor + stop-gradient，或加入 variance/covariance 约束。</code></pre>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与修正</h2>
+          <span class="tag">PITFALLS</span>
+        </div>
       <div class="grid2">
-        <div class="box redsoft"><h3>误区 1：语音版 BERT 就是把文字 BERT 直接拿来用</h3><p>错因：只看名字相似。后果：忽略声音是连续 feature。修法：说成“类似 BERT 的训练目标和 encoder 思路”。</p></div>
-        <div class="box redsoft"><h3>误区 2：mask 一个语音 frame 就足够</h3><p>错因：把语音当作离散 token。后果：模型可能只学内插。修法：mask 连续片段或预测更远未来。</p></div>
-        <div class="box redsoft"><h3>误区 3：生成式方法总是最好</h3><p>错因：文字中 BERT/GPT 很成功。后果：忽略图片和声音细节太多。修法：根据模态选择预测简化目标或表示空间目标。</p></div>
-        <div class="box redsoft"><h3>误区 4：对比学习只要找不同图片当负例就行</h3><p>错因：低估负例难度。后果：太简单学不到结构，太难可能误拉开同类。修法：关注增强策略和负例采样。</p></div>
-        <div class="box redsoft"><h3>误区 5：没有负例一定会 collapse</h3><p>错因：只看到朴素正样本目标。后果：无法理解 BYOL/VICReg。修法：补上 predictor、stop-gradient、variance 等机制。</p></div>
-        <div class="box redsoft"><h3>误区 6：wav2vec 2.0 和 BERT 完全无关</h3><p>错因：架构细节看起来复杂。后果：失去统一理解。修法：把它看作在 mask 位置预测正确语音离散单位的 BERT-like 目标。</p></div>
+        <div class="box redsoft">
+<h3>误区 1：语音版 BERT 就是把文字 BERT 直接拿来用</h3>
+<p>错因：只看名字相似。后果：忽略声音是连续 feature。修法：说成“类似 BERT 的训练目标和 encoder 思路”。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 2：mask 一个语音 frame 就足够</h3>
+<p>错因：把语音当作离散 token。后果：模型可能只学内插。修法：mask 连续片段或预测更远未来。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 3：生成式方法总是最好</h3>
+<p>错因：文字中 BERT/GPT 很成功。后果：忽略图片和声音细节太多。修法：根据模态选择预测简化目标或表示空间目标。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 4：对比学习只要找不同图片当负例就行</h3>
+<p>错因：低估负例难度。后果：太简单学不到结构，太难可能误拉开同类。修法：关注增强策略和负例采样。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 5：没有负例一定会 collapse</h3>
+<p>错因：只看到朴素正样本目标。后果：无法理解 BYOL/VICReg。修法：补上 predictor、stop-gradient、variance 等机制。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 6：wav2vec 2.0 和 BERT 完全无关</h3>
+<p>错因：架构细节看起来复杂。后果：失去统一理解。修法：把它看作在 mask 位置预测正确语音离散单位的 BERT-like 目标。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>用“模态差异、训练目标、是否需要负例、防 collapse 机制”四点诊断一个方法。</p>
+        </div>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>用“模态差异、训练目标、是否需要负例、防 collapse 机制”四点诊断一个方法。</p></div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>做题前先抓主线</strong><p>P27 的核心是：语音和影像也能自造训练目标，但连续讯号和高细节内容迫使方法从生成走向预测、对比、无负例和正则化。</p></div>
-        <div class="review-card"><strong>自检重点</strong><ul><li>能不能解释语音 mask 为什么要连续？</li><li>能不能区分五类方法？</li><li>能不能说明 contrastive、BYOL、VICReg 的关系？</li></ul></div>
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          <div class="quick-review">作答提示 回答时带上“输入是什么、目标是什么、输出表示怎么用”。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. 语音版 BERT 最合理的描述是哪一个？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="直接把文字 token 当声音输入">直接把文字 token 当声音输入</label>
+      <label><input type="radio" name="q?" value="用大量未标注声音训练 encoder，输出一排语音表示">用大量未标注声音训练 encoder，输出一排语音表示</label>
+      <label><input type="radio" name="q?" value="必须先有上万小时人工转写才能训练">必须先有上万小时人工转写才能训练</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、基础概念</h3><p>先检查语音、影像、文字之间的迁移关系。</p></div><div class="quick-review"><b>作答提示</b><span>回答时带上“输入是什么、目标是什么、输出表示怎么用”。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q01" data-role="homework"><div class="q-meta"><span class="pill">选择</span></div><h3>1. 语音版 BERT 最合理的描述是哪一个？</h3><div class="choices"><label><input type="radio" name="q01" value="直接把文字 token 当声音输入">直接把文字 token 当声音输入</label><label><input type="radio" name="q01" value="用大量未标注声音训练 encoder，输出一排语音表示">用大量未标注声音训练 encoder，输出一排语音表示</label><label><input type="radio" name="q01" value="必须先有上万小时人工转写才能训练">必须先有上万小时人工转写才能训练</label></div><div class="solve-note">提示：抓住未标注声音和 representation。</div></div>
-          <div class="q" id="q02" data-role="homework"><div class="q-meta"><span class="pill">判断</span></div><h3>2. SUPERB 的价值在于用多个语音任务评估同一个自督导表示。</h3><div class="choices"><label><input type="radio" name="q02" value="对">对</label><label><input type="radio" name="q02" value="错">错</label></div></div>
-          <div class="q short" id="q03" data-role="homework"><div class="q-meta"><span class="pill">填空</span></div><h3>3. 语音 feature 相邻帧很像，所以 mask 时通常要遮住一段 ______。</h3><input type="text" id="ans03" placeholder="写出关键词"></div>
-          <div class="q short" id="q04" data-role="homework"><div class="q-meta"><span class="pill">填空</span></div><h3>4. VICReg 的三个组成是 invariance、variance 和 ______。</h3><input type="text" id="ans04" placeholder="写出英文术语"></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 2. SUPERB 的价值在于用多个语音任务评估同一个自督导表示。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 3. 语音 feature 相邻帧很像，所以 mask 时通常要遮住一段 ______。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 4. VICReg 的三个组成是 invariance、variance 和 ______。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、五类方法</h3><p>这组题检查你能否按训练目标分类。</p></div><div class="quick-review"><b>作答提示</b><span>不要只列模型名，要说明它在让模型做什么。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q05" data-role="homework"><div class="q-meta"><span class="pill">匹配</span></div><h3>5. 将 generative / predictive / contrastive / bootstrap / regularization 分别用一句话解释。</h3><textarea id="ans05" placeholder="例：generative → ..."></textarea></div>
-          <div class="q" id="q06" data-role="homework"><div class="q-meta"><span class="pill">选择</span></div><h3>6. rotation prediction 和 context prediction 属于哪类方法？</h3><div class="choices"><label><input type="radio" name="q06" value="generative">generative</label><label><input type="radio" name="q06" value="predictive">predictive</label><label><input type="radio" name="q06" value="regularization">regularization</label></div></div>
-          <div class="q" id="q07" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>7. 为什么把 acoustic feature 先 clustering 成 cluster id，可能比直接还原声音更容易？</h3><textarea id="ans07" placeholder="从连续向量细节多、离散 id 更像 token 回答。"></textarea></div>
-          <div class="q" id="q08" data-role="homework"><div class="q-meta"><span class="pill">场景</span></div><h3>8. 你要为无人标注的室内机器人图片训练视觉表示。请设计一个 predictive 小任务。</h3><textarea id="ans08" placeholder="说明输入、自动生成的目标、为什么可能学到空间或物体信息。"></textarea></div>
+        <div class="group-head">
+          <div><h3>二、五类方法</h3></div>
+          <div class="quick-review">作答提示 不要只列模型名，要说明它在让模型做什么。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">匹配</span></div>
+        <h3><b>Q:</b> 5. 将 generative / predictive / contrastive / bootstrap / regularization 分别用一句话解释。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 6. rotation prediction 和 context prediction 属于哪类方法？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="generative">generative</label>
+      <label><input type="radio" name="q?" value="predictive">predictive</label>
+      <label><input type="radio" name="q?" value="regularization">regularization</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、对比学习与 wav2vec 2.0</h3><p>这组题检查你能否把分类、对比和语音模型连起来。</p></div><div class="quick-review"><b>作答提示</b><span>回答时说清 positive pair、negative pair 和目标表示。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q09" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>9. SimCLR 如何在没有标签的情况下构造 positive pair？</h3><textarea id="ans09" placeholder="从同一张图片的不同 augmentation 回答。"></textarea></div>
-          <div class="q" id="q10" data-role="homework"><div class="q-meta"><span class="pill">判断</span></div><h3>10. 在 contrastive learning 中，负例越难越好，完全不用担心把同类样本拉开。</h3><div class="choices"><label><input type="radio" name="q10" value="对">对</label><label><input type="radio" name="q10" value="错">错</label></div><div class="solve-note">提示：考虑两张猫图被误当成负例。</div></div>
-          <div class="q" id="q11" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>11. 从 BERT 角度解释 wav2vec 2.0：它在 mask 位置预测什么？为什么要用离散单位？</h3><textarea id="ans11" placeholder="提到 continuous input、discrete target、负例抽样。"></textarea></div>
-          <div class="q" id="q12" data-role="homework"><div class="q-meta"><span class="pill">对照</span></div><h3>12. 用两句话区分 classification 和 contrastive learning 的相似点与差别。</h3><textarea id="ans12" placeholder="相似点说正确目标接近、错误目标远离；差别说是否穷举类别或采样负例。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 7. 为什么把 acoustic feature 先 clustering 成 cluster id，可能比直接还原声音更容易？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景</span></div>
+        <h3><b>Q:</b> 8. 你要为无人标注的室内机器人图片训练视觉表示。请设计一个 predictive 小任务。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>四、错误诊断与迁移</h3><p>这组题要求定位错因、后果和修法。</p></div><div class="quick-review"><b>作答提示</b><span>错误示例题按“错在哪 / 后果 / 修法”写。</span></div></div>
-        <div class="drill-grid">
-          <div class="q full" id="q13" data-role="homework"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>13. 错误示例：有人说“只要让同一图片两种增强的向量接近，就一定能学到好表示”。请诊断。</h3><textarea id="ans13" placeholder="错在哪？为什么会 collapse？可以怎么避免？"></textarea></div>
-          <div class="q" id="q14" data-role="homework"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>14. 错误示例：有人把语音中的下一个 frame 预测当成 GPT，且只预测紧邻 frame。请诊断。</h3><textarea id="ans14" placeholder="从相邻 frame 太像、任务太容易、应预测更远位置回答。"></textarea></div>
-          <div class="q" id="q15" data-role="homework"><div class="q-meta"><span class="pill">场景应用</span></div><h3>15. 如果你没有负例采样经验，又担心 contrastive learning 把同类拉开，你会考虑哪两类无负例方法？</h3><textarea id="ans15" placeholder="说明 bootstrap 和 regularization，各自靠什么防 collapse。"></textarea></div>
-          <div class="q" id="q16" data-role="homework"><div class="q-meta"><span class="pill">面试短答</span></div><h3>16. 用 2-3 句话回答：BYOL 为什么不等于朴素地去掉负例？</h3><textarea id="ans16" placeholder="提到 teacher/student、predictor、stop-gradient 或 moving average。"></textarea></div>
+        <div class="group-head">
+          <div><h3>三、对比学习与 wav2vec 2.0</h3></div>
+          <div class="quick-review">作答提示 回答时说清 positive pair、negative pair 和目标表示。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 9. SimCLR 如何在没有标签的情况下构造 positive pair？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 10. 在 contrastive learning 中，负例越难越好，完全不用担心把同类样本拉开。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>五、表达输出</h3><p>最后两题检查你能否把整节课串起来。</p></div><div class="quick-review"><b>作答提示</b><span>关键词：语音版 BERT、SUPERB、generative、predictive、contrastive、negative example、BYOL、VICReg。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q17" data-role="homework"><div class="q-meta"><span class="pill">综合短答</span></div><h3>17. 为什么影像自督导有时能超过“用同一批图片标签监督训练”的基准？请从未标注资料结构和下游迁移解释。</h3><textarea id="ans17" placeholder="不要写成标签没用；说明自督导目标可能学到更泛化的表示。"></textarea></div>
-          <div class="q full" id="q18" data-role="homework"><div class="q-meta"><span class="pill">费曼题</span></div><h3>18. 费曼题：请用 5-7 句话向刚学完 BERT/GPT 的同学解释，语音与影像自督导为什么会从生成式方法一路发展出对比、bootstrap 和正则化方法。</h3><textarea id="ans18" placeholder="必须串联：连续讯号/高细节、mask 或预测、负例选择、collapse、BYOL/VICReg。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 11. 从 BERT 角度解释 wav2vec 2.0：它在 mask 位置预测什么？为什么要用离散单位？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 12. 用两句话区分 classification 和 contrastive learning 的相似点与差别。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>六、低摩擦核对与迁移</h3><p>快速判断训练目标是否合适，并迁移到新模态任务。</p></div><div class="quick-review"><b>作答提示</b><span>不要只报方法名，要说它避开什么问题。</span></div></div>
+        <div class="group-head">
+          <div><h3>四、错误诊断与迁移</h3></div>
+          <div class="quick-review">作答提示 错误示例题按“错在哪 / 后果 / 修法”写。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" id="q19" data-role="homework"><div class="q-meta"><span class="pill">判断</span><span class="pill">低摩擦</span></div><h3>19. 只让同一样本的两种增强表示接近，是否足以保证不 collapse？</h3><div class="choices"><label><input type="radio" name="q19" value="不足以，还需要非对称设计或正则化约束。">不足以，还需要非对称设计或正则化约束。</label><label><input type="radio" name="q19" value="足以，因为正样本越近越好。">足以，因为正样本越近越好。</label></div></div>
-          <div class="q" id="q20" data-role="homework"><div class="q-meta"><span class="pill">填空</span><span class="pill">低摩擦</span></div><h3>20. VICReg 中最直接防止所有样本输出同一向量的是哪一项？</h3><input type="text" placeholder="写出 variance / invariance / covariance 之一。"></div>
-          <div class="q" id="q21" data-role="homework"><div class="q-meta"><span class="pill">迁移</span><span class="pill">医疗影像</span></div><h3>21. 你有大量未标注 X 光片，想训练可迁移表示。请设计一个自监督目标并说明为什么不用完整像素重建。</h3><textarea placeholder="可选遮挡预测、对比学习或正则化路线；写出风险和缓解。"></textarea></div>
-          <div class="q" id="q22" data-role="homework"><div class="q-meta"><span class="pill">迁移</span><span class="pill">语音</span></div><h3>22. 为唤醒词系统预训练语音表示时，你会如何避免“预测任务太容易”？</h3><textarea placeholder="从遮住连续片段、预测更远位置、离散目标或下游评估回答。"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 13. 错误示例：有人说“只要让同一图片两种增强的向量接近，就一定能学到好表示”。请诊断。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 14. 错误示例：有人把语音中的下一个 frame 预测当成 GPT，且只预测紧邻 frame。请诊断。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景应用</span></div>
+        <h3><b>Q:</b> 15. 如果你没有负例采样经验，又担心 contrastive learning 把同类拉开，你会考虑哪两类无负例方法？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 16. 用 2-3 句话回答：BYOL 为什么不等于朴素地去掉负例？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、表达输出</h3></div>
+          <div class="quick-review">作答提示 关键词：语音版 BERT、SUPERB、generative、predictive、contrastive、negative example、BYOL、VICReg。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">综合短答</span></div>
+        <h3><b>Q:</b> 17. 为什么影像自督导有时能超过“用同一批图片标签监督训练”的基准？请从未标注资料结构和下游迁移解释。</h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼题</span></div>
+        <h3><b>Q:</b> 18. 费曼题：请用 5-7 句话向刚学完 BERT/GPT 的同学解释，语音与影像自督导为什么会从生成式方法一路发展出对比、bootstrap 和正则化方法。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>六、低摩擦核对与迁移</h3></div>
+          <div class="quick-review">作答提示 不要只报方法名，要说它避开什么问题。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 19. 只让同一样本的两种增强表示接近，是否足以保证不 collapse？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="不足以，还需要非对称设计或正则化约束。">不足以，还需要非对称设计或正则化约束。</label>
+      <label><input type="radio" name="q?" value="足以，因为正样本越近越好。">足以，因为正样本越近越好。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 20. VICReg 中最直接防止所有样本输出同一向量的是哪一项？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 21. 你有大量未标注 X 光片，想训练可迁移表示。请设计一个自监督目标并说明为什么不用完整像素重建。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 22. 为唤醒词系统预训练语音表示时，你会如何避免“预测任务太容易”？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
-      <p>完成练习后生成记录，方便你回看自己的判断链路。若有遗漏，页面会先提示哪些题还没写。</p>
-      <div class="quality" id="qualityBox"></div>
-      <div class="answer" id="answerBox">还没有生成记录。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" class="ghost" onclick="generateRecord()">生成记录</button>
-        <button type="button" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-const progress = document.getElementById('readProgress');
-window.addEventListener('scroll', () => {
-  const h = document.documentElement;
-  const max = h.scrollHeight - h.clientHeight;
-  progress.style.width = max > 0 ? (h.scrollTop / max * 100) + '%' : '0%';
-});
+      </ul>
+    </section>
+  </article>
 
-function updateMask(){
-  const len = Number(document.getElementById('maskLen').value);
-  document.getElementById('maskLenOut').textContent = len;
-  const box = document.getElementById('maskTokens');
-  box.innerHTML = '';
-  for(let i=1;i<=12;i++){
-    const span = document.createElement('span');
-    span.className = 'tok';
-    if(i >= 5 && i < 5 + len) span.classList.add('mask');
-    span.textContent = i >= 5 && i < 5 + len ? 'MASK' : 'f' + i;
-    box.appendChild(span);
-  }
-  const title = document.getElementById('maskTitle');
-  const text = document.getElementById('maskText');
-  if(len <= 1){
-    title.textContent = '太容易';
-    text.textContent = '只遮住一个 frame，模型可能靠左右相邻 frame 内插，学不到语音内容结构。';
-  }else if(len <= 5){
-    title.textContent = '中等难度';
-    text.textContent = '连续遮住几段 feature 后，模型不能只靠简单内插解决问题，较可能学到语音内容或结构。';
-  }else{
-    title.textContent = '偏困难';
-    text.textContent = '遮太长时目标会变难，可能需要更强模型或更合适的 mask 比例。难度要调，不是越长越好。';
-  }
-}
-document.getElementById('maskLen').addEventListener('input', updateMask);
-updateMask();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-function drawScatter(id, points){
-  const box = document.getElementById(id);
-  box.innerHTML = '';
-  points.forEach(p => {
-    const dot = document.createElement('span');
-    dot.className = 'point ' + (p.type || '');
-    dot.style.left = p.x + '%';
-    dot.style.top = p.y + '%';
-    box.appendChild(dot);
-  });
-}
-const negCases = {
-  easy: {
-    points: [{x:30,y:46},{x:34,y:50},{x:82,y:18,type:'neg'},{x:78,y:78,type:'neg'}],
-    title: '太简单的负例',
-    text: '如果猫的负例是天空或海，模型可能只学颜色差异就能分开，表示不一定学到物体结构。'
-  },
-  good: {
-    points: [{x:35,y:46},{x:38,y:50},{x:62,y:43,type:'neg'},{x:66,y:56,type:'neg'}],
-    title: '合适的负例',
-    text: '负例有点像但不是同类，模型需要学更有用的结构特征，训练信号更有价值。'
-  },
-  hard: {
-    points: [{x:45,y:48},{x:49,y:51},{x:53,y:50,type:'neg'},{x:56,y:53,type:'neg'}],
-    title: '太困难的负例',
-    text: '如果负例其实也是同类样本，强行拉远会破坏语义结构。这就是负例采样麻烦的地方。'
-  }
-};
-function setNeg(kind){
-  const item = negCases[kind];
-  drawScatter('scatterBox', item.points);
-  document.getElementById('negTitle').textContent = item.title;
-  document.getElementById('negText').textContent = item.text;
-  document.querySelectorAll('[data-neg]').forEach(btn => btn.classList.toggle('active', btn.dataset.neg === kind));
-}
-document.querySelectorAll('[data-neg]').forEach(btn => btn.addEventListener('click', () => setNeg(btn.dataset.neg)));
-setNeg('easy');
-
-const bootCases = {
-  plain: {
-    points: [{x:50,y:50},{x:51,y:51},{x:49,y:50},{x:50,y:49}],
-    title: '容易 collapse',
-    text: '如果训练目标只要求正样本接近，模型可以把所有输入都输出同一个向量。'
-  },
-  byol: {
-    points: [{x:34,y:39,type:'teacher'},{x:38,y:45,type:'student'},{x:68,y:28,type:'teacher'},{x:72,y:34,type:'student'},{x:47,y:72,type:'teacher'},{x:52,y:77,type:'student'}],
-    title: '非对称路径',
-    text: 'BYOL 风格方法用 predictor、stop-gradient 和 teacher/student 更新，让训练不是朴素地把所有点压到一起。'
-  },
-  vic: {
-    points: [{x:24,y:34},{x:38,y:69},{x:54,y:28},{x:72,y:61},{x:83,y:39},{x:46,y:48}],
-    title: '用 variance 撑开空间',
-    text: 'VICReg 要求 batch 内每个维度有足够变化，直接惩罚全部输出同一个向量的解。'
-  }
-};
-function setBoot(kind){
-  const item = bootCases[kind];
-  drawScatter('bootBox', item.points);
-  document.getElementById('bootTitle').textContent = item.title;
-  document.getElementById('bootText').textContent = item.text;
-  document.querySelectorAll('[data-boot]').forEach(btn => btn.classList.toggle('active', btn.dataset.boot === kind));
-}
-document.querySelectorAll('[data-boot]').forEach(btn => btn.addEventListener('click', () => setBoot(btn.dataset.boot)));
-setBoot('plain');
-
-function readQuestion(q){
-  const title = q.querySelector('h3')?.innerText.trim() || q.id;
-  const checked = Array.from(q.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(x => x.value);
-  const fields = Array.from(q.querySelectorAll('textarea,input[type="text"],select')).map(x => x.value.trim()).filter(Boolean);
-  const answer = checked.concat(fields).join('；');
-  return {title, answer};
-}
-function generateRecord(){
-  const qs = Array.from(document.querySelectorAll(".q[data-role='homework']"));
-  const rows = qs.map(readQuestion);
-  const missing = rows.filter(x => !x.answer);
-  const now = new Date();
-  const lines = [];
-  lines.push('# P27 语音与影像上的自督导式学习模型｜练习记录');
-  lines.push('');
-  lines.push('- 生成时间：' + now.toLocaleString());
-  lines.push('- 题目数量：' + qs.length);
-  lines.push('');
-  rows.forEach((row, i) => {
-    lines.push('## ' + String(i + 1).padStart(2, '0') + ' ' + row.title);
-    lines.push(row.answer ? row.answer : '（未填写）');
-    lines.push('');
-  });
-  const text = lines.join('\n');
-  document.getElementById('answerBox').textContent = text;
-  const quality = document.getElementById('qualityBox');
-  quality.style.display = 'block';
-  if(missing.length){
-    quality.textContent = '还有 ' + missing.length + ' 题没有填写：' + missing.map(x => x.title.replace(/^\d+\.\s*/, '')).join('；');
-  }else{
-    quality.textContent = '已生成完整记录。复盘时重点看：是否说清连续语音和文字 token 的差异，是否能解释负例采样与 collapse，是否能区分 BYOL 和 VICReg。';
-  }
-}
-function copyRecord(){
-  const text = document.getElementById('answerBox').textContent;
-  if(!text || text.includes('还没有生成')) generateRecord();
-  const finalText = document.getElementById('answerBox').textContent;
-  if(navigator.clipboard){
-    navigator.clipboard.writeText(finalText).then(() => {
-      document.getElementById('qualityBox').style.display = 'block';
-      document.getElementById('qualityBox').textContent = '记录已复制。';
-    }).catch(() => fallbackCopy(finalText));
-  }else{
-    fallbackCopy(finalText);
-  }
-}
-function fallbackCopy(text){
-  const area = document.createElement('textarea');
-  area.value = text;
-  document.body.appendChild(area);
-  area.select();
-  document.execCommand('copy');
-  area.remove();
-  document.getElementById('qualityBox').style.display = 'block';
-  document.getElementById('qualityBox').textContent = '记录已复制。';
-}
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

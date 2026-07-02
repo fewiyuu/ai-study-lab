@@ -4,504 +4,554 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P38｜NLP 对抗攻击 1：离散输入与样本生成</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="NLP adversarial attack,discrete input,evasion attack,adversarial example,goal,transformation,constraint,search method,word substitution,character perturbation">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>NLP 对抗攻击 1</strong><span>P38。文字是离散 token，所以攻击不能简单加连续噪声。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#discrete"><span class="dot"></span>离散输入</a>
-      <a href="#evasion"><span class="dot"></span>Evasion</a>
-      <a href="#examples"><span class="dot"></span>三个例子</a>
-      <a href="#ingredients"><span class="dot"></span>四要素</a>
-      <a href="#goal"><span class="dot"></span>Goal</a>
-      <a href="#transform"><span class="dot"></span>Transformation</a>
-      <a href="#viz"><span class="dot"></span>替换交互</a>
-      <a href="#gradient"><span class="dot"></span>Gradient 替换</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：NLP 攻击要改 token、字词或字符，同时尽量不改变人类应有的判断。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P38</div>
-        <h1>图片能加噪声，句子不能随便加噪声</h1>
-        <p>图像对抗攻击常在像素上加很小的连续扰动，人眼看起来几乎一样，模型却预测错误。P38 问的是：自然语言处理里能不能做类似事情？文字输入由离散 token 组成，模型真正接收的是词、子词或字符序列，而不是可以随便加减的连续像素。</p>
-        <p>因此 NLP 对抗攻击的核心变成：如何改写句子，让人类看来任务答案不该变，但模型输出变坏。本节先讲 evasion attack 与 adversarial example 的定义，再用情感分类、dependency parsing、机器翻译三个例子建立直觉，最后拆解生成攻击样本的四个要素：goal、transformation、constraint、search method。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释为什么 NLP 攻击比图像攻击多了离散输入困难。</li>
-          <li>定义 evasion attack 与 adversarial example。</li>
-          <li>判断一个文本扰动是否“对人类任务答案无影响”。</li>
-          <li>说出生成攻击样本的四要素。</li>
-          <li>比较同义词、embedding、BERT、gradient、字符级扰动的风险。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
-      <p>NLP adversarial attack 的目标，不是教人去攻击线上系统，而是理解模型有多脆弱，从而更谨慎地设计和防御。文本模型被公开后，真实用户可能每天用各种奇怪输入测试它；如果一个小改字、换词、拼写错误就能让模型崩掉，系统就不够 robust。</p>
-      <p>P38 讲到 constraint 前暂停，所以这一页的边界也放在 Part 1：重点是离散输入、evasion attack 的定义、攻击样本例子、目标设定和 transformation。constraint 与 search method 会作为完整流程的一部分先介绍，但细节留给下一节。</p>
-      <div class="map">
-        <span class="node">离散 token</span>
-        <span class="node">Evasion attack</span>
-        <span class="node">目标 Goal</span>
-        <span class="node">候选变换</span>
-        <span class="node">限制与搜索</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P38</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把 NLP 对抗攻击理解成“在离散文字空间中找保持人类语义、破坏模型预测的改写”。</p></div>
-    </section>
+      <h1 class="hero-title">P38｜NLP 对抗攻击 1：离散输入与样本生成</h1>
+      <p class="hero-desc">图像对抗攻击常在像素上加很小的连续扰动，人眼看起来几乎一样，模型却预测错误。P38 问的是：自然语言处理里能不能做类似事情？文字输入由离散 token 组成，模型真正接收的是词、子词或字符序列，而不是可以随便加减的连续像素。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P37_可解释性2_机器心中的类别/学习页.html">上一节</a>
+            <a href="../P39_对抗攻击1_基本概念与FGSM/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="discrete">
-      <div class="head"><h2>为什么 NLP 不像图像：输入空间是离散的</h2><span class="tag">DISCRETE</span></div>
-      <p>图像输入通常是连续数值，例如每个像素在 0 到 255 之间。对模型输出做 gradient 后，我们可以在像素上加一个小扰动。但文字不是这样。句子由 token 组成，token 是离散符号：你不能对单词 <code>film</code> 加上 <code>0.07</code> 的噪声。</p>
-      <p>你可能会想：模型内部不是会把 token 转成 word embedding 吗？能不能直接在 embedding 上加噪声？课程说明这不符合真实攻击设定。用户能控制的是输入文本，而不是模型内部 embedding lookup 后的向量。除非你在研究内部鲁棒性，否则攻击 NLP 模型时，通常要在 token、word 或 character 层面产生可读的改写。</p>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#discrete">为什么 NLP 不像图像：输入空间是离散的</a>
+      <a href="#evasion">Evasion Attack：推论时让模型预测变坏</a>
+      <a href="#examples">三个文本例子：从电影评论到机器翻译</a>
+      <a href="#ingredients">生成对抗样本的四要素</a>
+      <a href="#goal">Goal：只要错，还是错到指定类别</a>
+      <a href="#transform">Transformation：候选扰动从哪里来</a>
+      <a href="#viz">动手观察：不同替换策略的风险</a>
+      <a href="#gradient">Gradient 替换：用一阶近似估计换哪个词最能增大 loss</a>
+      <a href="#code">最小代码：生成候选替换并过滤</a>
+      <a href="#mistakes">常见误区与修法</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">MAP</span>
+        </div>
+<p>NLP adversarial attack 的目标，理解模型有多脆弱，从而更谨慎地设计和防御。文本模型被公开后，真实用户可能每天用各种奇怪输入测试它；如果一个小改字、换词、拼写错误就能让模型崩掉，系统就不够 robust。</p>
+<p>离散 token</p>
+<p>Evasion attack</p>
+<p>目标 Goal</p>
+<p>候选变换</p>
+<p>限制与搜索</p>
+      </section>
+      <section id="discrete">
+        <div class="head">
+          <h2>为什么 NLP 不像图像：输入空间是离散的</h2>
+          <span class="tag">DISCRETE</span>
+        </div>
+<p>图像输入通常是连续数值，例如每个像素在 0 到 255 之间。对模型输出做 gradient 后，我们可以在像素上加一个小扰动。但文字不是这样。句子由 token 组成，token 是离散符号：你不能对单词 <code>film</code> 加上 <code>0.07</code> 的噪声。</p>
+        <div class="box info">
+<h3>图像攻击</h3>
+<p>输入是连续像素，小幅数值扰动仍是一张图片。gradient 可以直接指导像素变化。</p>
+        </div>
+        <div class="box warn">
+<h3>NLP 攻击</h3>
+<p>输入是离散 token。扰动必须表现为换词、插入、删除、拼写变化等文本操作。</p>
+<p><b>现在你应该能做什么：</b>解释为什么“在 embedding 上加 noise”不能直接等同于攻击真实 NLP 输入。</p>
+        </div>
+      </section>
+      <section id="evasion">
+        <div class="head">
+          <h2>Evasion Attack：推论时让模型预测变坏</h2>
+          <span class="tag">EVASION</span>
+        </div>
+<p>evasion attack 指的是在推论阶段给模型一个 adversarial example，让模型的 prediction 变坏。它不一定要修改训练资料，也不一定要植入后门；它关注的是模型上线后，攻击者输入一个经过扰动的样本，模型原本能答对，现在答错。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+benign x：人类标签 y，模型预测 y
+adversarial x'：人类仍认为标签 y，但模型预测变成 y' ≠ y
+$$
+        </div>
+<p>这里的“人类看不出来差异”说对当前任务答案没有影响。在图像里，人类仍会认为是熊猫；在 dependency parsing 里，人类认为语法结构不该改变；在情感分类里，人类认为评论情绪不该从负面变正面。</p>
+      </section>
+      <section id="examples">
+        <div class="head">
+          <h2>三个文本例子：从电影评论到机器翻译</h2>
+          <span class="tag">EXAMPLES</span>
+        </div>
+<p>第一个例子是 sentiment analysis。原句 <code>skip the film and buy the soundtrack CD</code> 是带讽刺意味的负面评论。只把 <code>film</code> 改成 <code>films</code>，人类仍会认为它是负面评论，但模型可能改判正面。这说明很小的词形变化也可能影响分类器。</p>
+<p>第三个例子是 machine translation。课程提到线上翻译系统可能把一句带有 <code>sad</code> 的话翻出相反情绪，且错误与特定地名组合有关。这提醒我们，NLP 模型上线后会被大量用户反复试探，奇怪案例并不罕见。</p>
+<p><b>现在你应该能做什么：</b>判断“扰动是否小”时，不只看文字表面，而要看它是否改变当前任务的人类答案。</p>
+      </section>
+      <section id="ingredients">
+        <div class="head">
+          <h2>生成对抗样本的四要素</h2>
+          <span class="tag">INGREDIENTS</span>
+        </div>
+<p>课程把生成 NLP adversarial example 拆成四个 ingredient：goal、transformation、constraint、search method。这个框架很重要，因为它把攻击过程从“乱改句子”变成一个可分析的流程。</p>
+        <div class="box info">
+<h3>Transformation</h3>
+<p>如何产生候选扰动，例如换词、插词、删词、字符交换。</p>
+        </div>
+        <div class="box warn">
+<h3>Constraint</h3>
+<p>扰动必须满足什么条件，例如语义相近、语法合理、改动数量有限。</p>
+        </div>
+        <div class="box warn">
+<h3>Search method</h3>
+<p>如何在大量候选扰动中组合出成功样本，例如贪心、beam search、遗传算法。</p>
+<p>流程上，攻击者先有任务、victim model 和 benign sample；接着 transformation 产生候选改写；constraint 过滤不合理改写；search method 尝试组合候选；最后把结果丢回模型，若达到 goal，就得到成功的 adversarial example。</p>
+<p><b>现在你应该能做什么：</b>看到一个文本攻击方法时，把它拆成目标、变换、限制、搜索四部分来分析。</p>
+        </div>
+      </section>
+      <section id="goal">
+        <div class="head">
+          <h2>Goal：只要错，还是错到指定类别</h2>
+          <span class="tag">GOAL</span>
+        </div>
+<p>最常见的目标之一是 untargeted classification：只要让模型预测错即可，不要求它错成哪一类。比如新闻标题原本是科技新闻，扰动后模型预测成体育或国际新闻都算成功。</p>
+<p>不同任务的 goal 不同。dependency parsing 的目标可能是让输出树结构错误；机器翻译的目标可能是让某个关键词翻错、情绪翻反，或让输出质量下降。先定义 goal，才能判断攻击是否成功。</p>
+<p><b>现在你应该能做什么：</b>为一个 NLP 任务写出 untargeted 与 targeted 两种攻击目标。</p>
+      </section>
+      <section id="transform">
+        <div class="head">
+          <h2>Transformation：候选扰动从哪里来</h2>
+          <span class="tag">TRANSFORM</span>
+        </div>
+<p>transformation 是产生候选改写的方式。P38 重点讲了 word-level 与 character-level 的几类方法。word-level 可以做 substitution、insertion、deletion；character-level 可以交换相邻字符、替换字符、删除字符、插入字符。</p>
+<p>counter-fitted embedding 的思路，是用语言学限制把同义词拉近、反义词拉远，让邻近词更适合作为替换候选。BERT 类 masked language model 则可以根据上下文预测候选词，但直接 mask 原词可能生成语境合理但语义相反的词；不 mask 而做 reconstruction，候选通常更接近原词。</p>
+<p><b>现在你应该能做什么：</b>解释为什么候选替换不能只靠“看起来相关”，还必须用 constraint 检查语义和语法。</p>
+      </section>
+      <section id="viz">
+        <div class="head">
+          <h2>动手观察：不同替换策略的风险</h2>
+          <span class="tag">INTERACTIVE</span>
+        </div>
+<p>下面用一句电影评论模拟几种 transformation。注意：这里帮助你观察“候选改写”与“语义保持”之间的张力。</p>
+<p>原句</p>
+<p>词形变化</p>
+<p>BERT mask 风险</p>
+<p>Embedding 邻近</p>
+<p>字符扰动</p>
+<p>语义保持0.95</p>
+<p>攻击潜力0.20</p>
+<p>好的候选扰动通常要兼顾：人类标签不变、模型输出可能变化。</p>
+      </section>
+      <section id="gradient">
+        <div class="head">
+          <h2>Gradient 替换：用一阶近似估计换哪个词最能增大 loss</h2>
+          <span class="tag">GRADIENT</span>
+        </div>
+<p>如果攻击者知道模型结构和参数，就可以做 white-box attack，用 gradient 指导替换。虽然输入 token 是离散的，但 token 会映射到 embedding。我们可以计算 loss 对某个词 embedding 的梯度，再估计把当前词换成候选词后 loss 会增加多少。</p>
+<p>这用 gradient 给离散候选词排序。真正输出仍然是某个合法 token。课程中也提醒：如果某个词的所有候选替换都不能让 loss 增大，可以不换这个词，转而尝试句子里的其他词。</p>
+<p><b>现在你应该能做什么：</b>说明 gradient 在 NLP 攻击里给候选替换排序。</p>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：生成候选替换并过滤</h2>
+          <span class="tag">CODE</span>
+        </div>
+<p>下面的伪代码展示四要素的骨架：先定义 goal，再由 transformation 产生候选，constraint 过滤，search method 选择并测试。P38 重点看前两步，后两步先保留结构。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">def attack(model, sentence, true_label):
+ candidates = []
+ for position, token in enumerate(sentence.tokens):
+ for new_token in transform(token, context=sentence):
+ proposal = sentence.replace(position, new_token)
+ if satisfies_constraints(sentence, proposal):
+ candidates.append(proposal)
+
+ for proposal in search(candidates):
+ prediction = model.predict(proposal)
+ if prediction != true_label:
+ return proposal
+ return None</code></pre>
+<p>真正实现会复杂得多：候选可以组合多个位置，constraint 可能要用语义相似度、语言模型分数、词性检查，search 也可能用贪心或 beam search。但这个骨架足以帮你定位每个组件的角色。</p>
+        </div>
+<p>错误示例：只要模型错就接受Missing constraints</p>
+<p>这不一定是合格 adversarial example，因为它可能已经改变了人类标签。NLP 攻击最难的地方之一，就是同时让模型错、又让人类任务答案保持不变。</p>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与修法</h2>
+          <span class="tag">DIAGNOSIS</span>
+        </div>
       <div class="grid2">
-        <div class="box info"><h3>图像攻击</h3><p>输入是连续像素，小幅数值扰动仍是一张图片。gradient 可以直接指导像素变化。</p></div>
-        <div class="box warn"><h3>NLP 攻击</h3><p>输入是离散 token。扰动必须表现为换词、插入、删除、拼写变化等文本操作。</p></div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>解释为什么“在 embedding 上加 noise”不能直接等同于攻击真实 NLP 输入。</p>
-    </section>
-
-    <section id="evasion">
-      <div class="head"><h2>Evasion Attack：推论时让模型预测变坏</h2><span class="tag">EVASION</span></div>
-      <p>evasion attack 指的是在推论阶段给模型一个 adversarial example，让模型的 prediction 变坏。它不一定要修改训练资料，也不一定要植入后门；它关注的是模型上线后，攻击者输入一个经过扰动的样本，模型原本能答对，现在答错。</p>
-      <p>adversarial example 必须相对于某个 benign example 来理解。一个句子单独看，只是一个让模型判断错误的输入；当它和原本的正常句子相比，并且人类认为两者在任务标签上应该相同，而模型却从正确变错误时，我们才说它是这个正常样本的对抗样本。</p>
-      <div class="formula">
-        <div class="big">benign x：人类标签 y，模型预测 y</div>
-        <div class="big">adversarial x'：人类仍认为标签 y，但模型预测变成 y' ≠ y</div>
-      </div>
-      <p>这里的“人类看不出来差异”不是说字面完全一样，而是说对当前任务答案没有影响。在图像里，人类仍会认为是熊猫；在 dependency parsing 里，人类认为语法结构不该改变；在情感分类里，人类认为评论情绪不该从负面变正面。</p>
-      <p><strong>现在你应该能做什么：</strong>用 benign example、perturbation、model prediction 三个词定义 adversarial example。</p>
-    </section>
-
-    <section id="examples">
-      <div class="head"><h2>三个文本例子：从电影评论到机器翻译</h2><span class="tag">EXAMPLES</span></div>
-      <p>第一个例子是 sentiment analysis。原句 <code>skip the film and buy the soundtrack CD</code> 是带讽刺意味的负面评论。只把 <code>film</code> 改成 <code>films</code>，人类仍会认为它是负面评论，但模型可能改判正面。这说明很小的词形变化也可能影响分类器。</p>
-      <p>第二个例子是 dependency parsing。把一个词换成语义上对句法结构不该产生本质影响的词，人类仍会给出相同或近似的 dependency tree，但模型输出可能完全不同。这里的“扰动小”要按任务定义：不是字面不变，而是目标结构不该变。</p>
-      <p>第三个例子是 machine translation。课程提到线上翻译系统可能把一句带有 <code>sad</code> 的话翻出相反情绪，且错误与特定地名组合有关。这提醒我们，NLP 模型上线后会被大量用户反复试探，奇怪案例并不罕见。</p>
-      <table class="metric-table">
-        <tr><th>任务</th><th>扰动</th><th>人类预期</th><th>模型问题</th></tr>
-        <tr><td>情感分类</td><td>单复数、词形变化。</td><td>情绪标签不变。</td><td>负面变正面。</td></tr>
-        <tr><td>Dependency parsing</td><td>替换某个词。</td><td>句法结构不该大变。</td><td>树结构大幅错误。</td></tr>
-        <tr><td>机器翻译</td><td>特定词组或地名组合。</td><td>语义和情绪应正确保留。</td><td>翻译出相反含义。</td></tr>
-      </table>
-      <p><strong>现在你应该能做什么：</strong>判断“扰动是否小”时，不只看文字表面，而要看它是否改变当前任务的人类答案。</p>
-    </section>
-
-    <section id="ingredients">
-      <div class="head"><h2>生成对抗样本的四要素</h2><span class="tag">INGREDIENTS</span></div>
-      <p>课程把生成 NLP adversarial example 拆成四个 ingredient：goal、transformation、constraint、search method。这个框架很重要，因为它把攻击过程从“乱改句子”变成一个可分析的流程。</p>
-      <div class="grid2">
-        <div class="box info"><h3>Goal</h3><p>攻击想达到什么目标，例如只要分类错，或必须错到指定类别。</p></div>
-        <div class="box info"><h3>Transformation</h3><p>如何产生候选扰动，例如换词、插词、删词、字符交换。</p></div>
-        <div class="box warn"><h3>Constraint</h3><p>扰动必须满足什么条件，例如语义相近、语法合理、改动数量有限。</p></div>
-        <div class="box warn"><h3>Search method</h3><p>如何在大量候选扰动中组合出成功样本，例如贪心、beam search、遗传算法。</p></div>
-      </div>
-      <p>流程上，攻击者先有任务、victim model 和 benign sample；接着 transformation 产生候选改写；constraint 过滤不合理改写；search method 尝试组合候选；最后把结果丢回模型，若达到 goal，就得到成功的 adversarial example。</p>
-      <p><strong>现在你应该能做什么：</strong>看到一个文本攻击方法时，把它拆成目标、变换、限制、搜索四部分来分析。</p>
-    </section>
-
-    <section id="goal">
-      <div class="head"><h2>Goal：只要错，还是错到指定类别</h2><span class="tag">GOAL</span></div>
-      <p>最常见的目标之一是 untargeted classification：只要让模型预测错即可，不要求它错成哪一类。比如新闻标题原本是科技新闻，扰动后模型预测成体育或国际新闻都算成功。</p>
-      <p>另一种是 targeted classification：不仅要模型错，还要错到攻击者指定的类别。比如原本是科技新闻，攻击者指定要模型预测成体育新闻；如果扰动后预测成国际新闻，虽然错了，但不算达成 targeted goal。</p>
-      <p>不同任务的 goal 不同。dependency parsing 的目标可能是让输出树结构错误；机器翻译的目标可能是让某个关键词翻错、情绪翻反，或让输出质量下降。先定义 goal，才能判断攻击是否成功。</p>
-      <table class="metric-table">
-        <tr><th>Goal 类型</th><th>成功条件</th><th>难度</th></tr>
-        <tr><td>Untargeted</td><td>模型从正确变成任意错误。</td><td>通常较容易。</td></tr>
-        <tr><td>Targeted</td><td>模型输出攻击者指定的错误类别。</td><td>通常更难。</td></tr>
-        <tr><td>结构/生成任务</td><td>输出结构或生成文本满足特定失败条件。</td><td>需要任务专属定义。</td></tr>
-      </table>
-      <p><strong>现在你应该能做什么：</strong>为一个 NLP 任务写出 untargeted 与 targeted 两种攻击目标。</p>
-    </section>
-
-    <section id="transform">
-      <div class="head"><h2>Transformation：候选扰动从哪里来</h2><span class="tag">TRANSFORM</span></div>
-      <p>transformation 是产生候选改写的方式。P38 重点讲了 word-level 与 character-level 的几类方法。word-level 可以做 substitution、insertion、deletion；character-level 可以交换相邻字符、替换字符、删除字符、插入字符。</p>
-      <p>同义词替换最直觉，但不可靠。词典里的 synonym 不一定在当前语境中等价，甚至可能引入反义或语气变化。embedding 邻近替换也类似：传统 GloVe embedding 会把出现在相似上下文的词放近，但相似上下文不等于同义，例如 east、west、north 都可能相近，却不能随便互换。</p>
-      <p>counter-fitted embedding 的思路，是用语言学限制把同义词拉近、反义词拉远，让邻近词更适合作为替换候选。BERT 类 masked language model 则可以根据上下文预测候选词，但直接 mask 原词可能生成语境合理但语义相反的词；不 mask 而做 reconstruction，候选通常更接近原词。</p>
-      <table class="metric-table">
-        <tr><th>方法</th><th>产生方式</th><th>主要风险</th></tr>
-        <tr><td>词典同义词</td><td>从 WordNet 等资源拿 synonym。</td><td>上下文不合适，语义偏移。</td></tr>
-        <tr><td>Embedding 邻近</td><td>找向量空间附近的词。</td><td>相似上下文不等于同义。</td></tr>
-        <tr><td>BERT mask</td><td>遮住词，让语言模型补词。</td><td>补出语境合理但语义相反的词。</td></tr>
-        <tr><td>词形变化</td><td>改时态、单复数、派生形。</td><td>可能破坏语法或改变词性。</td></tr>
-        <tr><td>字符扰动</td><td>swap、substitute、delete、insert。</td><td>人类能读，模型可能 OOV；也可能太不自然。</td></tr>
-      </table>
-      <p><strong>现在你应该能做什么：</strong>解释为什么候选替换不能只靠“看起来相关”，还必须用 constraint 检查语义和语法。</p>
-    </section>
-
-    <section id="viz">
-      <div class="head"><h2>动手观察：不同替换策略的风险</h2><span class="tag">INTERACTIVE</span></div>
-      <p>下面用一句电影评论模拟几种 transformation。注意：这里不是调用真实模型，而是帮助你观察“候选改写”与“语义保持”之间的张力。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <div class="sentence" id="sentenceBox"></div>
-            <p class="viz-note" id="methodNote">选择一种 transformation，观察它是否保持原任务标签。</p>
-          </div>
-          <div>
-            <button type="button" onclick="setMethod('original')">原句</button>
-            <button type="button" onclick="setMethod('plural')">词形变化</button>
-            <button type="button" onclick="setMethod('bertbad')">BERT mask 风险</button>
-            <button type="button" onclick="setMethod('embed')">Embedding 邻近</button>
-            <button type="button" onclick="setMethod('char')">字符扰动</button>
-            <div class="barrow"><span>语义保持</span><div class="bar"><div class="fill green" id="semBar"></div></div><span id="semVal">0.95</span></div>
-            <div class="barrow"><span>攻击潜力</span><div class="bar"><div class="fill red" id="atkBar"></div></div><span id="atkVal">0.20</span></div>
-            <p class="muted">好的候选扰动通常要兼顾：人类标签不变、模型输出可能变化。</p>
-          </div>
+        <div class="box redsoft">
+<h3>误区 1：把 embedding 噪声当真实文本攻击</h3>
+<p>用户不能直接改模型内部 embedding。修法是区分内部鲁棒性实验和真实 token 级攻击。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 2：只要字面变了就不是对抗样本</h3>
+<p>NLP 中字面变化不可避免，关键是人类任务标签是否保持。修法是按任务定义扰动可接受性。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 3：同义词一定保持语义</h3>
+<p>词典同义词脱离上下文可能不等价。修法是加入语义、词性、语言流畅度限制。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 4：BERT mask 候选一定合理</h3>
+<p>mask 预测的是上下文合理词，不保证原句语义不变。修法是结合 reconstruction 或语义过滤。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 5：字符扰动太小所以总是合法</h3>
+<p>拼写错误可能影响可读性或任务标签，也可能过于明显。修法是限制编辑距离和可读性。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 6：untargeted 与 targeted 混淆</h3>
+<p>任意错和错到指定类是不同目标。修法是在实验报告中明确 goal。</p>
+<p><b>现在你应该能做什么：</b>审查一个 NLP 攻击样本时，同时问：目标是什么、怎么改的、语义是否保持、模型为什么会错。</p>
         </div>
       </div>
-      <p><strong>现在你应该能做什么：</strong>比较不同 transformation 时，同时评估语义保持和攻击潜力，而不是只看能不能改动模型。</p>
-    </section>
-
-    <section id="gradient">
-      <div class="head"><h2>Gradient 替换：用一阶近似估计换哪个词最能增大 loss</h2><span class="tag">GRADIENT</span></div>
-      <p>如果攻击者知道模型结构和参数，就可以做 white-box attack，用 gradient 指导替换。虽然输入 token 是离散的，但 token 会映射到 embedding。我们可以计算 loss 对某个词 embedding 的梯度，再估计把当前词换成候选词后 loss 会增加多少。</p>
-      <div class="formula">
-        <div class="big">ΔL ≈ ∇<sub>e</sub>L · (e_candidate - e_original)</div>
-        <small>这是 loss 在原 embedding 附近的一阶近似；值越大，表示替换后越可能让 loss 增加。</small>
-      </div>
-      <p>这不是直接在 embedding 上加连续噪声，而是用 gradient 给离散候选词排序。真正输出仍然是某个合法 token。课程中也提醒：如果某个词的所有候选替换都不能让 loss 增大，可以不换这个词，转而尝试句子里的其他词。</p>
-      <p>gradient 方法依赖 white-box 条件；如果只能查询黑箱模型，就需要其他策略，或者先做 model extraction 训练一个 proxy model，再在 proxy 上生成攻击样本。这部分只是建立概念，后续课程会继续展开。</p>
-      <p><strong>现在你应该能做什么：</strong>说明 gradient 在 NLP 攻击里不是直接修改 token，而是给候选替换排序。</p>
-    </section>
-
-    <section id="code">
-      <div class="head"><h2>最小代码：生成候选替换并过滤</h2><span class="tag">CODE</span></div>
-      <p>下面的伪代码展示四要素的骨架：先定义 goal，再由 transformation 产生候选，constraint 过滤，search method 选择并测试。P38 重点看前两步，后两步先保留结构。</p>
-      <div class="codebar"><span class="label">正确示例：文本 evasion attack 流程骨架</span><span class="kind">Python-like</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">attack</span>(model, sentence, true_label):
-    candidates = []
-    <span class="kw">for</span> position, token <span class="kw">in</span> enumerate(sentence.tokens):
-        <span class="kw">for</span> new_token <span class="kw">in</span> transform(token, context=sentence):
-            proposal = sentence.replace(position, new_token)
-            <span class="kw">if</span> satisfies_constraints(sentence, proposal):
-                candidates.append(proposal)
-
-    <span class="kw">for</span> proposal <span class="kw">in</span> search(candidates):
-        prediction = model.predict(proposal)
-        <span class="kw">if</span> prediction != true_label:
-            <span class="kw">return</span> proposal
-    <span class="kw">return</span> None</code></pre>
-      <p>真正实现会复杂得多：候选可以组合多个位置，constraint 可能要用语义相似度、语言模型分数、词性检查，search 也可能用贪心或 beam search。但这个骨架足以帮你定位每个组件的角色。</p>
-      <div class="codebar error"><span class="label">错误示例：只要模型错就接受</span><span class="kind">Missing constraints</span></div>
-      <pre><code><span class="cmt"># 错误示例：完全不检查语义，可能把负面评论改成真正的正面评论。</span>
-proposal = <span class="str">"this movie is excellent"</span>
-<span class="kw">if</span> model.predict(proposal) != true_label:
-    <span class="kw">return</span> proposal</code></pre>
-      <p>这不一定是合格 adversarial example，因为它可能已经改变了人类标签。NLP 攻击最难的地方之一，就是同时让模型错、又让人类任务答案保持不变。</p>
-      <p><strong>现在你应该能做什么：</strong>读懂生成文本对抗样本的流程骨架，并指出 constraint 缺失会导致什么问题。</p>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区与修法</h2><span class="tag">DIAGNOSIS</span></div>
-      <div class="grid2">
-        <div class="box redsoft"><h3>误区 1：把 embedding 噪声当真实文本攻击</h3><p>用户不能直接改模型内部 embedding。修法是区分内部鲁棒性实验和真实 token 级攻击。</p></div>
-        <div class="box redsoft"><h3>误区 2：只要字面变了就不是对抗样本</h3><p>NLP 中字面变化不可避免，关键是人类任务标签是否保持。修法是按任务定义扰动可接受性。</p></div>
-        <div class="box redsoft"><h3>误区 3：同义词一定保持语义</h3><p>词典同义词脱离上下文可能不等价。修法是加入语义、词性、语言流畅度限制。</p></div>
-        <div class="box redsoft"><h3>误区 4：BERT mask 候选一定合理</h3><p>mask 预测的是上下文合理词，不保证原句语义不变。修法是结合 reconstruction 或语义过滤。</p></div>
-        <div class="box redsoft"><h3>误区 5：字符扰动太小所以总是合法</h3><p>拼写错误可能影响可读性或任务标签，也可能过于明显。修法是限制编辑距离和可读性。</p></div>
-        <div class="box redsoft"><h3>误区 6：untargeted 与 targeted 混淆</h3><p>任意错和错到指定类是不同目标。修法是在实验报告中明确 goal。</p></div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>审查一个 NLP 攻击样本时，同时问：目标是什么、怎么改的、语义是否保持、模型为什么会错。</p>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答建议</strong><p>本节最重要的是“离散输入 + 四要素”。答题时先判断任务，再判断人类标签是否应保持。</p></div>
-        <div class="review-card"><strong>自检标准</strong><p>你能解释为什么 <code>film → films</code> 可以是攻击，而 <code>bad → excellent</code> 不一定是攻击，就理解了本节核心。</p></div>
-      </div>
 
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>一、基础定义</h3><p>先把 NLP 攻击和图像攻击的差异讲清楚。</p></div>
-          <div class="quick-review"><b>快速回顾</b>图像输入连续，文本输入离散；文本扰动要落在 token/word/character 上。</div>
+          <div><h3>一、基础定义</h3></div>
+          <div class="quick-review">快速回顾 图像输入连续，文本输入离散；文本扰动要落在 token/word/character 上。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q01" data-title="离散输入">
-            <div class="q-meta"><span class="pill">Q01</span><span class="pill">解释</span></div>
-            <h3>为什么 NLP adversarial attack 不能简单照搬图像中的“加小噪声”？</h3>
-            <textarea placeholder="从 token 离散、embedding 内部表示、可操作输入回答。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q02" data-title="embedding 噪声">
-            <div class="q-meta"><span class="pill">Q02</span><span class="pill">辨析</span></div>
-            <h3>“既然 token 会变成 embedding，那直接对 embedding 加扰动就是文本攻击。”这句话哪里不严谨？</h3>
-            <textarea placeholder="区分模型内部向量和用户可输入文本。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q03" data-title="evasion attack">
-            <div class="q-meta"><span class="pill">Q03</span><span class="pill">定义</span></div>
-            <h3>用自己的话定义 evasion attack，并说明它发生在训练阶段还是推论阶段。</h3>
-            <div class="choices">
-              <label><input type="radio" name="p38q03" value="推论阶段：给已训练模型输入 adversarial example，让 prediction 变坏。">推论阶段：给已训练模型输入 adversarial example，让 prediction 变坏。</label>
-              <label><input type="radio" name="p38q03" value="训练阶段：污染训练资料，让模型学到隐藏规则。">训练阶段：污染训练资料，让模型学到隐藏规则。</label>
-              <label><input type="radio" name="p38q03" value="部署之后：只检查模型解释，不改变输入。">部署之后：只检查模型解释，不改变输入。</label>
-            </div>
-          </div>
-          <div class="q" data-role="homework" data-qid="q04" data-title="adversarial example">
-            <div class="q-meta"><span class="pill">Q04</span><span class="pill">定义</span></div>
-            <h3>为什么 adversarial example 必须相对于某个 benign example 来理解？</h3>
-            <textarea placeholder="说明原样本正确、扰动后人类标签不变、模型变错。"></textarea>
-          </div>
-        </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q01</span></div>
+        <h3><b>Q:</b> 为什么 NLP adversarial attack 不能简单照搬图像中的“加小噪声”？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q02</span></div>
+        <h3><b>Q:</b> “既然 token 会变成 embedding，那直接对 embedding 加扰动就是文本攻击。”这句话哪里不严谨？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q03</span></div>
+        <h3><b>Q:</b> 用自己的话定义 evasion attack，并说明它发生在训练阶段还是推论阶段。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="推论阶段：给已训练模型输入 adversarial example，让 prediction 变坏。">推论阶段：给已训练模型输入 adversarial example，让 prediction 变坏。</label>
+      <label><input type="radio" name="q?" value="训练阶段：污染训练资料，让模型学到隐藏规则。">训练阶段：污染训练资料，让模型学到隐藏规则。</label>
+      <label><input type="radio" name="q?" value="部署之后：只检查模型解释，不改变输入。">部署之后：只检查模型解释，不改变输入。</label>
       </div>
 
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q04</span></div>
+        <h3><b>Q:</b> 为什么 adversarial example 必须相对于某个 benign example 来理解？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>二、例子与目标</h3><p>练习按任务判断扰动是否合理。</p></div>
-          <div class="quick-review"><b>快速回顾</b>“小扰动”按任务标签定义，不只按字面差异定义。</div>
+          <div><h3>二、例子与目标</h3></div>
+          <div class="quick-review">快速回顾 “小扰动”按任务标签定义，不只按字面差异定义。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q05" data-title="情感分类">
-            <div class="q-meta"><span class="pill">Q05</span><span class="pill">案例</span></div>
-            <h3>为什么 <code>film</code> 改成 <code>films</code> 后，如果情绪标签不该变但模型变了，可以算对抗样本？</h3>
-            <textarea placeholder="从人类情绪判断不变回答。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q06" data-title="dependency parsing">
-            <div class="q-meta"><span class="pill">Q06</span><span class="pill">迁移</span></div>
-            <h3>在 dependency parsing 中，判断扰动是否小，应该看什么？</h3>
-            <textarea placeholder="看人类认为 dependency tree 是否应保持。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q07" data-title="untargeted targeted">
-            <div class="q-meta"><span class="pill">Q07</span><span class="pill">对照</span></div>
-            <h3>区分 untargeted classification 和 targeted classification，并各举一个新闻分类例子。</h3>
-            <input type="text" data-label="untargeted classification" placeholder="例如：科技新闻被分错到任意非科技类别。">
-            <input type="text" data-label="targeted classification" placeholder="例如：科技新闻被指定攻击成体育类别。">
-          </div>
-          <div class="q" data-role="homework" data-qid="q08" data-title="机器翻译">
-            <div class="q-meta"><span class="pill">Q08</span><span class="pill">应用</span></div>
-            <h3>机器翻译中的 adversarial example 可以怎样定义成功目标？列出至少两种。</h3>
-            <textarea placeholder="例如情绪翻反、关键词翻错、输出质量显著下降。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q05</span></div>
+        <h3><b>Q:</b> 为什么 <code>film</code> 改成 <code>films</code> 后，如果情绪标签不该变但模型变了，可以算对抗样本？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q06</span></div>
+        <h3><b>Q:</b> 在 dependency parsing 中，判断扰动是否小，应该看什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q07</span></div>
+        <h3><b>Q:</b> 区分 untargeted classification 和 targeted classification，并各举一个新闻分类例子。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q08</span></div>
+        <h3><b>Q:</b> 机器翻译中的 adversarial example 可以怎样定义成功目标？列出至少两种。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>三、四要素与 Transformation</h3><p>把攻击流程拆成可分析组件。</p></div>
-          <div class="quick-review"><b>快速回顾</b>goal 决定成功标准，transformation 产生候选，constraint 过滤，search 组合。</div>
+          <div><h3>三、四要素与 Transformation</h3></div>
+          <div class="quick-review">快速回顾 goal 决定成功标准，transformation 产生候选，constraint 过滤，search 组合。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q09" data-title="四要素">
-            <div class="q-meta"><span class="pill">Q09</span><span class="pill">填空</span></div>
-            <h3>生成 NLP adversarial example 的四个 ingredient 是什么？分别一句话说明。</h3>
-            <input type="text" data-label="ingredient 1" placeholder="goal：成功标准">
-            <input type="text" data-label="ingredient 2" placeholder="transformation：候选改写">
-            <input type="text" data-label="ingredient 3" placeholder="constraint：合理性限制">
-            <input type="text" data-label="ingredient 4" placeholder="search method：搜索策略">
-          </div>
-          <div class="q" data-role="homework" data-qid="q10" data-title="同义词风险">
-            <div class="q-meta"><span class="pill">Q10</span><span class="pill">诊断</span></div>
-            <h3>为什么直接用词典同义词替换可能破坏原句语义？</h3>
-            <textarea placeholder="从上下文、词性、语气、反义混入回答。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q11" data-title="embedding 邻近">
-            <div class="q-meta"><span class="pill">Q11</span><span class="pill">解释</span></div>
-            <h3>为什么 GloVe 这类 embedding 中距离近，不一定代表两个词可互换？</h3>
-            <textarea placeholder="相似上下文不等于同义；east/west 例子。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q12" data-title="counter fitting">
-            <div class="q-meta"><span class="pill">Q12</span><span class="pill">概念</span></div>
-            <h3>counter-fitted embedding 的基本想法是什么？它想解决什么问题？</h3>
-            <textarea placeholder="同义词拉近，反义词拉远。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q09</span></div>
+        <h3><b>Q:</b> 生成 NLP adversarial example 的四个 ingredient 是什么？分别一句话说明。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q10</span></div>
+        <h3><b>Q:</b> 为什么直接用词典同义词替换可能破坏原句语义？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q11</span></div>
+        <h3><b>Q:</b> 为什么 GloVe 这类 embedding 中距离近，不一定代表两个词可互换？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q12</span></div>
+        <h3><b>Q:</b> counter-fitted embedding 的基本想法是什么？它想解决什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>四、BERT、Gradient 与字符扰动</h3><p>理解更细的候选生成方式。</p></div>
-          <div class="quick-review"><b>快速回顾</b>BERT 预测上下文合理词；gradient 给候选排序；字符扰动强但要控制可读性。</div>
+          <div><h3>四、BERT、Gradient 与字符扰动</h3></div>
+          <div class="quick-review">快速回顾 BERT 预测上下文合理词；gradient 给候选排序；字符扰动强但要控制可读性。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q13" data-title="BERT mask 风险">
-            <div class="q-meta"><span class="pill">Q13</span><span class="pill">错误示例</span></div>
-            <h3>错误示例：用 BERT mask 直接替换原词，只要语言模型概率高就接受。这个做法有什么风险？</h3>
-            <textarea placeholder="可能语境合理但语义相反。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q14" data-title="reconstruction">
-            <div class="q-meta"><span class="pill">Q14</span><span class="pill">解释</span></div>
-            <h3>为什么不 mask 原词、让 BERT 做 reconstruction，候选词可能更接近原词？</h3>
-            <textarea placeholder="原词信息仍在，输出分布更偏向相近替换。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q15" data-title="gradient 替换">
-            <div class="q-meta"><span class="pill">Q15</span><span class="pill">公式</span></div>
-            <h3>解释 <code>∇L · (e_candidate - e_original)</code> 在 gradient-based 替换中的含义。</h3>
-            <textarea placeholder="一阶近似估计替换后 loss 改变量。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q16" data-title="字符级扰动">
-            <div class="q-meta"><span class="pill">Q16</span><span class="pill">应用</span></div>
-            <h3>列出四种 character-level transformation，并说明为什么它们对模型可能很强。</h3>
-            <textarea placeholder="swap, substitution, deletion, insertion；OOV 或拼写鲁棒性差。"></textarea>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q17" data-title="费曼题">
-            <div class="q-meta"><span class="pill">Q17</span><span class="pill">费曼题</span></div>
-            <h3>请用 8-12 句话向同学讲清楚：NLP 对抗攻击为什么比图像攻击更特殊？</h3>
-            <textarea placeholder="要求串起：离散 token、不能直接加噪声、adversarial example、四要素、transformation 风险。"></textarea>
-            <div class="solve-note">提示：重点讲“人类任务标签保持不变”这件事。</div>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q18" data-title="完整攻击设计">
-            <div class="q-meta"><span class="pill">Q18</span><span class="pill">综合</span></div>
-            <h3>设计一个情感分类的 untargeted evasion attack。请写出 goal、至少三种 transformation、必要 constraint、以及一个简单 search 思路。</h3>
-            <textarea placeholder="写成流程，不要只列名词。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q13</span></div>
+        <h3><b>Q:</b> 错误示例：用 BERT mask 直接替换原词，只要语言模型概率高就接受。这个做法有什么风险？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q14</span></div>
+        <h3><b>Q:</b> 为什么不 mask 原词、让 BERT 做 reconstruction，候选词可能更接近原词？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q15</span></div>
+        <h3><b>Q:</b> 解释 <code>∇L · (e_candidate - e_original)</code> 在 gradient-based 替换中的含义。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q16</span></div>
+        <h3><b>Q:</b> 列出四种 character-level transformation，并说明为什么它们对模型可能很强。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q17</span></div>
+        <h3><b>Q:</b> 请用 8-12 句话向同学讲清楚：NLP 对抗攻击为什么比图像攻击更特殊？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q18</span></div>
+        <h3><b>Q:</b> 设计一个情感分类的 untargeted evasion attack。请写出 goal、至少三种 transformation、必要 constraint、以及一个简单 search 思路。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
-
+      </section>
     <section id="export">
-      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
-      <p>完成练习后，生成一份 Markdown 记录。它会保留完整题干和你的回答，方便自学检查或分享给读者参考。</p>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" onclick="generateRecord()">生成记录</button>
-        <button type="button" class="ghost" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
-      <div class="quality" id="qualityBox"></div>
-      <pre class="answer" id="recordOutput">还没有生成记录。</pre>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-  const $ = (id) => document.getElementById(id);
-  const examples = {
-    original: {
-      tokens: ['skip','the','film','and','buy','the','soundtrack','CD'],
-      hot: -1, sem: 0.96, atk: 0.12,
-      note: '原句是带讽刺意味的负面评论；模型若正确，应判为负面。'
-    },
-    plural: {
-      tokens: ['skip','the','films','and','buy','the','soundtrack','CD'],
-      hot: 2, sem: 0.95, atk: 0.55,
-      note: '词形变化通常不改变情绪标签，但可能触发模型脆弱点。'
-    },
-    bertbad: {
-      tokens: ['skip','the','movie','and','enjoy','the','soundtrack','CD'],
-      hot: 4, sem: 0.38, atk: 0.78,
-      note: 'BERT mask 可能补出上下文合理但语义不同的词；攻击潜力高，但可能不合法。'
-    },
-    embed: {
-      tokens: ['skip','the','picture','and','buy','the','soundtrack','CD'],
-      hot: 2, sem: 0.72, atk: 0.46,
-      note: 'embedding 邻近词可能相关，但需要检查当前语境中是否可替换。'
-    },
-    char: {
-      tokens: ['skip','the','flim','and','buy','the','soundtrack','CD'],
-      hot: 2, sem: 0.88, atk: 0.70,
-      note: '字符扰动对人类仍可读，但模型可能因为拼写或 OOV 处理不佳而出错。'
-    }
-  };
+      </ul>
+    </section>
+  </article>
 
-  function updateProgress(){
-    const doc = document.documentElement;
-    const max = doc.scrollHeight - doc.clientHeight;
-    const pct = max > 0 ? (doc.scrollTop / max) * 100 : 0;
-    $('readProgress').style.width = pct + '%';
-  }
-  document.addEventListener('scroll', updateProgress);
-  updateProgress();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-  const navLinks = Array.from(document.querySelectorAll('nav a'));
-  const sections = navLinks.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
-  const observer = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if(entry.isIntersecting){
-        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id));
-      }
-    });
-  }, {rootMargin:'-30% 0px -65% 0px'});
-  sections.forEach(sec => observer.observe(sec));
-
-  function setMethod(name){
-    const ex = examples[name];
-    $('sentenceBox').innerHTML = ex.tokens.map((t, i) => '<span class="token ' + (i === ex.hot ? 'hot' : '') + '">' + t + '</span>').join(' ');
-    $('methodNote').textContent = ex.note;
-    $('semBar').style.width = (ex.sem * 100) + '%';
-    $('semVal').textContent = ex.sem.toFixed(2);
-    $('atkBar').style.width = (ex.atk * 100) + '%';
-    $('atkVal').textContent = ex.atk.toFixed(2);
-  }
-  setMethod('original');
-
-  function collectAnswer(card){
-    const parts = [];
-    const checked = Array.from(card.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(input => {
-      const label = input.closest('label');
-      return label ? label.innerText.trim() : input.value;
-    });
-    if(checked.length) parts.push('选择：' + checked.join('；'));
-    const selects = Array.from(card.querySelectorAll('select')).map(select => {
-      const option = select.options[select.selectedIndex];
-      const value = option && option.value ? option.textContent.trim() : '';
-      const label = select.dataset.label || select.getAttribute('aria-label') || '下拉选择';
-      return value ? label + '：' + value : '';
-    }).filter(Boolean);
-    if(selects.length) parts.push(selects.join('\n'));
-    const texts = Array.from(card.querySelectorAll('textarea,input[type="text"]')).map(el => {
-      const value = el.value.trim();
-      const label = el.dataset.label || el.getAttribute('aria-label') || '';
-      return value ? (label ? label + '：' + value : value) : '';
-    }).filter(Boolean);
-    if(texts.length) parts.push(texts.join('\n'));
-    return parts.join('\n').trim();
-  }
-
-  function generateRecord(){
-    const cards = Array.from(document.querySelectorAll(".q[data-role='homework']"));
-    const lines = [];
-    let answered = 0;
-    lines.push('# P38 NLP 对抗攻击 1：离散输入与样本生成 - 练习记录');
-    lines.push('');
-    lines.push('## 完成情况');
-    cards.forEach((card, idx) => {
-      const title = card.dataset.title || ('题目 ' + (idx + 1));
-      const question = card.querySelector('h3')?.innerText.trim() || title;
-      const answer = collectAnswer(card);
-      if(answer) answered += 1;
-      lines.push('');
-      lines.push('### Q' + String(idx + 1).padStart(2, '0') + ' ' + title);
-      lines.push('');
-      lines.push('题目：' + question);
-      lines.push('');
-      lines.push(answer ? answer : '（未作答）');
-    });
-    const missing = cards.length - answered;
-    const quality = [];
-    quality.push('已作答：' + answered + ' / ' + cards.length);
-    if(missing > 0) quality.push('还有 ' + missing + ' 题未作答。');
-    if(!$('qualityBox').style.display || $('qualityBox').style.display === 'none') $('qualityBox').style.display = 'block';
-    $('qualityBox').textContent = quality.join('\n');
-    $('recordOutput').textContent = lines.join('\n');
-  }
-
-  async function copyRecord(){
-    const text = $('recordOutput').textContent;
-    if(!text || text === '还没有生成记录。') generateRecord();
-    try{
-      await navigator.clipboard.writeText($('recordOutput').textContent);
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '已复制练习记录。';
-    }catch(err){
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '复制失败，请手动选中下方记录。';
-    }
-  }
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

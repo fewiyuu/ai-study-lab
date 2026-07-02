@@ -4,996 +4,609 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>05 GPU 系统与性能瓶颈｜从零训练小语言模型</title>
-  <meta name="description" content="自包含中文学习页：讲解训练小语言模型时的显存、吞吐、GPU kernel、混合精度和多 GPU 通信瓶颈，并支持练习记录导出。">
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="从零训练小语言模型" data-unit="05">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>从零训练小语言模型</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">从零训练小语言模型</a>
+        <span class="sep">/</span>
         <span>05</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#overview"><span class="dot"></span>性能主线</a>
-        <a href="#memory"><span class="dot"></span>显存账本</a>
-        <a href="#throughput"><span class="dot"></span>吞吐口径</a>
-        <a href="#kernel"><span class="dot"></span>kernel 与 roofline</a>
-        <a href="#precision"><span class="dot"></span>精度与 attention</a>
-        <a href="#communication"><span class="dot"></span>多卡通信</a>
-        <a href="#profiler"><span class="dot"></span>profiler 诊断</a>
-        <a href="#failure-lab"><span class="dot"></span>故障实验室</a>
-        <a href="#mistakes"><span class="dot"></span>常见错误</a>
-        <a href="#bridge"><span class="dot"></span>下一步</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">慢训练先拆证据，不先猜技巧：显存账本、step 时间、kernel 时间线、dtype 数值、通信占比和数据等待。每次只改一个主要变量，再用同一口径复测。</div>
-    </aside>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <main>
-      <header class="hero">
-        <div>
-          <div class="kicker">系统性能</div>
-          <h1>GPU 系统与性能瓶颈</h1>
-          <p>这一页接在训练循环之后，专门处理“训练能跑，但跑得慢、显存爆、扩卡不涨、数值发散”这些系统问题。你要把一次 step 拆成可测量的显存、吞吐、kernel、dtype、attention、通信和数据输入链路，而不是把所有现象都归因于 GPU 不够强。</p>
-          <div class="course-links">
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">系统性能</div>
+      <div class="hero-meta">
+        <span class="hero-badge">05</span>
+      </div>
+      <h1 class="hero-title">05 GPU 系统与性能瓶颈｜从零训练小语言模型</h1>
+      <p class="hero-desc">这一页接在训练循环之后，专门处理“训练能跑，但跑得慢、显存爆、扩卡不涨、数值发散”这些系统问题。你要把一次 step 拆成可测量的显存、吞吐、kernel、dtype、attention、通信和数据输入链路，而不是把所有现象都归因于 GPU 不够强。</p>
+      <div class="course-links">
             <a href="../04_训练循环优化器与检查点/学习页.html">上一节：训练循环、优化器与检查点</a>
             <a href="../index.html">课程地图</a>
             <a href="../06_Scaling验证集与评估/学习页.html">下一节：Scaling、验证集与评估</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>读完本页，你应该能做什么</h3>
-          <ul>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
             <li>能用参数、梯度、优化器状态、激活值、临时 buffer 和 allocator reserved 列出显存账本。</li>
             <li>能用同一口径计算 tokens/s，区分 micro-batch、sequence length、grad accumulation 和 GPU 数的影响。</li>
             <li>能读 profiler 的时间线和 self CUDA time，把瓶颈初步归到数据输入、算子、数值精度、attention 或通信。</li>
             <li>能给出一套先测量、再改动、再复测的排查顺序，并说明每个优化动作可能牺牲什么。</li>
-          </ul>
-        </div>
-      </header>
+        </ul>
+      </div>
+    </div>
+  </header>
 
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#overview">性能主线</a>
+      <a href="#terms">术语与误区</a>
+      <a href="#memory">显存账本</a>
+      <a href="#throughput">吞吐口径</a>
+      <a href="#kernel">kernel 与 roofline</a>
+      <a href="#precision">精度与 attention</a>
+      <a href="#communication">多卡通信</a>
+      <a href="#profiler">profiler 诊断</a>
+      <a href="#failure-lab">故障实验室</a>
+      <a href="#mistakes">常见错误</a>
+      <a href="#bridge">下一步</a>
+      <a href="#practice">练习</a>
+      <a href="#check">自测答案方向</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
         <div class="head">
           <h2>学习目标</h2>
           <span class="tag">goal</span>
         </div>
-        <div class="grid2">
-          <div class="box soft">
-            <h3>先会记账</h3>
-            <p>看到 OOM 时，先把显存拆成参数、梯度、优化器状态、激活值、临时 buffer、通信 buffer 和 allocator reserved。只看“模型参数多大”会漏掉训练峰值。</p>
-          </div>
-          <div class="box info">
-            <h3>先会计时</h3>
-            <p>看到训练慢时，先统一 tokens/s 的口径，再拆 step 时间。micro-batch、序列长度、累积步数和 GPU 数一变，吞吐比较就可能失真。</p>
-          </div>
-          <div class="box">
-            <h3>先会定位</h3>
-            <p>优化前先拿证据：dataloader 等待、kernel 自身耗时、dtype 数值问题、attention 中间压力、NCCL 通信和 GPU 拓扑都要分开看。</p>
-          </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>先会记账</h3>
+<p>看到 OOM 时，先把显存拆成参数、梯度、优化器状态、激活值、临时 buffer、通信 buffer 和 allocator reserved。只看“模型参数多大”会漏掉训练峰值。</p>
+        </div>
+        <div class="box info">
+<h3>先会计时</h3>
+<p>看到训练慢时，先统一 tokens/s 的口径，再拆 step 时间。micro-batch、序列长度、累积步数和 GPU 数一变，吞吐比较就可能失真。</p>
+        </div>
+        <div class="box">
+<h3>先会定位</h3>
+<p>优化前先拿证据：dataloader 等待、kernel 自身耗时、dtype 数值问题、attention 中间压力、NCCL 通信和 GPU 拓扑都要分开看。</p>
         </div>
         <div class="box warn">
-          <h3>本页边界</h3>
-          <p>这里不教完整 CUDA 编程，也不展开分布式训练工程。你只需要学会把一次小语言模型训练 step 拆成可观察的系统账本；下一页再用这些指标进入 scaling、验证集和评估。</p>
+<h3>本页边界</h3>
+<p>这里不教完整 CUDA 编程，也不展开分布式训练工程。你只需要学会把一次小语言模型训练 step 拆成可观察的系统账本；下一页再用这些指标进入 scaling、验证集和评估。</p>
         </div>
+      </div>
       </section>
-
       <section id="overview">
         <div class="head">
           <h2>性能主线</h2>
           <span class="tag">map</span>
         </div>
-        <p>性能排查要从一条训练 step 的时间线开始。CPU 准备 batch，数据被拷到 GPU，模型前向和反向启动一串 kernel，优化器更新参数，分布式场景还要同步梯度或参数分片。慢训练通常不是一个点坏了，而是某段等待、读写或同步占了太多时间。</p>
-        <div class="shape-tracer" data-shape-tracer>
-          <div class="trace-lines">
-            <button class="trace-line active" type="button" data-trace-step="input"><code>input</code><span>CPU 读样本、拼 batch、拷贝到 GPU</span></button>
-            <button class="trace-line" type="button" data-trace-step="forward"><code>forward</code><span>matmul / attention / norm / logits</span></button>
-            <button class="trace-line" type="button" data-trace-step="backward"><code>backward</code><span>激活值回读，写梯度，显存到峰值</span></button>
-            <button class="trace-line" type="button" data-trace-step="update"><code>update</code><span>读梯度和 moments，写参数状态</span></button>
-            <button class="trace-line" type="button" data-trace-step="comm"><code>comm</code><span>DDP all-reduce / FSDP shard 通信</span></button>
-            <button class="trace-line" type="button" data-trace-step="record"><code>record</code><span>日志、checkpoint、profiler 证据</span></button>
-          </div>
-          <div class="trace-canvas">
-            <div class="tensor-card active" data-trace-target="input">
-              <b>input</b>
-              <span>dataloader wait</span>
-              <p>如果 GPU utilization 周期性掉到低位，先查 CPU 解码、token 拼接、pin memory 和 H2D 拷贝。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="forward">
-              <b>forward</b>
-              <span>kernel chain</span>
-              <p>前向会启动 matmul、attention、LayerNorm、mask 和 elementwise kernel。小 kernel 太多时，GPU 可能在调度和读写上花时间。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="backward">
-              <b>backward</b>
-              <span>activation peak</span>
-              <p>反向需要前向中间值，OOM 常在这里出现。记录 peak memory 比只看 step 结束后的 allocated 更有用。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="update">
-              <b>optimizer</b>
-              <span>state traffic</span>
-              <p>AdamW 会读写 moments 和参数。参数量大时，optimizer state 和它的内存读写会成为一块实成本。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="comm">
-              <b>comm</b>
-              <span>synchronization</span>
-              <p>多卡训练会加入同步。每卡 batch 太小或网络慢时，GPU 可能在等通信，而不是继续计算。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="record">
-              <b>record</b>
-              <span>evidence</span>
-              <p>日志要能复现判断：step time、tokens/s、allocated/reserved、dtype、GPU 数、通信时间和 profiler 截图。</p>
-            </div>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table data-export-context="训练 step 系统时间线" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>阶段</th>
-                <th>主要读写</th>
-                <th>常见症状</th>
-                <th>第一条证据</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>数据输入</td>
-                <td>CPU 样本、token batch、host-to-device copy</td>
-                <td>GPU utilization 有空洞，step time 抖动大</td>
-                <td>dataloader time、H2D copy time、GPU timeline gap</td>
-              </tr>
-              <tr>
-                <td>前向 / 反向</td>
-                <td>参数、激活值、attention 中间张量、梯度</td>
-                <td>OOM、self CUDA time 集中、长序列变慢</td>
-                <td>peak memory、profiler 按 kernel 排序</td>
-              </tr>
-              <tr>
-                <td>优化器</td>
-                <td>梯度、参数、moments、master weights</td>
-                <td>大模型 step 更新慢，显存超过参数直觉</td>
-                <td>optimizer state size、update kernel time</td>
-              </tr>
-              <tr>
-                <td>通信</td>
-                <td>梯度 bucket、参数 shard、NCCL buffer</td>
-                <td>多卡扩展效率低，等待 all-reduce</td>
-                <td>NCCL 时间、通信/计算重叠、拓扑</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="inline-note"><b>读法</b>先把慢训练归到一段时间线，再讨论技巧。没有基线、没有同口径 tokens/s、没有 profiler 的优化建议，通常只是猜。</p>
+<p>性能排查要从一条训练 step 的时间线开始。CPU 准备 batch，数据被拷到 GPU，模型前向和反向启动一串 kernel，优化器更新参数，分布式场景还要同步梯度或参数分片。慢训练通常某段等待、读写或同步占了太多时间。</p>
       </section>
-
       <section id="terms">
         <div class="head">
           <h2>术语与误区</h2>
           <span class="tag">terms</span>
         </div>
-        <div class="table-wrap">
-          <table data-export-context="术语与误区" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>术语</th>
-                <th>直觉解释</th>
-                <th>精确定义</th>
-                <th>常见误解</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><b>peak memory</b></td>
-                <td>训练过程中最满的时候。</td>
-                <td>一次 step 内出现过的最高显存占用，常在 backward。</td>
-                <td>只看 step 结束时的 allocated，会低估峰值。</td>
-              </tr>
-              <tr>
-                <td><b>tokens/s</b></td>
-                <td>每秒处理多少 token。</td>
-                <td>通常按全局 step 的有效 token 数除以 step_seconds。</td>
-                <td>把 micro-step 当完整 step，会把数字算歪。</td>
-              </tr>
-              <tr>
-                <td><b>kernel</b></td>
-                <td>GPU 上执行的一小段工作。</td>
-                <td>由 CPU 发起、在 GPU 上并行执行的函数，可能只是模型层的一部分。</td>
-                <td>把 kernel 当神经网络层，容易误读 profiler。</td>
-              </tr>
-              <tr>
-                <td><b>BF16 / FP16</b></td>
-                <td>低精度训练的两种常见格式。</td>
-                <td>BF16 保指数范围，FP16 更省位数；二者都要看数值稳定。</td>
-                <td>只看速度，不看 loss scale 和 NaN，会翻车。</td>
-              </tr>
-              <tr>
-                <td><b>NCCL all-reduce</b></td>
-                <td>多卡同步梯度。</td>
-                <td>分布式训练里的 collective communication，用来把各卡梯度合并。</td>
-                <td>通信慢，不一定是网络坏，也可能是每卡 batch 太小。</td>
-              </tr>
-              <tr>
-                <td><b>roofline</b></td>
-                <td>看算力和带宽谁先顶住。</td>
-                <td>用 FLOPs/bytes moved 的直觉判断更像 compute-bound 还是 memory-bound。</td>
-                <td>把它当精确诊断器，会过度简化。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>术语</th><th>直觉解释</th><th>精确定义</th><th>常见误解</th></tr>
+<tr><td><b>peak memory</b></td><td>训练过程中最满的时候。</td><td>一次 step 内出现过的最高显存占用，常在 backward。</td><td>只看 step 结束时的 allocated，会低估峰值。</td></tr>
+<tr><td><b>tokens/s</b></td><td>每秒处理多少 token。</td><td>通常按全局 step 的有效 token 数除以 step_seconds。</td><td>把 micro-step 当完整 step，会把数字算歪。</td></tr>
+<tr><td><b>kernel</b></td><td>GPU 上执行的一小段工作。</td><td>由 CPU 发起、在 GPU 上并行执行的函数，可能只是模型层的一部分。</td><td>把 kernel 当神经网络层，容易误读 profiler。</td></tr>
+<tr><td><b>BF16 / FP16</b></td><td>低精度训练的两种常见格式。</td><td>BF16 保指数范围，FP16 更省位数；二者都要看数值稳定。</td><td>只看速度，不看 loss scale 和 NaN，会翻车。</td></tr>
+<tr><td><b>NCCL all-reduce</b></td><td>多卡同步梯度。</td><td>分布式训练里的 collective communication，用来把各卡梯度合并。</td><td>通信慢，不一定是网络坏，也可能是每卡 batch 太小。</td></tr>
+<tr><td><b>roofline</b></td><td>看算力和带宽谁先顶住。</td><td>用 FLOPs/bytes moved 的直觉判断更像 compute-bound 还是 memory-bound。</td><td>把它当精确诊断器，会过度简化。</td></tr>
+        </table></div>
       </section>
-
       <section id="memory">
         <div class="head">
           <h2>显存账本</h2>
           <span class="tag">memory</span>
         </div>
-        <p>训练显存不等于模型文件大小。参数会占显存，梯度也会占显存；Adam 这类优化器还有 moments；反向传播要保留激活值；框架、通信库和 kernel workspace 也会临时要空间。OOM 排查的第一步是把账本列出来。</p>
-        <div class="math-block" data-export-context="训练显存粗略账本" data-export-lang="math">
-          $$M_{train} \approx P(b_{param}+b_{grad}+b_{opt}) + M_{act} + M_{tmp} + M_{comm} + M_{reserved}$$
-          <p><code>P</code> 是参数个数；<code>b_param</code>、<code>b_grad</code>、<code>b_opt</code> 是每个参数对应的参数、梯度和优化器状态字节数。激活值和临时 buffer 会随 batch、序列长度、实现和 checkpoint 策略变化。</p>
+<p>训练显存不等于模型文件大小。参数会占显存，梯度也会占显存；Adam 这类优化器还有 moments；反向传播要保留激活值；框架、通信库和 kernel workspace 也会临时要空间。OOM 排查的第一步是把账本列出来。</p>
+<p><code>P</code> 是参数个数；<code>b_param</code>、<code>b_grad</code>、<code>b_opt</code> 是每个参数对应的参数、梯度和优化器状态字节数。激活值和临时 buffer 会随 batch、序列长度、实现和 checkpoint 策略变化。</p>
+        <div class="box info">
+<h3>峰值在哪里</h3>
+<p>峰值常出现在 backward，而不是 step 结束。你要记录 <code>max_memory_allocated</code>、<code>max_memory_reserved</code>，再按 forward、backward、optimizer step 分段观察。</p>
+<p>如果反向才 OOM，优先怀疑激活值、attention 中间张量、临时 workspace 或通信 buffer。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>显存项</th><th>什么时候出现</th><th>受什么影响</th><th>常用处理</th></tr>
+<tr><td>参数</td><td>模型加载后长期存在</td><td>参数量、dtype、是否有 master weights</td><td>更低精度、模型分片、缩小模型</td></tr>
+<tr><td>梯度</td><td>反向传播后存在，更新前后清理</td><td>参数量、梯度累积、分片方式</td><td>梯度分片、累积策略、及时 zero_grad</td></tr>
+<tr><td>优化器状态</td><td>第一次更新后长期存在</td><td>AdamW、Adafactor、SGD 等优化器选择</td><td>更省状态的优化器、ZeRO/FSDP 分片</td></tr>
+<tr><td>激活值</td><td>前向保存，反向读取</td><td>micro-batch、seq_len、层数、checkpointing</td><td>减小 micro-batch/seq_len、activation checkpointing</td></tr>
+<tr><td>临时与通信 buffer</td><td>kernel、attention、NCCL、allocator 运行时出现</td><td>实现、拓扑、bucket、动态 shape</td><td>固定形状、预留空间、调 bucket、换实现</td></tr>
+</table></div>
+<p><b>检查动作</b>报 OOM 时，不要只说“显存不够”。写出 batch、seq_len、dtype、参数量、优化器、是否 activation checkpointing，以及 allocated/reserved/peak 的数字。</p>
         </div>
-        <div class="grid2">
-          <div class="box soft">
-            <h3>小算例</h3>
-            <p>假设有 300M 参数，参数 BF16 约 2 bytes，梯度 BF16 约 2 bytes，Adam 两个 moments 用 FP32 共 8 bytes。不算激活值，每个参数约 12 bytes，参数态和优化器态已经接近 3.35 GiB。</p>
-            <p>如果还保留 FP32 master weights，就再加 4 bytes/parameter。这个额外项常被初学者漏掉。</p>
-          </div>
-          <div class="box info">
-            <h3>峰值在哪里</h3>
-            <p>峰值常出现在 backward，而不是 step 结束。你要记录 <code>max_memory_allocated</code>、<code>max_memory_reserved</code>，再按 forward、backward、optimizer step 分段观察。</p>
-            <p>如果反向才 OOM，优先怀疑激活值、attention 中间张量、临时 workspace 或通信 buffer。</p>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table data-export-context="显存对象读写表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>显存项</th>
-                <th>什么时候出现</th>
-                <th>受什么影响</th>
-                <th>常用处理</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>参数</td>
-                <td>模型加载后长期存在</td>
-                <td>参数量、dtype、是否有 master weights</td>
-                <td>更低精度、模型分片、缩小模型</td>
-              </tr>
-              <tr>
-                <td>梯度</td>
-                <td>反向传播后存在，更新前后清理</td>
-                <td>参数量、梯度累积、分片方式</td>
-                <td>梯度分片、累积策略、及时 zero_grad</td>
-              </tr>
-              <tr>
-                <td>优化器状态</td>
-                <td>第一次更新后长期存在</td>
-                <td>AdamW、Adafactor、SGD 等优化器选择</td>
-                <td>更省状态的优化器、ZeRO/FSDP 分片</td>
-              </tr>
-              <tr>
-                <td>激活值</td>
-                <td>前向保存，反向读取</td>
-                <td>micro-batch、seq_len、层数、checkpointing</td>
-                <td>减小 micro-batch/seq_len、activation checkpointing</td>
-              </tr>
-              <tr>
-                <td>临时与通信 buffer</td>
-                <td>kernel、attention、NCCL、allocator 运行时出现</td>
-                <td>实现、拓扑、bucket、动态 shape</td>
-                <td>固定形状、预留空间、调 bucket、换实现</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="inline-note"><b>检查动作</b>报 OOM 时，不要只说“显存不够”。写出 batch、seq_len、dtype、参数量、优化器、是否 activation checkpointing，以及 allocated/reserved/peak 的数字。</p>
       </section>
-
       <section id="throughput">
         <div class="head">
           <h2>吞吐口径</h2>
           <span class="tag">tokens/s</span>
         </div>
-        <p>训练速度通常用 tokens/s 表示，但这个数字只有在口径一致时才有意义。你要说清楚统计的是单卡还是全局，是训练 tokens 还是有效更新 tokens，是否包含 dataloader、checkpoint 和评估时间。</p>
-        <div class="math-block" data-export-context="全局 tokens/s 口径" data-export-lang="math">
-          $$tokens/s = \frac{n_{gpu} \times micro\_batch \times seq\_len \times grad\_accum}{step\_seconds}$$
-          <p>这里的 <code>step_seconds</code> 应该是一次 optimizer update 的端到端时间。如果你用 micro-step 时间当分母，或者忘了 grad accumulation，比较就会偏。</p>
-        </div>
-        <div class="table-wrap">
-          <table data-export-context="吞吐计算例子" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>配置</th>
-                <th>计算</th>
-                <th>tokens/s</th>
-                <th>读法</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>1 GPU，micro=8，seq=1024，accum=4，step=2.0s</td>
-                <td>1 × 8 × 1024 × 4 / 2.0</td>
-                <td>16,384</td>
-                <td>这是全局训练吞吐，也是单卡吞吐。</td>
-              </tr>
-              <tr>
-                <td>4 GPU，micro=8，seq=1024，accum=4，step=2.4s</td>
-                <td>4 × 8 × 1024 × 4 / 2.4</td>
-                <td>54,613</td>
-                <td>比 1 卡快 3.33 倍，扩展效率约 83%。</td>
-              </tr>
-              <tr>
-                <td>4 GPU，micro=4，seq=1024，accum=4，step=1.5s</td>
-                <td>4 × 4 × 1024 × 4 / 1.5</td>
-                <td>43,691</td>
-                <td>step 变短但 tokens/s 变低，不能只看秒数。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="codebar"><span>timing_skeleton.py</span><button class="copy" type="button" data-copy="timing-code">复制</button></div>
-        <pre id="timing-code" data-export-context="CUDA 计时骨架" data-export-lang="python"><code class="language-python">import time
+<p>训练速度通常用 tokens/s 表示，但这个数字只有在口径一致时才有意义。你要说清楚统计的是单卡还是全局，是训练 tokens 还是有效更新 tokens，是否包含 dataloader、checkpoint 和评估时间。</p>
+<p>这里的 <code>step_seconds</code> 应该是一次 optimizer update 的端到端时间。如果你用 micro-step 时间当分母，或者忘了 grad accumulation，比较就会偏。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-throughput-1">复制</button></div>
+        <pre id="code-throughput-1" data-export-context="代码" data-export-lang="python"><code class="language-python">import time
 import torch
 
 def measure_step(train_step, warmup=5, repeat=20):
-    for _ in range(warmup):
-        train_step()
-    torch.cuda.synchronize()
-    start = time.perf_counter()
-    for _ in range(repeat):
-        train_step()
-    torch.cuda.synchronize()
-    return (time.perf_counter() - start) / repeat
+ for _ in range(warmup):
+ train_step()
+ torch.cuda.synchronize()
+ start = time.perf_counter()
+ for _ in range(repeat):
+ train_step()
+ torch.cuda.synchronize()
+ return (time.perf_counter() - start) / repeat
 
 # CPU 计时前后都要同步，否则可能只测到 kernel 提交时间。
 # 真实报告还要写清 batch、seq_len、grad_accum、GPU 数和是否包含 dataloader。</code></pre>
-        <p class="inline-note"><b>检查动作</b>每次改 batch、accum、GPU 数、dtype 或 dataloader 后，都重新记录同一套口径。吞吐变快但验证 loss 变差时，要回到训练语义，不把它当纯系统收益。</p>
+<p><b>检查动作</b>每次改 batch、accum、GPU 数、dtype 或 dataloader 后，都重新记录同一套口径。吞吐变快但验证 loss 变差时，要回到训练语义，不把它当纯系统收益。</p>
+        </div>
       </section>
-
       <section id="kernel">
         <div class="head">
           <h2>kernel 与 roofline</h2>
           <span class="tag">kernel</span>
         </div>
-        <p>Python 里的一层 Transformer，到 GPU 上会变成很多 kernel：矩阵乘、softmax、mask、dropout、LayerNorm、elementwise、optimizer update。性能问题常来自两类：kernel 太碎，启动和内存读写占比高；或者大 kernel 没有喂满 Tensor Core，算力利用不足。</p>
-        <div class="table-wrap">
-          <table data-export-context="kernel 时间线读法" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>profiler 现象</th>
-                <th>更可能的原因</th>
-                <th>先查什么</th>
-                <th>可能动作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>大量很短的 elementwise kernel</td>
-                <td>算子没融合、batch 太小、Python 控制流太碎</td>
-                <td>self CUDA time、kernel 数量、shape 是否很小</td>
-                <td>torch.compile、fused op、增大 micro-batch</td>
-              </tr>
-              <tr>
-                <td>matmul 时间长但 GPU 利用率不高</td>
-                <td>shape 不利于 Tensor Core、dtype 或 layout 不合适</td>
-                <td>矩阵维度、dtype、是否走 FP16/BF16/TF32 路径</td>
-                <td>调整 hidden size 对齐、autocast、检查 contiguous/layout</td>
-              </tr>
-              <tr>
-                <td>softmax / attention 占比随序列长度暴涨</td>
-                <td>attention 中间矩阵和 HBM 读写压力大</td>
-                <td>seq_len、head 数、attention 实现、是否物化分数矩阵</td>
-                <td>FlashAttention、减小 seq_len、activation checkpointing</td>
-              </tr>
-            </tbody>
-          </table>
+<p>Python 里的一层 Transformer，到 GPU 上会变成很多 kernel：矩阵乘、softmax、mask、dropout、LayerNorm、elementwise、optimizer update。性能问题常来自两类：kernel 太碎，启动和内存读写占比高；或者大 kernel 没有喂满 Tensor Core，算力利用不足。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+arithmetic\ intensity = \frac{FLOPs}{bytes\ moved}
+$$
         </div>
-        <div class="math-block" data-export-context="roofline 直觉公式" data-export-lang="math">
-          $$arithmetic\ intensity = \frac{FLOPs}{bytes\ moved}$$
-          <p>roofline 的直觉是：如果每搬一字节数据只做很少计算，瓶颈更像内存带宽；如果每搬一字节能做大量矩阵乘，瓶颈更可能是算力或 Tensor Core 利用。它不是精确诊断结论，但能提醒你看 HBM 往返和 kernel 形状。</p>
-        </div>
-        <div class="codebar"><span>fused_attention_boundary.txt</span><button class="copy" type="button" data-copy="kernel-boundary">复制</button></div>
-        <pre id="kernel-boundary" data-export-context="kernel 优化边界" data-export-lang="text">优化 kernel 前先问四个问题：
+<p>roofline 的直觉是：如果每搬一字节数据只做很少计算，瓶颈更像内存带宽；如果每搬一字节能做大量矩阵乘，瓶颈更可能是算力或 Tensor Core 利用。它不是精确诊断结论，但能提醒你看 HBM 往返和 kernel 形状。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-kernel-1">复制</button></div>
+        <pre id="code-kernel-1" data-export-context="代码" data-export-lang="text"><code class="language-text">优化 kernel 前先问四个问题：
 1. profiler 里时间是否真的花在这些 op 上？
 2. 这些 op 是 compute-bound 还是 memory-bound？
 3. 框架版本是否已经内置融合或高效实现？
-4. 改实现以后，数值、mask、dropout、训练/评估模式是否仍然一致？</pre>
+4. 改实现以后，数值、mask、dropout、训练/评估模式是否仍然一致？</code></pre>
+        </div>
       </section>
-
       <section id="precision">
         <div class="head">
           <h2>精度与 attention</h2>
           <span class="tag">dtype</span>
         </div>
-        <p>混合精度的目标是让适合低精度的矩阵乘走快路径，同时守住容易不稳定的归约、softmax、loss 和归一化统计。dtype 改动会同时影响显存、吞吐和数值稳定，不能只看速度。</p>
-        <div class="table-wrap">
-          <table data-export-context="训练 dtype 对照表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>dtype / 机制</th>
-                <th>主要收益</th>
-                <th>主要风险</th>
-                <th>先看指标</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>FP32</td>
-                <td>动态范围和精度稳，便于调试</td>
-                <td>显存和吞吐成本高</td>
-                <td>基线 loss、grad norm、tokens/s</td>
-              </tr>
-              <tr>
-                <td>FP16 + GradScaler</td>
-                <td>显存低，Tensor Core 快</td>
-                <td>梯度下溢、scale 波动、NaN</td>
-                <td>loss scale、NaN 首发位置、grad norm</td>
-              </tr>
-              <tr>
-                <td>BF16</td>
-                <td>指数范围接近 FP32，训练更稳</td>
-                <td>尾数精度较低，硬件需支持</td>
-                <td>验证 loss、吞吐、关键层输出范围</td>
-              </tr>
-              <tr>
-                <td>TF32</td>
-                <td>在支持的 NVIDIA GPU 上加速 FP32 matmul</td>
-                <td>矩阵乘精度近似，结果可能有细小差异</td>
-                <td>是否启用、loss 曲线是否可接受</td>
-              </tr>
-            </tbody>
-          </table>
+<p>混合精度的目标是让适合低精度的矩阵乘走快路径，同时守住容易不稳定的归约、softmax、loss 和归一化统计。dtype 改动会同时影响显存、吞吐和数值稳定，不能只看速度。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+scores\ shape \approx batch \times heads \times seq\_len \times seq\_len
+$$
         </div>
-        <div class="math-block" data-export-context="attention 中间张量规模" data-export-lang="math">
-          $$scores\ shape \approx batch \times heads \times seq\_len \times seq\_len$$
-          <p>标准 self-attention 会比较每个 token 和每个 token。序列长度翻倍，分数矩阵元素数会变成四倍。如果实现显式物化中间矩阵，显存和 HBM 读写都会变重。</p>
-        </div>
-        <div class="box warn">
-          <h3>边界</h3>
-          <p>FlashAttention 主要解决 attention 的 IO 和中间显存问题。它不会修复 dataloader 等待、optimizer state 太大、NCCL 通信慢或训练超参错误。</p>
-        </div>
+<p>标准 self-attention 会比较每个 token 和每个 token。序列长度翻倍，分数矩阵元素数会变成四倍。如果实现显式物化中间矩阵，显存和 HBM 读写都会变重。</p>
       </section>
-
       <section id="communication">
         <div class="head">
           <h2>多卡通信</h2>
           <span class="tag">parallel</span>
         </div>
-        <p>多卡训练增加的是全局计算能力，也增加了同步成本。DDP 常见路径是每张卡算自己的 micro-batch，然后对梯度做 all-reduce；FSDP/ZeRO 会把参数、梯度或优化器状态分片，省显存但加入更多通信和调度约束。</p>
-        <div class="table-wrap">
-          <table data-export-context="多卡扩展诊断表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>现象</th>
-                <th>可能原因</th>
-                <th>证据</th>
-                <th>动作与代价</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>8 卡只比 1 卡快 3 倍</td>
-                <td>通信占比高、每卡 batch 太小、dataloader 等待</td>
-                <td>NCCL 时间、timeline 空洞、每卡 tokens 数</td>
-                <td>增大每次同步前计算量；代价是有效 batch 或显存变化</td>
-              </tr>
-              <tr>
-                <td>DDP 显存仍然太高</td>
-                <td>每卡都保留完整参数、梯度和 optimizer state</td>
-                <td>每卡 memory summary 与参数态估算对不上</td>
-                <td>考虑 FSDP/ZeRO；代价是通信和实现复杂度增加</td>
-              </tr>
-              <tr>
-                <td>跨节点后吞吐掉很多</td>
-                <td>互联带宽和延迟变差，拓扑不匹配</td>
-                <td>NCCL 日志、节点内/节点间对比、拓扑图</td>
-                <td>优先节点内通信、调整并行策略；代价是资源调度限制</td>
-              </tr>
-            </tbody>
-          </table>
+<p>多卡训练增加的是全局计算能力，也增加了同步成本。DDP 常见路径是每张卡算自己的 micro-batch，然后对梯度做 all-reduce；FSDP/ZeRO 会把参数、梯度或优化器状态分片，省显存但加入更多通信和调度约束。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+scaling\ efficiency = \frac{throughput_N}{N \times throughput_1}
+$$
         </div>
-        <div class="math-block" data-export-context="扩展效率口径" data-export-lang="math">
-          $$scaling\ efficiency = \frac{throughput_N}{N \times throughput_1}$$
-          <p>这个指标只在训练口径一致时有意义。GPU 数变了以后，如果 micro-batch、累积步数、数据加载路径或 checkpoint 频率也变了，就要把这些变化写进报告。</p>
-        </div>
-        <div class="box warn">
-          <h3>小模型的多卡陷阱</h3>
-          <p>模型太小或每卡 batch 太小时，通信税会显得很重。小规模实验上看到扩展效率差，不必直接推断“大模型也会差”；你要先确认计算量是否足够覆盖同步成本。</p>
-        </div>
+<p>这个指标只在训练口径一致时有意义。GPU 数变了以后，如果 micro-batch、累积步数、数据加载路径或 checkpoint 频率也变了，就要把这些变化写进报告。</p>
       </section>
-
       <section id="profiler">
         <div class="head">
           <h2>profiler 诊断</h2>
           <span class="tag">profile</span>
         </div>
-        <p>profiler 的作用不是给出一句“优化建议”，而是把等待、计算、通信和内存峰值摆到同一张证据表里。一个稳的排查流程是：建立基线，确认口径；分段计时；看时间线空洞；按 self CUDA time 排 kernel；记录显存峰值；最后只改一个主要变量。</p>
-        <div class="codebar"><span>profiler_minimal.py</span><button class="copy" type="button" data-copy="profiler-code">复制</button></div>
-        <pre id="profiler-code" data-export-context="PyTorch profiler 最小骨架" data-export-lang="python"><code class="language-python">import torch
+<p>profiler 的作用把等待、计算、通信和内存峰值摆到同一张证据表里。一个稳的排查流程是：建立基线，确认口径；分段计时；看时间线空洞；按 self CUDA time 排 kernel；记录显存峰值；最后只改一个主要变量。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-profiler-1">复制</button></div>
+        <pre id="code-profiler-1" data-export-context="代码" data-export-lang="python"><code class="language-python">import torch
 from torch.profiler import profile, ProfilerActivity
 
 with profile(
-    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-    record_shapes=True,
-    profile_memory=True,
-    with_stack=False,
+ activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+ record_shapes=True,
+ profile_memory=True,
+ with_stack=False,
 ) as prof:
-    for step, batch in enumerate(loader):
-        if step >= 20:
-            break
-        loss = train_one_step(batch)
-        prof.step()
+ for step, batch in enumerate(loader):
+ if step &gt;= 20:
+ break
+ loss = train_one_step(batch)
+ prof.step()
 
 print(prof.key_averages().table(
-    sort_by="self_cuda_time_total",
-    row_limit=20,
+ sort_by="self_cuda_time_total",
+ row_limit=20,
 ))
 
 # 看表之前先确认：warmup 是否完成，是否包含 dataloader，
 # CUDA 计时是否同步，batch/seq_len/dtype/GPU 数是否写进报告。</code></pre>
-        <div class="table-wrap">
-          <table data-export-context="profiler 读表顺序" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>读表步骤</th>
-                <th>要看什么</th>
-                <th>常见判断</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>1. 时间线</td>
-                <td>GPU 是否有长空洞，CPU 和 GPU 是否错位</td>
-                <td>空洞常指向 dataloader、CPU 同步或 H2D 拷贝。</td>
-              </tr>
-              <tr>
-                <td>2. self CUDA time</td>
-                <td>哪个 kernel 真正占 GPU 时间</td>
-                <td>matmul、attention、norm、optimizer update 要分开看。</td>
-              </tr>
-              <tr>
-                <td>3. shape</td>
-                <td>慢 kernel 对应的输入形状</td>
-                <td>小 shape 可能启动开销重，大 shape 可能算力或带宽重。</td>
-              </tr>
-              <tr>
-                <td>4. memory</td>
-                <td>allocated、reserved、peak 和分段峰值</td>
-                <td>reserved 高不等于泄漏，可能是缓存、碎片或临时 workspace。</td>
-              </tr>
-              <tr>
-                <td>5. 复测</td>
-                <td>只改一个变量后的同口径指标</td>
-                <td>优化动作要同时报告 tokens/s、显存和验证 loss。</td>
-              </tr>
-            </tbody>
-          </table>
         </div>
-        <p class="inline-note"><b>检查动作</b>把 profiler 结果写成“现象 → 证据 → 判断 → 改动 → 复测”。如果只有“用了某个优化技巧”，这份报告还不能说明问题真的被定位了。</p>
       </section>
-
       <section id="failure-lab">
         <div class="head">
           <h2>故障实验室</h2>
           <span class="tag">diagnosis</span>
         </div>
-        <p>下面几个日志片段覆盖本页最常见的排查入口。点击不同案例时，注意首查证据怎么变：OOM 看峰值，吞吐低看时间线，NaN 看 dtype 和首发位置，扩卡差看通信和每卡计算量。</p>
-        <div class="terminal-lab" data-terminal-lab>
-          <div class="terminal-controls">
-            <button class="ghost active" type="button" data-terminal-case="oom">反向 OOM</button>
-            <button class="ghost" type="button" data-terminal-case="idle">GPU 空洞</button>
-            <button class="ghost" type="button" data-terminal-case="nan">NaN</button>
-            <button class="ghost" type="button" data-terminal-case="scale">扩卡低效</button>
-          </div>
-          <pre class="terminal-output" data-export-context="系统瓶颈故障日志" data-export-lang="text" aria-live="polite">RuntimeError: CUDA out of memory in backward()
-allocated=21.4GiB reserved=23.7GiB peak=23.9GiB seq_len=4096 micro_batch=4
-next: 分段记录 forward/backward/optimizer peak，先查激活值、attention scores 和临时 workspace。</pre>
-          <template data-terminal-output="oom">RuntimeError: CUDA out of memory in backward()
-allocated=21.4GiB reserved=23.7GiB peak=23.9GiB seq_len=4096 micro_batch=4
-next: 分段记录 forward/backward/optimizer peak；尝试减 micro-batch 或 seq_len，检查 FlashAttention 和 activation checkpointing。</template>
-          <template data-terminal-output="idle">step_time p50=1.9s p95=4.8s gpu_util drops to 20% every few steps
-timeline: CPU dataloader gap before H2D copy
-next: 单独计 dataloader time，检查 worker、pin_memory、预取、token 拼接和 CPU 解码。</template>
-          <template data-terminal-output="nan">step=740 loss=nan grad_norm=inf dtype=fp16 scaler dropped 8 times
-timeline: NaN first appears after attention softmax
-next: 记录 logits/attention score 范围，检查 mask、softmax dtype、loss scale，尝试 BF16 或局部 FP32。</template>
-          <template data-terminal-output="scale">1GPU=18k tokens/s, 8GPU=62k tokens/s, efficiency=43%
-NCCL all_reduce takes 31% of step time, per_gpu_micro_batch=1
-next: 增大每卡计算量或累积步，查 bucket、拓扑和 dataloader；复测时同时看有效 batch 和验证 loss。</template>
-        </div>
-        <div class="table-wrap">
-          <table data-export-context="瓶颈症状到首查点" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>症状</th>
-                <th>首查点</th>
-                <th>容易误判</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>前向能过，反向 OOM</td>
-                <td>activation peak、attention 中间张量、checkpoint 策略</td>
-                <td>只按参数量估算显存。</td>
-              </tr>
-              <tr>
-                <td>GPU utilization 周期性掉低</td>
-                <td>dataloader、H2D copy、CPU 同步、日志拉取</td>
-                <td>直接换更快 GPU。</td>
-              </tr>
-              <tr>
-                <td>混合精度后 NaN</td>
-                <td>NaN 首发 op、loss scale、softmax/logits 范围</td>
-                <td>把所有 NaN 都归因于学习率。</td>
-              </tr>
-              <tr>
-                <td>多卡扩展差</td>
-                <td>NCCL 时间、每卡 batch、bucket、拓扑</td>
-                <td>只看总 GPU 数，不看每卡计算量。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+<p>下面几个日志片段覆盖本页最常见的排查入口。点击不同案例时，注意首查证据怎么变：OOM 看峰值，吞吐低看时间线，NaN 看 dtype 和首发位置，扩卡差看通信和每卡计算量。</p>
       </section>
-
       <section id="mistakes">
         <div class="head">
           <h2>常见错误</h2>
           <span class="tag">pitfalls</span>
         </div>
-        <div class="grid2">
-          <div class="box warn">
-            <h3>未同步就计时</h3>
-            <p>CUDA 默认异步执行。CPU 计时如果前后不加 <code>torch.cuda.synchronize()</code>，很可能只测到提交任务的时间。</p>
-          </div>
-          <div class="box warn">
-            <h3>只看 allocated</h3>
-            <p><code>reserved</code>、峰值、非 PyTorch 分配、NCCL buffer 和临时 workspace 都可能影响 OOM。报告里只写 allocated 不够。</p>
-          </div>
-          <div class="box warn">
-            <h3>频繁 <code>.item()</code></h3>
-            <p>每步把 GPU tensor 拉回 CPU 可能触发同步，让时间线出现空洞。日志可以降频，必要指标批量记录。</p>
-          </div>
-          <div class="box warn">
-            <h3>把 batch 改动当纯系统优化</h3>
-            <p>micro-batch、累积步数和 GPU 数改变后，有效 batch 也可能改变。训练曲线变化不能只按吞吐解释。</p>
-          </div>
-          <div class="box warn">
-            <h3>忽略数据输入</h3>
-            <p>GPU 慢不一定是 GPU 算得慢。CPU 解码、采样、拼接、拷贝和日志同步都可能让 GPU 等数据。</p>
-          </div>
-          <div class="box warn">
-            <h3>把单个技巧当万能药</h3>
-            <p>FlashAttention、torch.compile、activation checkpointing、FSDP 都有边界和代价。先定位瓶颈，再选工具。</p>
-          </div>
+      <div class="grid2">
+        <div class="box warn">
+<h3>未同步就计时</h3>
+<p>CUDA 默认异步执行。CPU 计时如果前后不加 <code>torch.cuda.synchronize()</code>，很可能只测到提交任务的时间。</p>
         </div>
+        <div class="box warn">
+<h3>只看 allocated</h3>
+<p><code>reserved</code>、峰值、非 PyTorch 分配、NCCL buffer 和临时 workspace 都可能影响 OOM。报告里只写 allocated 不够。</p>
+        </div>
+        <div class="box warn">
+<h3>频繁 <code>.item()</code></h3>
+<p>每步把 GPU tensor 拉回 CPU 可能触发同步，让时间线出现空洞。日志可以降频，必要指标批量记录。</p>
+        </div>
+        <div class="box warn">
+<h3>把 batch 改动当纯系统优化</h3>
+<p>micro-batch、累积步数和 GPU 数改变后，有效 batch 也可能改变。训练曲线变化不能只按吞吐解释。</p>
+        </div>
+        <div class="box warn">
+<h3>忽略数据输入</h3>
+<p>GPU 慢不一定是 GPU 算得慢。CPU 解码、采样、拼接、拷贝和日志同步都可能让 GPU 等数据。</p>
+        </div>
+        <div class="box warn">
+<h3>把单个技巧当万能药</h3>
+<p>FlashAttention、torch.compile、activation checkpointing、FSDP 都有边界和代价。先定位瓶颈，再选工具。</p>
+        </div>
+      </div>
       </section>
-
       <section id="bridge">
         <div class="head">
           <h2>下一步</h2>
           <span class="tag">bridge</span>
         </div>
-        <p>读完本页后，你应该能给一次训练实验写出系统证据，而不是只贴一张 loss 曲线。下一页进入 scaling、验证集与评估时，会用这些证据判断一个改动到底是训练质量变好、系统口径变了，还是实验不可比。</p>
-        <div class="table-wrap">
-          <table data-export-context="系统证据到评估衔接" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>本页留下的证据</th>
-                <th>下一页怎么用</th>
-                <th>如果缺失会怎样</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>tokens/s、step time、GPU 数、batch/seq_len/accum</td>
-                <td>比较不同规模实验的训练成本</td>
-                <td>无法判断 loss 下降是更高预算还是更好配方。</td>
-              </tr>
-              <tr>
-                <td>dtype、显存峰值、attention 实现</td>
-                <td>解释长上下文和更大模型的可行性</td>
-                <td>遇到 OOM 只能靠猜。</td>
-              </tr>
-              <tr>
-                <td>profiler 截图、通信占比、dataloader 等待</td>
-                <td>区分训练质量问题和系统瓶颈</td>
-                <td>可能把系统慢误判为模型没学会。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+<p>读完本页后，你应该能给一次训练实验写出系统证据，而不是只贴一张 loss 曲线。下一页进入 scaling、验证集与评估时，会用这些证据判断一个改动到底是训练质量变好、系统口径变了，还是实验不可比。</p>
       </section>
-
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">practice</span>
         </div>
-        <div class="practice-intro">
-          <div class="box soft">
-            <strong>作答目标</strong>
-            <p>练习按“口径、账本、诊断、迁移”分组。客观题用页面按钮检查；开放题先写自己的判断，再展开参考答案对照证据是否完整。</p>
-          </div>
-          <div class="box info">
-            <strong>检查重点</strong>
-            <p>好答案通常会先写证据，再写判断，最后写改动和副作用。只写“开 FlashAttention”“换 GPU”“调 batch”都不够。</p>
-          </div>
+      <div class="practice-intro">
+      <div class="box soft">
+<p>作答目标</p>
+<p>练习按“口径、账本、诊断、迁移”分组。客观题用页面按钮检查；开放题先写自己的判断，再展开参考答案对照证据是否完整。</p>
+      </div>
+      <div class="box info">
+<p>检查重点</p>
+<p>好答案通常会先写证据，再写判断，最后写改动和副作用。只写“开 FlashAttention”“换 GPU”“调 batch”都不够。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础口径</h3></div>
+          <div class="quick-review">先问：这个指标是在什么 batch、seq_len、accum、GPU 数、dtype 和计时范围下测的？ --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="参数、梯度、优化器状态、激活值、临时/通信 buffer 和 reserved。">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q1. 排查 OOM 时，下列哪个账本更完整？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>一、基础口径</h3>
-              <p>确认你能把性能问题拆成显存、吞吐、dtype 和 attention 的基本口径。</p>
-            </div>
-            <div class="quick-review">先问：这个指标是在什么 batch、seq_len、accum、GPU 数、dtype 和计时范围下测的？</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q1" data-group="一、基础口径" data-title="Q1. 训练显存账本" data-answer="B">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">memory</span></div>
-              <h3>Q1. 排查 OOM 时，下列哪个账本更完整？</h3>
-              <label><input type="radio" name="q1" value="A">A. 只看模型 checkpoint 文件大小。</label>
-              <label><input type="radio" name="q1" value="B">B. 参数、梯度、优化器状态、激活值、临时/通信 buffer 和 reserved。</label>
-              <label><input type="radio" name="q1" value="C">C. 只看 <code>nvidia-smi</code> 的总占用。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q1" value="只看模型 checkpoint 文件大小。">只看模型 checkpoint 文件大小。</label>
+      <label><input type="radio" name="q1" value="参数、梯度、优化器状态、激活值、临时/通信 buffer 和 reserved。">参数、梯度、优化器状态、激活值、临时/通信 buffer 和 reserved。</label>
+      <label><input type="radio" name="q1" value="只看 nvidia-smi 的总占用。">只看 nvidia-smi 的总占用。</label>
+      </div>
 
-            <div class="q" data-question="q2" data-group="一、基础口径" data-title="Q2. tokens/s 填空">
-              <div class="q-meta"><span class="pill">fill</span><span class="pill">tokens/s</span></div>
-              <h3>Q2. 1 GPU，micro-batch=8，seq_len=1024，grad_accum=4，一次 optimizer step 用 2 秒。全局 tokens/s 是多少？</h3>
-              <input type="text" name="q2" data-answer="16384" placeholder="填写纯数字 16384">
-              <p class="hint">按 <code>GPU × micro_batch × seq_len × grad_accum / step_seconds</code> 计算，写纯数字，不要加单位。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>参数、梯度、优化器状态、激活值、临时/通信 buffer 和 reserved。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> Q2. 1 GPU，micro-batch=8，seq_len=1024，grad_accum=4，一次 optimizer step 用 2 秒。全局 tokens/s 是多少？</h3>
 
-            <div class="q" data-question="q3" data-group="一、基础口径" data-title="Q3. FlashAttention 边界">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">attention</span></div>
-              <h3>Q3. 关于 FlashAttention，哪个说法更准确？</h3>
-              <label><input type="radio" name="q3" value="A">A. 它会让所有训练瓶颈消失。</label>
-              <label><input type="radio" name="q3" value="B">B. 它主要改变语言模型的训练目标。</label>
-              <label><input type="radio" name="q3" value="C">C. 它主要缓解 attention 的 IO 和中间显存压力。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
 
-            <div class="q full" data-question="q4" data-group="一、基础口径" data-title="Q4. 参数态显存估算">
-              <div class="q-meta"><span class="pill">fill</span><span class="pill">memory</span></div>
-              <h3>Q4. 300M 参数，参数 BF16 2 bytes，梯度 BF16 2 bytes，Adam moments 共 8 bytes。不算激活值时，每个参数大约多少 bytes？</h3>
-              <input type="text" name="q4" data-answer="12" placeholder="例如：12">
-              <p class="hint">如果还保留 FP32 master weights，需要再加 4 bytes/parameter。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-          </div>
+      <textarea name="q2"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q3. 关于 FlashAttention，哪个说法更准确？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q3" value="它会让所有训练瓶颈消失。">它会让所有训练瓶颈消失。</label>
+      <label><input type="radio" name="q3" value="它主要改变语言模型的训练目标。">它主要改变语言模型的训练目标。</label>
+      <label><input type="radio" name="q3" value="它主要缓解 attention 的 IO 和中间显存压力。">它主要缓解 attention 的 IO 和中间显存压力。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> Q4. 300M 参数，参数 BF16 2 bytes，梯度 BF16 2 bytes，Adam moments 共 8 bytes。不算激活值时，每个参数大约多少 bytes？</h3>
+
+
+      <textarea name="q4"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>二、显存与精度</h3>
-              <p>练习把显存峰值、dtype 改动和长上下文 attention 放到同一张账本里。</p>
-            </div>
-            <div class="quick-review">先分清长期常驻状态和运行时峰值：参数态不等于 backward 峰值。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q5" data-group="二、显存与精度" data-title="Q5. 反向 OOM 首查">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">OOM</span></div>
-              <h3>Q5. 前向能过，反向 OOM。你先查什么？</h3>
-              <label><input type="radio" name="q5" value="A">A. 只查 checkpoint 文件是否太大。</label>
-              <label><input type="radio" name="q5" value="B">B. backward peak、激活值、attention 中间张量和临时 workspace。</label>
-              <label><input type="radio" name="q5" value="C">C. 只查训练集文本是否太少。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-
-            <div class="q" data-question="q6" data-group="二、显存与精度" data-title="Q6. FP16 NaN">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">dtype</span></div>
-              <h3>Q6. FP16 后 loss 变成 NaN，最稳的第一步是什么？</h3>
-              <label><input type="radio" name="q6" value="A">A. 直接把所有 batch 都翻倍。</label>
-              <label><input type="radio" name="q6" value="B">B. 只看最终 checkpoint 是否能保存。</label>
-              <label><input type="radio" name="q6" value="C">C. 定位 NaN 首发 op，查 loss scale、logits/softmax 范围和 grad norm。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-
-            <div class="q full" data-question="q7" data-group="二、显存与精度" data-title="Q7. 长上下文成本解释">
-              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">attention</span></div>
-              <h3>Q7. 解释为什么 seq_len 从 1024 改到 4096 后，attention 可能突然成为显存和时间瓶颈。</h3>
-              <p class="solve-note">至少覆盖 <code>batch × heads × seq_len × seq_len</code>、中间张量、HBM 往返，以及 FlashAttention 的边界。</p>
-              <textarea name="q7" placeholder="先写形状如何变化，再写为什么它影响显存和 HBM 读写，最后写可尝试的改法。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>好答案会指出 attention 分数矩阵随 <code>seq_len²</code> 增长：1024 到 4096 是长度 4 倍，分数元素约 16 倍。若实现物化中间矩阵，显存和 HBM 读写都会上升。可查 attention 实现、head 数、activation checkpointing、FlashAttention 和 micro-batch；同时说明 FlashAttention 不处理 dataloader 或通信瓶颈。</p>
-              </details>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、显存与精度</h3></div>
+          <div class="quick-review">先分清长期常驻状态和运行时峰值：参数态不等于 backward 峰值。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q5. 前向能过，反向 OOM。你先查什么？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>三、kernel、数据输入与通信</h3>
-              <p>把 profiler 现象映射到可行动的首查点。</p>
-            </div>
-            <div class="quick-review">看 profiler 时，先看时间线空洞，再看 self CUDA time，最后看 shape 和 memory。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q8" data-group="三、kernel、数据输入与通信" data-title="Q8. 小 kernel 过多">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">kernel</span></div>
-              <h3>Q8. profiler 里大量很短的 elementwise kernel，最先怀疑什么？</h3>
-              <label><input type="radio" name="q8" value="A">A. 算子没融合、batch 太小或 Python 控制流太碎。</label>
-              <label><input type="radio" name="q8" value="B">B. 训练集标签一定错了。</label>
-              <label><input type="radio" name="q8" value="C">C. checkpoint 保存间隔太短。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q5" value="只查 checkpoint 文件是否太大。">只查 checkpoint 文件是否太大。</label>
+      <label><input type="radio" name="q5" value="backward peak、激活值、attention 中间张量和临时 workspace。">backward peak、激活值、attention 中间张量和临时 workspace。</label>
+      <label><input type="radio" name="q5" value="只查训练集文本是否太少。">只查训练集文本是否太少。</label>
+      </div>
 
-            <div class="q" data-question="q9" data-group="三、kernel、数据输入与通信" data-title="Q9. GPU 时间线空洞">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">dataloader</span></div>
-              <h3>Q9. GPU utilization 周期性掉到 20%，timeline 显示 kernel 之间有长空洞。先查什么？</h3>
-              <label><input type="radio" name="q9" value="A">A. 只调大学习率。</label>
-              <label><input type="radio" name="q9" value="B">B. dataloader、CPU 同步、H2D copy 和日志拉取。</label>
-              <label><input type="radio" name="q9" value="C">C. 只减少验证集大小。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q6. FP16 后 loss 变成 NaN，最稳的第一步是什么？</h3>
 
-            <div class="q" data-question="q10" data-group="三、kernel、数据输入与通信" data-title="Q10. 多卡效率">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">NCCL</span></div>
-              <h3>Q10. 8 卡只比 1 卡快 3 倍。最合适的首查组合是？</h3>
-              <label><input type="radio" name="q10" value="A">A. 只查模型层数。</label>
-              <label><input type="radio" name="q10" value="B">B. 只查 tokenizer 词表大小。</label>
-              <label><input type="radio" name="q10" value="C">C. NCCL 时间、每卡 batch、通信/计算重叠、dataloader 和拓扑。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q6" value="直接把所有 batch 都翻倍。">直接把所有 batch 都翻倍。</label>
+      <label><input type="radio" name="q6" value="只看最终 checkpoint 是否能保存。">只看最终 checkpoint 是否能保存。</label>
+      <label><input type="radio" name="q6" value="定位 NaN 首发 op，查 loss scale、logits/softmax 范围和 grad norm。">定位 NaN 首发 op，查 loss scale、logits/softmax 范围和 grad norm。</label>
+      </div>
 
-            <div class="q full" data-question="q11" data-group="三、kernel、数据输入与通信" data-title="Q11. 扩展效率计算">
-              <div class="q-meta"><span class="pill">fill</span><span class="pill">scaling</span></div>
-              <h3>Q11. 1 卡吞吐 18k tokens/s，8 卡吞吐 62k tokens/s。扩展效率约是多少？</h3>
-              <input type="text" name="q11" data-answer="43" placeholder="例如：43">
-              <p class="hint">计算 <code>62 / (8 × 18)</code>，约 0.43，也就是 43%。</p>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-          </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> Q7. 解释为什么 seq_len 从 1024 改到 4096 后，attention 可能突然成为显存和时间瓶颈。</h3>
+
+
+      <textarea name="q7"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案会指出 attention 分数矩阵随 seq_len² 增长：1024 到 4096 是长度 4 倍，分数元素约 16 倍。若实现物化中间矩阵，显存和 HBM 读写都会上升。可查 attention 实现、head 数、activation checkpointing、FlashAttention 和 micro-batch；同时说明 FlashAttention 不处理 dataloader 或通信瓶颈。</p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>四、综合诊断</h3>
-              <p>把本页机制串成一套能复测的性能排查记录。</p>
-            </div>
-            <div class="quick-review">答案结构建议：现象 → 证据 → 判断 → 改动 → 副作用 → 复测。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q full" data-question="q12" data-group="四、综合诊断" data-title="Q12. 写一份慢训练排查顺序">
-              <div class="q-meta"><span class="pill">diagnosis</span><span class="pill">workflow</span></div>
-              <h3>Q12. 你接手一个小模型训练：loss 正常下降，但 tokens/s 只有预期的一半。写一份排查顺序。</h3>
-              <p class="solve-note">至少覆盖基线口径、CUDA 同步计时、dataloader、self CUDA time、显存峰值、dtype、通信和复测。</p>
-              <textarea name="q12" placeholder="例如：先固定 batch/seq_len/accum/GPU 数，记录 step time 和 tokens/s；再用 profiler 看时间线……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>好答案会先固定口径并同步计时，确认是否包含 dataloader 和 checkpoint；随后看时间线空洞，排查 CPU 解码、H2D copy 和 <code>.item()</code>；再按 self CUDA time 找 matmul、attention、norm、optimizer 等热点；同时记录 allocated/reserved/peak 和 dtype；多卡时补查 NCCL 与每卡 batch。每次只改一个变量，复测 tokens/s、显存和验证 loss。</p>
-              </details>
-            </div>
-
-            <div class="q full" data-question="q13" data-group="四、综合诊断" data-title="Q13. 设计一次可报告的系统实验">
-              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">report</span></div>
-              <h3>Q13. 设计一次“打开 BF16 + FlashAttention”的对比实验，说明你会记录哪些字段，怎么判断这次改动有效。</h3>
-              <p class="solve-note">不要只写“看速度”。同时考虑显存、吞吐、loss 曲线、数值稳定、版本和硬件。</p>
-              <textarea name="q13" placeholder="写出 baseline、改动项、固定变量、记录字段、成功标准和可能副作用。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>好答案会保留一个 FP32 或原 dtype baseline，固定数据、batch、seq_len、accum、GPU 数和训练步数；记录 tokens/s、step time、peak allocated/reserved、验证 loss、NaN/grad norm、dtype、CUDA/PyTorch/FlashAttention 版本和硬件型号。判断有效要同时满足吞吐或显存改善、loss 曲线无异常、数值稳定，并说明改动只覆盖 attention 和矩阵乘路径，不代表 dataloader 或通信已优化。</p>
-              </details>
-            </div>
-
-            <div class="q full" data-question="q14" data-group="四、综合诊断" data-title="Q14. 费曼式解释">
-              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">explain</span></div>
-              <h3>Q14. 用一段话讲完整个单元。</h3>
-              <p class="solve-note">向一个会 PyTorch 但不熟 GPU 系统的人解释：为什么训练小语言模型要同时看显存、吞吐、kernel、混合精度和通信瓶颈。</p>
-              <textarea name="q14" placeholder="先给直觉，再用术语，最后说遇到慢训练时的排查顺序。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>好的解释会把训练 step 说成一条链：输入先到 GPU，前后向启动 kernel，优化器改参数，通信负责跨卡同步，dtype 决定数值与吞吐，显存和 attention 中间张量决定能不能放下。慢训练先看时间线和显存，再看 kernel 形态和 dtype，再看通信和数据输入；不要一上来就换 GPU 或盲开技巧。</p>
-              </details>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、kernel、数据输入与通信</h3></div>
+          <div class="quick-review">看 profiler 时，先看时间线空洞，再看 self CUDA time，最后看 shape 和 memory。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q8. profiler 里大量很短的 elementwise kernel，最先怀疑什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q8" value="算子没融合、batch 太小或 Python 控制流太碎。">算子没融合、batch 太小或 Python 控制流太碎。</label>
+      <label><input type="radio" name="q8" value="训练集标签一定错了。">训练集标签一定错了。</label>
+      <label><input type="radio" name="q8" value="checkpoint 保存间隔太短。">checkpoint 保存间隔太短。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q9. GPU utilization 周期性掉到 20%，timeline 显示 kernel 之间有长空洞。先查什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q9" value="只调大学习率。">只调大学习率。</label>
+      <label><input type="radio" name="q9" value="dataloader、CPU 同步、H2D copy 和日志拉取。">dataloader、CPU 同步、H2D copy 和日志拉取。</label>
+      <label><input type="radio" name="q9" value="只减少验证集大小。">只减少验证集大小。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q10. 8 卡只比 1 卡快 3 倍。最合适的首查组合是？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q10" value="只查模型层数。">只查模型层数。</label>
+      <label><input type="radio" name="q10" value="只查 tokenizer 词表大小。">只查 tokenizer 词表大小。</label>
+      <label><input type="radio" name="q10" value="NCCL 时间、每卡 batch、通信/计算重叠、dataloader 和拓扑。">NCCL 时间、每卡 batch、通信/计算重叠、dataloader 和拓扑。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> Q11. 1 卡吞吐 18k tokens/s，8 卡吞吐 62k tokens/s。扩展效率约是多少？</h3>
+
+
+      <textarea name="q11"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、综合诊断</h3></div>
+          <div class="quick-review">答案结构建议：现象 → 证据 → 判断 → 改动 → 副作用 → 复测。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> Q12. 你接手一个小模型训练：loss 正常下降，但 tokens/s 只有预期的一半。写一份排查顺序。</h3>
+
+
+      <textarea name="q12"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案会先固定口径并同步计时，确认是否包含 dataloader 和 checkpoint；随后看时间线空洞，排查 CPU 解码、H2D copy 和 .item() ；再按 self CUDA time 找 matmul、attention、norm、optimizer 等热点；同时记录 allocated/reserved/peak 和 dtype；多卡时补查 NCCL 与每卡 batch。每次只改一个变量，复测 tokens/s、显存和验证 loss。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q13" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">13</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> Q13. 设计一次“打开 BF16 + FlashAttention”的对比实验，说明你会记录哪些字段，怎么判断这次改动有效。</h3>
+
+
+      <textarea name="q13"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案会保留一个 FP32 或原 dtype baseline，固定数据、batch、seq_len、accum、GPU 数和训练步数；记录 tokens/s、step time、peak allocated/reserved、验证 loss、NaN/grad norm、dtype、CUDA/PyTorch/FlashAttention 版本和硬件型号。判断有效要同时满足吞吐或显存改善、loss 曲线无异常、数值稳定，并说明改动只覆盖 attention 和矩阵乘路径，不代表 dataloader 或通信已优化。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q14" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">14</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> Q14. 用一段话讲完整个单元。</h3>
+
+
+      <textarea name="q14"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好的解释会把训练 step 说成一条链：输入先到 GPU，前后向启动 kernel，优化器改参数，通信负责跨卡同步，dtype 决定数值与吞吐，显存和 attention 中间张量决定能不能放下。慢训练先看时间线和显存，再看 kernel 形态和 dtype，再看通信和数据输入；不要一上来就换 GPU 或盲开技巧。</p>
+        </details>
+      </article>
+        </div>
+      </div>
       </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">Practice Record</span>
-        </div>
-        <p>点击“生成练习记录”会把题目上下文和你的答案整理成 Markdown。你可以复制，也可以下载为本地文件。</p>
-        <div class="quality" id="quality"></div>
-        <div class="export" id="record"># GPU 系统与性能瓶颈｜练习记录
-
-（这里会显示你的练习答案。）</div>
-        <div class="actions">
-          <button class="action" type="button" onclick="generateRecord()">生成练习记录</button>
-          <button class="ghost" type="button" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
-
       <section id="check">
         <div class="head">
           <h2>自测答案方向</h2>
           <span class="tag">check</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>计算题方向</h3>
-            <p>显存账本要写清每个项对应的字节数；tokens/s 要统一为一次 optimizer step 的口径；扩展效率用 <code>throughput_N / (N × throughput_1)</code>，不要把 micro-step 当成完整 step。</p>
-          </div>
-          <div class="box">
-            <h3>诊断题方向</h3>
-            <p>优先写证据和首查点：时间线空洞先看 dataloader 和同步，NaN 先看首发 op 和 dtype，扩卡差先看 NCCL 和每卡 batch，反向 OOM 先看 activation peak。</p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>计算题方向</h3>
+<p>显存账本要写清每个项对应的字节数；tokens/s 要统一为一次 optimizer step 的口径；扩展效率用 <code>throughput_N / (N × throughput_1)</code>，不要把 micro-step 当成完整 step。</p>
         </div>
+        <div class="box">
+<h3>诊断题方向</h3>
+<p>优先写证据和首查点：时间线空洞先看 dataloader 和同步，NaN 先看首发 op 和 dtype，扩卡差先看 NCCL 和每卡 batch，反向 OOM 先看 activation peak。</p>
+        </div>
+      </div>
       </section>
-
-      <section id="sources">
+      <section id="section-sources">
         <div class="head">
-          <h2>公开资料与边界</h2>
+          <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>课程主线</h3>
-            <p><a href="https://cs336.stanford.edu/spring2025/index.html">Stanford CS336: Language Modeling from Scratch</a>，尤其是 GPU、resource accounting、kernels/Triton、parallelism 和 systems assignment 的学习顺序。</p>
-          </div>
-          <div class="box">
-            <h3>教学实现</h3>
-            <p><a href="https://github.com/karpathy/llm.c">llm.c</a>，用于观察从 PyTorch 抽象下沉到 C/CUDA 训练循环、kernel 和性能检查的工程视角。</p>
-          </div>
-          <div class="box">
-            <h3>系统与框架参考</h3>
-            <p>PyTorch AMP、CUDA memory、DDP/FSDP 文档，NVIDIA CUDA 与混合精度训练文档，用于校准 dtype、memory profiler、梯度同步和分片通信的表述。</p>
-          </div>
-          <div class="box">
-            <h3>注意力优化参考</h3>
-            <p><a href="https://arxiv.org/abs/2205.14135">FlashAttention</a>，用于说明 attention 的 IO-aware 优化边界：它减少中间显存和 HBM 往返，但不替代数据输入、通信和优化器排查。</p>
-          </div>
-        </div>
-        <p class="muted">这页不使用私有 benchmark 日志，也不声称给出某张 GPU 的固定性能。所有数字例子都是为了练习账本口径；真实训练要以当前硬件拓扑、CUDA/PyTorch 版本、框架实现和 profiler 结果为准。</p>
+
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

@@ -4,511 +4,507 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P48｜强化学习 3：Actor-Critic</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="actor critic,value function,Monte Carlo,temporal difference,TD target,advantage,Q function,DQN">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Actor-Critic</strong><span>P48。让 critic 先学会评价，actor 才知道该怎么改。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#critic"><span class="dot"></span>Critic 是什么</a>
-      <a href="#value"><span class="dot"></span>Value Function</a>
-      <a href="#mc"><span class="dot"></span>Monte Carlo</a>
-      <a href="#td"><span class="dot"></span>TD 方法</a>
-      <a href="#compare"><span class="dot"></span>MC vs TD</a>
-      <a href="#use"><span class="dot"></span>训练 Actor</a>
-      <a href="#advantage"><span class="dot"></span>Advantage</a>
-      <a href="#share"><span class="dot"></span>共享网络</a>
-      <a href="#dqn"><span class="dot"></span>Q 与 DQN</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：critic 不是替 actor 行动，而是估计“现在局面大概值多少”。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P48</div>
-        <h1>Actor 负责行动，Critic 负责未卜先知</h1>
-        <p>P47 用 return-to-go 和 baseline 来评价动作，但 baseline 到底怎么设？P48 引入 critic。critic 的工作是评估某个 actor 在某个 state 后，预期还能得到多少 discounted reward。最常用的 critic 是 value function <code>Vπ(s)</code>。</p>
-        <p>有了 value function，我们可以更聪明地训练 actor：不只是看一次 sample 的累计回馈，而是用 <code>G_t - V(s_t)</code> 或 <code>r_t + γV(s_{t+1}) - V(s_t)</code> 估计 advantage。这样 actor 学的是“这个动作比平均选择好多少”。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释 critic 与 value function 的角色。</li>
-          <li>区分 Monte Carlo 和 Temporal Difference 训练 critic。</li>
-          <li>用 <code>V(s)</code> 解释 baseline 为什么合理。</li>
-          <li>计算 TD-style advantage。</li>
-          <li>说明 actor 和 critic 为什么常共享前几层网络。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
-      <p>Actor-Critic 由两类模型组成。actor 决定 action；critic 评价当前 state 或 state-action 的价值。它不是告诉 actor“正确动作是什么”，而是提供一个更稳定、更有信息量的评价基准。</p>
-      <p>本节先定义 value function，再讲两种训练方式：Monte Carlo 直接等 episode 结束后用真实 return 训练；TD 不等整局结束，而是利用 <code>V(s_t) ≈ r_t + γV(s_{t+1})</code> 的关系做一步更新。最后把 critic 放回 actor 更新，得到 advantage actor-critic 的直觉。</p>
-      <div class="map">
-        <span class="node">Actor 行动</span>
-        <span class="node">收集轨迹</span>
-        <span class="node">Critic 估值</span>
-        <span class="node">MC / TD</span>
-        <span class="node">Advantage</span>
-        <span class="node">更新 Actor</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P48</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把 critic 理解成：用学习出来的价值估计，改进 policy gradient 的动作评价。</p></div>
-    </section>
-
-    <section id="critic">
-      <div class="head"><h2>Critic 是什么：评估 Actor 的好坏</h2><span class="tag">CRITIC</span></div>
-      <p>critic 的工作是评价某个 actor。给定 actor 和当前 observation，critic 预测接下来大概能得到多少 discounted cumulative reward。它像一个评论员：不是自己下棋或开火，而是看当前局面，判断这个 actor 后面大概能打出多少分。</p>
-      <p>critic 有不同形式。有的只看 state，输出 <code>V(s)</code>；有的同时看 state 和 action，输出 <code>Q(s,a)</code>。P48 重点讲 value function，因为它会直接用作 baseline，并引出 Actor-Critic。</p>
-      <div class="grid2">
-        <div class="box info"><h3>Actor</h3><p>输入 state，输出 action 分布；负责做决定。</p></div>
-        <div class="box warn"><h3>Critic</h3><p>输入 state 或 state-action，输出价值估计；负责评价。</p></div>
+      <h1 class="hero-title">P48｜强化学习 3：Actor-Critic</h1>
+      <p class="hero-desc">P47 用 return-to-go 和 baseline 来评价动作，但 baseline 到底怎么设？P48 引入 critic。critic 的工作是评估某个 actor 在某个 state 后，预期还能得到多少 discounted reward。最常用的 critic 是 value function Vπ(s) 。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P47_强化学习概述2_Policy_Gradient/学习页.html">上一节</a>
+            <a href="../P49_强化学习概述4_稀疏回馈与Reward_Shaping/学习页.html">下一节</a>
       </div>
-      <p><strong>现在你应该能做什么：</strong>解释 critic 和 actor 的分工，不把 critic 误解成另一个 actor。</p>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="value">
-      <div class="head"><h2>Value Function：某个 Actor 在这个 state 后能拿多少分</h2><span class="tag">VALUE</span></div>
-      <p>value function 写作 <code>Vπ(s)</code> 或课程里的 <code>V^θ(s)</code>。上标表示它评估的是哪个 actor / policy。这个细节很重要：同一个游戏画面，对强 actor 可能价值很高；对弱 actor 可能价值很低，因为弱 actor 接下来可能马上失败。</p>
-      <div class="formula">
-        <span class="big">V<sup>π</sup>(s) = E[G<sub>t</sub> | s<sub>t</sub>=s, policy=π]</span>
-        <small>也就是：在 state s 开始，按照 policy π 继续行动，未来 discounted return 的期望值。</small>
+        </ul>
       </div>
-      <p>value function 的能力是“游戏还没玩完，就估计未来”。如果当前画面还有很多可得分机会，且 actor 很会玩，value 应该高；如果局面快结束或 actor 很差，value 可能低。</p>
-      <p><strong>现在你应该能做什么：</strong>说明为什么 value function 必须相对于某个 actor 来定义。</p>
-    </section>
+    </div>
+  </header>
 
-    <section id="mc">
-      <div class="head"><h2>训练 Critic 方法一：Monte Carlo</h2><span class="tag">MC</span></div>
-      <p>Monte Carlo 方法最直觉：让 actor 玩完整个 episode，记录它在每个 state 后实际得到的 return。然后把 state 当输入、实际 return 当目标，训练 value function。</p>
-      <div class="stage">
-        <div><strong>1. 玩一局</strong><p>actor 与环境互动到结束。</p></div>
-        <div><strong>2. 算 return</strong><p>对每个 state 算后续累计回馈。</p></div>
-        <div><strong>3. 形成资料</strong><p><code>(s, G)</code> 是 value 的训练样本。</p></div>
-        <div><strong>4. 回归训练</strong><p>让 <code>V(s)</code> 接近 <code>G</code>。</p></div>
-      </div>
-      <p>优点是简单、目标来自真实完整结果。缺点是必须等 episode 结束；如果游戏很长，甚至没有自然终止，就很不方便。MC 的估计也可能方差很大，因为一次 sample 的结果可能很受运气影响。</p>
-      <p><strong>现在你应该能做什么：</strong>用一句话解释 MC：玩到底，看真实 return，再训练 value。</p>
-    </section>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#critic">Critic 是什么：评估 Actor 的好坏</a>
+      <a href="#value">Value Function：某个 Actor 在这个 state 后能拿多少分</a>
+      <a href="#mc">训练 Critic 方法一：Monte Carlo</a>
+      <a href="#td">训练 Critic 方法二：Temporal Difference</a>
+      <a href="#compare">动手比较：MC 和 TD 可以给出不同答案</a>
+      <a href="#use">Critic 怎么帮助训练 Actor</a>
+      <a href="#advantage">Advantage Actor-Critic：用平均减平均</a>
+      <a href="#share">实现小技巧：Actor 和 Critic 共享前几层</a>
+      <a href="#dqn">补充：只用 Critic 行动的路线 Q / DQN</a>
+      <a href="#code">最小代码：Actor-Critic 更新骨架</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
 
-    <section id="td">
-      <div class="head"><h2>训练 Critic 方法二：Temporal Difference</h2><span class="tag">TD</span></div>
-      <p>TD 方法不需要等整局结束。它利用 value function 的递推关系：当前 state 的价值，应该接近当前 reward 加上下一个 state 的折扣价值。</p>
-      <div class="formula">
-        <span class="big">V(s<sub>t</sub>) ≈ r<sub>t</sub> + γ V(s<sub>t+1</sub>)</span>
-        <small>TD target 是 <code>r_t + γV(s_{t+1})</code>。它用自己的估计 bootstrap 出当前估计。</small>
-      </div>
-      <p>TD 的好处是只要看到一步 transition：<code>(s_t, a_t, r_t, s_{t+1})</code>，就能更新 value。它适合长 episode 或持续任务。代价是目标包含 <code>V(s_{t+1})</code> 这个估计值，可能带来偏差。</p>
-      <p><strong>现在你应该能做什么：</strong>写出 TD target，并解释它为什么不用等游戏结束。</p>
-    </section>
-
-    <section id="compare">
-      <div class="head"><h2>动手比较：MC 和 TD 可以给出不同答案</h2><span class="tag">MC VS TD</span></div>
-      <p>课程中有一个例子：观察到 8 次游戏，<code>S_B</code> 出现 8 次，其中 6 次后续 reward 为 1，2 次为 0，所以 <code>V(S_B)=3/4</code>。但 <code>S_A</code> 只出现一次，并且后面接 <code>S_B</code> 时刚好 reward 为 0。MC 会说 <code>V(S_A)=0</code>；TD 会借用 <code>V(S_B)</code>，说 <code>V(S_A)=0 + V(S_B)=3/4</code>。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="compare">
-            <div><h3>Monte Carlo</h3><p>只看实际观察到的完整 return。</p><p class="score" id="mcVal">V(SA)=0.00</p></div>
-            <div><h3>Temporal Difference</h3><p>用下一状态价值估计当前状态。</p><p class="score" id="tdVal">V(SA)=0.75</p></div>
-          </div>
-          <div>
-            <div class="slider-row"><label for="sbSuccess">SB 成功次数</label><input id="sbSuccess" type="range" min="0" max="8" step="1" value="6"><span id="sbSuccessVal">6</span></div>
-            <div class="slider-row"><label for="gammaSlider">γ</label><input id="gammaSlider" type="range" min="0.50" max="1.00" step="0.05" value="1.00"><span id="gammaVal">1.00</span></div>
-            <p class="viz-note" id="compareNote">TD 会把 SB 的估计传播给 SA；MC 只相信 SA 这次实际结果。</p>
-          </div>
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">MAP</span>
         </div>
-      </div>
-      <p>谁对？要看假设。MC 认为实际 sample 就是证据；TD 假设 <code>S_A</code> 转到 <code>S_B</code> 后，<code>S_B</code> 的平均价值仍适用。二者是 bias-variance 取舍的不同表现。</p>
-      <p><strong>现在你应该能做什么：</strong>解释为什么 MC 和 TD 都合理，但背后假设不同。</p>
-    </section>
-
-    <section id="use">
-      <div class="head"><h2>Critic 怎么帮助训练 Actor</h2><span class="tag">ACTOR UPDATE</span></div>
-      <p>P47 中我们用 <code>G_t - baseline</code> 当 action 分数。现在有了 critic，可以把 baseline 设成 <code>V(s_t)</code>。直觉是：<code>V(s_t)</code> 表示“在这个 state 按照当前 actor 随便 sample action，平均能拿多少”。如果实际采取 <code>a_t</code> 后得到的 return 比这个平均值高，就说明这个 action 比一般选择好。</p>
-      <div class="formula">
-        <span class="big">A<sub>t</sub> = G<sub>t</sub> - V(s<sub>t</sub>)</span>
-        <small>这是用 critic 作为 baseline 的 advantage 直觉。</small>
-      </div>
-      <p>这样比固定 baseline 更细，因为不同 state 的“平均表现”不同。一个危险局面里拿 2 分可能很好；一个大好局面里拿 2 分可能很差。<code>V(s)</code> 给每个 state 一个局部基准。</p>
-      <p><strong>现在你应该能做什么：</strong>解释为什么 <code>V(s_t)</code> 是比常数 baseline 更合理的基准。</p>
-    </section>
-
-    <section id="advantage">
-      <div class="head"><h2>Advantage Actor-Critic：用平均减平均</h2><span class="tag">ADVANTAGE</span></div>
-      <p><code>G_t - V(s_t)</code> 仍然使用一次 sampled return <code>G_t</code>。课程继续推一步：既然 <code>G_t</code> 是 sample，那可以用 <code>r_t + γV(s_{t+1})</code> 作为采取 <code>a_t</code> 后的期望回馈近似，再减掉 <code>V(s_t)</code>。</p>
-      <div class="formula">
-        <span class="big">A<sub>t</sub> ≈ r<sub>t</sub> + γV(s<sub>t+1</sub>) - V(s<sub>t</sub>)</span>
-        <small>这个量也是 TD error 的形式。若大于 0，说明该 action 比当前 state 的平均选择好；若小于 0，说明较差。</small>
-      </div>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="calc">
-            <div class="row"><span>r<sub>t</sub></span><div class="bar"><div class="fill green" id="rFill"></div></div><span id="rText">1.0</span></div>
-            <div class="row"><span>V(s<sub>t+1</sub>)</span><div class="bar"><div class="fill" id="nextFill"></div></div><span id="nextText">4.0</span></div>
-            <div class="row"><span>V(s<sub>t</sub>)</span><div class="bar"><div class="fill red" id="curFill"></div></div><span id="curText">3.0</span></div>
-            <p class="score" id="advText">A = 1.00</p>
-            <p class="viz-note" id="advNote">调节数值，观察 advantage 正负如何改变动作评价。</p>
-          </div>
-          <div>
-            <div class="slider-row"><label for="rSlider">r</label><input id="rSlider" type="range" min="-2" max="5" step="0.5" value="1"><span id="rVal">1.0</span></div>
-            <div class="slider-row"><label for="nextSlider">V next</label><input id="nextSlider" type="range" min="0" max="8" step="0.5" value="4"><span id="nextVal">4.0</span></div>
-            <div class="slider-row"><label for="curSlider">V current</label><input id="curSlider" type="range" min="0" max="8" step="0.5" value="3"><span id="curVal">3.0</span></div>
-          </div>
+<p>Actor-Critic 由两类模型组成。actor 决定 action；critic 评价当前 state 或 state-action 的价值。它提供一个更稳定、更有信息量的评价基准。</p>
+<p>Actor 行动</p>
+<p>收集轨迹</p>
+<p>Critic 估值</p>
+<p>MC / TD</p>
+<p>Advantage</p>
+<p>更新 Actor</p>
+      </section>
+      <section id="critic">
+        <div class="head">
+          <h2>Critic 是什么：评估 Actor 的好坏</h2>
+          <span class="tag">CRITIC</span>
         </div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>用 <code>r + γV(next) - V(current)</code> 判断某一步 action 是高于还是低于平均。</p>
-    </section>
-
-    <section id="share">
-      <div class="head"><h2>实现小技巧：Actor 和 Critic 共享前几层</h2><span class="tag">SHARED BACKBONE</span></div>
-      <p>actor 和 critic 的输入常常一样，都是游戏画面或状态特征。若输入是图片，它们都需要前几层 CNN 来理解画面。因此实践中常让 actor 和 critic 共享前面的 backbone，只在最后分成两个 head：actor head 输出每个 action 的分数，critic head 输出一个 scalar value。</p>
-      <div class="diagram">
-        <div><b>Shared Backbone</b><p>抽取状态表示，例如 CNN / MLP / Transformer。</p></div>
-        <div><b>Two Heads</b><p>policy head 输出 action logits；value head 输出 <code>V(s)</code>。</p></div>
-      </div>
-      <p>共享参数可以省计算，也能让两个任务互相提供表示学习信号。但要注意 actor loss 和 critic loss 的权重平衡；critic 学歪会影响 advantage，actor 学太快也会让 critic 的目标分布变化。</p>
-      <p><strong>现在你应该能做什么：</strong>画出一个 Actor-Critic 网络结构：共享层 + policy head + value head。</p>
-    </section>
-
-    <section id="dqn">
-      <div class="head"><h2>补充：只用 Critic 行动的路线 Q / DQN</h2><span class="tag">Q LEARNING</span></div>
-      <p>critic 不一定只辅助 actor。还有一类方法直接学习 <code>Q(s,a)</code>，表示在 state <code>s</code> 做 action <code>a</code> 后的价值，然后选择 <code>Q</code> 最大的 action。Deep Q Network，也就是 DQN，就是这个方向的代表。</p>
-      <p>P48 不展开 DQN，但你要知道 RL 有两大直觉路线：policy-based 方法直接学 actor；value-based 方法学 value / Q，再由价值决定动作。Actor-Critic 则把二者结合：actor 负责策略，critic 提供评价。</p>
-      <table class="metric-table">
-        <tr><th>路线</th><th>学什么</th><th>如何行动</th></tr>
-        <tr><td>Policy Gradient</td><td>直接学 policy <code>π(a|s)</code>。</td><td>按 actor 输出采样或选择动作。</td></tr>
-        <tr><td>Actor-Critic</td><td>学 actor，也学 critic。</td><td>actor 行动，critic 评价并稳定训练。</td></tr>
-        <tr><td>DQN</td><td>学 <code>Q(s,a)</code>。</td><td>选 Q 值最高的 action。</td></tr>
-      </table>
-      <p><strong>现在你应该能做什么：</strong>区分 value function 当 baseline 和 Q function 直接选 action 的差别。</p>
-    </section>
-
-    <section id="code">
-      <div class="head"><h2>最小代码：Actor-Critic 更新骨架</h2><span class="tag">CODE</span></div>
-      <p>下面是 TD target 训练 critic 的伪代码。critic 学会让 <code>V(s)</code> 接近 <code>r + γV(next)</code>。</p>
-      <div class="codebar"><span class="label">正确示例：TD 训练 critic</span><span class="kind">Python-like</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">train_critic_td</span>(critic, s, r, next_s, done, gamma):
-    v = critic(s)
-    next_v = <span class="num">0</span> <span class="kw">if</span> done <span class="kw">else</span> critic(next_s).detach()
-    target = r + gamma * next_v
-    value_loss = mse(v, target)
-    value_loss.backward()
-    update(critic)</code></pre>
-      <p>actor 使用 TD error / advantage 来更新。如果 advantage 为正，提高该 action 的 log probability；为负则降低。</p>
-      <div class="codebar"><span class="label">正确示例：用 advantage 更新 actor</span><span class="kind">Python-like</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">train_actor</span>(actor, critic, s, a, r, next_s, done, gamma):
-    v = critic(s).detach()
-    next_v = <span class="num">0</span> <span class="kw">if</span> done <span class="kw">else</span> critic(next_s).detach()
-    advantage = r + gamma * next_v - v
-    log_prob = log(actor(s)[a])
-    policy_loss = -advantage * log_prob
-    policy_loss.backward()
-    update(actor)</code></pre>
-      <div class="codebar error"><span class="label">错误示例：忘记 value 和 actor 相关</span><span class="kind">Concept bug</span></div>
-      <pre><code><span class="cmt"># 错误示例：把某个旧 actor 的 V(s) 永久拿来当新 actor 的 baseline。</span>
-baseline = old_critic(s)
-advantage = current_return - baseline
-
-<span class="cmt"># value function 评估的是某个 policy；actor 变了，critic 也需要跟着更新。</span></code></pre>
-      <p><strong>现在你应该能做什么：</strong>读懂 Actor-Critic 的最小更新，并指出 critic 的目标和 actor 的目标不同。</p>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+<p>critic 的工作是评价某个 actor。给定 actor 和当前 observation，critic 预测接下来大概能得到多少 discounted cumulative reward。它像一个评论员：看当前局面，判断这个 actor 后面大概能打出多少分。</p>
+        <div class="box info">
+<h3>Actor</h3>
+<p>输入 state，输出 action 分布；负责做决定。</p>
+        </div>
+        <div class="box warn">
+<h3>Critic</h3>
+<p>输入 state 或 state-action，输出价值估计；负责评价。</p>
+<p><b>现在你应该能做什么：</b>解释 critic 和 actor 的分工，不把 critic 误解成另一个 actor。</p>
+        </div>
+      </section>
+      <section id="value">
+        <div class="head">
+          <h2>Value Function：某个 Actor 在这个 state 后能拿多少分</h2>
+          <span class="tag">VALUE</span>
+        </div>
+<p>value function 写作 <code>Vπ(s)</code> 或课程里的 <code>V^θ(s)</code>。上标表示它评估的是哪个 actor / policy。这个细节很重要：同一个游戏画面，对强 actor 可能价值很高；对弱 actor 可能价值很低，因为弱 actor 接下来可能马上失败。</p>
+<p>value function 的能力是“游戏还没玩完，就估计未来”。如果当前画面还有很多可得分机会，且 actor 很会玩，value 应该高；如果局面快结束或 actor 很差，value 可能低。</p>
+      </section>
+      <section id="mc">
+        <div class="head">
+          <h2>训练 Critic 方法一：Monte Carlo</h2>
+          <span class="tag">MC</span>
+        </div>
+<p>Monte Carlo 方法最直觉：让 actor 玩完整个 episode，记录它在每个 state 后实际得到的 return。然后把 state 当输入、实际 return 当目标，训练 value function。</p>
+<p>优点是简单、目标来自真实完整结果。缺点是必须等 episode 结束；如果游戏很长，甚至没有自然终止，就很不方便。MC 的估计也可能方差很大，因为一次 sample 的结果可能很受运气影响。</p>
+      </section>
+      <section id="td">
+        <div class="head">
+          <h2>训练 Critic 方法二：Temporal Difference</h2>
+          <span class="tag">TD</span>
+        </div>
+<p>TD 方法不需要等整局结束。它利用 value function 的递推关系：当前 state 的价值，应该接近当前 reward 加上下一个 state 的折扣价值。</p>
+<p>TD 的好处是只要看到一步 transition：<code>(s_t, a_t, r_t, s_{t+1})</code>，就能更新 value。它适合长 episode 或持续任务。代价是目标包含 <code>V(s_{t+1})</code> 这个估计值，可能带来偏差。</p>
+      </section>
+      <section id="compare">
+        <div class="head">
+          <h2>动手比较：MC 和 TD 可以给出不同答案</h2>
+          <span class="tag">MC</span>
+        </div>
+<p>课程中有一个例子：观察到 8 次游戏，<code>S_B</code> 出现 8 次，其中 6 次后续 reward 为 1，2 次为 0，所以 <code>V(S_B)=3/4</code>。但 <code>S_A</code> 只出现一次，并且后面接 <code>S_B</code> 时刚好 reward 为 0。MC 会说 <code>V(S_A)=0</code>；TD 会借用 <code>V(S_B)</code>，说 <code>V(S_A)=0 + V(S_B)=3/4</code>。</p>
+<p>SB 成功次数6</p>
+<p>γ1.00</p>
+<p>TD 会把 SB 的估计传播给 SA；MC 只相信 SA 这次实际结果。</p>
+<p><b>现在你应该能做什么：</b>解释为什么 MC 和 TD 都合理，但背后假设不同。</p>
+      </section>
+      <section id="use">
+        <div class="head">
+          <h2>Critic 怎么帮助训练 Actor</h2>
+          <span class="tag">ACTOR</span>
+        </div>
+<p>P47 中我们用 <code>G_t - baseline</code> 当 action 分数。现在有了 critic，可以把 baseline 设成 <code>V(s_t)</code>。直觉是：<code>V(s_t)</code> 表示“在这个 state 按照当前 actor 随便 sample action，平均能拿多少”。如果实际采取 <code>a_t</code> 后得到的 return 比这个平均值高，就说明这个 action 比一般选择好。</p>
+<p>这样比固定 baseline 更细，因为不同 state 的“平均表现”不同。一个危险局面里拿 2 分可能很好；一个大好局面里拿 2 分可能很差。<code>V(s)</code> 给每个 state 一个局部基准。</p>
+      </section>
+      <section id="advantage">
+        <div class="head">
+          <h2>Advantage Actor-Critic：用平均减平均</h2>
+          <span class="tag">ADVANTAGE</span>
+        </div>
+<p><code>G_t - V(s_t)</code> 仍然使用一次 sampled return <code>G_t</code>。课程继续推一步：既然 <code>G_t</code> 是 sample，那可以用 <code>r_t + γV(s_{t+1})</code> 作为采取 <code>a_t</code> 后的期望回馈近似，再减掉 <code>V(s_t)</code>。</p>
+<p>rt1.0</p>
+<p>V(st+1)4.0</p>
+<p>V(st)3.0</p>
+<p>A = 1.00</p>
+<p>调节数值，观察 advantage 正负如何改变动作评价。</p>
+<p><b>现在你应该能做什么：</b>用 <code>r + γV(next) - V(current)</code> 判断某一步 action 是高于还是低于平均。</p>
+      </section>
+      <section id="share">
+        <div class="head">
+          <h2>实现小技巧：Actor 和 Critic 共享前几层</h2>
+          <span class="tag">SHARED</span>
+        </div>
+<p>actor 和 critic 的输入常常一样，都是游戏画面或状态特征。若输入是图片，它们都需要前几层 CNN 来理解画面。因此实践中常让 actor 和 critic 共享前面的 backbone，只在最后分成两个 head：actor head 输出每个 action 的分数，critic head 输出一个 scalar value。</p>
+<p>共享参数可以省计算，也能让两个任务互相提供表示学习信号。但要注意 actor loss 和 critic loss 的权重平衡；critic 学歪会影响 advantage，actor 学太快也会让 critic 的目标分布变化。</p>
+      </section>
+      <section id="dqn">
+        <div class="head">
+          <h2>补充：只用 Critic 行动的路线 Q / DQN</h2>
+          <span class="tag">Q</span>
+        </div>
+<p>critic 不一定只辅助 actor。还有一类方法直接学习 <code>Q(s,a)</code>，表示在 state <code>s</code> 做 action <code>a</code> 后的价值，然后选择 <code>Q</code> 最大的 action。Deep Q Network，也就是 DQN，就是这个方向的代表。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>路线</th><th>学什么</th><th>如何行动</th></tr>
+<tr><td>Policy Gradient</td><td>直接学 policy π(a</td><td>s) 。</td><td>按 actor 输出采样或选择动作。</td></tr><tr><td>Actor-Critic</td><td>学 actor，也学 critic。</td><td>actor 行动，critic 评价并稳定训练。</td></tr><tr><td>DQN</td><td>学 Q(s,a) 。</td><td>选 Q 值最高的 action。</td></tr>
+        </table></div>
+<p><b>现在你应该能做什么：</b>区分 value function 当 baseline 和 Q function 直接选 action 的差别。</p>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：Actor-Critic 更新骨架</h2>
+          <span class="tag">CODE</span>
+        </div>
+<p>下面是 TD target 训练 critic 的伪代码。critic 学会让 <code>V(s)</code> 接近 <code>r + γV(next)</code>。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">def train_critic_td(critic, s, r, next_s, done, gamma):
+ v = critic(s)
+ next_v = 0 if done else critic(next_s).detach()
+ target = r + gamma * next_v
+ value_loss = mse(v, target)
+ value_loss.backward()
+ update(critic)</code></pre>
+<p>actor 使用 TD error / advantage 来更新。如果 advantage 为正，提高该 action 的 log probability；为负则降低。</p>
+        </div>
+<p>正确示例：用 advantage 更新 actorPython-like</p>
+<p>错误示例：忘记 value 和 actor 相关Concept bug</p>
+<p><b>现在你应该能做什么：</b>读懂 Actor-Critic 的最小更新，并指出 critic 的目标和 actor 的目标不同。</p>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答建议</strong><p>每题先说 critic 在估计什么，再说这个估计如何影响 actor。</p></div>
-        <div class="review-card"><strong>自检标准</strong><p>你能解释 <code>r + γV(s') - V(s)</code> 的正负含义，就掌握了本节。</p></div>
-      </div>
 
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>一、Critic 与 Value</h3><p>确认 critic 的定义和依赖对象。</p></div>
-          <div class="quick-review"><b>快速回顾</b>value function 评估某个 policy 在 state 后的期望 return。</div>
+          <div><h3>一、Critic 与 Value</h3></div>
+          <div class="quick-review">快速回顾 value function 评估某个 policy 在 state 后的期望 return。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q01" data-title="critic 定义">
-            <div class="q-meta"><span class="pill">Q01</span><span class="pill">解释</span></div>
-            <h3>Critic 的工作是什么？它和 actor 的工作有什么不同？</h3>
-            <textarea placeholder="actor 行动；critic 评价未来回馈。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q02" data-title="value function">
-            <div class="q-meta"><span class="pill">Q02</span><span class="pill">概念</span></div>
-            <h3><code>Vπ(s)</code> 表示什么？为什么上标 policy / actor 很重要？</h3>
-            <textarea placeholder="同一 state 对不同 actor 价值不同。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q03" data-title="未卜先知">
-            <div class="q-meta"><span class="pill">Q03</span><span class="pill">直觉</span></div>
-            <h3>为什么说 value function 像“未卜先知”？它预测的不是哪一件事，而是什么期望？</h3>
-            <textarea placeholder="不等游戏结束，预测未来 discounted return 的期望。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q04" data-title="Q function">
-            <div class="q-meta"><span class="pill">Q04</span><span class="pill">对照</span></div>
-            <h3><code>V(s)</code> 和 <code>Q(s,a)</code> 的输入和含义有什么差别？</h3>
-            <select>
-              <option value="">选择最贴近的解释</option>
-              <option value="V 看状态，Q 看状态和动作">V(s) 只看状态并估未来期望回馈；Q(s,a) 看状态和动作。</option>
-              <option value="V 看动作，Q 看状态">V(s) 看动作编号；Q(s,a) 只看状态。</option>
-              <option value="两者完全相同">两者输入和含义完全相同，只是符号不同。</option>
-            </select>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q01</span></div>
+        <h3><b>Q:</b> Critic 的工作是什么？它和 actor 的工作有什么不同？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q02</span></div>
+        <h3><b>Q:</b> <code>Vπ(s)</code> 表示什么？为什么上标 policy / actor 很重要？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q03</span></div>
+        <h3><b>Q:</b> 为什么说 value function 像“未卜先知”？它预测的什么期望？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q04</span></div>
+        <h3><b>Q:</b> <code>V(s)</code> 和 <code>Q(s,a)</code> 的输入和含义有什么差别？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>二、训练 Critic</h3><p>比较 MC 和 TD。</p></div>
-          <div class="quick-review"><b>快速回顾</b>MC 等完整结果，TD 用下一状态估计当前状态。</div>
+          <div><h3>二、训练 Critic</h3></div>
+          <div class="quick-review">快速回顾 MC 等完整结果，TD 用下一状态估计当前状态。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q05" data-title="MC 方法">
-            <div class="q-meta"><span class="pill">Q05</span><span class="pill">流程</span></div>
-            <h3>Monte Carlo 如何训练 value function？它的优点和缺点是什么？</h3>
-            <textarea placeholder="玩完整局得到 G；直觉简单但要等结束、方差大。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q06" data-title="TD target">
-            <div class="q-meta"><span class="pill">Q06</span><span class="pill">公式</span></div>
-            <h3>写出 TD target，并解释为什么它只需要一步 transition。</h3>
-            <textarea placeholder="r + gamma V(s_next)。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q07" data-title="MC vs TD">
-            <div class="q-meta"><span class="pill">Q07</span><span class="pill">辨析</span></div>
-            <h3>为什么 MC 和 TD 在同一批观察资料上可能给出不同的 <code>V(SA)</code>？</h3>
-            <textarea placeholder="MC 相信实际 sample；TD 借用下一状态平均价值。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q08" data-title="bias variance">
-            <div class="q-meta"><span class="pill">Q08</span><span class="pill">推理</span></div>
-            <h3>从直觉上说，MC 和 TD 分别更容易有什么问题：方差还是偏差？为什么？</h3>
-            <textarea placeholder="MC 方差大；TD 用估计 bootstrap 可能有偏差。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q05</span></div>
+        <h3><b>Q:</b> Monte Carlo 如何训练 value function？它的优点和缺点是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q06</span></div>
+        <h3><b>Q:</b> 写出 TD target，并解释为什么它只需要一步 transition。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q07</span></div>
+        <h3><b>Q:</b> 为什么 MC 和 TD 在同一批观察资料上可能给出不同的 <code>V(SA)</code>？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q08</span></div>
+        <h3><b>Q:</b> 从直觉上说，MC 和 TD 分别更容易有什么问题：方差还是偏差？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>三、用 Critic 训练 Actor</h3><p>理解 baseline 与 advantage。</p></div>
-          <div class="quick-review"><b>快速回顾</b><code>V(s)</code> 是当前 state 的平均表现，advantage 是比平均好多少。</div>
+          <div><h3>三、用 Critic 训练 Actor</h3></div>
+          <div class="quick-review">快速回顾 V(s) 是当前 state 的平均表现，advantage 是比平均好多少。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q09" data-title="V as baseline">
-            <div class="q-meta"><span class="pill">Q09</span><span class="pill">解释</span></div>
-            <h3>为什么 <code>V(s_t)</code> 是一个合理的 baseline？它比常数 baseline 好在哪里？</h3>
-            <textarea placeholder="每个 state 有自己的平均期待。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q10" data-title="advantage 直觉">
-            <div class="q-meta"><span class="pill">Q10</span><span class="pill">概念</span></div>
-            <h3><code>G_t - V(s_t)</code> 的正负号分别说明什么？</h3>
-            <textarea placeholder="实际结果比平均好/差。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q11" data-title="TD advantage">
-            <div class="q-meta"><span class="pill">Q11</span><span class="pill">计算</span></div>
-            <h3>若 <code>r=1</code>、<code>γ=0.9</code>、<code>V(s')=4</code>、<code>V(s)=3</code>，计算 <code>A=r+γV(s')-V(s)</code>。</h3>
-            <input type="text" placeholder="A = 1 + 0.9 * 4 - 3 = 1.6">
-          </div>
-          <div class="q" data-role="homework" data-qid="q12" data-title="更新 actor">
-            <div class="q-meta"><span class="pill">Q12</span><span class="pill">应用</span></div>
-            <h3>当 TD advantage 为正时，actor 的 action probability 应该怎样调整？为负时呢？</h3>
-            <div class="choice-list">
-              <label><input type="radio" name="p48q12" value="正数提高负数降低">正数提高该动作概率；负数降低该动作概率。</label>
-              <label><input type="radio" name="p48q12" value="正数降低负数提高">正数降低该动作概率；负数提高该动作概率。</label>
-              <label><input type="radio" name="p48q12" value="不影响 actor">TD advantage 只训练 critic，不影响 actor。</label>
-            </div>
-          </div>
-          <div class="q" data-role="homework" data-qid="q13" data-title="sample vs expectation">
-            <div class="q-meta"><span class="pill">Q13</span><span class="pill">辨析</span></div>
-            <h3>为什么课程会说 <code>G_t</code> 是一个 sample，而 <code>V(s_t)</code> 是很多可能路径的平均？这对 advantage 有什么影响？</h3>
-            <textarea placeholder="sample 可能偶然好/坏；value 是期望。"></textarea>
-          </div>
-        </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q09</span></div>
+        <h3><b>Q:</b> 为什么 <code>V(s_t)</code> 是一个合理的 baseline？它比常数 baseline 好在哪里？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q10</span></div>
+        <h3><b>Q:</b> <code>G_t - V(s_t)</code> 的正负号分别说明什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q11</span></div>
+        <h3><b>Q:</b> 若 <code>r=1</code>、<code>γ=0.9</code>、<code>V(s')=4</code>、<code>V(s)=3</code>，计算 <code>A=r+γV(s')-V(s)</code>。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q12</span></div>
+        <h3><b>Q:</b> 当 TD advantage 为正时，actor 的 action probability 应该怎样调整？为负时呢？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="正数提高该动作概率；负数降低该动作概率。">正数提高该动作概率；负数降低该动作概率。</label>
+      <label><input type="radio" name="q?" value="正数降低该动作概率；负数提高该动作概率。">正数降低该动作概率；负数提高该动作概率。</label>
+      <label><input type="radio" name="q?" value="TD advantage 只训练 critic，不影响 actor。">TD advantage 只训练 critic，不影响 actor。</label>
       </div>
 
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q13</span></div>
+        <h3><b>Q:</b> 为什么课程会说 <code>G_t</code> 是一个 sample，而 <code>V(s_t)</code> 是很多可能路径的平均？这对 advantage 有什么影响？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>四、结构与扩展</h3><p>把 Actor-Critic 放到 RL 方法谱系里。</p></div>
-          <div class="quick-review"><b>快速回顾</b>Actor-Critic 结合 policy-based 和 value-based 的直觉。</div>
+          <div><h3>四、结构与扩展</h3></div>
+          <div class="quick-review">快速回顾 Actor-Critic 结合 policy-based 和 value-based 的直觉。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q14" data-title="共享网络">
-            <div class="q-meta"><span class="pill">Q14</span><span class="pill">结构</span></div>
-            <h3>为什么 actor 和 critic 常共享前几层网络？最后两个 head 分别输出什么？</h3>
-            <textarea placeholder="输入相同，共享表示；policy head 输出 action logits，value head 输出 scalar。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q15" data-title="DQN">
-            <div class="q-meta"><span class="pill">Q15</span><span class="pill">对照</span></div>
-            <h3>DQN / Q-learning 和 Actor-Critic 的行动方式有什么不同？</h3>
-            <textarea placeholder="DQN 用 Q 值选 action；Actor-Critic 由 actor 行动、critic 评价。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q16" data-title="错误示例">
-            <div class="q-meta"><span class="pill">Q16</span><span class="pill">错误示例</span></div>
-            <h3>错误示例：训练好一个 critic 后，无论 actor 怎么变，都一直拿它当 baseline。这个做法为什么有问题？</h3>
-            <textarea placeholder="critic 评估的是特定 policy，actor 变了 value 也应更新。"></textarea>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q17" data-title="费曼题">
-            <div class="q-meta"><span class="pill">Q17</span><span class="pill">费曼题</span></div>
-            <h3>请用 8-12 句话向同学讲清楚：Actor-Critic 如何用 critic 改进 Policy Gradient？</h3>
-            <textarea placeholder="要求串起：value function、MC/TD、baseline、advantage、actor update、共享网络。"></textarea>
-            <div class="solve-note">提示：重点讲“比平均好多少”。</div>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q18" data-title="完整训练方案">
-            <div class="q-meta"><span class="pill">Q18</span><span class="pill">综合</span></div>
-            <h3>设计一个 Actor-Critic 训练流程。请说明如何采样、如何训练 critic、如何计算 advantage、如何更新 actor、如何处理 done 状态。</h3>
-            <textarea placeholder="写成算法步骤。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q14</span></div>
+        <h3><b>Q:</b> 为什么 actor 和 critic 常共享前几层网络？最后两个 head 分别输出什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q15</span></div>
+        <h3><b>Q:</b> DQN / Q-learning 和 Actor-Critic 的行动方式有什么不同？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q16</span></div>
+        <h3><b>Q:</b> 错误示例：训练好一个 critic 后，无论 actor 怎么变，都一直拿它当 baseline。这个做法为什么有问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q17</span></div>
+        <h3><b>Q:</b> 请用 8-12 句话向同学讲清楚：Actor-Critic 如何用 critic 改进 Policy Gradient？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q18</span></div>
+        <h3><b>Q:</b> 设计一个 Actor-Critic 训练流程。请说明如何采样、如何训练 critic、如何计算 advantage、如何更新 actor、如何处理 done 状态。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
-
+      </section>
     <section id="export">
-      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
-      <p>完成练习后，生成一份 Markdown 记录。它会保留完整题目和你的回答，方便之后回顾。</p>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" onclick="generateRecord()">生成记录</button>
-        <button type="button" class="ghost" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
-      <div class="quality" id="qualityBox"></div>
-      <pre class="answer" id="recordOutput">还没有生成记录。</pre>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-  const $ = (id) => document.getElementById(id);
+      </ul>
+    </section>
+  </article>
 
-  function updateProgress(){
-    const doc = document.documentElement;
-    const max = doc.scrollHeight - doc.clientHeight;
-    const pct = max > 0 ? (doc.scrollTop / max) * 100 : 0;
-    $('readProgress').style.width = pct + '%';
-  }
-  document.addEventListener('scroll', updateProgress);
-  updateProgress();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-  const navLinks = Array.from(document.querySelectorAll('nav a'));
-  const sections = navLinks.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
-  const observer = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if(entry.isIntersecting){
-        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id));
-      }
-    });
-  }, {rootMargin:'-30% 0px -65% 0px'});
-  sections.forEach(sec => observer.observe(sec));
-
-  function updateCompare(){
-    const success = parseInt($('sbSuccess').value, 10);
-    const gamma = parseFloat($('gammaSlider').value);
-    $('sbSuccessVal').textContent = success;
-    $('gammaVal').textContent = gamma.toFixed(2);
-    const vSb = success / 8;
-    const mc = 0;
-    const td = gamma * vSb;
-    $('mcVal').textContent = 'V(SA)=' + mc.toFixed(2);
-    $('tdVal').textContent = 'V(SA)=' + td.toFixed(2);
-    $('compareNote').textContent = td > 0.5
-      ? 'TD 从 SB 的平均价值推回 SA，所以 SA 得到较高估值。'
-      : success === 0
-        ? 'SB 本身没有成功经验，TD 也无法给 SA 传播价值。'
-        : 'TD 估值随 SB 成功率和 gamma 改变。';
-  }
-  ['sbSuccess','gammaSlider'].forEach(id => $(id).addEventListener('input', updateCompare));
-  updateCompare();
-
-  function setFill(id, value, max){
-    $(id).style.width = Math.max(0, Math.min(100, value / max * 100)) + '%';
-  }
-
-  function updateAdv(){
-    const r = parseFloat($('rSlider').value);
-    const next = parseFloat($('nextSlider').value);
-    const cur = parseFloat($('curSlider').value);
-    const gamma = 0.9;
-    const adv = r + gamma * next - cur;
-    $('rVal').textContent = r.toFixed(1);
-    $('nextVal').textContent = next.toFixed(1);
-    $('curVal').textContent = cur.toFixed(1);
-    $('rText').textContent = r.toFixed(1);
-    $('nextText').textContent = next.toFixed(1);
-    $('curText').textContent = cur.toFixed(1);
-    setFill('rFill', r + 2, 7);
-    setFill('nextFill', next, 8);
-    setFill('curFill', cur, 8);
-    $('advText').textContent = 'A = ' + adv.toFixed(2);
-    $('advText').className = 'score ' + (adv >= 0 ? 'pos' : 'neg');
-    $('advNote').textContent = adv >= 0
-      ? '这个 action 高于当前 state 的平均期待，应提高概率。'
-      : '这个 action 低于当前 state 的平均期待，应降低概率。';
-  }
-  ['rSlider','nextSlider','curSlider'].forEach(id => $(id).addEventListener('input', updateAdv));
-  updateAdv();
-
-  function collectAnswer(card){
-    const parts = [];
-    const checked = Array.from(card.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(input => {
-      const label = input.closest('label');
-      return (label ? label.innerText : input.value).trim();
-    }).filter(Boolean);
-    const selected = Array.from(card.querySelectorAll('select')).map(select => {
-      const option = select.selectedOptions[0];
-      return option && option.value ? option.textContent.trim() : '';
-    }).filter(Boolean);
-    if(checked.length) parts.push('选择：' + checked.join('；'));
-    if(selected.length) parts.push('下拉选择：' + selected.join('；'));
-    const texts = Array.from(card.querySelectorAll('textarea,input[type="text"],input[type="number"]')).map(el => el.value.trim()).filter(Boolean);
-    if(texts.length) parts.push(texts.join('\n'));
-    return parts.join('\n').trim();
-  }
-
-  function generateRecord(){
-    const cards = Array.from(document.querySelectorAll(".q[data-role='homework']"));
-    const lines = [];
-    let answered = 0;
-    lines.push('# P48 强化学习 3：Actor-Critic - 练习记录');
-    lines.push('');
-    lines.push('## 完成情况');
-    cards.forEach((card, idx) => {
-      const title = card.dataset.title || ('题目 ' + (idx + 1));
-      const question = card.querySelector('h3')?.innerText.trim() || title;
-      const answer = collectAnswer(card);
-      if(answer) answered += 1;
-      lines.push('');
-      lines.push('### Q' + String(idx + 1).padStart(2, '0') + ' ' + title);
-      lines.push('');
-      lines.push('题目：' + question);
-      lines.push('');
-      lines.push('回答：');
-      lines.push(answer ? answer : '（未作答）');
-    });
-    const missing = cards.length - answered;
-    const quality = [];
-    quality.push('已作答：' + answered + ' / ' + cards.length);
-    if(missing > 0) quality.push('还有 ' + missing + ' 题未作答。');
-    if(!$('qualityBox').style.display || $('qualityBox').style.display === 'none') $('qualityBox').style.display = 'block';
-    $('qualityBox').textContent = quality.join('\n');
-    $('recordOutput').textContent = lines.join('\n');
-  }
-
-  async function copyRecord(){
-    const text = $('recordOutput').textContent;
-    if(!text || text === '还没有生成记录。') generateRecord();
-    try{
-      await navigator.clipboard.writeText($('recordOutput').textContent);
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '已复制练习记录。';
-    }catch(err){
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '复制失败，请手动选中下方记录。';
-    }
-  }
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

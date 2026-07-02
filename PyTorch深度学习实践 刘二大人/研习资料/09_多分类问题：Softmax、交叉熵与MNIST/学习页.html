@@ -4,585 +4,769 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>09｜多分类问题：Softmax、交叉熵与 MNIST</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css"><link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css"><link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css"><link rel="stylesheet" href="../assets/study-page.css"></head>
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
+</head>
 <body data-course="PyTorch 深度学习实践 刘二大人" data-unit="09 多分类问题：Softmax、交叉熵与 MNIST">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand">
-      <strong>PyTorch 深度学习实践 刘二大人</strong><span>09 多分类问题：Softmax、交叉熵与 MNIST</span></div>
-    <div class="nav-title">目录</div>
-    <nav>
-      <!-- learning-kit:nav:start -->
-      <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-      <a href="#goal"><span class="dot"></span>学习目标</a>
-      <a href="#map"><span class="dot"></span>概念骨架</a>
-      <a href="#trace"><span class="dot"></span>概率与损失</a>
-      <a href="#lecture"><span class="dot"></span>讲义</a>
-      <a href="#boundary"><span class="dot"></span>边界</a>
-      <a href="#terms"><span class="dot"></span>术语表</a>
-      <a href="#examples"><span class="dot"></span>代码与例子</a>
-      <a href="#pitfalls"><span class="dot"></span>误区诊断</a>
-      <a href="#practice"><span class="dot"></span>练习区</a>
-      <a href="#export"><span class="dot"></span>学习记录</a>
-      <a href="#sources"><span class="dot"></span>参考资料</a>
-      <!-- learning-kit:nav:end -->
-    </nav>
-    <div class="side-note">先把 MNIST 十分类的 logits、softmax、CrossEntropyLoss 和 argmax 钉住；卷积输入、通道和更复杂的结构留到后面的单元。</div>
-  </aside>
-  <main>
-    <section class="hero" id="goal">
-      <div>
-        <div class="kicker">刘二大人课程精读 · 第 09 讲</div>
-        <h1>多分类问题：Softmax、交叉熵与 MNIST</h1>
-        <p>理解多分类输出为什么是 logits 向量，掌握 softmax、NLL、CrossEntropyLoss、类别索引标签和训练/测试循环。</p>
-      </div>
-      <div class="box info">
-        <h3>这节课抓一件事</h3>
-        <p>从二分类概率扩展到十类数字分类。</p>
-        <ol>
-          <li>先看对象之间的数据流。</li>
-          <li>再看每一步的形状、类型和状态变化。</li>
-          <li>最后用练习题检查自己能不能诊断错误。</li>
-        </ol>
-      </div>
-    </section>
 
-    <section id="map">
-      <div class="head"><h2>概念骨架</h2><span class="tag">先搭主线</span></div>
-      
-    <div class="map"><span class="node">logits</span><span class="arrow">→</span><span class="node">概率</span><span class="arrow">→</span><span class="node">标签</span><span class="arrow">→</span><span class="node">交叉熵</span><span class="arrow">→</span><span class="node">梯度</span><span class="arrow">→</span><span class="node">预测类别</span></div>
-    <div class="box info">
-      <div class="grid">
-        <div class="box">
-          <b>先看输入</b>
-          <p>确认数据形状、标签形式和 dtype。许多训练错误在进入模型前已经发生。</p>
-        </div>
-        <div class="box">
-          <b>再看变换</b>
-          <p>逐层追踪输出形状和语义，别只看 API 名字。每一层都应该能回答“它把什么变成什么”。</p>
-        </div>
-        <div class="box">
-          <b>最后看目标</b>
-          <p>确认 loss 的输入约定、输出是否是标量，以及评估指标是否对应真实任务。</p>
-        </div>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">PyTorch 深度学习实践 刘二大人</a>
+        <span class="sep">/</span>
+        <span>09 多分类问题：Softmax、交叉熵与 MNIST</span>
       </div>
-      <p class="viz-note">判断句：如果你说不清某一行读入什么、输出什么、改变什么状态，就先不要急着调参。</p>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
     </div>
-    
-      
-        <div class="shape-tracer" data-shape-tracer=""><div class="trace-lines"><button class="trace-line active" type="button" data-trace-step="logits"><code>logits</code><span>[B,10]</span></button><button class="trace-line" type="button" data-trace-step="softmax"><code>softmax</code><span>归一化</span></button><button class="trace-line" type="button" data-trace-step="labels"><code>labels</code><span>long [B]</span></button><button class="trace-line" type="button" data-trace-step="loss"><code>CrossEntropy</code><span>标量</span></button><button class="trace-line" type="button" data-trace-step="pred"><code>argmax</code><span>类别</span></button></div><div class="trace-canvas"><div class="tensor-card active" data-trace-target="logits"><b>原始分数</b><span>[B,10]</span><p>每个样本先保留 10 个类别分数，不急着转概率。</p></div><div class="tensor-card" data-trace-target="softmax"><b>概率分布</b><span>归一化</span><p>把一行分数变成和为 1 的概率，方便解释。</p></div><div class="tensor-card" data-trace-target="labels"><b>类别索引</b><span>long [B]</span><p>训练标签保持为类别编号，不必改成 one-hot。</p></div><div class="tensor-card" data-trace-target="loss"><b>损失值</b><span>标量</span><p>训练时直接把 logits 和 long 标签送进损失函数。</p></div><div class="tensor-card" data-trace-target="pred"><b>预测结果</b><span>类别</span><p>评估时再取最大分数的位置，得到最终类别。</p></div></div></div><div class="shape-tracer" data-shape-tracer=""><div class="trace-lines"><button class="trace-line active" type="button" data-trace-step="logits"><code>logits</code><span>[B,10]</span></button><button class="trace-line" type="button" data-trace-step="softmax"><code>softmax</code><span>归一化</span></button><button class="trace-line" type="button" data-trace-step="labels"><code>labels</code><span>long [B]</span></button><button class="trace-line" type="button" data-trace-step="loss"><code>CrossEntropy</code><span>标量</span></button><button class="trace-line" type="button" data-trace-step="pred"><code>argmax</code><span>类别</span></button></div><div class="trace-canvas"><div class="tensor-card active" data-trace-target="logits"><b>原始分数</b><span>[B,10]</span><p>每个样本先保留 10 个类别分数，不急着转概率。</p></div><div class="tensor-card" data-trace-target="softmax"><b>概率分布</b><span>归一化</span><p>把一行分数变成和为 1 的概率，方便解释。</p></div><div class="tensor-card" data-trace-target="labels"><b>类别索引</b><span>long [B]</span><p>训练标签保持为类别编号，不必改成 one-hot。</p></div><div class="tensor-card" data-trace-target="loss"><b>损失值</b><span>标量</span><p>训练时直接把 logits 和 long 标签送进损失函数。</p></div><div class="tensor-card" data-trace-target="pred"><b>预测结果</b><span>类别</span><p>评估时再取最大分数的位置，得到最终类别。</p></div></div></div><div class="math-block" data-export-context="Softmax 与 CrossEntropy 公式" data-export-lang="math">
-          <div><b>softmax</b>：<span class="math">pᵢ = exp(zᵢ) / Σⱼ exp(zⱼ)</span></div>
-          <div><b>交叉熵</b>：真实类别对应的概率越低，loss 越大。</div>
-        </div>
-        
-    <div class="shape-tracer" data-shape-tracer=""><div class="trace-lines"><button class="trace-line active" type="button" data-trace-step="logits"><code>logits</code><span>[B,10]</span></button><button class="trace-line" type="button" data-trace-step="softmax"><code>softmax</code><span>归一化</span></button><button class="trace-line" type="button" data-trace-step="labels"><code>labels</code><span>long [B]</span></button><button class="trace-line" type="button" data-trace-step="loss"><code>CrossEntropy</code><span>标量</span></button><button class="trace-line" type="button" data-trace-step="pred"><code>argmax</code><span>类别</span></button></div><div class="trace-canvas"><div class="tensor-card active" data-trace-target="logits"><b>原始分数</b><span>[B,10]</span><p>每个样本先保留 10 个类别分数，不急着转概率。</p></div><div class="tensor-card" data-trace-target="softmax"><b>概率分布</b><span>归一化</span><p>把一行分数变成和为 1 的概率，方便解释。</p></div><div class="tensor-card" data-trace-target="labels"><b>类别索引</b><span>long [B]</span><p>训练标签保持为类别编号，不必改成 one-hot。</p></div><div class="tensor-card" data-trace-target="loss"><b>损失值</b><span>标量</span><p>训练时直接把 logits 和 long 标签送进损失函数。</p></div><div class="tensor-card" data-trace-target="pred"><b>预测结果</b><span>类别</span><p>评估时再取最大分数的位置，得到最终类别。</p></div></div></div><div class="shape-tracer" data-shape-tracer=""><div class="trace-lines"><button class="trace-line active" type="button" data-trace-step="logits"><code>logits</code><span>[B,10]</span></button><button class="trace-line" type="button" data-trace-step="softmax"><code>softmax</code><span>归一化</span></button><button class="trace-line" type="button" data-trace-step="labels"><code>labels</code><span>long [B]</span></button><button class="trace-line" type="button" data-trace-step="loss"><code>CrossEntropy</code><span>标量</span></button><button class="trace-line" type="button" data-trace-step="pred"><code>argmax</code><span>类别</span></button></div><div class="trace-canvas"><div class="tensor-card active" data-trace-target="logits"><b>原始分数</b><span>[B,10]</span><p>每个样本先保留 10 个类别分数，不急着转概率。</p></div><div class="tensor-card" data-trace-target="softmax"><b>概率分布</b><span>归一化</span><p>把一行分数变成和为 1 的概率，方便解释。</p></div><div class="tensor-card" data-trace-target="labels"><b>类别索引</b><span>long [B]</span><p>训练标签保持为类别编号，不必改成 one-hot。</p></div><div class="tensor-card" data-trace-target="loss"><b>损失值</b><span>标量</span><p>训练时直接把 logits 和 long 标签送进损失函数。</p></div><div class="tensor-card" data-trace-target="pred"><b>预测结果</b><span>类别</span><p>评估时再取最大分数的位置，得到最终类别。</p></div></div></div><div class="shape-tracer" data-shape-tracer=""><div class="trace-lines"><button class="trace-line active" type="button" data-trace-step="logits"><code>logits</code><span>[B,10]</span></button><button class="trace-line" type="button" data-trace-step="softmax"><code>softmax</code><span>归一化</span></button><button class="trace-line" type="button" data-trace-step="labels"><code>labels</code><span>long [B]</span></button><button class="trace-line" type="button" data-trace-step="loss"><code>CrossEntropy</code><span>标量</span></button><button class="trace-line" type="button" data-trace-step="pred"><code>argmax</code><span>类别</span></button></div><div class="trace-canvas"><div class="tensor-card active" data-trace-target="logits"><b>原始分数</b><span>[B,10]</span><p>每个样本先保留 10 个类别分数，不急着转概率。</p></div><div class="tensor-card" data-trace-target="softmax"><b>概率分布</b><span>归一化</span><p>把一行分数变成和为 1 的概率，方便解释。</p></div><div class="tensor-card" data-trace-target="labels"><b>类别索引</b><span>long [B]</span><p>训练标签保持为类别编号，不必改成 one-hot。</p></div><div class="tensor-card" data-trace-target="loss"><b>损失值</b><span>标量</span><p>训练时直接把 logits 和 long 标签送进损失函数。</p></div><div class="tensor-card" data-trace-target="pred"><b>预测结果</b><span>类别</span><p>评估时再取最大分数的位置，得到最终类别。</p></div></div></div><div class="shape-tracer" data-shape-tracer=""><div class="trace-lines"><button class="trace-line active" type="button" data-trace-step="logits"><code>logits</code><span>[B,10]</span></button><button class="trace-line" type="button" data-trace-step="softmax"><code>softmax</code><span>归一化</span></button><button class="trace-line" type="button" data-trace-step="labels"><code>labels</code><span>long [B]</span></button><button class="trace-line" type="button" data-trace-step="loss"><code>CrossEntropy</code><span>标量</span></button><button class="trace-line" type="button" data-trace-step="pred"><code>argmax</code><span>类别</span></button></div><div class="trace-canvas"><div class="tensor-card active" data-trace-target="logits"><b>原始分数</b><span>[B,10]</span><p>每个样本先保留 10 个类别分数，不急着转概率。</p></div><div class="tensor-card" data-trace-target="softmax"><b>概率分布</b><span>归一化</span><p>把一行分数变成和为 1 的概率，方便解释。</p></div><div class="tensor-card" data-trace-target="labels"><b>类别索引</b><span>long [B]</span><p>训练标签保持为类别编号，不必改成 one-hot。</p></div><div class="tensor-card" data-trace-target="loss"><b>损失值</b><span>标量</span><p>训练时直接把 logits 和 long 标签送进损失函数。</p></div><div class="tensor-card" data-trace-target="pred"><b>预测结果</b><span>类别</span><p>评估时再取最大分数的位置，得到最终类别。</p></div></div></div><div class="shape-tracer" data-shape-tracer=""><div class="trace-lines"><button class="trace-line active" type="button" data-trace-step="logits"><code>logits</code><span>[B,10]</span></button><button class="trace-line" type="button" data-trace-step="softmax"><code>softmax</code><span>归一化</span></button><button class="trace-line" type="button" data-trace-step="labels"><code>labels</code><span>long [B]</span></button><button class="trace-line" type="button" data-trace-step="loss"><code>CrossEntropy</code><span>标量</span></button><button class="trace-line" type="button" data-trace-step="pred"><code>argmax</code><span>类别</span></button></div><div class="trace-canvas"><div class="tensor-card active" data-trace-target="logits"><b>原始分数</b><span>[B,10]</span><p>每个样本先保留 10 个类别分数，不急着转概率。</p></div><div class="tensor-card" data-trace-target="softmax"><b>概率分布</b><span>归一化</span><p>把一行分数变成和为 1 的概率，方便解释。</p></div><div class="tensor-card" data-trace-target="labels"><b>类别索引</b><span>long [B]</span><p>训练标签保持为类别编号，不必改成 one-hot。</p></div><div class="tensor-card" data-trace-target="loss"><b>损失值</b><span>标量</span><p>训练时直接把 logits 和 long 标签送进损失函数。</p></div><div class="tensor-card" data-trace-target="pred"><b>预测结果</b><span>类别</span><p>评估时再取最大分数的位置，得到最终类别。</p></div></div></div><div class="shape-tracer" data-shape-tracer=""><div class="trace-lines"><button class="trace-line active" type="button" data-trace-step="logits"><code>logits</code><span>[B,10]</span></button><button class="trace-line" type="button" data-trace-step="softmax"><code>softmax</code><span>归一化</span></button><button class="trace-line" type="button" data-trace-step="labels"><code>labels</code><span>long [B]</span></button><button class="trace-line" type="button" data-trace-step="loss"><code>CrossEntropy</code><span>标量</span></button><button class="trace-line" type="button" data-trace-step="pred"><code>argmax</code><span>类别</span></button></div><div class="trace-canvas"><div class="tensor-card active" data-trace-target="logits"><b>原始分数</b><span>[B,10]</span><p>每个样本先保留 10 个类别分数，不急着转概率。</p></div><div class="tensor-card" data-trace-target="softmax"><b>概率分布</b><span>归一化</span><p>把一行分数变成和为 1 的概率，方便解释。</p></div><div class="tensor-card" data-trace-target="labels"><b>类别索引</b><span>long [B]</span><p>训练标签保持为类别编号，不必改成 one-hot。</p></div><div class="tensor-card" data-trace-target="loss"><b>损失值</b><span>标量</span><p>训练时直接把 logits 和 long 标签送进损失函数。</p></div><div class="tensor-card" data-trace-target="pred"><b>预测结果</b><span>类别</span><p>评估时再取最大分数的位置，得到最终类别。</p></div></div></div></section>
+  </nav>
 
-    <section id="trace">
-      <div class="head"><h2>概率与损失追踪</h2><span class="tag">把一行 logits 追完整</span></div>
-      <table data-export-context="多分类追踪表" data-export-lang="table">
-        <thead><tr><th>步骤</th><th>读什么</th><th>写什么</th><th>为什么要看</th></tr></thead>
-        <tbody>
-          <tr><td>logits</td><td>[B,10] 原始分数</td><td>每类一个分数</td><td>还不是概率</td></tr>
-          <tr><td>softmax</td><td>10 个分数</td><td>和为 1 的概率分布</td><td>用于展示和解释</td></tr>
-          <tr><td>CrossEntropyLoss</td><td>logits + long 标签</td><td>标量 loss</td><td>训练时直接用</td></tr>
-          <tr><td>argmax(dim=1)</td><td>一行分数或概率</td><td>预测类别 id</td><td>评估时取最大值</td></tr>
-        </tbody>
-      </table>
-      <div class="box info">
-        <b>读法</b>
-        <p>训练时让 loss 读 logits，展示时再看 softmax；如果你先 softmax 再喂给 CrossEntropyLoss，输入约定就乱了。</p>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">刘二大人课程精读 · 第 09 讲</div>
+      <div class="hero-meta">
+        <span class="hero-badge">09 多分类问题：Softmax、交叉熵与 MNIST</span>
       </div>
-    </section>
-
-    <section id="lecture">
-      <div class="head"><h2>讲义</h2><span class="tag">慢读这一部分</span></div>
-      
-        <div class="box soft">
-          <h3>1. 多分类输出是一组类别分数</h3>
-          <p>二分类可以用一个 logit 表示正类倾向，多分类通常输出一个长度等于类别数的向量。MNIST 有 10 个数字类别，模型输出形状常是 `[batch, 10]`。每一列对应一个类别的原始分数。</p><p>这些原始分数叫 logits。它们不要求在 0 到 1 之间，也不要求相加等于 1。预测类别时，通常取 logits 最大的位置，也就是 `argmax(dim=1)`。</p><p>你现在应该能看到 `[batch, 10]` 输出，并判断每行代表一个样本的 10 个类别分数。</p>
-          <p class="box soft">读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
-        </div>
-        
-
-        <div class="box soft">
-          <h3>2. softmax 把 logits 变成概率分布</h3>
-          <p>softmax 会对一组 logits 做指数归一化，得到每个类别的概率，所有类别概率相加为 1。某个 logit 越大，对应概率越高。它适合表达“十个类别中选一个”。</p><p>但训练时不一定要在模型里显式写 softmax。PyTorch 的 `CrossEntropyLoss` 内部已经包含 `log_softmax` 和 `NLLLoss`。如果你先 softmax 再传给 `CrossEntropyLoss`，反而会让输入语义不对。</p><p>你现在应该能区分：展示概率时可以 softmax，训练 CrossEntropyLoss 时传 logits。</p>
-          <p class="box soft">读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
-        </div>
-        
-
-        <div class="box soft">
-          <h3>3. 标签不是 one-hot，而是类别索引</h3>
-          <p>`CrossEntropyLoss` 默认要求目标标签是 `LongTensor` 类别索引，形状通常是 `[batch]`。例如数字 7 的标签就是整数 7，不需要写成 `[0,0,0,0,0,0,0,1,0,0]`。</p><p>这是多分类新手最常见的坑之一。输出是 `[batch, num_classes]`，标签却是 `[batch]`。二者形状不同是正常的，因为输出给每个类别打分，标签只告诉正确类别编号。</p><p>你现在应该能解释为什么 MNIST 标签不是 one-hot，也能检查标签 dtype 是否是 long。</p>
-          <p class="box soft">读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
-        </div>
-        
-
-        <div class="box soft">
-          <h3>4. 全连接 MNIST 先把图像展平</h3>
-          <p>MNIST 图像原始形状通常是 `[batch, 1, 28, 28]`。如果用全连接层处理，需要先展平成 `[batch, 784]`。这里的 784 来自 `1 * 28 * 28`。</p><p>展平会丢掉二维空间结构，但它让我们能先用全连接网络理解多分类流程。后面的 CNN 会重新利用图像的空间结构。</p><p>你现在应该能说明为什么全连接 MNIST 要 `view(-1, 784)`，以及 `-1` 代表让 PyTorch 自动推断 batch 维。</p>
-          <p class="box soft">读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
-        </div>
-        
-
-        <div class="box soft">
-          <h3>5. 训练和测试要分开写</h3>
-          <p>训练循环负责更新参数：前向、loss、清梯度、反向、step。测试循环只负责评估：切 `eval()`、关梯度、前向、取预测、统计正确数。</p><p>如果测试时忘记 `no_grad()`，结果可能仍然对，但会浪费内存。如果忘记 `eval()`，含 Dropout 或 BatchNorm 的模型结果会不稳定。虽然这节的全连接网络可能没有这些层，也要养成习惯。</p><p>你现在应该能写出一个最小 test loop，并说明它和 train loop 哪几行不同。</p>
-          <p class="box soft">读到这里，你应该能：把训练 step 拆成前向、loss、清梯度、反向和更新。</p>
-        </div>
-        
-
-        <div class="box soft">
-          <h3>6. 多分类错误常来自维度和损失函数</h3>
-          <p>多分类训练最常见错误有三个：模型输出维度不是类别数，标签用了 one-hot 或 float，训练前手动 softmax 再用 `CrossEntropyLoss`。这些错误都不是数学难题，而是输入约定不清。</p><p>调试时先看三件事：`logits.shape == [batch, num_classes]`，`target.shape == [batch]`，`target.dtype == torch.long`。这三项对了，多分类损失一般就能工作。</p><p>你现在应该能用这三项检查快速定位多数 CrossEntropyLoss 报错。</p>
-          <p class="box soft">读到这里，你应该能：拿到一段代码后先检查输入、输出和层间维度是否对齐。</p>
-        </div>
-        
-      <div class="box soft">
-        <h3>完整知识链路</h3>
-        <p>从二分类概率扩展到十类数字分类。 它仍然落在同一条 PyTorch 主线上：先准备能被模型读取的数据，再让模型输出符合任务的张量，用合适的损失函数得到标量 loss，反向传播写入梯度，优化器更新参数，最后在评估模式下检查结果。换任务时，最先变化的是输入形状、模型输出含义和 loss 输入约定。</p>
+      <h1 class="hero-title">09｜多分类问题：Softmax、交叉熵与 MNIST</h1>
+      <p class="hero-desc">理解多分类输出为什么是 logits 向量，掌握 softmax、NLL、CrossEntropyLoss、类别索引标签和训练/测试循环。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../08_加载数据集：Dataset、DataLoader与mini-batch/学习页.html">上一节</a>
+            <a href="../10_卷积神经网络基础：通道、卷积核与池化/学习页.html">下一节</a>
       </div>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="boundary">
-      <div class="head"><h2>先别追</h2><span class="tag">把范围收住</span></div>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#map">概念骨架</a>
+      <a href="#trace">概率与损失追踪</a>
+      <a href="#lecture">讲义</a>
+      <a href="#boundary">先别追</a>
+      <a href="#terms">术语表</a>
+      <a href="#examples">代码与例子</a>
+      <a href="#pitfalls">误区诊断</a>
+      <a href="#worked-example">完整样例</a>
+      <a href="#bridge-chain">故障链</a>
+      <a href="#consistency-note">一致性补充</a>
+      <a href="#practice">练习区</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="map">
+        <div class="head">
+          <h2>概念骨架</h2>
+          <span class="tag">先搭主线</span>
+        </div>
+<p>logits→概率→标签→交叉熵→梯度→预测类别</p>
+      </section>
+      <section id="trace">
+        <div class="head">
+          <h2>概率与损失追踪</h2>
+          <span class="tag">把一行</span>
+        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>步骤</th><th>读什么</th><th>写什么</th><th>为什么要看</th></tr>
+<tr><td>logits</td><td>[B,10] 原始分数</td><td>每类一个分数</td><td>还不是概率</td></tr><tr><td>softmax</td><td>10 个分数</td><td>和为 1 的概率分布</td><td>用于展示和解释</td></tr><tr><td>CrossEntropyLoss</td><td>logits + long 标签</td><td>标量 loss</td><td>训练时直接用</td></tr><tr><td>argmax(dim=1)</td><td>一行分数或概率</td><td>预测类别 id</td><td>评估时取最大值</td></tr>
+        </table></div>
+        <div class="box info">
+<p>读法</p>
+<p>训练时让 loss 读 logits，展示时再看 softmax；如果你先 softmax 再喂给 CrossEntropyLoss，输入约定就乱了。</p>
+        </div>
+      </section>
+      <section id="lecture">
+        <div class="head">
+          <h2>讲义</h2>
+          <span class="tag">慢读这一部分</span>
+        </div>
+        <div class="box soft">
+<h3>1. 多分类输出是一组类别分数</h3>
+<p>二分类可以用一个 logit 表示正类倾向，多分类通常输出一个长度等于类别数的向量。MNIST 有 10 个数字类别，模型输出形状常是 <code>[batch, 10]</code>。每一列对应一个类别的原始分数。</p>
+<p>这些原始分数叫 logits。它们不要求在 0 到 1 之间，也不要求相加等于 1。预测类别时，通常取 logits 最大的位置，也就是 <code>argmax(dim=1)</code>。</p>
+<p>你现在应该能看到 <code>[batch, 10]</code> 输出，并判断每行代表一个样本的 10 个类别分数。</p>
+<p>读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
+        </div>
+        <div class="box soft">
+<h3>2. softmax 把 logits 变成概率分布</h3>
+<p>softmax 会对一组 logits 做指数归一化，得到每个类别的概率，所有类别概率相加为 1。某个 logit 越大，对应概率越高。它适合表达“十个类别中选一个”。</p>
+<p>但训练时不一定要在模型里显式写 softmax。PyTorch 的 <code>CrossEntropyLoss</code> 内部已经包含 <code>log_softmax</code> 和 <code>NLLLoss</code>。如果你先 softmax 再传给 <code>CrossEntropyLoss</code>，反而会让输入语义不对。</p>
+<p>你现在应该能区分：展示概率时可以 softmax，训练 CrossEntropyLoss 时传 logits。</p>
+<p>读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
+        </div>
+        <div class="box soft">
+<h3>3. 标签类别索引</h3>
+<p><code>CrossEntropyLoss</code> 默认要求目标标签是 <code>LongTensor</code> 类别索引，形状通常是 <code>[batch]</code>。例如数字 7 的标签就是整数 7，不需要写成 <code>[0,0,0,0,0,0,0,1,0,0]</code>。</p>
+<p>这是多分类新手最常见的坑之一。输出是 <code>[batch, num_classes]</code>，标签却是 <code>[batch]</code>。二者形状不同是正常的，因为输出给每个类别打分，标签只告诉正确类别编号。</p>
+<p>你现在应该能解释为什么 MNIST 标签不是 one-hot，也能检查标签 dtype 是否是 long。</p>
+<p>读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
+        </div>
+        <div class="box soft">
+<h3>4. 全连接 MNIST 先把图像展平</h3>
+<p>MNIST 图像原始形状通常是 <code>[batch, 1, 28, 28]</code>。如果用全连接层处理，需要先展平成 <code>[batch, 784]</code>。这里的 784 来自 <code>1 <i> 28 </i> 28</code>。</p>
+<p>展平会丢掉二维空间结构，但它让我们能先用全连接网络理解多分类流程。后面的 CNN 会重新利用图像的空间结构。</p>
+<p>你现在应该能说明为什么全连接 MNIST 要 <code>view(-1, 784)</code>，以及 <code>-1</code> 代表让 PyTorch 自动推断 batch 维。</p>
+<p>读到这里，你应该能：用这一小节的判断规则去检查相关代码。</p>
+        </div>
+        <div class="box soft">
+<h3>5. 训练和测试要分开写</h3>
+<p>训练循环负责更新参数：前向、loss、清梯度、反向、step。测试循环只负责评估：切 <code>eval()</code>、关梯度、前向、取预测、统计正确数。</p>
+<p>如果测试时忘记 <code>no_grad()</code>，结果可能仍然对，但会浪费内存。如果忘记 <code>eval()</code>，含 Dropout 或 BatchNorm 的模型结果会不稳定。虽然这节的全连接网络可能没有这些层，也要养成习惯。</p>
+<p>你现在应该能写出一个最小 test loop，并说明它和 train loop 哪几行不同。</p>
+<p>读到这里，你应该能：把训练 step 拆成前向、loss、清梯度、反向和更新。</p>
+        </div>
+        <div class="box soft">
+<h3>6. 多分类错误常来自维度和损失函数</h3>
+<p>多分类训练最常见错误有三个：模型输出维度不是类别数，标签用了 one-hot 或 float，训练前手动 softmax 再用 <code>CrossEntropyLoss</code>。这些错误都输入约定不清。</p>
+<p>调试时先看三件事：<code>logits.shape == [batch, num_classes]</code>，<code>target.shape == [batch]</code>，<code>target.dtype == torch.long</code>。这三项对了，多分类损失一般就能工作。</p>
+<p>你现在应该能用这三项检查快速定位多数 CrossEntropyLoss 报错。</p>
+<p>读到这里，你应该能：拿到一段代码后先检查输入、输出和层间维度是否对齐。</p>
+        </div>
+        <div class="box soft">
+<h3>完整知识链路</h3>
+<p>从二分类概率扩展到十类数字分类。 它仍然落在同一条 PyTorch 主线上：先准备能被模型读取的数据，再让模型输出符合任务的张量，用合适的损失函数得到标量 loss，反向传播写入梯度，优化器更新参数，最后在评估模式下检查结果。换任务时，最先变化的是输入形状、模型输出含义和 loss 输入约定。</p>
+        </div>
+      </section>
+      <section id="boundary">
+        <div class="head">
+          <h2>先别追</h2>
+          <span class="tag">把范围收住</span>
+        </div>
       <div class="grid2">
-        <div class="box warn"><h3>这里先讲什么</h3><p>多分类输出、标签索引、CrossEntropyLoss、argmax 和 MNIST 的展平读法。</p></div>
-        <div class="box info"><h3>下一讲再看什么</h3><p>卷积输入 <code>[N, C, H, W]</code>、通道变化、池化和分类头，放到第 10 讲。</p></div>
+        <div class="box warn">
+<h3>这里先讲什么</h3>
+<p>多分类输出、标签索引、CrossEntropyLoss、argmax 和 MNIST 的展平读法。</p>
+        </div>
+        <div class="box info">
+<h3>下一讲再看什么</h3>
+<p>卷积输入 <code>[N, C, H, W]</code>、通道变化、池化和分类头，放到第 10 讲。</p>
+        </div>
       </div>
-    </section>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语表</h2>
+          <span class="tag">别混词</span>
+        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>术语</th><th>直觉与定义</th><th>常见误解</th></tr>
+<tr><td>logits</td><td>模型输出的原始类别分数。</td><td>误以为它们已经是概率。</td></tr><tr><td>softmax</td><td>把一组类别分数归一化为概率分布。</td><td>训练 CrossEntropyLoss 前重复使用。</td></tr><tr><td>CrossEntropyLoss</td><td>多分类常用损失，内部包含 log_softmax 和 NLLLoss。</td><td>把 one-hot float 标签直接传入默认用法。</td></tr><tr><td>argmax</td><td>取分数最大的位置作为预测类别。</td><td>误以为它可用于反向训练。</td></tr>
+        </table></div>
+<h3>易混概念对照</h3>
+      </section>
+      <section id="examples">
+        <div class="head">
+          <h2>代码与例子</h2>
+          <span class="tag">逐行读语义</span>
+        </div>
+<p>读代码时先标出输入、输出和状态变化。能解释这些，才算真正看懂。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-examples-1">复制</button></div>
+        <pre id="code-examples-1" data-export-context="代码" data-export-lang="python"><code class="language-python">class MnistNet(nn.Module):
+ def __init__(self):
+ super().__init__()
+ self.fc1 = nn.Linear(784, 512)
+ self.fc2 = nn.Linear(512, 10)
 
-    <section id="terms">
-      <div class="head"><h2>术语表</h2><span class="tag">别混词</span></div>
-      <table data-export-context="术语表 1" data-export-lang="table">
-        <thead><tr><th>术语</th><th>直觉与定义</th><th>常见误解</th></tr></thead>
-        <tbody><tr><td>logits</td><td>模型输出的原始类别分数。</td><td>误以为它们已经是概率。</td></tr>
-<tr><td>softmax</td><td>把一组类别分数归一化为概率分布。</td><td>训练 CrossEntropyLoss 前重复使用。</td></tr>
-<tr><td>CrossEntropyLoss</td><td>多分类常用损失，内部包含 log_softmax 和 NLLLoss。</td><td>把 one-hot float 标签直接传入默认用法。</td></tr>
-<tr><td>argmax</td><td>取分数最大的位置作为预测类别。</td><td>误以为它可用于反向训练。</td></tr></tbody>
-      </table>
-      <h3>易混概念对照</h3>
-      <table data-export-context="术语表 2" data-export-lang="table">
-        <thead><tr><th>概念</th><th>准确含义</th><th>不要混成</th></tr></thead>
-        <tbody><tr><td>logits</td><td>训练损失的输入</td><td>不是归一化概率</td></tr>
-<tr><td>softmax 概率</td><td>解释或可视化用</td><td>通常不传给 CrossEntropyLoss</td></tr>
-<tr><td>类别索引</td><td>正确答案编号</td><td>不是 one-hot 向量</td></tr></tbody>
-      </table>
-    </section>
-
-    <section id="examples">
-      <div class="head"><h2>代码与例子</h2><span class="tag">逐行读语义</span></div>
-      <p class="muted">读代码时先标出输入、输出和状态变化。能解释这些，才算真正看懂。</p>
-      
-        <div class="codebar"><span class="label">MNIST 全连接模型</span><span class="kind">示例代码</span></div>
-        <pre id="09_code_1" data-export-context="MNIST 全连接模型" data-export-lang="python"><code class="language-python">class MnistNet(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.fc1 = nn.Linear(784, 512)
-        self.fc2 = nn.Linear(512, 10)
-
-    def forward(self, x):
-        x = x.view(x.size(0), -1)
-        x = torch.relu(self.fc1(x))
-        return self.fc2(x)  # logits</code></pre>
-        
-
-        <div class="codebar"><span class="label">CrossEntropyLoss 的输入约定</span><span class="kind">示例代码</span></div>
-        <pre id="09_code_2" data-export-context="CrossEntropyLoss 的输入约定" data-export-lang="python"><code class="language-python">logits = model(images)          # [batch, 10]
-target = labels.long()          # [batch]
+ def forward(self, x):
+ x = x.view(x.size(0), -1)
+ x = torch.relu(self.fc1(x))
+ return self.fc2(x) # logits</code></pre>
+<p>CrossEntropyLoss 的输入约定示例代码</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-examples-2">复制</button></div>
+        <pre id="code-examples-2" data-export-context="代码" data-export-lang="python"><code class="language-python">logits = model(images) # [batch, 10]
+target = labels.long() # [batch]
 loss = nn.CrossEntropyLoss()(logits, target)</code></pre>
-        
-
-        <div class="codebar"><span class="label">测试循环</span><span class="kind">示例代码</span></div>
-        <pre id="09_code_3" data-export-context="测试循环" data-export-lang="python"><code class="language-python">model.eval()
+<p>测试循环示例代码</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-examples-3">复制</button></div>
+        <pre id="code-examples-3" data-export-context="代码" data-export-lang="python"><code class="language-python">model.eval()
 correct = 0
 with torch.no_grad():
-    for images, labels in test_loader:
-        logits = model(images)
-        pred = logits.argmax(dim=1)
-        correct += (pred == labels).sum().item()</code></pre>
-        
-    </section>
-
-    <section id="pitfalls">
-      <div class="head"><h2>误区诊断</h2><span class="tag">错因 / 后果 / 修法</span></div>
+ for images, labels in test_loader:
+ logits = model(images)
+ pred = logits.argmax(dim=1)
+ correct += (pred == labels).sum().item()</code></pre>
+        </div>
+      </section>
+      <section id="pitfalls">
+        <div class="head">
+          <h2>误区诊断</h2>
+          <span class="tag">错因</span>
+        </div>
       <div class="grid2">
         <div class="box warn">
-          <h3>先 softmax 再 CrossEntropyLoss</h3>
-          <p><b>后果：</b>输入约定错误，数值效果变差。</p>
-          <p><b>修法：</b>训练时传 logits。</p>
+<h3>先 softmax 再 CrossEntropyLoss</h3>
+<p><b>后果：</b>输入约定错误，数值效果变差。</p>
+<p><b>修法：</b>训练时传 logits。</p>
         </div>
-        
-
         <div class="box warn">
-          <h3>标签写成 one-hot</h3>
-          <p><b>后果：</b>默认 CrossEntropyLoss 期望类别索引。</p>
-          <p><b>修法：</b>用 `[batch]` long 标签。</p>
+<h3>标签写成 one-hot</h3>
+<p><b>后果：</b>默认 CrossEntropyLoss 期望类别索引。</p>
+<p><b>修法：</b>用 <code>[batch]</code> long 标签。</p>
         </div>
-        
-
         <div class="box warn">
-          <h3>忘记展平图像</h3>
-          <p><b>后果：</b>全连接层收到 4D 输入可能不符合预期。</p>
-          <p><b>修法：</b>进入 Linear 前变成 `[batch, 784]`。</p>
+<h3>忘记展平图像</h3>
+<p><b>后果：</b>全连接层收到 4D 输入可能不符合预期。</p>
+<p><b>修法：</b>进入 Linear 前变成 <code>[batch, 784]</code>。</p>
         </div>
-        
-
         <div class="box warn">
-          <h3>argmax 维度写错</h3>
-          <p><b>后果：</b>可能沿 batch 维取最大，预测全乱。</p>
-          <p><b>修法：</b>多分类通常 `dim=1`。</p>
+<h3>argmax 维度写错</h3>
+<p><b>后果：</b>可能沿 batch 维取最大，预测全乱。</p>
+<p><b>修法：</b>多分类通常 <code>dim=1</code>。</p>
         </div>
-        
-
         <div class="box warn">
-          <h3>测试时仍在训练模式</h3>
-          <p><b>后果：</b>含特定层时评估结果不稳定。</p>
-          <p><b>修法：</b>测试前 `model.eval()`。</p>
+<h3>测试时仍在训练模式</h3>
+<p><b>后果：</b>含特定层时评估结果不稳定。</p>
+<p><b>修法：</b>测试前 <code>model.eval()</code>。</p>
         </div>
-        
-
         <div class="box warn">
-          <h3>把训练循环当成背诵模板</h3>
-          <p><b>后果：</b>模板能跑不等于能诊断。每一行都要知道它读什么、写什么、改变哪个状态。</p>
-          <p><b>修法：</b>把每行标成前向、loss、清梯度、反向或更新。</p>
+<h3>把训练循环当成背诵模板</h3>
+<p><b>后果：</b>模板能跑不等于能诊断。每一行都要知道它读什么、写什么、改变哪个状态。</p>
+<p><b>修法：</b>把每行标成前向、loss、清梯度、反向或更新。</p>
         </div>
-        
-
         <div class="box warn">
-          <h3>只看 loss 下降</h3>
-          <p><b>后果：</b>loss 下降只能说明优化目标变小，还要检查数据、标签、输出形状和评估指标是否对应任务。</p>
-          <p><b>修法：</b>同时检查验证集指标和预测样例。</p>
+<h3>只看 loss 下降</h3>
+<p><b>后果：</b>loss 下降只能说明优化目标变小，还要检查数据、标签、输出形状和评估指标是否对应任务。</p>
+<p><b>修法：</b>同时检查验证集指标和预测样例。</p>
         </div>
-        
-
         <div class="box warn">
-          <h3>混用训练和评估状态</h3>
-          <p><b>后果：</b>`model.train()` 和 `model.eval()` 会影响 Dropout、BatchNorm 等层，评估时还要配合 `torch.no_grad()`。</p>
-          <p><b>修法：</b>训练和评估写成两个清楚的函数。</p>
+<h3>混用训练和评估状态</h3>
+<p><b>后果：</b><code>model.train()</code> 和 <code>model.eval()</code> 会影响 Dropout、BatchNorm 等层，评估时还要配合 <code>torch.no_grad()</code>。</p>
+<p><b>修法：</b>训练和评估写成两个清楚的函数。</p>
         </div>
+      </div>
+      </section>
+      <section id="worked-example">
+        <div class="head">
+          <h2>完整样例</h2>
+          <span class="tag">一条完整教学链</span>
         </div>
-    </section>
-
-    <section id="worked-example"><div class="head"><h2>完整样例</h2><span class="tag">一条完整教学链</span></div><div class="box soft"><h3>完整样例：一批 MNIST logits 的读法</h3><p>拿一批 shape 是 [B, 1, 28, 28] 的灰度图时，第一件事不是想 softmax，而是先把输入和标签放到同一条账本上。模型前向会先把图像展平或交给卷积骨架，最后吐出 [B, 10] 的 logits。这里的 10 对应十个类别，每个位置都只是原始分数。</p><p>训练时，`CrossEntropyLoss` 直接读取 logits 和 long 类型标签。它不需要 one-hot，也不需要你先把分数转成概率。真正该保留的是 shape、dtype 和类别索引这三样东西。只要这三样对齐，训练闭环就能跑通。</p><p>评估时再看 softmax 和 argmax：softmax 用来解释概率，argmax 用来取预测类别。把这两件事和训练损失分开，你才不会把“展示用的概率”误当成“训练用的输入”。</p><p>如果你看到 loss 在下降但准确率不动，优先回到这条账本：logits 的最后一维是不是 10，标签是不是 long，是否把 softmax 先做在前面。多数多分类错题都不是数学推导错误，而是接口顺序写反了。</p></div><div class="grid2"><div class="box info"><h3>输入和输出怎么对齐</h3><p>先把输入 shape、标签 dtype、输出维度和训练目标写成同一张账本，后面再看 API。</p></div><div class="box warn"><h3>最常见的失配</h3><p>这类页最常见的问题不是算不动，而是输入和输出的约定写反。先查 shape，再查 dtype，最后才查 loss。</p></div></div><div class="table-wrap"><table data-export-context="完整样例：一批 MNIST logits 的读法 账本" data-export-lang="table"><tbody><tr><td>输入</td><td>[B, 1, 28, 28]</td><td>灰度批次</td><td>先确认 batch 和空间维</td></tr><tr><td>展平后</td><td>[B, 784]</td><td>进入全连接骨架</td><td>只有这里适合 Linear</td></tr><tr><td>输出</td><td>[B, 10]</td><td>十类 logits</td><td>每行十个原始分数</td></tr><tr><td>标签</td><td>[B]</td><td>long 类别索引</td><td>CrossEntropyLoss 直接读取</td></tr></tbody><thead><tr><th>对象</th><th>shape / 语义</th><th>要读什么</th><th>常见失配</th></tr></thead></table></div><div class="codebar"><span>最小可执行片段</span><button class="copy" type="button" data-copy="09_worked_code">复制</button></div><pre id="09_worked_code" data-export-context="最小可执行片段" data-export-lang="python"><code class="language-python">import torch
+        <div class="box soft">
+<h3>完整样例：一批 MNIST logits 的读法</h3>
+<p>拿一批 shape 是 [B, 1, 28, 28] 的灰度图时，第一件事先把输入和标签放到同一条账本上。模型前向会先把图像展平或交给卷积骨架，最后吐出 [B, 10] 的 logits。这里的 10 对应十个类别，每个位置都只是原始分数。</p>
+<p>训练时，<code>CrossEntropyLoss</code> 直接读取 logits 和 long 类型标签。它不需要 one-hot，也不需要你先把分数转成概率。真正该保留的是 shape、dtype 和类别索引这三样东西。只要这三样对齐，训练闭环就能跑通。</p>
+<p>评估时再看 softmax 和 argmax：softmax 用来解释概率，argmax 用来取预测类别。把这两件事和训练损失分开，你才不会把“展示用的概率”误当成“训练用的输入”。</p>
+<p>如果你看到 loss 在下降但准确率不动，优先回到这条账本：logits 的最后一维是不是 10，标签是不是 long，是否把 softmax 先做在前面。多数多分类错题都接口顺序写反了。</p>
+        </div>
+        <div class="box info">
+<h3>输入和输出怎么对齐</h3>
+<p>先把输入 shape、标签 dtype、输出维度和训练目标写成同一张账本，后面再看 API。</p>
+        </div>
+        <div class="box warn">
+<h3>最常见的失配</h3>
+<p>这类页最常见的问题输入和输出的约定写反。先查 shape，再查 dtype，最后才查 loss。</p>
+<p>输入[B, 1, 28, 28]灰度批次先确认 batch 和空间维展平后[B, 784]进入全连接骨架只有这里适合 Linear输出[B, 10]十类 logits每行十个原始分数标签[B]long 类别索引CrossEntropyLoss 直接读取对象shape / 语义要读什么常见失配</p>
+<p>最小可执行片段复制</p>
+<pre><code class="language-python">import torch
 
 images = torch.randn(4, 1, 28, 28)
 labels = torch.tensor([7, 2, 1, 0], dtype=torch.long)
 logits = model(images.view(images.size(0), -1))
 loss = criterion(logits, labels)
 pred = logits.argmax(dim=1)
-print(logits.shape, loss.item(), pred.tolist())</code></pre><div class="box warn"> 如果你看到训练能跑但结论不稳，先回到这个样例把 logits、标签和 shape 再核一次。<b>故障现场</b></div></section><section id="bridge-chain"><div class="head"><h2>故障链</h2><span class="tag">从症状回到接口</span></div><div class="box soft"><h3>第二条教学链：从错误信号回头查接口</h3><p>多分类最常见的坏味道，是代码能跑但结果不可信。你要先把故障分成三类：输出维度不够、标签 dtype 不对、训练前多做了一次 softmax。这个分类很重要，因为这三类问题对应的修法完全不同。输出维度不够，改模型最后一层；dtype 不对，改标签构造；softmax 放错位置，改 loss 前的输入。</p><p>再往下查时，不要盯着 accuracy 的数字发呆。先打印 logits 的 shape，再打印 labels 的 dtype，最后看模型在 loss 前到底喂了什么。`CrossEntropyLoss` 想要的是未归一化分数和 long 标签，不是已经变成概率的张量。只要这句约定不记错，大多数多分类调试都能回到正轨。</p><p>一旦模型从图像走到类别分数，你可以用一个小样本把完整路径复读一遍：输入是 `[B, 1, 28, 28]`，中间经过展平或卷积骨架，最后输出 `[B, 10]`。这一条链路上，只有最后一维和标签语义真的会影响 loss，前面那些中间层只是改变表示，不是改任务。换句话说，训练不稳时，优先怀疑接口顺序，而不是怀疑数学。</p></div><div class="table-wrap"><table data-export-context="第二条教学链：从错误信号回头查接口 账本" data-export-lang="table"><thead><tr><th>症状</th><th>你先查什么</th><th>为什么先查它</th><th>修法</th></tr></thead><tbody><tr><td>输出太小</td><td>最后一层不是 10 维</td><td>十分类任务却只给了一个分数</td><td>把最后一层改成 num_classes</td></tr><tr><td>标签太松</td><td>标签是 float 或 one-hot</td><td>默认 CrossEntropyLoss 不按这套读</td><td>改成 long 类别索引</td></tr><tr><td>概率太早</td><td>先 softmax 再算 loss</td><td>把训练输入和展示输入混了</td><td>训练时直接传 logits</td></tr><tr><td>验证太晚</td><td>只看 loss 不看样本</td><td>数值在变，语义未必对</td><td>把 shape、dtype 和预测样本一起看</td></tr></tbody></table></div><div class="codebar"><span>故障排查片段</span><button class="copy" type="button" data-copy="09_bridge_code">复制</button></div><pre id="09_bridge_code" data-export-context="故障排查片段" data-export-lang="python"><code class="language-python">logits = model(batch_x)
+print(logits.shape, loss.item(), pred.tolist())</code></pre>
+        </div>
+        <div class="box warn">
+<p>如果你看到训练能跑但结论不稳，先回到这个样例把 logits、标签和 shape 再核一次。</p>
+<p>故障现场</p>
+        </div>
+      </section>
+      <section id="bridge-chain">
+        <div class="head">
+          <h2>故障链</h2>
+          <span class="tag">从症状回到接口</span>
+        </div>
+        <div class="box soft">
+<h3>第二条教学链：从错误信号回头查接口</h3>
+<p>多分类最常见的坏味道，是代码能跑但结果不可信。你要先把故障分成三类：输出维度不够、标签 dtype 不对、训练前多做了一次 softmax。这个分类很重要，因为这三类问题对应的修法完全不同。输出维度不够，改模型最后一层；dtype 不对，改标签构造；softmax 放错位置，改 loss 前的输入。</p>
+<p>再往下查时，不要盯着 accuracy 的数字发呆。先打印 logits 的 shape，再打印 labels 的 dtype，最后看模型在 loss 前到底喂了什么。<code>CrossEntropyLoss</code> 想要的是未归一化分数和 long 标签，不是已经变成概率的张量。只要这句约定不记错，大多数多分类调试都能回到正轨。</p>
+<p>一旦模型从图像走到类别分数，你可以用一个小样本把完整路径复读一遍：输入是 <code>[B, 1, 28, 28]</code>，中间经过展平或卷积骨架，最后输出 <code>[B, 10]</code>。这一条链路上，只有最后一维和标签语义真的会影响 loss，前面那些中间层只是改变表示，不是改任务。换句话说，训练不稳时，优先怀疑接口顺序，而不是怀疑数学。</p>
+<p>症状你先查什么为什么先查它修法输出太小最后一层不是 10 维十分类任务却只给了一个分数把最后一层改成 num_classes标签太松标签是 float 或 one-hot默认 CrossEntropyLoss 不按这套读改成 long 类别索引概率太早先 softmax 再算 loss把训练输入和展示输入混了训练时直接传 logits验证太晚只看 loss 不看样本数值在变，语义未必对把 shape、dtype 和预测样本一起看</p>
+<p>故障排查片段复制</p>
+<pre><code class="language-python">logits = model(batch_x)
 if logits.shape[-1] != 10:
-    raise ValueError("expect 10 classes")
+ raise ValueError("expect 10 classes")
 if batch_y.dtype != torch.long:
-    batch_y = batch_y.long()
+ batch_y = batch_y.long()
 loss = criterion(logits, batch_y)
-print("shape:", logits.shape, "loss:", float(loss))</code></pre><div class="box info"><h3>练习时的用法</h3><p>先把上面的症状、表格和代码各读一遍，再回到练习区。这样你写答案时不是在猜，而是在复述已经排过的链路。</p></div></section><section id="consistency-note"><div class="head"><h2>一致性补充</h2><span class="tag">把接口写稳</span></div><div class="box info"><h3>学习时的落点</h3><p>这一段不是再讲一遍前文，而是把训练、评估、调试和迁移时应该固定住的检查顺序收束成一张表。</p><p>多分类这一讲真正要练熟的，不只是会写 `CrossEntropyLoss`，而是会在训练前就把输入、输出、标签和评估指标放到同一页上。你可以把它理解成一个小账本：输入是图片，输出是十类分数，标签是类别索引，评估时再把分数转成可解释的概率。四者语义一致，训练才有意义。</p><p>判断模型是否对齐，不一定要先跑完整个 epoch。更稳的办法，是拿一个小 batch 直接打印 shape 和 dtype：`logits.shape`、`labels.dtype`、`pred.shape`。只要这三项都像预期，后续的错误大多不是框架问题，而是数据管道或者损失调用顺序出了偏差。</p><p>如果你想把这节课真的用起来，就别只盯着最终准确率。先看一条样本能不能从输入流到 logits，再看一个 batch 能不能得到稳定的 loss，最后再看预测类别是不是和直觉一致。这个顺序比“先跑再说”更省时间，也更容易定位 bug。</p><p>另一个很实用的习惯，是把训练和评估写成两个固定模板。训练模板负责 `zero_grad -&gt; backward -&gt; step`，评估模板负责 `eval -&gt; no_grad -&gt; argmax -&gt; 统计`。你只要不混用这两套模板，很多‘为什么结果忽高忽低’的问题会直接少一半。</p><p>当你需要换任务，比如从 MNIST 换到别的十分类数据时，先别改学习率，先改接口：输入 shape、标签范围、最后一层输出维度、损失函数输入约定。只要这四项对齐，参数调节才有意义；如果它们没对齐，调得再久也只是修表象。</p></div><div class="table-wrap"><table data-export-context="实现一致性：把训练、评估和记录对齐 账本" data-export-lang="table"><thead><tr><th>场景</th><th>先看什么</th><th>为什么</th><th>下一步</th></tr></thead><tbody><tr><td>训练前</td><td>确认输入/标签/输出</td><td>先看 shape 和 dtype</td><td>直接避免接口误接</td></tr><tr><td>训练中</td><td>监控 loss</td><td>看 loss 是否真的下降</td><td>不是每个下降都代表学对</td></tr><tr><td>验证时</td><td>看 argmax 结果</td><td>对照真实标签</td><td>发现类别错位</td></tr><tr><td>切任务</td><td>改最后一层与标签</td><td>num_classes 和标签范围</td><td>换任务时最容易漏改</td></tr></tbody></table></div><div class="codebar"><span>收束后的检查脚本</span><button class="copy" type="button" data-copy="09_appendix_code">复制</button></div><pre id="09_appendix_code" data-export-context="收束后的检查脚本" data-export-lang="python"><code class="language-python">batch_x = batch_x.float()
+print("shape:", logits.shape, "loss:", float(loss))</code></pre>
+        </div>
+        <div class="box info">
+<h3>练习时的用法</h3>
+<p>先把上面的症状、表格和代码各读一遍，再回到练习区。这样你写答案时不是在猜，而是在复述已经排过的链路。</p>
+        </div>
+      </section>
+      <section id="consistency-note">
+        <div class="head">
+          <h2>一致性补充</h2>
+          <span class="tag">把接口写稳</span>
+        </div>
+        <div class="box info">
+<h3>学习时的落点</h3>
+<p>这一段把训练、评估、调试和迁移时应该固定住的检查顺序收束成一张表。</p>
+<p>多分类这一讲真正要练熟的，不只是会写 <code>CrossEntropyLoss</code>，而是会在训练前就把输入、输出、标签和评估指标放到同一页上。你可以把它理解成一个小账本：输入是图片，输出是十类分数，标签是类别索引，评估时再把分数转成可解释的概率。四者语义一致，训练才有意义。</p>
+<p>判断模型是否对齐，不一定要先跑完整个 epoch。更稳的办法，是拿一个小 batch 直接打印 shape 和 dtype：<code>logits.shape</code>、<code>labels.dtype</code>、<code>pred.shape</code>。只要这三项都像预期，后续的错误大多数据管道或者损失调用顺序出了偏差。</p>
+<p>如果你想把这节课真的用起来，就别只盯着最终准确率。先看一条样本能不能从输入流到 logits，再看一个 batch 能不能得到稳定的 loss，最后再看预测类别是不是和直觉一致。这个顺序比“先跑再说”更省时间，也更容易定位 bug。</p>
+<p>另一个很实用的习惯，是把训练和评估写成两个固定模板。训练模板负责 <code>zero_grad -> backward -> step</code>，评估模板负责 <code>eval -> no_grad -> argmax -> 统计</code>。你只要不混用这两套模板，很多‘为什么结果忽高忽低’的问题会直接少一半。</p>
+<p>当你需要换任务，比如从 MNIST 换到别的十分类数据时，先别改学习率，先改接口：输入 shape、标签范围、最后一层输出维度、损失函数输入约定。只要这四项对齐，参数调节才有意义；如果它们没对齐，调得再久也只是修表象。</p>
+<p>场景先看什么为什么下一步训练前确认输入/标签/输出先看 shape 和 dtype直接避免接口误接训练中监控 loss看 loss 是否真的下降不是每个下降都代表学对验证时看 argmax 结果对照真实标签发现类别错位切任务改最后一层与标签num_classes 和标签范围换任务时最容易漏改</p>
+<p>收束后的检查脚本复制</p>
+<pre><code class="language-python">batch_x = batch_x.float()
 batch_y = batch_y.long()
 logits = model(batch_x)
 assert logits.shape[-1] == 10
 loss = criterion(logits, batch_y)
 with torch.no_grad():
-    pred = logits.argmax(dim=1)
-    acc = (pred == batch_y).float().mean()
-print("loss:", float(loss), "acc:", float(acc))</code></pre><div class="box warn"><h3>最后一遍检查</h3><p>把这页的表、代码和练习题一起读完后，再回头看题目。这样你写答案时不是照搬模板，而是在复述一整条已验证过的数据流。</p></div></section><section id="practice">
-      <div class="head"><h2>练习区</h2><span class="tag">20 题</span></div>
+ pred = logits.argmax(dim=1)
+ acc = (pred == batch_y).float().mean()
+print("loss:", float(loss), "acc:", float(acc))</code></pre>
+        </div>
+        <div class="box warn">
+<h3>最后一遍检查</h3>
+<p>把这页的表、代码和练习题一起读完后，再回头看题目。这样你写答案时在复述一整条已验证过的数据流。</p>
+        </div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>练习区</h2>
+          <span class="tag">20</span>
+        </div>
       <div class="practice-intro">
-        <div class="box"><strong>怎么写答案</strong><p>选择和判断题先给结论；短答题写 1-3 句话；诊断题按“错因、后果、修法”回答；最后的费曼题用完整段落串起主线。</p></div>
-        <div class="box"><strong>检查重点</strong><p>每个答案尽量落到形状、数据流、loss 输入约定或参数状态上。只写“因为不对”通常不够。</p></div>
+      <div class="box">
+<p>怎么写答案</p>
+<p>选择和判断题先给结论；短答题写 1-3 句话；诊断题按“错因、后果、修法”回答；最后的费曼题用完整段落串起主线。</p>
       </div>
-      
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>基础概念</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="1. MNIST 十分类模型最后输出维度通常是多少？" data-question="q1" data-group="基础概念" data-answer="10" data-explain="每个类别一个分数。">
-              <div class="q-meta"><span class="pill">选择</span><span class="pill">基础概念</span></div>
-              <h3>1. MNIST 十分类模型最后输出维度通常是多少？</h3>
-              <div class="solve-note">每个类别一个分数。</div>
-              <div class="choices"><label><input type="radio" name="q1" value="10">10</label><label><input type="radio" name="q1" value="1">1</label><label><input type="radio" name="q1" value="784">784</label></div>
-            <button class="check" type="button">检查</button><div class="feedback"></div></div>
-            
-            <div class="q " data-title="2. `CrossEntropyLoss` 默认输入应该是 softmax 后概率。" data-question="q2" data-group="基础概念" data-answer="错误：CrossEntropyLoss 默认接收 logits，不要先手动 softmax" data-explain="判断内部是否包含 log_softmax。">
-              <div class="q-meta"><span class="pill">判断</span><span class="pill">基础概念</span></div>
-              <h3>2. `CrossEntropyLoss` 默认输入应该是 softmax 后概率。</h3>
-              <div class="solve-note">判断内部是否包含 log_softmax。</div>
-              <div class="choices"><label><input type="radio" name="q2" value="错误：CrossEntropyLoss 默认接收 logits，不要先手动 softmax">错误：CrossEntropyLoss 默认接收 logits，不要先手动 softmax</label><label><input type="radio" name="q2" value="正确：必须先 softmax 再输入 CrossEntropyLoss">正确：必须先 softmax 再输入 CrossEntropyLoss</label></div>
-            <button class="check" type="button">检查</button><div class="feedback"></div></div>
-            
-            <div class="q " data-title="3. MNIST 图像 `[1,28,28]` 展平后特征数是 ______。" data-question="q3" data-group="基础概念">
-              <div class="q-meta"><span class="pill">填空</span><span class="pill">基础概念</span></div>
-              <h3>3. MNIST 图像 `[1,28,28]` 展平后特征数是 ______。</h3>
-              <div class="solve-note">计算乘积。</div>
-              <input type="text" name="q3" placeholder="填写 1×28×28 的乘积" autocomplete="off" data-answer="784" data-explain="1×28×28=784。">
-            <button class="check" type="button">检查</button><div class="feedback"></div></div>
-            
-          </div>
+      <div class="box">
+<p>检查重点</p>
+<p>每个答案尽量落到形状、数据流、loss 输入约定或参数状态上。只写“因为不对”通常不够。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>基础概念</h3></div>
+          <div class="quick-review">作答提示 先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。 --></div>
         </div>
-        
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="10">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. MNIST 十分类模型最后输出维度通常是多少？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>形状判断</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="4. logits `[64,10]`、labels `[64]` 对 CrossEntropyLoss 是否合理？为什么？" data-question="q4" data-group="形状判断">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">形状判断</span></div>
-              <h3>4. logits `[64,10]`、labels `[64]` 对 CrossEntropyLoss 是否合理？为什么？</h3>
-              <div class="solve-note">说明输出和目标约定。</div>
-              <textarea name="q4" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>合理。<code>CrossEntropyLoss</code> 期望输入是每个样本的类别 logits，形状通常为 <code>[batch,num_classes]</code>；标签是每个样本一个类别索引，形状为 <code>[batch]</code>，dtype 通常是 <code>long</code>。</p></details></div>
-            
-          </div>
+      <div class="choices">
+      <label><input type="radio" name="q1" value="10">10</label>
+      <label><input type="radio" name="q1" value="1">1</label>
+      <label><input type="radio" name="q1" value="784">784</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>10。每个类别一个分数。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="错误：CrossEntropyLoss 默认接收 logits，不要先手动 softmax">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 2. <code>CrossEntropyLoss</code> 默认输入应该是 softmax 后概率。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q2" value="错误：CrossEntropyLoss 默认接收 logits，不要先手动 softmax">错误：CrossEntropyLoss 默认接收 logits，不要先手动 softmax</label>
+      <label><input type="radio" name="q2" value="正确：必须先 softmax 再输入 CrossEntropyLoss">正确：必须先 softmax 再输入 CrossEntropyLoss</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>错误：CrossEntropyLoss 默认接收 logits，不要先手动 softmax。判断内部是否包含 log_softmax。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 3. MNIST 图像 <code>[1,28,28]</code> 展平后特征数是 ______。</h3>
+
+
+      <textarea name="q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>代码阅读</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="5. `x.view(x.size(0), -1)` 中 `x.size(0)` 保留什么？" data-question="q5" data-group="代码阅读">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">代码阅读</span></div>
-              <h3>5. `x.view(x.size(0), -1)` 中 `x.size(0)` 保留什么？</h3>
-              <div class="solve-note">保留 batch。</div>
-              <textarea name="q5" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p><code>x.size(0)</code> 保留 batch 维度。后面的 <code>-1</code> 让 PyTorch 自动把剩余维度合并成特征数，避免把不同样本混在一起。</p></details></div>
-            
-            <div class="q " data-title="6. `argmax(dim=1)` 为什么沿 dim=1？" data-question="q6" data-group="代码阅读">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">代码阅读</span></div>
-              <h3>6. `argmax(dim=1)` 为什么沿 dim=1？</h3>
-              <div class="solve-note">dim=1 是类别维。</div>
-              <textarea name="q6" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>因为 <code>logits</code> 的形状是 <code>[batch,num_classes]</code>，<code>dim=1</code> 是类别维。沿这个维度取最大值，得到每个样本分数最高的类别索引。</p></details></div>
-            
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>形状判断</h3></div>
+          <div class="quick-review">作答提示 先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。 --></div>
         </div>
-        
+        <div class="drill-grid">
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 4. logits <code>[64,10]</code>、labels <code>[64]</code> 对 CrossEntropyLoss 是否合理？为什么？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>错误诊断</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q full" data-title="7. 把标签做成 one-hot 后传给 CrossEntropyLoss，哪里不稳？" data-question="q7" data-group="错误诊断">
-              <div class="q-meta"><span class="pill">诊断</span><span class="pill">错误诊断</span></div>
-              <h3>7. 把标签做成 one-hot 后传给 CrossEntropyLoss，哪里不稳？</h3>
-              <div class="solve-note">说默认目标要求。</div>
-              <textarea name="q7" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>默认多分类用法里，<code>CrossEntropyLoss</code> 需要的是类别索引，而不是 one-hot。one-hot 会让 shape 和语义都偏离默认接口；应传 <code>[batch]</code> 的 long 类型标签，例如 0 到 9。</p></details></div>
-            
-            <div class="q full" data-title="8. 模型最后输出 `[batch,1]` 却做 MNIST 十分类，会怎样？" data-question="q8" data-group="错误诊断">
-              <div class="q-meta"><span class="pill">诊断</span><span class="pill">错误诊断</span></div>
-              <h3>8. 模型最后输出 `[batch,1]` 却做 MNIST 十分类，会怎样？</h3>
-              <div class="solve-note">类别分数不够。</div>
-              <textarea name="q8" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>MNIST 是 10 分类，最后输出 <code>[batch,1]</code> 只给了一个分数，无法表示 10 个类别的竞争关系。分类头应输出 <code>[batch,10]</code>，每一列对应一个数字类别。</p></details></div>
-            
-            <div class="q full" data-title="9. 测试循环忘记 `no_grad()` 的后果是什么？" data-question="q9" data-group="错误诊断">
-              <div class="q-meta"><span class="pill">诊断</span><span class="pill">错误诊断</span></div>
-              <h3>9. 测试循环忘记 `no_grad()` 的后果是什么？</h3>
-              <div class="solve-note">从计算图和内存回答。</div>
-              <textarea name="q9" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>测试时不需要反向传播，忘记 <code>torch.no_grad()</code> 会让 PyTorch 继续构建计算图，增加显存或内存开销，也会让评估循环变慢。它通常不改变预测值，但会浪费资源。</p></details></div>
-            
-          </div>
+
+      <textarea name="q4"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。合理。 CrossEntropyLoss 期望输入是每个样本的类别 logits，形状通常为 [batch,num_classes] ；标签是每个样本一个类别索引，形状为 [batch] ，dtype 通常是 long 。</p>
+        </details>
+      </article>
         </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>场景应用</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="10. 如果分类任务有 18 类，最后一层应该输出多少维？" data-question="q10" data-group="场景应用">
-              <div class="q-meta"><span class="pill">场景</span><span class="pill">场景应用</span></div>
-              <h3>10. 如果分类任务有 18 类，最后一层应该输出多少维？</h3>
-              <div class="solve-note">类别数对应输出维。</div>
-              <textarea name="q10" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>最后一层应输出 18 维，也就是 <code>[batch,18]</code>。标签索引也应落在 0 到 17 之间，评估时 <code>argmax(dim=1)</code> 才能得到 18 类中的一个。</p></details></div>
-            
-            <div class="q " data-title="11. 什么时候需要 softmax 概率？" data-question="q11" data-group="场景应用">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">场景应用</span></div>
-              <h3>11. 什么时候需要 softmax 概率？</h3>
-              <div class="solve-note">展示置信度或阈值分析。</div>
-              <textarea name="q11" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>训练时通常把 logits 直接交给 <code>CrossEntropyLoss</code>。需要展示置信度、做阈值分析、输出概率给人看，或和其他系统对接概率分布时，才显式计算 softmax。</p></details></div>
-            
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>代码阅读</h3></div>
+          <div class="quick-review">作答提示 先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。 --></div>
         </div>
-        
+        <div class="drill-grid">
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 5. <code>x.view(x.size(0), -1)</code> 中 <code>x.size(0)</code> 保留什么？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>概念区分</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="12. 匹配 logits / softmax / argmax：原始分数、概率分布、预测类别。" data-question="q12" data-group="概念区分">
-              <div class="q-meta"><span class="pill">匹配</span><span class="pill">概念区分</span></div>
-              <h3>12. 匹配 logits / softmax / argmax：原始分数、概率分布、预测类别。</h3>
-              <div class="solve-note">按顺序写。</div>
-              <textarea name="q12" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p><code>logits</code> 是模型输出的原始类别分数；<code>softmax</code> 把这些分数归一化成概率分布；<code>argmax</code> 取分数或概率最大的类别索引，作为预测类别。</p></details></div>
-            
-            <div class="q " data-title="13. 二分类 BCE 和多分类 CrossEntropy 的标签形式有什么不同？" data-question="q13" data-group="概念区分">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">概念区分</span></div>
-              <h3>13. 二分类 BCE 和多分类 CrossEntropy 的标签形式有什么不同？</h3>
-              <div class="solve-note">从 float 0/1 与 long 类别索引回答。</div>
-              <textarea name="q13" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>BCE 常见目标是 float 的 0/1 或多标签向量，和 sigmoid 搭配；多分类 <code>CrossEntropyLoss</code> 常见目标是 long 类型类别索引，每个样本一个整数类别，和 logits 搭配。</p></details></div>
-            
-          </div>
+
+      <textarea name="q5"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。x.size(0) 保留 batch 维度。后面的 -1 让 PyTorch 自动把剩余维度合并成特征数，避免把不同样本混在一起。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 6. <code>argmax(dim=1)</code> 为什么沿 dim=1？</h3>
+
+
+      <textarea name="q6"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。因为 logits 的形状是 [batch,num_classes] ， dim=1 是类别维。沿这个维度取最大值，得到每个样本分数最高的类别索引。</p>
+        </details>
+      </article>
         </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>面试追问</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="14. 为什么全连接处理图像要展平？" data-question="q14" data-group="面试追问">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">面试追问</span></div>
-              <h3>14. 为什么全连接处理图像要展平？</h3>
-              <div class="solve-note">从 Linear 输入要求回答。</div>
-              <textarea name="q14" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p><code>Linear</code> 接收的是二维张量 <code>[batch,features]</code>。图像原本有通道、高、宽三类特征维，送进全连接前要把它们合并成每个样本的一条特征向量。</p></details></div>
-            
-            <div class="q " data-title="15. 为什么 CNN 后面才重新讲图像空间结构？" data-question="q15" data-group="面试追问">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">面试追问</span></div>
-              <h3>15. 为什么 CNN 后面才重新讲图像空间结构？</h3>
-              <div class="solve-note">全连接展平会丢空间关系。</div>
-              <textarea name="q15" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>本页的全连接方案会先展平图像，空间相邻关系被弱化。CNN 会重新利用高宽结构，用卷积核在局部窗口里读模式，所以后面要专门讲图像空间结构。</p></details></div>
-            
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>错误诊断</h3></div>
+          <div class="quick-review">作答提示 先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。 --></div>
         </div>
-        
+        <div class="drill-grid">
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 7. 把标签做成 one-hot 后传给 CrossEntropyLoss，哪里不稳？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>检查清单</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q full" data-title="16. 调试 CrossEntropyLoss 前列 5 项检查。" data-question="q16" data-group="检查清单">
-              <div class="q-meta"><span class="pill">清单</span><span class="pill">检查清单</span></div>
-              <h3>16. 调试 CrossEntropyLoss 前列 5 项检查。</h3>
-              <div class="solve-note">覆盖 logits shape、label shape、dtype、softmax、类别数。</div>
-              <textarea name="q16" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>检查 5 项：logits 是否是 <code>[batch,num_classes]</code>；labels 是否是 <code>[batch]</code>；labels 是否为 long 类型；训练前是否没有手动 softmax；类别数是否和最后一层输出维度、标签取值范围一致。</p></details></div>
-            
-          </div>
+
+      <textarea name="q7"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。默认多分类用法里， CrossEntropyLoss 需要的是类别索引，而不是 one-hot。one-hot 会让 shape 和语义都偏离默认接口；应传 [batch] 的 long 类型标签，例如 0 到 9。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 8. 模型最后输出 <code>[batch,1]</code> 却做 MNIST 十分类，会怎样？</h3>
+
+
+      <textarea name="q8"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。MNIST 是 10 分类，最后输出 [batch,1] 只给了一个分数，无法表示 10 个类别的竞争关系。分类头应输出 [batch,10] ，每一列对应一个数字类别。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 9. 测试循环忘记 <code>no_grad()</code> 的后果是什么？</h3>
+
+
+      <textarea name="q9"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。测试时不需要反向传播，忘记 torch.no_grad() 会让 PyTorch 继续构建计算图，增加显存或内存开销，也会让评估循环变慢。它通常不改变预测值，但会浪费资源。</p>
+        </details>
+      </article>
         </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>代码修正</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q full" data-title="17. 代码中 `loss = criterion(torch.softmax(logits, dim=1), labels)` 应怎样改？" data-question="q17" data-group="代码修正">
-              <div class="q-meta"><span class="pill">诊断</span><span class="pill">代码修正</span></div>
-              <h3>17. 代码中 `loss = criterion(torch.softmax(logits, dim=1), labels)` 应怎样改？</h3>
-              <div class="solve-note">传 logits。</div>
-              <textarea name="q17" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>改成 <code>loss = criterion(logits, labels)</code>。<code>CrossEntropyLoss</code> 内部已经包含 log-softmax 和负对数似然的组合，提前 softmax 会让输入语义不对，也可能影响数值稳定性。</p></details></div>
-            
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>场景应用</h3></div>
+          <div class="quick-review">作答提示 先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。 --></div>
         </div>
-        
+        <div class="drill-grid">
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">场景</span></div>
+        <h3><b>Q:</b> 10. 如果分类任务有 18 类，最后一层应该输出多少维？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>迁移应用</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="18. 从 MNIST 10 类换成 26 个字母分类，需要改哪些地方？" data-question="q18" data-group="迁移应用">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">迁移应用</span></div>
-              <h3>18. 从 MNIST 10 类换成 26 个字母分类，需要改哪些地方？</h3>
-              <div class="solve-note">输出层、标签范围、指标。</div>
-              <textarea name="q18" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>至少改三处：最后一层输出从 10 改成 26；标签编码和数据集类别范围改成 0 到 25；准确率、混淆矩阵或类别名映射按 26 类读取。输入图像形状若变化，还要重新检查展平维度。</p></details></div>
-            
-          </div>
+
+      <textarea name="q10"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。最后一层应输出 18 维，也就是 [batch,18] 。标签索引也应落在 0 到 17 之间，评估时 argmax(dim=1) 才能得到 18 类中的一个。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 11. 什么时候需要 softmax 概率？</h3>
+
+
+      <textarea name="q11"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。训练时通常把 logits 直接交给 CrossEntropyLoss 。需要展示置信度、做阈值分析、输出概率给人看，或和其他系统对接概率分布时，才显式计算 softmax。</p>
+        </details>
+      </article>
         </div>
-        
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>费曼解释</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q full" data-title="19. 用 6-9 句话解释：多分类模型如何从图像输出一个类别。" data-question="q19" data-group="费曼解释">
-              <div class="q-meta"><span class="pill">费曼</span><span class="pill">费曼解释</span></div>
-              <h3>19. 用 6-9 句话解释：多分类模型如何从图像输出一个类别。</h3>
-              <div class="solve-note">串联展平、logits、softmax、CrossEntropy、标签索引、argmax、测试。</div>
-              <textarea name="q19" rows="5"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>图像先变成一条特征向量，模型最后输出每个类别的 logits。训练时把 logits 和 long 类型类别索引交给 <code>CrossEntropyLoss</code>，不需要手动 softmax。loss 会鼓励正确类别的 logit 高于其他类别。预测时可以对 logits 做 <code>argmax(dim=1)</code> 得到类别索引。若要展示置信度，再对 logits 做 softmax。调试时重点看 logits shape、label shape、label dtype 和类别数是否一致。</p></details></div>
-            
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>概念区分</h3></div>
+          <div class="quick-review">作答提示 先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。 --></div>
         </div>
-        
+        <div class="drill-grid">
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">匹配</span></div>
+        <h3><b>Q:</b> 12. 匹配 logits / softmax / argmax：原始分数、概率分布、预测类别。</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div><h3>自我检查</h3><p>这一组用来检查你是否能把概念落到判断、代码阅读和排错上。</p></div>
-            <div class="quick-review"><b>作答提示</b>先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。</div>
-          </div>
-          <div class="drill-grid">
-            
-            <div class="q " data-title="20. 学完本页后，你现在能做什么？" data-question="q20" data-group="自我检查">
-              <div class="q-meta"><span class="pill">短答</span><span class="pill">自我检查</span></div>
-              <h3>20. 学完本页后，你现在能做什么？</h3>
-              <div class="solve-note">写一个可执行动作。</div>
-              <textarea name="q20" rows="3"></textarea>
-            <button class="reveal" type="button">展开反馈</button><details><summary>参考回答</summary><p>你现在应该能检查一个多分类训练循环：确认展平后的特征数，读懂 logits 的类别维，正确使用 <code>CrossEntropyLoss</code>，用 <code>argmax(dim=1)</code> 取预测，并排查标签 shape 或 dtype 错误。</p></details></div>
-            
-          </div>
+
+      <textarea name="q12"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。logits 是模型输出的原始类别分数； softmax 把这些分数归一化成概率分布； argmax 取分数或概率最大的类别索引，作为预测类别。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q13" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">13</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 13. 二分类 BCE 和多分类 CrossEntropy 的标签形式有什么不同？</h3>
+
+
+      <textarea name="q13"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。BCE 常见目标是 float 的 0/1 或多标签向量，和 sigmoid 搭配；多分类 CrossEntropyLoss 常见目标是 long 类型类别索引，每个样本一个整数类别，和 logits 搭配。</p>
+        </details>
+      </article>
         </div>
-        
-    </section>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>面试追问</h3></div>
+          <div class="quick-review">作答提示 先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q14" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">14</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 14. 为什么全连接处理图像要展平？</h3>
 
+
+      <textarea name="q14"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。Linear 接收的是二维张量 [batch,features] 。图像原本有通道、高、宽三类特征维，送进全连接前要把它们合并成每个样本的一条特征向量。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q15" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">15</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 15. 为什么 CNN 后面才重新讲图像空间结构？</h3>
+
+
+      <textarea name="q15"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。本页的全连接方案会先展平图像，空间相邻关系被弱化。CNN 会重新利用高宽结构，用卷积核在局部窗口里读模式，所以后面要专门讲图像空间结构。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>检查清单</h3></div>
+          <div class="quick-review">作答提示 先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q16" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">16</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 16. 调试 CrossEntropyLoss 前列 5 项检查。</h3>
+
+
+      <textarea name="q16"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。检查 5 项：logits 是否是 [batch,num_classes] ；labels 是否是 [batch] ；labels 是否为 long 类型；训练前是否没有手动 softmax；类别数是否和最后一层输出维度、标签取值范围一致。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>代码修正</h3></div>
+          <div class="quick-review">作答提示 先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q17" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">17</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 17. 代码中 <code>loss = criterion(torch.softmax(logits, dim=1), labels)</code> 应怎样改？</h3>
+
+
+      <textarea name="q17"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。改成 loss = criterion(logits, labels) 。 CrossEntropyLoss 内部已经包含 log-softmax 和负对数似然的组合，提前 softmax 会让输入语义不对，也可能影响数值稳定性。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>迁移应用</h3></div>
+          <div class="quick-review">作答提示 先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q18" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">18</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 18. 从 MNIST 10 类换成 26 个字母分类，需要改哪些地方？</h3>
+
+
+      <textarea name="q18"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。至少改三处：最后一层输出从 10 改成 26；标签编码和数据集类别范围改成 0 到 25；准确率、混淆矩阵或类别名映射按 26 类读取。输入图像形状若变化，还要重新检查展平维度。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>费曼解释</h3></div>
+          <div class="quick-review">作答提示 先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q19" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">19</span><span class="pill">费曼</span></div>
+        <h3><b>Q:</b> 19. 用 6-9 句话解释：多分类模型如何从图像输出一个类别。</h3>
+
+
+      <textarea name="q19"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。图像先变成一条特征向量，模型最后输出每个类别的 logits。训练时把 logits 和 long 类型类别索引交给 CrossEntropyLoss ，不需要手动 softmax。loss 会鼓励正确类别的 logit 高于其他类别。预测时可以对 logits 做 argmax(dim=1) 得到类别索引。若要展示置信度，再对 logits 做 softmax。调试时重点看 logits shape、label shape、label dtype 和类别数是否一致。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>自我检查</h3></div>
+          <div class="quick-review">作答提示 先说判断依据，再说后果或修法。遇到代码题时，写清输入、输出和状态变化。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q20" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">20</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 20. 学完本页后，你现在能做什么？</h3>
+
+
+      <textarea name="q20"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。你现在应该能检查一个多分类训练循环：确认展平后的特征数，读懂 logits 的类别维，正确使用 CrossEntropyLoss ，用 argmax(dim=1) 取预测，并排查标签 shape 或 dtype 错误。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+<ul>
+<li>[来源说明.md]()：本页的来源说明、锚点样本和教学意图。</li>
+<li><a href="../08_%E5%8A%A0%E8%BD%BD%E6%95%B0%E6%8D%AE%E9%9B%86%EF%BC%9ADataset%E3%80%81DataLoader%E4%B8%8Emini-batch/%E5%AD%A6%E4%B9%A0%E9%A1%B5.html">08 讲</a>：batch、标签 dtype 和训练 / 测试循环约定。</li>
+<li><a href="../10_%E5%8D%B7%E7%A7%AF%E7%A5%9E%E7%BB%8F%E7%BD%91%E7%BB%9C%E5%9F%BA%E7%A1%80%EF%BC%9A%E9%80%9A%E9%81%93%E3%80%81%E5%8D%B7%E7%A7%AF%E6%A0%B8%E4%B8%8E%E6%B1%A0%E5%8C%96/%E5%AD%A6%E4%B9%A0%E9%A1%B5.html">10 讲</a>：下一步的图像输入和 CNN 形状。</li>
+<li><a href="../index.html">课程地图</a>：本页在整门课中的位置。</li>
+</ul>
+      </section>
     <section id="export">
-      <div class="head"><h2>整理练习记录</h2><span class="tag">自学记录</span></div>
-      <p class="muted">生成学习记录，可用于整理错题和回看订正；本页离线运行，不会上传答案。</p>
-      <div class="actions"><button onclick="generateRecord()">生成学习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-
     <section id="sources">
-      <div class="head"><h2>参考来源</h2><span class="tag">本地课程树</span></div>
-      <ul>
-        <li><a>来源说明.md</a>：本页的来源说明、锚点样本和教学意图。</li><li><a href="../08_%E5%8A%A0%E8%BD%BD%E6%95%B0%E6%8D%AE%E9%9B%86%EF%BC%9ADataset%E3%80%81DataLoader%E4%B8%8Emini-batch/%E5%AD%A6%E4%B9%A0%E9%A1%B5.html">08 讲</a>：batch、标签 dtype 和训练 / 测试循环约定。</li>
-        <li><a href="../10_%E5%8D%B7%E7%A7%AF%E7%A5%9E%E7%BB%8F%E7%BD%91%E7%BB%9C%E5%9F%BA%E7%A1%80%EF%BC%9A%E9%80%9A%E9%81%93%E3%80%81%E5%8D%B7%E7%A7%AF%E6%A0%B8%E4%B8%8E%E6%B1%A0%E5%8C%96/%E5%AD%A6%E4%B9%A0%E9%A1%B5.html">10 讲</a>：下一步的图像输入和 CNN 形状。</li>
-        <li><a href="../index.html">课程地图</a>：本页在整门课中的位置。</li>
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
       </ul>
     </section>
-  </main>
-</div>
-<script src="../assets/vendor/katex/katex.min.js"></script><script src="../assets/vendor/katex/auto-render.min.js"></script><script src="../assets/vendor/prism/prism-core.min.js"></script><script src="../assets/vendor/prism/prism-clike.min.js"></script><script src="../assets/vendor/prism/prism-python.min.js"></script><script src="../assets/vendor/prism/prism-bash.min.js"></script><script src="../assets/vendor/prism/prism-json.min.js"></script><script src="../assets/vendor/prism/prism-line-numbers.min.js"></script><script src="../assets/study-page.js"></script></body>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
+</body>
 </html>

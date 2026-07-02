@@ -4,262 +4,487 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>20 Hook系统｜Claude Code 工作流</title>
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body>
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Claude Code 工作流</strong><span>20｜Hook系统</span></div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>目标与主线</a>
-      <a href="#concept"><span class="dot"></span>Hook直觉</a>
-      <a href="#events"><span class="dot"></span>三个时机</a>
-      <a href="#runtime"><span class="dot"></span>运行流程</a>
-      <a href="#trust"><span class="dot"></span>信任与阻塞</a>
-      <a href="#pitfall"><span class="dot"></span>常见误区</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>整理学习答案</a>
-    </nav>
-    <div class="side-note">Hook 的关键不是改主循环，而是在主循环预留的关键时机插入自定义逻辑。</div>
-  </aside>
-  <main>
-    <header class="hero" id="goal">
-      <div>
-        <div class="kicker">Hook system</div>
-        <h1>Hook系统</h1>
-        <p class="muted">Hook 是系统在固定主流程中预留的扩展口。Claude Code 工作流 这一节用 `.hooks.json` 配置 `session_start`、`pre_tool_use`、`post_tool_use` 三个时机，让你不修改 Agent loop 主体，也能在会话开始、工具执行前、工具执行后插入命令、记录日志、阻止操作或补充上下文。</p>
-        <div class="map">
-          <span class="node">session_start</span><span class="arrow">→</span>
-          <span class="node">LLM response</span><span class="arrow">→</span>
-          <span class="node">pre_tool_use</span><span class="arrow">→</span>
-          <span class="node">run tool</span><span class="arrow">→</span>
-          <span class="node">post_tool_use</span>
+<body data-course="Claude Code 工作流" data-unit="20">
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">Claude Code 工作流</a>
+        <span class="sep">/</span>
+        <span>20</span>
+      </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Hook system</div>
+      <div class="hero-meta">
+        <span class="hero-badge">20</span>
+      </div>
+      <h1 class="hero-title">20 Hook系统｜Claude Code 工作流</h1>
+      <p class="hero-desc">Hook 是系统在固定主流程中预留的扩展口。Claude Code 工作流 这一节用 `.hooks.json` 配置 `session_start`、`pre_tool_use`、`post_tool_use` 三个时机，让你不修改 Agent loop 主体，也能在会话开始、工具执行前、工具执行后插入命令、记录日志、阻止操作或补充上下文。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../19_权限系统/学习页.html">上一节</a>
+            <a href="../21_记忆系统/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#concept">1. Hook 是固定流程里的扩展口</a>
+      <a href="#events">2. 本节三个 Hook 时机</a>
+      <a href="#runtime">3. `run_hooks` 如何运行 Hook</a>
+      <a href="#trust">4. 信任标记、matcher、blocked 与 message</a>
+      <a href="#pitfall">5. 常见误区：Hook 不是把所有逻辑塞进主循环</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="concept">
+        <div class="head">
+          <h2>1. Hook 是固定流程里的扩展口</h2>
+          <span class="tag">extension</span>
         </div>
-        <p>学完本页，你应该能解释 Hook 与生命周期、中间件、模板方法的共同点，并能设计一个最小 Agent Hook。</p>
-      </div>
-      <div class="box soft">
-        <h3>来源材料</h3>
-        <p>视频：《Learn Claude Code 源码详解》灵活扩展：Hook 系统，开发实战分享屋，2026-04-15。</p>
-        <p>重点：Hook 概念、workspace trust、`.hooks.json`、`run_hooks`、matcher、环境变量、blocked 和 message。</p>
-      </div>
-    </header>
-
-    <section id="concept">
-      <div class="head"><h2>1. Hook 是固定流程里的扩展口</h2><span class="tag">extension point</span></div>
-      <p>Hook 的直觉：框架把主流程定死，在关键节点留下口子，让使用者插入自定义逻辑，而不必修改框架源码。Vue 的生命周期、Android Activity 生命周期、测试框架的 setup/teardown、Web 框架 middleware、模板方法模式里的抽象步骤，都可以用这个直觉理解。</p>
-      <p>Agent Harness 里的 Hook 也一样。Agent loop 仍然负责发请求、解析 tool use、执行工具、回填结果；Hook 只是在某些时机被调用。这样既保持主流程稳定，又允许用户或插件扩展行为。</p>
-      <p>边界也要清楚：Hook 是旁路扩展，不是新的主流程。它可以观察、记录、阻断或补充上下文，但不应该悄悄替代 Agent loop 的工具执行、权限检查和消息回填。</p>
-      <div class="grid3">
-        <div class="box soft"><h3>生命周期</h3><p>在 create、mount、destroy 等节点插入逻辑。</p></div>
-        <div class="box soft"><h3>中间件</h3><p>请求和响应经过一层层 middleware。</p></div>
-        <div class="box soft"><h3>模板方法</h3><p>主流程固定，局部步骤交给子类实现。</p></div>
-      </div>
-      <p>你现在应该能做什么：用“固定主流程 + 预留扩展点”解释 Hook。</p>
-    </section>
-
-    <section id="events">
-      <div class="head"><h2>2. 本节三个 Hook 时机</h2><span class="tag">events</span></div>
-      <p>代码里初始化了一个 hooks 字典，包含三个 key：`pre_tool_use`、`post_tool_use`、`session_start`。每个 key 对应一个列表，可以挂多个 Hook。Hook 配置来自 `.hooks.json`。</p>
-      <div class="codebar"><span class="label">Hook 配置示例</span><span>JSON</span></div>
-      <pre><code>{
-  "session_start": [
-    {"command": "echo session start ok"}
-  ],
-  "pre_tool_use": [
-    {"matcher": "bash", "command": "echo before bash"},
-    {"matcher": "read_file", "command": "echo before read"}
-  ],
-  "post_tool_use": [
-    {"matcher": "*", "command": "echo post tool use ok"}
-  ]
+<p>Hook 的直觉：框架把主流程定死，在关键节点留下口子，让使用者插入自定义逻辑，而不必修改框架源码。Vue 的生命周期、Android Activity 生命周期、测试框架的 setup/teardown、Web 框架 middleware、模板方法模式里的抽象步骤，都可以用这个直觉理解。</p>
+<p>边界也要清楚：Hook 是旁路扩展，不是新的主流程。它可以观察、记录、阻断或补充上下文，但不应该悄悄替代 Agent loop 的工具执行、权限检查和消息回填。</p>
+<p>你现在应该能做什么：用“固定主流程 + 预留扩展点”解释 Hook。</p>
+      </section>
+      <section id="events">
+        <div class="head">
+          <h2>2. 本节三个 Hook 时机</h2>
+          <span class="tag">events</span>
+        </div>
+<p>代码里初始化了一个 hooks 字典，包含三个 key：<code>pre_tool_use</code>、<code>post_tool_use</code>、<code>session_start</code>。每个 key 对应一个列表，可以挂多个 Hook。Hook 配置来自 <code>.hooks.json</code>。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-events-1">复制</button></div>
+        <pre id="code-events-1" data-export-context="代码" data-export-lang="text"><code class="language-text">{
+ "session_start": [
+ {"command": "echo session start ok"}
+ ],
+ "pre_tool_use": [
+ {"matcher": "bash", "command": "echo before bash"},
+ {"matcher": "read_file", "command": "echo before read"}
+ ],
+ "post_tool_use": [
+ {"matcher": "*", "command": "echo post tool use ok"}
+ ]
 }</code></pre>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Hook</th><th>触发时机</th><th>典型用途</th></tr></thead>
-          <tbody>
-            <tr><td>`session_start`</td><td>会话开始时</td><td>加载环境、记录启动、注入初始上下文。</td></tr>
-            <tr><td>`pre_tool_use`</td><td>工具执行前</td><td>检查、阻止、改写、记录即将执行的操作。</td></tr>
-            <tr><td>`post_tool_use`</td><td>工具执行后</td><td>记录结果、上报可观测性、补充消息。</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p>选择 Hook 时机可以按问题反推：需要准备环境，用 `session_start`；需要在危险动作前把关，用 `pre_tool_use`；需要记录实际结果或写审计，用 `post_tool_use`。同一需求不要随便挂到所有事件上，否则会重复执行或造成难查的副作用。</p>
-    </section>
-
-    <section id="runtime">
-      <div class="head"><h2>3. `run_hooks` 如何运行 Hook</h2><span class="tag">runtime</span></div>
-      <p>`run_hooks(event, context)` 是核心。它先创建 result：`blocked=false`、`messages=[]`。然后检查 workspace trust。如果当前工作区不可信，Hook 不运行。可信后，根据 event 取出对应 Hook 列表，按 matcher 判断是否匹配当前工具，再把 context 写入环境变量并运行 command。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <div class="viz-actions">
-              <button data-hook="start" class="active">session_start</button>
-              <button data-hook="pre">pre_tool_use</button>
-              <button data-hook="tool">run tool</button>
-              <button data-hook="post">post_tool_use</button>
-            </div>
-            <div class="timeline" id="hookText"></div>
-          </div>
-          <div class="viz-cell">
-            <h3 id="hookTitle">session_start</h3>
-            <p id="hookExplain">说明会显示在这里。</p>
-            <div class="hook-step" data-hook-step="trust">1. check workspace trust</div>
-            <div class="hook-step" data-hook-step="match">2. matcher 筛选</div>
-            <div class="hook-step" data-hook-step="env">3. 注入环境变量</div>
-            <div class="hook-step" data-hook-step="run">4. 执行 command</div>
-            <div class="hook-step" data-hook-step="inject">5. 结果注入 messages/output</div>
-            <div class="viz-note">pre 可以阻止工具，post 可以把工具结果之后的额外信息补回上下文。</div>
-          </div>
+<p>Hook触发时机典型用途</p>
         </div>
-      </div>
-      <div class="codebar"><span class="label">伪代码：Hook 运行结果</span><span>Python</span></div>
-      <pre><code>result = {"blocked": False, "messages": []}
+<p><code>session_start</code>会话开始时加载环境、记录启动、注入初始上下文。</p>
+<p><code>pre_tool_use</code>工具执行前检查、阻止、改写、记录即将执行的操作。</p>
+<p><code>post_tool_use</code>工具执行后记录结果、上报可观测性、补充消息。</p>
+      </section>
+      <section id="runtime">
+        <div class="head">
+          <h2>3. `run_hooks` 如何运行 Hook</h2>
+          <span class="tag">runtime</span>
+        </div>
+<p><code>run_hooks(event, context)</code> 是核心。它先创建 result：<code>blocked=false</code>、<code>messages=[]</code>。然后检查 workspace trust。如果当前工作区不可信，Hook 不运行。可信后，根据 event 取出对应 Hook 列表，按 matcher 判断是否匹配当前工具，再把 context 写入环境变量并运行 command。</p>
+<p>session_start</p>
+<p>说明会显示在这里。</p>
+<ol>
+<li>check workspace trust</li>
+<li>matcher 筛选</li>
+<li>注入环境变量</li>
+<li>执行 command</li>
+<li>结果注入 messages/output</li>
+</ol>
+<p>pre 可以阻止工具，post 可以把工具结果之后的额外信息补回上下文。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-runtime-1">复制</button></div>
+        <pre id="code-runtime-1" data-export-context="代码" data-export-lang="text"><code class="language-text">result = {"blocked": False, "messages": []}
 
 if not check_workspace_trust():
-    return result
+ return result
 
 for hook in hooks[event]:
-    if not matches(hook.get("matcher"), context):
-        continue
+ if not matches(hook.get("matcher"), context):
+ continue
 
-    env["HOOK_EVENT"] = event
-    env["HOOK_TOOL_NAME"] = context.get("tool_name", "")
-    env["HOOK_TOOL_INPUT"] = json.dumps(context.get("tool_input", {}))
-    env["HOOK_TOOL_OUTPUT"] = context.get("tool_output", "")[:10000]
+ env["HOOK_EVENT"] = event
+ env["HOOK_TOOL_NAME"] = context.get("tool_name", "")
+ env["HOOK_TOOL_INPUT"] = json.dumps(context.get("tool_input", {}))
+ env["HOOK_TOOL_OUTPUT"] = context.get("tool_output", "")[:10000]
 
-    output = run_command(hook["command"], env=env)
-    result = merge_hook_output(result, output)</code></pre>
-      <div class="codebar"><span class="label">Worked example：阻止访问密钥文件</span><span>pre_tool_use</span></div>
-      <pre><code>context:
-  event = "pre_tool_use"
-  tool_name = "read_file"
-  tool_input.path = ".env"
+ output = run_command(hook["command"], env=env)
+ result = merge_hook_output(result, output)</code></pre>
+<p>Worked example：阻止访问密钥文件pre_tool_use</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-runtime-2">复制</button></div>
+        <pre id="code-runtime-2" data-export-context="代码" data-export-lang="text"><code class="language-text">context:
+ event = "pre_tool_use"
+ tool_name = "read_file"
+ tool_input.path = ".env"
 
 hook:
-  matcher = "read_file"
-  command = "check-sensitive-path"
+ matcher = "read_file"
+ command = "check-sensitive-path"
 
 hook output:
-  {"blocked": true, "messages": ["Blocked reading .env because it may contain secrets."]}
+ {"blocked": true, "messages": ["Blocked reading .env because it may contain secrets."]}
 
 Agent loop:
-  不执行 read_file
-  把 blocked message 作为工具结果或上下文反馈给模型
-  让模型改用安全路径或请求用户确认</code></pre>
-    </section>
-
-    <section id="trust">
-      <div class="head"><h2>4. 信任标记、matcher、blocked 与 message</h2><span class="tag">control</span></div>
-      <p>Hook 可以执行本地命令，所以必须先有工作区信任。视频中为了 debug 创建了类似 `.claude/.claude_trusted` 的标记文件，否则 `check_workspace_trust` 会拒绝运行 Hook。这是安全设计：不可信工作区里的 Hook 不应该随便执行命令。</p>
-      <p>matcher 决定 Hook 是否命中当前工具。`matcher="bash"` 只匹配 Bash；`matcher="read_file"` 只匹配读文件；`matcher="*"` 匹配所有工具。未匹配的 Hook 会 continue。</p>
-      <p>Hook 命令输出如果是普通文本，可以仅打印或记录；如果是结构化 JSON，可以携带 `blocked` 和 `messages`。`blocked=true` 时，pre Hook 可以阻止工具执行；messages 可以补充到模型上下文，让模型知道 Hook 发现了什么。</p>
-      <p>messages 的定位是“给模型看的补充信息”，不是给用户看的最终报告。它应该短、明确、可操作，例如说明为什么被阻止、下一步可选什么；不要把大量日志或完整文件内容塞进去，避免污染上下文。</p>
-      <div class="codebar"><span class="label">结构化 Hook 输出：阻止危险操作</span><span>JSON</span></div>
-      <pre><code>{
-  "blocked": true,
-  "messages": [
-    "pre_tool_use blocked this command because it touches a forbidden path."
-  ]
-}</code></pre>
-      <p>你现在应该能做什么：判断一个 Hook 是记录型、增强上下文型，还是阻断型。</p>
-    </section>
-
-    <section id="pitfall">
-      <div class="head"><h2>5. 常见误区：Hook 不是把所有逻辑塞进主循环</h2><span class="tag">pitfalls</span></div>
-      <p>Hook 的价值是开闭原则：对主循环修改关闭，对扩展开放。你不需要改 Agent loop，就能在关键时机加日志、检查、通知、上下文注入、记忆写入或安全阻断。</p>
-      <div class="grid2">
-        <div class="box warn">
-          <h3>错误做法</h3>
-          <p>每新增一个需求，就往主循环里加 if/else，最终 loop 变成杂乱控制中心。</p>
+ 不执行 read_file
+ 把 blocked message 作为工具结果或上下文反馈给模型
+ 让模型改用安全路径或请求用户确认</code></pre>
         </div>
-        <div class="box ok">
-          <h3>Hook 做法</h3>
-          <p>主循环只负责触发事件；扩展逻辑放进配置和 Hook command。</p>
+      </section>
+      <section id="trust">
+        <div class="head">
+          <h2>4. 信任标记、matcher、blocked 与 message</h2>
+          <span class="tag">control</span>
         </div>
-      </div>
-      <div class="codebar error"><span class="label">错误示例：不可信工作区直接运行 Hook</span><span>安全风险</span></div>
-      <pre><code># 风险：任意项目里的 .hooks.json 都能执行本地命令
+<p>Hook 可以执行本地命令，所以必须先有工作区信任。视频中为了 debug 创建了类似 <code>.claude/.claude_trusted</code> 的标记文件，否则 <code>check_workspace_trust</code> 会拒绝运行 Hook。这是安全设计：不可信工作区里的 Hook 不应该随便执行命令。</p>
+<p>Hook 命令输出如果是普通文本，可以仅打印或记录；如果是结构化 JSON，可以携带 <code>blocked</code> 和 <code>messages</code>。<code>blocked=true</code> 时，pre Hook 可以阻止工具执行；messages 可以补充到模型上下文，让模型知道 Hook 发现了什么。</p>
+<p>结构化 Hook 输出：阻止危险操作JSON</p>
+<p>你现在应该能做什么：判断一个 Hook 是记录型、增强上下文型，还是阻断型。</p>
+      </section>
+      <section id="pitfall">
+        <div class="head">
+          <h2>5. 常见误区：Hook 不是把所有逻辑塞进主循环</h2>
+          <span class="tag">pitfalls</span>
+        </div>
+<p>Hook 的价值是开闭原则：对主循环修改关闭，对扩展开放。你不需要改 Agent loop，就能在关键时机加日志、检查、通知、上下文注入、记忆写入或安全阻断。</p>
+        <div class="box">
+<h3>Hook 做法</h3>
+<p>主循环只负责触发事件；扩展逻辑放进配置和 Hook command。</p>
+<p>错误示例：不可信工作区直接运行 Hook安全风险</p>
+<pre><code class="language-text"># 风险：任意项目里的 .hooks.json 都能执行本地命令
 for hook in hooks[event]:
-    run_command(hook["command"])
+ run_command(hook["command"])
 
 # 更稳：先检查 workspace trust，再运行 Hook。</code></pre>
-      <p>设计 Hook 时还要避免隐藏副作用。记录型 Hook 应尽量只写日志；阻断型 Hook 要返回明确原因；增强上下文型 Hook 要控制输出长度。Hook 一旦能修改文件、发网络请求或执行命令，就必须纳入权限和审计视野。</p>
-    </section>
+<p>设计 Hook 时还要避免隐藏副作用。记录型 Hook 应尽量只写日志；阻断型 Hook 要返回明确原因；增强上下文型 Hook 要控制输出长度。Hook 一旦能修改文件、发网络请求或执行命令，就必须纳入权限和审计视野。</p>
+        </div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">检查理解</span>
+        </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、Hook 直觉</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 1. 用一句话定义 Hook。</h3>
 
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、Hook 直觉</h3><p>先把概念说清楚。</p></div><div class="box soft">固定主流程 + 预留扩展点。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="1. Hook定义"><div class="q-meta"><span class="pill">短答</span></div><h3>1. 用一句话定义 Hook。</h3><textarea name="q1"></textarea></div>
-          <div class="q" data-title="2. 类比"><div class="q-meta"><span class="pill">清单</span></div><h3>2. 列出 3 个传统软件开发中的 Hook 类比。</h3><textarea name="q2"></textarea></div>
-          <div class="q" data-title="3. 开闭原则"><div class="q-meta"><span class="pill">解释</span></div><h3>3. Hook 如何体现开闭原则？</h3><textarea name="q3"></textarea></div>
-          <div class="q" data-title="4. 中间件"><div class="q-meta"><span class="pill">比较</span></div><h3>4. Hook 和 Web 中间件有什么相似之处？</h3><textarea name="q4"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>二、三个时机</h3><p>掌握本节具体 Hook。</p></div><div class="box warn">session_start、pre_tool_use、post_tool_use。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="5. 三个Hook"><div class="q-meta"><span class="pill">填空</span></div><h3>5. 本节代码定义了哪三个 Hook event？</h3><input type="text" name="q5"></div>
-          <div class="q" data-title="6. session_start"><div class="q-meta"><span class="pill">用途</span></div><h3>6. `session_start` 适合做什么？</h3><textarea name="q6"></textarea></div>
-          <div class="q" data-title="7. pre_tool_use"><div class="q-meta"><span class="pill">用途</span></div><h3>7. `pre_tool_use` 为什么适合做安全检查或阻断？</h3><textarea name="q7"></textarea></div>
-          <div class="q" data-title="8. post_tool_use"><div class="q-meta"><span class="pill">用途</span></div><h3>8. `post_tool_use` 适合记录哪些信息？</h3><textarea name="q8"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、运行机制</h3><p>看懂 run_hooks。</p></div><div class="box soft">trust、matcher、env、command、result。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="9. 工作区信任"><div class="q-meta"><span class="pill">解释</span></div><h3>9. 为什么运行 Hook 前要检查 workspace trust？</h3><textarea name="q9"></textarea></div>
-          <div class="q" data-title="10. matcher"><div class="q-meta"><span class="pill">解释</span></div><h3>10. matcher 如何决定某个 Hook 是否运行？</h3><textarea name="q10"></textarea></div>
-          <div class="q" data-title="11. 环境变量"><div class="q-meta"><span class="pill">清单</span></div><h3>11. Hook command 可以从哪些环境变量拿到上下文？</h3><textarea name="q11"></textarea></div>
-          <div class="q" data-title="12. blocked"><div class="q-meta"><span class="pill">机制</span></div><h3>12. `blocked=true` 在 pre hook 中意味着什么？</h3><textarea name="q12"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、设计迁移</h3><p>把 Hook 用在自己的 Agent。</p></div><div class="box soft">Hook 可用于日志、记忆、安全、通知、上下文增强。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="13. 日志Hook"><div class="q-meta"><span class="pill">设计</span></div><h3>13. 设计一个 post_tool_use 日志 Hook，它应该记录什么？</h3><textarea name="q13"></textarea></div>
-          <div class="q" data-title="14. 记忆Hook"><div class="q-meta"><span class="pill">迁移</span></div><h3>14. 如何用 session_stop 或 post_tool_use Hook 写入长期记忆？</h3><textarea name="q14"></textarea></div>
-          <div class="q" data-title="15. 安全Hook"><div class="q-meta"><span class="pill">设计</span></div><h3>15. 设计一个 pre_tool_use Hook，用来阻止访问某个敏感路径。</h3><textarea name="q15"></textarea></div>
-          <div class="q" data-title="16. 主循环关系"><div class="q-meta"><span class="pill">解释</span></div><h3>16. 为什么 Hook 不应该让主循环变得更复杂？</h3><textarea name="q16"></textarea></div>
-          <div class="q full" data-title="17. 面试表达"><div class="q-meta"><span class="pill">表达</span></div><h3>17. 用 3-5 句话解释 Hook 系统在 Agent Harness 中的价值。</h3><textarea name="q17"></textarea></div>
-          <div class="q full" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：Hook 如何让 Agent 在不改主循环的情况下扩展能力。</h3><div class="solve-note">请串联主流程、扩展点、session_start、pre_tool_use、post_tool_use、matcher、workspace trust、blocked、messages。</div><textarea name="q18"></textarea></div>
-        </div>
-      </div>
-    </section>
 
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 2. 列出 3 个传统软件开发中的 Hook 类比。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 3. Hook 如何体现开闭原则？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">比较</span></div>
+        <h3><b>Q:</b> 4. Hook 和 Web 中间件有什么相似之处？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、三个时机</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 5. 本节代码定义了哪三个 Hook event？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">用途</span></div>
+        <h3><b>Q:</b> 6. <code>session_start</code> 适合做什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">用途</span></div>
+        <h3><b>Q:</b> 7. <code>pre_tool_use</code> 为什么适合做安全检查或阻断？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">用途</span></div>
+        <h3><b>Q:</b> 8. <code>post_tool_use</code> 适合记录哪些信息？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、运行机制</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 9. 为什么运行 Hook 前要检查 workspace trust？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 10. matcher 如何决定某个 Hook 是否运行？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 11. Hook command 可以从哪些环境变量拿到上下文？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">机制</span></div>
+        <h3><b>Q:</b> 12. <code>blocked=true</code> 在 pre hook 中意味着什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、设计迁移</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b> 13. 设计一个 post_tool_use 日志 Hook，它应该记录什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 14. 如何用 session_stop 或 post_tool_use Hook 写入长期记忆？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b> 15. 设计一个 pre_tool_use Hook，用来阻止访问某个敏感路径。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 16. 为什么 Hook 不应该让主循环变得更复杂？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">表达</span></div>
+        <h3><b>Q:</b> 17. 用 3-5 句话解释 Hook 系统在 Agent Harness 中的价值。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 18. 用 6-9 句话讲清楚：Hook 如何让 Agent 在不改主循环的情况下扩展能力。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>整理学习答案</h2><span class="tag">学习输出</span></div>
-      <p class="muted">完成练习后生成 Markdown 学习笔记，便于保存和继续学习。</p>
-      <div class="actions"><button onclick="generateRecord()">生成学习笔记</button><button class="ghost" onclick="copyRecord()">复制内容</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">学习笔记会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-const hookStates={
-  start:["session_start","event = session_start\ncontext = {}\n\ncheck_workspace_trust -> true\nhooks['session_start'] -> [echo session start ok]\nrun command\noutput = 'session start ok'\n\nresult.blocked = false","会话启动时运行，适合加载配置、记录启动或注入初始提示。",["trust","run"]],
-  pre:["pre_tool_use","event = pre_tool_use\ncontext.tool_name = write_file\ncontext.tool_input = {path:'hello.py', content:'print(...)'}\n\nmatcher bash -> skip\nmatcher read_file -> skip\n\nresult.blocked = false","pre hook 在工具执行前运行。matcher 不匹配就跳过；匹配后可以检查或阻止。",["trust","match","env","run"]],
-  tool:["run tool","pre result.blocked = false\n\nrun write_file\noutput = 'Created hello.py'\n\n把 output 放入 post hook context。","只有 pre hook 没有阻塞，真正工具才会执行。",["inject"]],
-  post:["post_tool_use","event = post_tool_use\nmatcher = '*'\ncontext.tool_output = 'Created hello.py'\n\nenv.HOOK_TOOL_OUTPUT = first 10000 chars\nrun command: echo post tool use ok\n\npost messages 可追加到工具结果或上下文。","post hook 在工具执行后运行，适合记录结果、上报可观测性或补充上下文。",["trust","match","env","run","inject"]]
-};
-function renderHook(name){const d=hookStates[name]||hookStates.start;document.querySelectorAll("[data-hook]").forEach(b=>b.classList.toggle("active",b.dataset.hook===name));document.querySelectorAll("[data-hook-step]").forEach(s=>s.classList.toggle("active",d[3].includes(s.dataset.hookStep)));document.getElementById("hookTitle").textContent=d[0];document.getElementById("hookText").textContent=d[1];document.getElementById("hookExplain").textContent=d[2]}
-document.querySelectorAll("[data-hook]").forEach(btn=>btn.addEventListener("click",()=>renderHook(btn.dataset.hook)));renderHook("start");
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
-const questions=[
-  ["Hook直觉","1. Hook 定义。","q1","text"],["Hook直觉","2. 传统 Hook 类比。","q2","text"],["Hook直觉","3. 开闭原则。","q3","text"],["Hook直觉","4. Hook 与中间件相似。","q4","text"],["三个时机","5. 三个 Hook event。","q5","text"],["三个时机","6. session_start 用途。","q6","text"],["三个时机","7. pre_tool_use 用途。","q7","text"],["三个时机","8. post_tool_use 用途。","q8","text"],["运行机制","9. workspace trust。","q9","text"],["运行机制","10. matcher。","q10","text"],["运行机制","11. 环境变量。","q11","text"],["运行机制","12. blocked=true。","q12","text"],["设计迁移","13. post_tool_use 日志 Hook。","q13","text"],["设计迁移","14. 记忆 Hook。","q14","text"],["设计迁移","15. 安全 Hook。","q15","text"],["设计迁移","16. 主循环关系。","q16","text"],["设计迁移","17. Harness 价值。","q17","text"],["费曼解释","18. Hook 系统费曼解释。","q18","text"]
-];
-function val(q){const el=document.querySelector(`[name="${q[2]}"]`);return el?el.value.trim():""}
-function generateRecord(){const groups={};const missing=[];questions.forEach(q=>{const v=val(q);if(!v)missing.push(q[1]);if(!groups[q[0]])groups[q[0]]=[];groups[q[0]].push({t:q[1],a:v||"（未填写）"})});let out="# 20 Hook系统｜学习笔记\n\n";Object.keys(groups).forEach(g=>{out+=`## ${g}\n\n`;groups[g].forEach(item=>{out+=`### ${item.t}\n${item.a}\n\n`})});document.getElementById("record").textContent=out;const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=val(["","","q18","text"]);const keys=["主流程","session_start","pre_tool_use","post_tool_use","matcher","trust","blocked"];const lack=keys.filter(k=>!f.includes(k));if(f&&f.length<120)warnings.push("费曼解释偏短，建议讲成 6-9 句话。");if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join("、")}。`);const q=document.getElementById("quality");q.style.display="block";q.textContent=warnings.length?warnings.join("\n"):"学习笔记已生成，便于保存和继续学习。"}
-function copyRecord(){navigator.clipboard.writeText(document.getElementById("record").textContent).catch(()=>alert("复制失败，请手动复制。"))}
-</script>
-<script src="../assets/study-page.js"></script>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

@@ -4,351 +4,639 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>46_P47｜（延申）用语言模型來解释语言模型 (下)</title>
-  <link rel="stylesheet" href="../../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body data-study-kind="extension" data-feynman-keywords="Subject model、Explainer、Simulator、activation、correlation score、revision、not all、单一神经元">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand">
-      <strong>46_P47</strong>
-      <span>（延申）用语言模型來解释语言模型 (下)<br>延伸专题 · 李宏毅生成式 AI 课程</span>
+<body data-course="李宏毅 LLM 课程" data-unit="46">
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅 LLM 课程</a>
+        <span class="sep">/</span>
+        <span>46</span>
+      </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
     </div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>学习目标</a>
-      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
-      <a href="#terms"><span class="dot"></span>术语表</a>
-      <a href="#lecture"><span class="dot"></span>讲义主线</a>
-      <a href="#source"><span class="dot"></span>课程线索</a>
-      <a href="#example"><span class="dot"></span>最小例子</a>
-      <a href="#viz"><span class="dot"></span>交互观察</a>
-      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>自学记录</a>
-    </nav>
-    <div class="side-note">这一页只处理 P47 下半段：解释如何打分、为什么样本选择会误导解释、怎样用模型生成反例修正解释，以及这套方法还有哪些硬伤。</div>
-  </aside>
-  <main>
-    <section class="hero" id="goal">
-      <div>
-        <div class="kicker">LI HONGYI LLM · 延伸专题</div>
-        <h1>（延申）用语言模型來解释语言模型 (下)</h1>
-        <p>上半段已经讲过一个基本想法：让一个语言模型观察 GPT-2 某个神经元在句子上的 activation，再写出这个神经元可能在侦测什么。下半段继续追问：这个解释怎么验收？如果给 explainer 的例子本身有偏差，它会不会写出听起来合理但实际错误的解释？</p>
-        <p>核心链路是 Subject model、Explainer、Simulator 三个角色。Subject model 是被解释的模型，视频里是 GPT-2；Explainer 读取神经元的高 activation 例子并写解释，视频里用 GPT-4；Simulator 根据解释扮演这个神经元，再用预测出的 activation 和真实 activation 比较。读到这里，你应能先画出三角色流程，再说明打分为什么不是一句“解释得好”就结束。</p>
-        <div class="map"><span class="node">Subject model</span><span class="arrow">→</span><span class="node">activation pattern</span><span class="arrow">→</span><span class="node">Explainer</span><span class="arrow">→</span><span class="node">Simulator</span><span class="arrow">→</span><span class="node">score / revision</span></div>
-        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=47">https://www.bilibili.com/video/BV1JKoeBiEt4?p=47</a></p>
-      </div>
-      <div class="route">
-        <h3>学完后要能做四件事</h3>
-        <ol><li>说清 Subject model、Explainer、Simulator 各自读什么、写什么、不能替谁负责。</li><li>解释 correlation score 和替换神经元的 whole-model output 检查为什么会互相印证。</li><li>用 not all / all 的例子说明高 activation 样本为什么会让解释过宽。</li><li>指出这篇方法的边界：单一神经元未必有独立功能，语言未必能完整描述神经元，低分也可能是 simulator 太弱。</li></ol>
-      </div>
-    </section>
+  </nav>
 
-    <section id="skeleton">
-      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
-      <div class="grid3">
-        <div class="box soft"><h3>解释不是直接相信模型</h3><p>Explainer 写出的句子只是一份候选解释。它可能准确，也可能只是抓住了高 activation 例子里最显眼的词。课程后半段一直在补一件事：把候选解释放回模型行为里检查。</p><p>判断句：只要一个解释没有经过真实 activation 或整网输出检验，它还不能算稳定解释。</p></div>
-        <div class="box"><h3>打分要看两层行为</h3><p>第一层是神经元级别：Simulator 根据解释预测某个神经元在新句子上的 activation，再和 GPT-2 真实 activation 做 correlation。第二层是模型级别：把 GPT-2 的一个神经元换成 GPT-4 扮演的神经元，看整个 GPT-2 输出是否变化。</p><p>两种分数正相关时，说明“像不像这个神经元”和“会不会影响整体输出”没有明显冲突。读到这里，你应能区分局部打分和整体打分。</p></div>
-        <div class="box warn"><h3>样本选择会改变解释</h3><p>Explainer 不可能读完上万个句子的 activation，只能看一小部分例子。通常会挑 target neuron 反应最强的句子，但这种选择会漏掉负例和反例。not all 的例子就是典型：只看正例时，模型容易把神经元解释成“看到 all 就启动”。</p><p>核心直觉：正例告诉你“哪些东西会亮”，反例才告诉你“边界在哪里”。没有边界的解释通常会过宽。</p></div>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">LI HONGYI LLM · 延伸专题</div>
+      <div class="hero-meta">
+        <span class="hero-badge">46</span>
       </div>
-      <div class="mini-graph">
-        <div class="box"><h3>1. 观察</h3><p>让 GPT-2 读大量句子，记录某个 neuron 的 activation。</p></div>
-        <div class="box"><h3>2. 解释</h3><p>把高 activation 片段给 GPT-4，让它写出神经元的自然语言解释。</p></div>
-        <div class="box"><h3>3. 扮演</h3><p>让 GPT-4 根据解释预测同一神经元在新句子上的反应。</p></div>
-        <div class="box"><h3>4. 修正</h3><p>用分数和反例检查解释，必要时生成新句子再 revision。</p></div>
+      <h1 class="hero-title">46_P47｜（延申）用语言模型來解释语言模型 (下)</h1>
+      <p class="hero-desc">上半段已经讲过一个基本想法：让一个语言模型观察 GPT-2 某个神经元在句子上的 activation，再写出这个神经元可能在侦测什么。下半段继续追问：这个解释怎么验收？如果给 explainer 的例子本身有偏差，它会不会写出听起来合理但实际错误的解释？</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../45_P46_延申_用语言模型來解释语言模型_上/学习页.html">上一节</a>
+            <a href="../47_P48_作业七：UnderstandingwhatAIisthinking/学习页.html">下一节</a>
       </div>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="terms">
-      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
-      <table class="metric-table">
-        <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
-        <tr><td>Subject model</td><td>被拿来解释的模型。</td><td>课程例子里是 GPT-2，研究者读取它内部某个 neuron 的 activation pattern。</td><td>以为 Subject model 也负责写解释。它只提供被观察的行为。</td></tr>
-        <tr><td>Target neuron</td><td>被盯住的单一神经元。</td><td>在每个 token 或片段上会输出一个 activation 数值，数值大代表这个神经元反应强。</td><td>把一个神经元当成完整概念检测器；现实里功能可能分布在一组神经元里。</td></tr>
-        <tr><td>Explainer</td><td>写解释的模型。</td><td>读取若干句子和对应 activation，输出“这个神经元可能在侦测什么”的自然语言描述。</td><td>把 explainer 的文字当成事实，而不是待验证假设。</td></tr>
-        <tr><td>Simulator</td><td>照着解释扮演神经元的模型。</td><td>根据 explanation 和新句子，预测 target neuron 应该给出怎样的 activation。</td><td>分数低时只怪解释，其实也可能是 simulator 扮演能力不够。</td></tr>
-        <tr><td>correlation score</td><td>看扮演结果像不像真实神经元。</td><td>比较 simulator 预测 activation 与真实 activation 的相关程度，越高说明解释更能指导扮演。</td><td>以为分数高就等于人一定看懂解释；分数只说明这套系统内的匹配较好。</td></tr>
-        <tr><td>revision</td><td>用新例子修正解释。</td><td>先让模型按当前解释生成可能触发神经元的句子，再送回 Subject model 标注 activation，用新证据改写解释。</td><td>把 revision 当成随便扩充数据；关键是生成能区分旧解释和新解释的例子。</td></tr>
-      </table>
-      <p class="checkpoint">读完这一段，你应能把“谁观察、谁解释、谁扮演、谁打分”说清楚。术语记不住时，先回到这四个角色。</p>
-    </section>
+        </ul>
+      </div>
+    </div>
+  </header>
 
-    <section id="lecture">
-      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#skeleton">概念骨架</a>
+      <a href="#terms">术语表</a>
+      <a href="#lecture">讲义主线</a>
+      <a href="#source">课程线索</a>
+      <a href="#example">最小例子</a>
+      <a href="#viz">交互观察</a>
+      <a href="#diagnosis">误区诊断</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="skeleton">
+        <div class="head">
+          <h2>概念骨架</h2>
+          <span class="tag">MAP</span>
+        </div>
+<p>解释不是直接相信模型Explainer 写出的句子只是一份候选解释。它可能准确，也可能只是抓住了高 activation 例子里最显眼的词。课程后半段一直在补一件事：把候选解释放回模型行为里检查。判断句：只要一个解释没有经过真实 activation 或整网输出检验，它还不能算稳定解释。</p>
+<p>打分要看两层行为第一层是神经元级别：Simulator 根据解释预测某个神经元在新句子上的 activation，再和 GPT-2 真实 activation 做 correlation。第二层是模型级别：把 GPT-2 的一个神经元换成 GPT-4 扮演的神经元，看整个 GPT-2 输出是否变化。两种分数正相关时，说明“像不像这个神经元”和“会不会影响整体输出”没有明显冲突。读到这里，你应能区分局部打分和整体打分。</p>
+<p>样本选择会改变解释Explainer 不可能读完上万个句子的 activation，只能看一小部分例子。通常会挑 target neuron 反应最强的句子，但这种选择会漏掉负例和反例。not all 的例子就是典型：只看正例时，模型容易把神经元解释成“看到 all 就启动”。核心直觉：正例告诉你“哪些东西会亮”，反例才告诉你“边界在哪里”。没有边界的解释通常会过宽。</p>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语表</h2>
+          <span class="tag">TERMS</span>
+        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
+<tr><td>Subject model</td><td>被拿来解释的模型。</td><td>课程例子里是 GPT-2，研究者读取它内部某个 neuron 的 activation pattern。</td><td>以为 Subject model 也负责写解释。它只提供被观察的行为。</td></tr><tr><td>Target neuron</td><td>被盯住的单一神经元。</td><td>在每个 token 或片段上会输出一个 activation 数值，数值大代表这个神经元反应强。</td><td>把一个神经元当成完整概念检测器；现实里功能可能分布在一组神经元里。</td></tr><tr><td>Explainer</td><td>写解释的模型。</td><td>读取若干句子和对应 activation，输出“这个神经元可能在侦测什么”的自然语言描述。</td><td>把 explainer 的文字当成事实，而不是待验证假设。</td></tr><tr><td>Simulator</td><td>照着解释扮演神经元的模型。</td><td>根据 explanation 和新句子，预测 target neuron 应该给出怎样的 activation。</td><td>分数低时只怪解释，其实也可能是 simulator 扮演能力不够。</td></tr><tr><td>correlation score</td><td>看扮演结果像不像真实神经元。</td><td>比较 simulator 预测 activation 与真实 activation 的相关程度，越高说明解释更能指导扮演。</td><td>以为分数高就等于人一定看懂解释；分数只说明这套系统内的匹配较好。</td></tr><tr><td>revision</td><td>用新例子修正解释。</td><td>先让模型按当前解释生成可能触发神经元的句子，再送回 Subject model 标注 activation，用新证据改写解释。</td><td>把 revision 当成随便扩充数据；关键是生成能区分旧解释和新解释的例子。</td></tr>
+        </table></div>
+<p>读完这一段，你应能把“谁观察、谁解释、谁扮演、谁打分”说清楚。术语记不住时，先回到这四个角色。</p>
+      </section>
+      <section id="lecture">
+        <div class="head">
+          <h2>讲义主线</h2>
+          <span class="tag">LECTURE</span>
+        </div>
       <div class="grid2">
         <div class="box">
-          <h3>1. 为什么还要检查解释</h3>
-          <p>让 GPT-4 给 GPT-2 神经元写解释，这件事最容易让人误会成“模型自己说了算”。课程里没有这样处理。解释被写出来以后，还要交给 simulator 使用：如果 simulator 只看这段解释，就能预测出真实 target neuron 在不同句子上的 activation，解释才算有实际约束力。</p>
-          <p>这里的直觉很简单：好的说明书应该能指导别人复现行为。若 explanation 写成“这个神经元在寻找 all”，但 simulator 按这句话预测所有含 all 的句子都会高 activation，而真实 GPT-2 只在 not all 这种结构上高反应，那么说明书太宽了。</p>
-          <p>正式说法是，解释质量通过 simulation 任务来间接衡量。Explainer 产生一段自然语言解释，Simulator 把这段语言转成 activation 预测，最后用 correlation score 比较预测值与真实值。读到这里，你应能把“自然语言解释”看成中间变量，而不是最终答案。</p>
+<h3>1. 为什么还要检查解释</h3>
+<p>让 GPT-4 给 GPT-2 神经元写解释，这件事最容易让人误会成“模型自己说了算”。课程里没有这样处理。解释被写出来以后，还要交给 simulator 使用：如果 simulator 只看这段解释，就能预测出真实 target neuron 在不同句子上的 activation，解释才算有实际约束力。</p>
+<p>这里的直觉很简单：好的说明书应该能指导别人复现行为。若 explanation 写成“这个神经元在寻找 all”，但 simulator 按这句话预测所有含 all 的句子都会高 activation，而真实 GPT-2 只在 not all 这种结构上高反应，那么说明书太宽了。</p>
+<p>正式说法是，解释质量通过 simulation 任务来间接衡量。Explainer 产生一段自然语言解释，Simulator 把这段语言转成 activation 预测，最后用 correlation score 比较预测值与真实值。读到这里，你应能把“自然语言解释”看成中间变量，而不是最终答案。</p>
         </div>
         <div class="box">
-          <h3>2. 局部像不像，还要问整体有没有变</h3>
-          <p>只比较单个 neuron 的 activation 仍然有一个问题：某些神经元很关键，数值差一点就会影响整个 GPT-2 输出；某些神经元不重要，activation 差很多也不会影响最终输出。单看局部相关性，可能把这两类神经元混在一起。</p>
-          <p>视频里提到另一种检查：用 GPT-4 扮演的神经元替换 GPT-2 里的真实神经元，再观察 GPT-2 的整体输出有没有改变。这个实验听起来很怪，一个有许多参数的大模型被要求扮演一个神经元，但它抓住了更现实的问题：这个 neuron 的行为差异是否真的传到整网输出。</p>
-          <p>OpenAI 的结果显示，activation correlation score 和这种替换后的整体输出分数呈正相关。因此实际分析时可以优先看其中一个分数，不必每次都做代价更高的整体替换。读到这里，你应能解释为什么“像不像神经元”和“影响不影响模型输出”是两个不同层次的问题。</p>
+<h3>2. 局部像不像，还要问整体有没有变</h3>
+<p>只比较单个 neuron 的 activation 仍然有一个问题：某些神经元很关键，数值差一点就会影响整个 GPT-2 输出；某些神经元不重要，activation 差很多也不会影响最终输出。单看局部相关性，可能把这两类神经元混在一起。</p>
+<p>视频里提到另一种检查：用 GPT-4 扮演的神经元替换 GPT-2 里的真实神经元，再观察 GPT-2 的整体输出有没有改变。这个实验听起来很怪，一个有许多参数的大模型被要求扮演一个神经元，但它抓住了更现实的问题：这个 neuron 的行为差异是否真的传到整网输出。</p>
+<p>OpenAI 的结果显示，activation correlation score 和这种替换后的整体输出分数呈正相关。因此实际分析时可以优先看其中一个分数，不必每次都做代价更高的整体替换。读到这里，你应能解释为什么“像不像神经元”和“影响不影响模型输出”是两个不同层次的问题。</p>
+<ol>
+<li>高 activation 样本为什么必要GPT-4 的输入长度有限，不可能把 target neuron 在所有句子上的反应都塞进去。研究者通常先让 GPT-2 跑过大量文本，再挑出这个神经元 activation 最大的片段给 explainer。这样做能把最有信号的例子放到 explainer 面前。判断句：如果一个样本从来没有触发目标神经元，它对“这个神经元喜欢什么”帮助有限。</li>
+<li>高 activation 样本也会误导问题在于，正例只告诉你“这些句子会触发”，不告诉你“哪些相似句子不会触发”。如果高 activation 片段都包含 not all，explainer 可能注意到 all，却没有证据知道没有 not 的 all 不会触发。这就是解释过宽。判断句：看到一个解释时，要问它有没有被负例或对照样本挑战过。</li>
+<li>revision 的作用revision 让模型按当前解释生成新句子，再让 Subject model 给这些句子标 activation。若当前解释说“侦测 all”，就生成更多含 all 的句子；若 GPT-2 对 “All the students ...” 没有高反应，旧解释就站不稳。这样得到的新资料能逼 explainer 收窄解释，从“all”改成“not all”。读到这里，你应能说明 revision 为什么比随机加样本更有针对性。</li>
+<li>random revision 为什么也有用视频里提到，随机多找一些句子或从数据库抽一些句子，解释力分数也可能提升。原因更多样本会补上一些原来没见过的边界。但随机样本未必撞到关键反例。模型生成的样本如果围绕当前解释制造对照，通常能更快暴露漏洞。</li>
+<li>最后的质疑不能跳过这套方法确实漂亮，但它没有解决所有问题。单一神经元可能没有独立语义；某个神经元的真实功能也许无法用人类语言描述；explainer 和 simulator 的分工还会混淆责任。分数低时，你很难判断到底是 explanation 不好，还是 simulator 不会扮演。判断句：这节课要你会拆解这套验证框架。</li>
+</ol>
+        </div>
+        <div class="box">
+<h3>完整知识链路</h3>
+<p>把本节串起来，可以这样讲：研究者先从 Subject model 取出 target neuron 的 activation pattern，让 Explainer 写出自然语言解释；再让 Simulator 按这段解释去预测 activation，用 correlation score 衡量预测和真实反应是否一致。为了避免只看高 activation 正例造成过宽解释，可以用当前解释生成新句子，再送回 Subject model 标注，利用反例做 revision。最后还要记住，这个流程解释的是被选中的神经元，不一定解释了整个网络；语言解释也不一定覆盖神经元真正做的复杂运算。你应能从“观察、解释、扮演、打分、修正、质疑”六步复述整节课。</p>
         </div>
       </div>
-      <div class="grid3" style="margin-top:12px">
-        <div class="box soft"><h3>3. 高 activation 样本为什么必要</h3><p>GPT-4 的输入长度有限，不可能把 target neuron 在所有句子上的反应都塞进去。研究者通常先让 GPT-2 跑过大量文本，再挑出这个神经元 activation 最大的片段给 explainer。</p><p>这样做能把最有信号的例子放到 explainer 面前。判断句：如果一个样本从来没有触发目标神经元，它对“这个神经元喜欢什么”帮助有限。</p></div>
-        <div class="box warn"><h3>4. 高 activation 样本也会误导</h3><p>问题在于，正例只告诉你“这些句子会触发”，不告诉你“哪些相似句子不会触发”。如果高 activation 片段都包含 not all，explainer 可能注意到 all，却没有证据知道没有 not 的 all 不会触发。</p><p>这就是解释过宽。判断句：看到一个解释时，要问它有没有被负例或对照样本挑战过。</p></div>
-        <div class="box info"><h3>5. revision 的作用</h3><p>revision 不是单纯多喂一点资料，而是让模型按当前解释生成新句子，再让 Subject model 给这些句子标 activation。若当前解释说“侦测 all”，就生成更多含 all 的句子；若 GPT-2 对 “All the students ...” 没有高反应，旧解释就站不稳。</p><p>这样得到的新资料能逼 explainer 收窄解释，从“all”改成“not all”。读到这里，你应能说明 revision 为什么比随机加样本更有针对性。</p></div>
-        <div class="box"><h3>6. random revision 为什么也有用</h3><p>视频里提到，随机多找一些句子或从数据库抽一些句子，解释力分数也可能提升。原因不是随机本身有魔法，而是更多样本会补上一些原来没见过的边界。</p><p>但随机样本未必撞到关键反例。模型生成的样本如果围绕当前解释制造对照，通常能更快暴露漏洞。</p></div>
-        <div class="box redsoft"><h3>7. 最后的质疑不能跳过</h3><p>这套方法确实漂亮，但它没有解决所有问题。单一神经元可能没有独立语义；某个神经元的真实功能也许无法用人类语言描述；explainer 和 simulator 的分工还会混淆责任。分数低时，你很难判断到底是 explanation 不好，还是 simulator 不会扮演。</p><p>判断句：这节课不是要你相信“AI 已经能解释 AI”，而是要你会拆解这套验证框架。</p></div>
-      </div>
-      <div class="box greenbox" style="margin-top:12px">
-        <h3>完整知识链路</h3>
-        <p>把本节串起来，可以这样讲：研究者先从 Subject model 取出 target neuron 的 activation pattern，让 Explainer 写出自然语言解释；再让 Simulator 按这段解释去预测 activation，用 correlation score 衡量预测和真实反应是否一致。为了避免只看高 activation 正例造成过宽解释，可以用当前解释生成新句子，再送回 Subject model 标注，利用反例做 revision。最后还要记住，这个流程解释的是被选中的神经元，不一定解释了整个网络；语言解释也不一定覆盖神经元真正做的复杂运算。你应能从“观察、解释、扮演、打分、修正、质疑”六步复述整节课。</p>
-      </div>
-    </section>
-
-    <section id="source">
-      <div class="head"><h2>课程线索</h2><span class="tag">线索</span></div>
-      <p class="muted">下面按字幕推进顺序整理。它们不是逐字摘录，而是把视频口头讲法压成适合回看的知识块。</p>
-      <div class="source-lines">
-        <div class="box"><h3>线索 1：三种模型角色</h3><p>字幕开头先回顾整体流程：被解释的是 Subject model，课程例子里是 GPT-2；Explainer 和 Simulator 都可以由 GPT-4 扮演，但它们不必和被解释模型相同，也不必固定是 GPT-4。关键是角色分工，不是模型名字。</p><p class="checkpoint">读到这里，你应能判断：哪个角色产出解释，哪个角色产出 activation 预测。</p></div>
-        <div class="box"><h3>线索 2：两种评分角度</h3><p>第一种角度比较 simulator 输出和真实神经元输出，得到 correlation score。第二种角度把 GPT-2 的真实神经元换成 GPT-4 扮演的神经元，检查 GPT-2 整体输出改变多少。前者看局部拟合，后者看整网影响。</p><p class="checkpoint">读到这里，你应能说明为什么“局部相似”不自动等于“整体无影响”。</p></div>
-        <div class="box"><h3>线索 3：分数和人类判断的关系</h3><p>视频提到 OpenAI 做了 human study：人觉得比较好的解释，通常在自动解释力分数上也更高。这一点缓解了一个担心：分数不只是模型内部自娱自乐，至少和人类读到的解释质量有正相关。</p><p class="checkpoint">但它不是最终证明。human study 说明有关联，不说明所有高分解释都可靠。</p></div>
-        <div class="box"><h3>线索 4：为什么要选 activation 最大的句子</h3><p>Explainer 的上下文有限，只能看一小批例子。比较自然的做法是让 GPT-2 先读大量句子，再挑出 target neuron 输出特别大的句子。这样能让 explainer 看到最明显的触发模式。</p><p class="checkpoint">读到这里，你应能说出这一步的必要性：不是偷懒，而是受上下文长度限制。</p></div>
-        <div class="box"><h3>线索 5：not all 反例</h3><p>字幕里的例子很关键：某个神经元看起来在看到 all 时启动，但真实功能可能是寻找 not all。只给正例时，Explainer 没有证据排除普通 all，于是会写出过宽解释。</p><p class="checkpoint">你应能用这个例子解释什么叫“缺少对照样本”。</p></div>
-        <div class="box"><h3>线索 6：用 GPT-4 生成关键样本</h3><p>如果当前解释是“侦测 all”，就让 GPT-4 生成更多含 all 的句子，再让 GPT-2 给这些句子标 activation。若普通 all 不触发，Explainer 就能把解释修成“not all”。这种 revision 比随机抽样更容易打到旧解释的弱点。</p><p class="checkpoint">读到这里，你应能区分随机补样本和有目标地造反例。</p></div>
-        <div class="box"><h3>线索 7：方法本身的质疑</h3><p>结尾集中列出几个边界：用 AI 解释 AI 是否可靠；解释单一神经元是否有意义；神经元行为是否能被人类语言描述；explainer 与 simulator 的合作分数是否会掩盖责任归属。</p><p class="checkpoint">你应能把这些质疑归类为“对象边界、语言边界、评估边界”。</p></div>
-      </div>
-    </section>
-
-    <section id="example">
-      <div class="head"><h2>最小例子</h2><span class="tag">EXAMPLE</span></div>
-      <p>下面用几行伪代码重建课程里的 not all 例子。重点不是运行代码，而是看懂样本、解释、预测和修正之间的关系。</p>
-      <div class="codebar"><span class="label">最小示例：用反例修正神经元解释</span><span class="kind">pseudo-python</span></div>
-      <pre><code>case = {
-  &quot;positive_examples&quot;: [
-    (&quot;not all of them agreed&quot;, 0.96),
-    (&quot;not all answers are correct&quot;, 0.91)
-  ],
-  &quot;draft_explanation&quot;: &quot;This neuron activates on the word all.&quot;,
-  &quot;generated_tests&quot;: [
-    &quot;All the students arrived early.&quot;,
-    &quot;Not all the students arrived early.&quot;
-  ],
-  &quot;subject_model_labels&quot;: [0.08, 0.94],
-  &quot;revised_explanation&quot;: &quot;This neuron activates on the phrase not all.&quot;
+      </section>
+      <section id="source">
+        <div class="head">
+          <h2>课程线索</h2>
+          <span class="tag">线索</span>
+        </div>
+<p>下面按字幕推进顺序整理。它们把视频口头讲法压成适合回看的知识块。</p>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>最小例子</h2>
+          <span class="tag">EXAMPLE</span>
+        </div>
+<p>下面用几行伪代码重建课程里的 not all 例子。重点看懂样本、解释、预测和修正之间的关系。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-example-1">复制</button></div>
+        <pre id="code-example-1" data-export-context="代码" data-export-lang="text"><code class="language-text">case = {
+ "positive_examples": [
+ ("not all of them agreed", 0.96),
+ ("not all answers are correct", 0.91)
+ ],
+ "draft_explanation": "This neuron activates on the word all.",
+ "generated_tests": [
+ "All the students arrived early.",
+ "Not all the students arrived early."
+ ],
+ "subject_model_labels": [0.08, 0.94],
+ "revised_explanation": "This neuron activates on the phrase not all."
 }
-correlation_before = score_simulator(case[&quot;draft_explanation&quot;])
-correlation_after = score_simulator(case[&quot;revised_explanation&quot;])</code></pre>
-      <div class="box soft"><h3>逐行理解</h3><p>前两条正例只告诉我们：含 not all 的句子会让 target neuron 有高 activation。它们还不能证明 all 本身就是触发条件，因为这两条正例里 all 总是和 not 一起出现。</p><p>revision 的关键动作是主动造对照。把只有 all 的句子和含 not all 的句子一起送回 Subject model，观察真实 activation 差异。若只有 not all 高，解释就必须从“all”收窄到“not all”。读完这段，你应能指出一个解释缺少哪些反例。</p></div>
-      <div class="grid2" style="margin-top:12px">
+correlation_before = score_simulator(case["draft_explanation"])
+correlation_after = score_simulator(case["revised_explanation"])</code></pre>
+        </div>
         <div class="box">
-          <h3>代码里的关键对象</h3>
-          <p><code>positive_examples</code> 是原本挑出来的高 activation 片段，它们都支持“这个神经元会启动”的事实，但不一定能区分 all 与 not all。<code>draft_explanation</code> 是 Explainer 的初稿，它抓到了 all，却漏掉了前面的 not。</p>
-          <p><code>generated_tests</code> 是 revision 的关键。第一句只有 all，第二句有 not all；送回 Subject model 后，真实 activation 标签显示第一句低、第二句高。这样 Explainer 才有证据把解释收窄。</p>
+<h3>代码里的关键对象</h3>
+<p><code>positive_examples</code> 是原本挑出来的高 activation 片段，它们都支持“这个神经元会启动”的事实，但不一定能区分 all 与 not all。<code>draft_explanation</code> 是 Explainer 的初稿，它抓到了 all，却漏掉了前面的 not。</p>
+<p><code>generated_tests</code> 是 revision 的关键。第一句只有 all，第二句有 not all；送回 Subject model 后，真实 activation 标签显示第一句低、第二句高。这样 Explainer 才有证据把解释收窄。</p>
         </div>
         <div class="box warn">
-          <h3>删掉哪一行会出问题</h3>
-          <p>删掉 <code>subject_model_labels</code>，你就只有 GPT-4 自己生成的新句子，却不知道 GPT-2 真实神经元怎样反应。删掉 <code>generated_tests</code>，你就只能在旧正例里打转，无法发现“all”这个解释过宽。</p>
-          <p>判断句：revision 的价值来自“生成候选反例 + 回到 Subject model 标注”，两步缺一不可。</p>
+<h3>删掉哪一行会出问题</h3>
+<p>删掉 <code>subject_model_labels</code>，你就只有 GPT-4 自己生成的新句子，却不知道 GPT-2 真实神经元怎样反应。删掉 <code>generated_tests</code>，你就只能在旧正例里打转，无法发现“all”这个解释过宽。</p>
+<p>判断句：revision 的价值来自“生成候选反例 + 回到 Subject model 标注”，两步缺一不可。</p>
         </div>
-      </div>
-      <div class="box info" style="margin-top:12px">
-        <h3>Worked example：从过宽解释到收窄解释</h3>
-        <p>初稿解释是“神经元侦测 all”。现在设计四个测试句：<code>All birds can fly</code>、<code>All files are ready</code>、<code>Not all birds can fly</code>、<code>Not all files are ready</code>。如果 Subject model 给出的 activation 是 <code>0.05, 0.07, 0.92, 0.89</code>，那么 all 本身不是充分条件，<code>not all</code> 结构才更像触发条件。</p>
-        <p>这就是 revision 的手感：不要只让模型再写一句更优雅的解释，而是先构造能区分两个解释的样本，再用真实 activation 逼解释收窄。你现在应该能为任意一个候选解释写出“支持句”和“挑战句”。</p>
-      </div>
-    </section>
-
-    <section id="viz">
-      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <h3>正例比例</h3>
-            <div class="slider-row"><span>只看高 activation</span><input id="complexity" type="range" min="10" max="100" value="70"><b id="complexityOut">70</b></div>
-            <div class="evidence-meter"><div class="evidence-fill" id="complexityFill"></div></div>
-            <p id="complexityText" class="checkpoint"></p>
-          </div>
-          <div class="viz-cell">
-            <h3>检查方式</h3>
-            <div class="seg">
-              <button data-check="loose" class="active">只看正例</button>
-              <button data-check="normal">加入随机样本</button>
-              <button data-check="strict">生成对照反例</button>
-            </div>
-            <p id="checkText" class="checkpoint"></p>
-          </div>
+        <div class="box info">
+<h3>Worked example：从过宽解释到收窄解释</h3>
+<p>初稿解释是“神经元侦测 all”。现在设计四个测试句：<code>All birds can fly</code>、<code>All files are ready</code>、<code>Not all birds can fly</code>、<code>Not all files are ready</code>。如果 Subject model 给出的 activation 是 <code>0.05, 0.07, 0.92, 0.89</code>，那么 all 本身不是充分条件，<code>not all</code> 结构才更像触发条件。</p>
+<p>这就是 revision 的手感：不要只让模型再写一句更优雅的解释，而是先构造能区分两个解释的样本，再用真实 activation 逼解释收窄。你现在应该能为任意一个候选解释写出“支持句”和“挑战句”。</p>
         </div>
-      </div>
-      <p>观察重点：高 activation 正例越多，Explainer 越容易抓到显眼共同点，但也越可能把共同点解释得太宽。真正有价值的检查，是找出“看起来相似但不触发”的句子。</p>
-    </section>
-
-    <section id="diagnosis">
-      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
+      </section>
+      <section id="viz">
+        <div class="head">
+          <h2>交互观察</h2>
+          <span class="tag">OBSERVE</span>
+        </div>
+<p>正例比例</p>
+<p>只看高 activation<b>70</b></p>
+<p>只看正例</p>
+<p>加入随机样本</p>
+<p>生成对照反例</p>
+      </section>
+      <section id="diagnosis">
+        <div class="head">
+          <h2>误区诊断</h2>
+          <span class="tag">DIAGNOSIS</span>
+        </div>
       <div class="grid2">
         <div class="box redsoft">
-          <h3>常见坑</h3>
-          <ol><li>把 Explainer 的解释当成事实。错因：忽略解释只是候选假设。后果：遇到反例时仍相信过宽解释。修法：用 simulator 和真实 activation 打分。</li><li>只看高 activation 正例。错因：没有负例或对照样本。后果：把 not all 误解释成 all。修法：生成相似但可能不触发的句子，再送回 Subject model 标注。</li><li>把 correlation score 理解成整网影响。错因：局部分数只比较神经元输出。后果：无法判断这个 neuron 的误差是否影响 GPT-2 最终输出。修法：必要时做替换神经元的整体输出检查。</li><li>分数低就断定解释差。错因：忽略 simulator 也可能很弱。后果：把责任全推给 explanation。修法：同时检查 simulator 能力、给 simulator 的说明和样本质量。</li><li>以为单一神经元一定有清晰语义。错因：把神经网络内部表示想得太模块化。后果：解释结果可能碎片化或误导。修法：保留“功能可能分布在神经元组或方向上”的判断。</li><li>以为自然语言能描述所有行为。错因：语言词汇有限。后果：高维复杂特征被压成粗糙标签。修法：把语言解释看成可用近似，不当成完整还原。</li></ol>
+<h3>常见坑</h3>
+<ol>
+<li>把 Explainer 的解释当成事实。错因：忽略解释只是候选假设。后果：遇到反例时仍相信过宽解释。修法：用 simulator 和真实 activation 打分。</li>
+<li>只看高 activation 正例。错因：没有负例或对照样本。后果：把 not all 误解释成 all。修法：生成相似但可能不触发的句子，再送回 Subject model 标注。</li>
+<li>把 correlation score 理解成整网影响。错因：局部分数只比较神经元输出。后果：无法判断这个 neuron 的误差是否影响 GPT-2 最终输出。修法：必要时做替换神经元的整体输出检查。</li>
+<li>分数低就断定解释差。错因：忽略 simulator 也可能很弱。后果：把责任全推给 explanation。修法：同时检查 simulator 能力、给 simulator 的说明和样本质量。</li>
+<li>以为单一神经元一定有清晰语义。错因：把神经网络内部表示想得太模块化。后果：解释结果可能碎片化或误导。修法：保留“功能可能分布在神经元组或方向上”的判断。</li>
+<li>以为自然语言能描述所有行为。错因：语言词汇有限。后果：高维复杂特征被压成粗糙标签。修法：把语言解释看成可用近似，不当成完整还原。</li>
+</ol>
         </div>
         <div class="box">
-          <h3>易混概念</h3>
-          <table class="metric-table">
-            <tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr>
-            <tr><td>Explainer</td><td>Simulator</td><td>Explainer 写解释；Simulator 按解释预测 activation。前者负责生成假设，后者负责检验假设能否指导行为复现。</td></tr>
-            <tr><td>correlation score</td><td>整体输出检查</td><td>前者比较单个神经元的预测和真实 activation；后者把神经元替换掉，看 GPT-2 最终输出是否受影响。</td></tr>
-            <tr><td>高 activation 正例</td><td>对照反例</td><td>正例说明哪些句子触发；反例说明哪些相似句子不触发。缺少反例时，解释容易过宽。</td></tr>
-            <tr><td>解释单一神经元</td><td>解释神经元组</td><td>单一神经元更容易观察，但功能可能不完整；神经元组或方向可能更接近实际表示。</td></tr>
-          </table>
+<h3>易混概念</h3>
+<p>概念 A概念 B区别</p>
+<p>ExplainerSimulatorExplainer 写解释；Simulator 按解释预测 activation。前者负责生成假设，后者负责检验假设能否指导行为复现。</p>
+<p>correlation score整体输出检查前者比较单个神经元的预测和真实 activation；后者把神经元替换掉，看 GPT-2 最终输出是否受影响。</p>
+<p>高 activation 正例对照反例正例说明哪些句子触发；反例说明哪些相似句子不触发。缺少反例时，解释容易过宽。</p>
+<p>解释单一神经元解释神经元组单一神经元更容易观察，但功能可能不完整；神经元组或方向可能更接近实际表示。</p>
         </div>
       </div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">DRILL</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答前先抓主线</strong><p>先写三角色：Subject model 给真实 activation，Explainer 写解释，Simulator 按解释预测。再写两类检查：局部 correlation 和整体输出变化。</p></div>
-        <div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起 Subject model、Explainer、Simulator、activation、correlation score、revision 和 not all 例子。</p></div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、基础概念</h3><p>这一组检查角色、指标和样本选择。答题时先定位对象，不要把模型角色混在一起。</p></div><div class="quick-review"><b>REMIND</b>Subject model 被观察；Explainer 写解释；Simulator 扮演神经元。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-title="1. Subject model 在本节流程里负责写出神经元解释。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. Subject model 在本节流程里负责写出神经元解释。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
-          <div class="q" data-role="homework" data-title="2. Explainer 的输入最接近哪一组？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. Explainer 的输入最接近哪一组？</h3><div class="choices"><label><input type="radio" name="q2" value="句子片段和 target neuron 的 activation">句子片段和 target neuron 的 activation</label><label><input type="radio" name="q2" value="GPT-2 的全部参数和训练资料">GPT-2 的全部参数和训练资料</label><label><input type="radio" name="q2" value="人类提前写好的标准答案">人类提前写好的标准答案</label></div></div>
-          <div class="q short" data-role="homework" data-title="3. 请补全流程：Subject model → activation pattern → ______ → ______ → score。"><div class="q-meta"><span class="pill">填空</span></div><h3>3. 请补全流程：Subject model → activation pattern → ______ → ______ → score。</h3><input type="text" name="q3"></div>
-          <div class="q short" data-role="homework" data-title="4. 用 1-2 句话解释 target neuron 的 activation pattern 是什么。"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 用 1-2 句话解释 target neuron 的 activation pattern 是什么。</h3><textarea name="q4"></textarea></div>
-          <div class="q" data-role="homework" data-title="5. Simulator 的作用是根据解释预测神经元反应，而不是重新训练 GPT-2。"><div class="q-meta"><span class="pill">判断</span></div><h3>5. Simulator 的作用是根据解释预测神经元反应，而不是重新训练 GPT-2。</h3><div class="choices"><label><input type="radio" name="q5" value="对">对</label><label><input type="radio" name="q5" value="错">错</label></div></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>二、评分与验证</h3><p>这一组要求你区分局部 activation 打分和整网输出检查。两者都在看解释是否有行为约束。</p></div><div class="quick-review"><b>REMIND</b>correlation score 看局部像不像；替换神经元看整体输出变不变。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="6. correlation score 比较的是哪两个量？"><div class="q-meta"><span class="pill">填空</span></div><h3>6. correlation score 比较的是哪两个量？</h3><input type="text" name="q6"></div>
-          <div class="q" data-role="homework" data-title="7. 为什么只看神经元输出不一定够？"><div class="q-meta"><span class="pill">选择</span></div><h3>7. 为什么只看神经元输出不一定够？</h3><div class="choices"><label><input type="radio" name="q7" value="不同神经元对整网输出的重要性不同">不同神经元对整网输出的重要性不同</label><label><input type="radio" name="q7" value="activation 数值永远没有意义">activation 数值永远没有意义</label><label><input type="radio" name="q7" value="语言模型不能处理数字">语言模型不能处理数字</label></div></div>
-          <div class="q short" data-role="homework" data-title="8. 把 GPT-2 的某个神经元换成 GPT-4 扮演的神经元，这个实验想检查什么？"><div class="q-meta"><span class="pill">解释</span></div><h3>8. 把 GPT-2 的某个神经元换成 GPT-4 扮演的神经元，这个实验想检查什么？</h3><textarea name="q8"></textarea></div>
-          <div class="q" data-role="homework" data-title="9. 视频提到两种分数呈正相关，所以可以把所有验证都取消。"><div class="q-meta"><span class="pill">判断</span></div><h3>9. 视频提到两种分数呈正相关，所以可以把所有验证都取消。</h3><div class="choices"><label><input type="radio" name="q9" value="对">对</label><label><input type="radio" name="q9" value="错">错</label></div></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、样本与 revision</h3><p>这一组围绕 not all 例子。你要说清为什么正例不够、反例怎样改变解释。</p></div><div class="quick-review"><b>REMIND</b>旧解释越宽，越需要相似但不触发的句子来挑战它。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="10. 为什么一开始通常挑 target neuron activation 特别大的句子给 Explainer？"><div class="q-meta"><span class="pill">简答</span></div><h3>10. 为什么一开始通常挑 target neuron activation 特别大的句子给 Explainer？</h3><textarea name="q10"></textarea></div>
-          <div class="q short" data-role="homework" data-title="11. not all 例子里，错误初稿为什么会写成“侦测 all”？"><div class="q-meta"><span class="pill">因果</span></div><h3>11. not all 例子里，错误初稿为什么会写成“侦测 all”？</h3><textarea name="q11"></textarea></div>
-          <div class="q short" data-role="homework" data-title="12. 请给当前解释“这个神经元侦测 all”设计两个对照句：一个只有 all，一个包含 not all。"><div class="q-meta"><span class="pill">设计</span></div><h3>12. 请给当前解释“这个神经元侦测 all”设计两个对照句：一个只有 all，一个包含 not all。</h3><textarea name="q12"></textarea></div>
-          <div class="q short" data-role="homework" data-title="13. 如果 All the students 的 activation 很低，而 Not all the students 的 activation 很高，应怎样修正解释？"><div class="q-meta"><span class="pill">推理</span></div><h3>13. 如果 <code>All the students</code> 的 activation 很低，而 <code>Not all the students</code> 的 activation 很高，应怎样修正解释？</h3><textarea name="q13"></textarea></div>
-          <div class="q" data-role="homework" data-title="14. revision random 和 GPT-4 生成关键样本的差别是：前者补充随机样本，后者围绕当前解释制造更有区分度的样本。"><div class="q-meta"><span class="pill">判断</span></div><h3>14. revision random 和 GPT-4 生成关键样本的差别是：前者补充随机样本，后者围绕当前解释制造更有区分度的样本。</h3><div class="choices"><label><input type="radio" name="q14" value="对">对</label><label><input type="radio" name="q14" value="错">错</label></div></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、例子阅读</h3><p>这一组把伪代码拆开看。回答时写清读入什么、写出什么、删掉会怎样。</p></div><div class="quick-review"><b>REMIND</b>没有 Subject model 标注，新句子只是测试题，还不是证据。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="15. 伪代码里的 positive_examples 能证明“all 本身会触发”吗？为什么？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>15. 伪代码里的 <code>positive_examples</code> 能证明“all 本身会触发”吗？为什么？</h3><textarea name="q15"></textarea></div>
-          <div class="q short" data-role="homework" data-title="16. 如果删掉 subject_model_labels，revision 会失去哪一步证据？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>16. 如果删掉 <code>subject_model_labels</code>，revision 会失去哪一步证据？</h3><textarea name="q16"></textarea></div>
-          <div class="q short" data-role="homework" data-title="17. correlation_before 到 correlation_after 上升，能说明什么？还不能说明什么？"><div class="q-meta"><span class="pill">边界</span></div><h3>17. <code>correlation_before</code> 到 <code>correlation_after</code> 上升，能说明什么？还不能说明什么？</h3><textarea name="q17"></textarea></div>
-          <div class="q" data-role="homework" data-title="18. 只要 revised_explanation 是自然语言写成的，它就一定完整描述了神经元真实功能。"><div class="q-meta"><span class="pill">判断</span></div><h3>18. 只要 <code>revised_explanation</code> 是自然语言写成的，它就一定完整描述了神经元真实功能。</h3><div class="choices"><label><input type="radio" name="q18" value="对">对</label><label><input type="radio" name="q18" value="错">错</label></div></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>五、错误诊断</h3><p>这一组按错因、后果、修法回答。不要只写“这个说法不严谨”。</p></div><div class="quick-review"><b>REMIND</b>把问题落到样本、角色、分数或语言边界上。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="19. 有人说“GPT-4 写了解释，所以这个神经元功能已经确定”。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>19. 有人说“GPT-4 写了解释，所以这个神经元功能已经确定”。错因、后果、修法是什么？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q19"></textarea></div>
-          <div class="q short" data-role="homework" data-title="20. 有人只给 Explainer 看高 activation 正例，然后接受“all”解释。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>20. 有人只给 Explainer 看高 activation 正例，然后接受“all”解释。错因、后果、修法是什么？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q20"></textarea></div>
-          <div class="q short" data-role="homework" data-title="21. 有人看到 explanation score 低，就断定 explainer 很差。这个诊断漏掉了什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>21. 有人看到 explanation score 低，就断定 explainer 很差。这个诊断漏掉了什么？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q21"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>六、表达与迁移</h3><p>最后几题检查你能不能把研究流程讲清楚，并把边界带进去。</p></div><div class="quick-review"><b>REMIND</b>好的回答会同时讲流程、分数、revision 和质疑。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="22. 如果要解释一组神经元而不是单一神经元，你会额外担心什么？"><div class="q-meta"><span class="pill">迁移</span></div><h3>22. 如果要解释一组神经元而不是单一神经元，你会额外担心什么？</h3><textarea name="q22"></textarea></div>
-          <div class="q short" data-role="homework" data-title="23. 面试短答：为什么“用 AI 解释 AI”不必因为“AI 也是黑盒”就直接判死刑？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>23. 面试短答：为什么“用 AI 解释 AI”不必因为“AI 也是黑盒”就直接判死刑？</h3><textarea name="q23"></textarea></div>
-          <div class="q short" data-role="homework" data-title="24. 请写出你检查一个神经元解释时会看的 4 项清单。"><div class="q-meta"><span class="pill">清单</span></div><h3>24. 请写出你检查一个神经元解释时会看的 4 项清单。</h3><textarea name="q24"></textarea></div>
-          <div class="q full" data-role="homework" data-title="25. 用 6-9 句话讲清楚 P47 下半段。请串联 Subject model、Explainer、Simulator、activation、correlation score、revision、not all、单一神经元。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>25. 用 6-9 句话讲清楚 P47 下半段。请串联 Subject model、Explainer、Simulator、activation、correlation score、revision、not all、单一神经元。</h3><div class="solve-note">先说三角色流程，再说评分方式，接着讲 not all 修正，最后补一句方法边界。</div><textarea name="q25"></textarea></div>
-        </div>
-      </div>
-    </section>
 
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          <div class="quick-review">REMIND Subject model 被观察；Explainer 写解释；Simulator 扮演神经元。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 1. Subject model 在本节流程里负责写出神经元解释。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 2. Explainer 的输入最接近哪一组？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="句子片段和 target neuron 的 activation">句子片段和 target neuron 的 activation</label>
+      <label><input type="radio" name="q?" value="GPT-2 的全部参数和训练资料">GPT-2 的全部参数和训练资料</label>
+      <label><input type="radio" name="q?" value="人类提前写好的标准答案">人类提前写好的标准答案</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 3. 请补全流程：Subject model → activation pattern → ______ → ______ → score。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 4. 用 1-2 句话解释 target neuron 的 activation pattern 是什么。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 5. Simulator 的作用是根据解释预测神经元反应，而不是重新训练 GPT-2。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、评分与验证</h3></div>
+          <div class="quick-review">REMIND correlation score 看局部像不像；替换神经元看整体输出变不变。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 6. correlation score 比较的是哪两个量？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 7. 为什么只看神经元输出不一定够？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="不同神经元对整网输出的重要性不同">不同神经元对整网输出的重要性不同</label>
+      <label><input type="radio" name="q?" value="activation 数值永远没有意义">activation 数值永远没有意义</label>
+      <label><input type="radio" name="q?" value="语言模型不能处理数字">语言模型不能处理数字</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 8. 把 GPT-2 的某个神经元换成 GPT-4 扮演的神经元，这个实验想检查什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 9. 视频提到两种分数呈正相关，所以可以把所有验证都取消。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、样本与 revision</h3></div>
+          <div class="quick-review">REMIND 旧解释越宽，越需要相似但不触发的句子来挑战它。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 10. 为什么一开始通常挑 target neuron activation 特别大的句子给 Explainer？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">因果</span></div>
+        <h3><b>Q:</b> 11. not all 例子里，错误初稿为什么会写成“侦测 all”？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b> 12. 请给当前解释“这个神经元侦测 all”设计两个对照句：一个只有 all，一个包含 not all。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">推理</span></div>
+        <h3><b>Q:</b> 13. 如果 <code>All the students</code> 的 activation 很低，而 <code>Not all the students</code> 的 activation 很高，应怎样修正解释？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 14. revision random 和 GPT-4 生成关键样本的差别是：前者补充随机样本，后者围绕当前解释制造更有区分度的样本。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、例子阅读</h3></div>
+          <div class="quick-review">REMIND 没有 Subject model 标注，新句子只是测试题，还不是证据。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">代码阅读</span></div>
+        <h3><b>Q:</b> 15. 伪代码里的 <code>positive_examples</code> 能证明“all 本身会触发”吗？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">代码阅读</span></div>
+        <h3><b>Q:</b> 16. 如果删掉 <code>subject_model_labels</code>，revision 会失去哪一步证据？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">边界</span></div>
+        <h3><b>Q:</b> 17. <code>correlation_before</code> 到 <code>correlation_after</code> 上升，能说明什么？还不能说明什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 18. 只要 <code>revised_explanation</code> 是自然语言写成的，它就一定完整描述了神经元真实功能。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、错误诊断</h3></div>
+          <div class="quick-review">REMIND 把问题落到样本、角色、分数或语言边界上。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 19. 有人说“GPT-4 写了解释，所以这个神经元功能已经确定”。错因、后果、修法是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 20. 有人只给 Explainer 看高 activation 正例，然后接受“all”解释。错因、后果、修法是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 21. 有人看到 explanation score 低，就断定 explainer 很差。这个诊断漏掉了什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>六、表达与迁移</h3></div>
+          <div class="quick-review">REMIND 好的回答会同时讲流程、分数、revision 和质疑。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 22. 如果要解释一组神经元而不是单一神经元，你会额外担心什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 23. 面试短答：为什么“用 AI 解释 AI”不必因为“AI 也是黑盒”就直接判死刑？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 24. 请写出你检查一个神经元解释时会看的 4 项清单。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 25. 用 6-9 句话讲清楚 P47 下半段。请串联 Subject model、Explainer、Simulator、activation、correlation score、revision、not all、单一神经元。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>自学记录</h2><span class="tag">记录</span></div>
-      <p class="muted">完成练习后生成记录，方便回看订正。</p>
-      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../../assets/study-page.js"></script>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){
-  const max=document.documentElement.scrollHeight-innerHeight;
-  progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";
-  let current=sections[0]?.id;
-  for(const section of sections){
-    const rect=section.getBoundingClientRect();
-    if(rect.top<innerHeight*.36) current=section.id;
-    section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);
-  }
-  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));
-}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-document.querySelectorAll(".codebar").forEach(bar=>{
-  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
-  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});
-  bar.appendChild(btn);
-});
-const complexity=document.getElementById("complexity");
-function updateComplexity(){
-  const value=Number(complexity.value);
-  document.getElementById("complexityOut").textContent=value;
-  document.getElementById("complexityFill").style.width=value+"%";
-  document.getElementById("complexityText").textContent=value>75?"几乎只看正例时，解释容易抓住最显眼的共同词，却不知道相似负例是否会触发。":value<30?"正例太少时，Explainer 可能连触发模式都看不清，需要先补足高 activation 样本。":"正例和对照样本都有时，比较容易判断解释是过宽、过窄，还是接近真实触发条件。";
-}
-complexity.addEventListener("input",updateComplexity);updateComplexity();
-const checkTexts={
-  loose:"只看正例容易把 not all 误写成 all，因为没有句子告诉你普通 all 不触发。",
-  normal:"随机样本可能补上一些边界，但不保证刚好打到当前解释的漏洞。",
-  strict:"围绕当前解释生成对照反例，再让 Subject model 标注 activation，最能检查解释是否过宽。"
-};
-document.querySelectorAll("[data-check]").forEach(btn=>btn.addEventListener("click",()=>{
-  document.querySelectorAll("[data-check]").forEach(b=>b.classList.toggle("active",b===btn));
-  document.getElementById("checkText").textContent=checkTexts[btn.dataset.check];
-}));
-document.getElementById("checkText").textContent=checkTexts.loose;
-function valueOfQuestion(q){
-  const radio=q.querySelector("input[type=radio]:checked"); if(radio) return radio.value;
-  const text=q.querySelector("textarea,input[type=text],select"); return text?text.value.trim():"";
-}
-function questionGroup(q){return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";}
-function generateRecord(){
-  const qs=[...document.querySelectorAll("[data-role=homework]")],groups={},warnings=[];
-  qs.forEach((q,i)=>{
-    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";
-    const hint=q.querySelector(".solve-note")?.innerText.trim()||"";
-    const answer=valueOfQuestion(q);
-    if(!answer) warnings.push("第 "+(i+1)+" 题未填写："+title);
-    if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))) warnings.push("第 "+(i+1)+" 题建议补齐“错因 / 后果 / 修法”。");
-    if(q.dataset.type==="feynman"){
-      const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
-      if(answer&&answer.length<120) warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");
-      const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):[];
-      if(lack.length) warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");
-    }
-    const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
-  });
-  let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";
-  Object.keys(groups).forEach(group=>{out+="## "+group+"\n\n";groups[group].forEach(item=>{out+="### "+item.title+"\n";if(item.hint) out+="提示摘要："+item.hint+"\n\n";out+=item.answer+"\n\n";});});
-  document.getElementById("record").textContent=out;
-  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，适合回看订正。";
-}
-function fallbackCopy(text,onOk,onFail){
-  const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";document.body.appendChild(ta);ta.focus();ta.select();
-  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
-}
-function copyText(text,onOk,onFail){
-  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
-  else fallbackCopy(text,onOk,onFail);
-}
-function copyRecord(){
-  copyText(document.getElementById("record").textContent,()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";},()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";});
-}
-</script>
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

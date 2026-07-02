@@ -4,450 +4,642 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>58_P59｜延申：Generative Adversarial Network / GAN</title>
-  <link rel="stylesheet" href="../../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body data-study-kind="media" data-feynman-keywords="GAN、Generator、Discriminator、随机向量、latent code、database、batch size、adversarial training、AutoEncoder、VAE、structure learning、argmax、FID">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand">
-      <strong>58_P59</strong>
-      <span>延申：Generative Adversarial Network / GAN<br>李宏毅生成式 AI 课程 · 字幕精制学习页</span>
+<body data-course="李宏毅 LLM 课程" data-unit="58">
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅 LLM 课程</a>
+        <span class="sep">/</span>
+        <span>58</span>
+      </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
     </div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>学习目标</a>
-      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
-      <a href="#terms"><span class="dot"></span>术语表</a>
-      <a href="#lecture"><span class="dot"></span>讲义主线</a>
-      <a href="#source"><span class="dot"></span>GAN 线索</a>
-      <a href="#example"><span class="dot"></span>比较与原理</a>
-      <a href="#viz"><span class="dot"></span>交互观察</a>
-      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>自学记录</a>
-    </nav>
-    <div class="side-note">读 GAN 时先抓两条线：Generator 负责快速生成候选，Discriminator 负责从整体评价候选。真正重要的是二者轮流训练时，反馈怎样从“逐像素像不像”变成“整体像不像真实样本”。</div>
-  </aside>
-  <main>
-    <section class="hero" id="goal">
-      <div>
-        <div class="kicker">LI HONGYI LLM · P59 EXTENSION</div>
-        <h1>Generative Adversarial Network / GAN</h1>
-        <p>这一节讲的是 GAN 的基本想法。课程从“让机器生成图片或句子”出发，先定义 Generator 和 Discriminator，再用二次元头像生成说明二者怎样轮流进步。后半段把 GAN 放回 structure learning 的脉络，解释为什么只训练 Generator 会容易失去大局观，为什么只靠 Discriminator 生成又会卡在 argmax 搜索上。</p>
-        <p>你不需要先会完整数学证明，但要能看懂训练流程：从资料库抽真实样本，从随机分布抽 latent vector，Generator 生成假样本，Discriminator 学会区分真假，然后固定 Discriminator 反过来训练 Generator 取得高分。</p>
-        <div class="map">
-          <span class="node">随机向量 z</span>
-          <span class="node">Generator G</span>
-          <span class="node">生成样本 G(z)</span>
-          <span class="node">Discriminator D</span>
-          <span class="node">整体反馈与轮流训练</span>
-        </div>
-        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=59">Bilibili P59 字幕</a>。本页按原字幕逐节整理，不改动原始字幕文件。</p>
-      </div>
-      <div class="route">
-        <h3>学完后要能做五件事</h3>
-        <ol>
-          <li>解释 GAN 中 Generator、Discriminator、adversarial training 各自负责什么。</li>
-          <li>写出一次 GAN iteration 的两步：先训 D，再训 G，并说明为什么要 freeze 另一边。</li>
-          <li>说明 random vector / latent code 如何被映射成高维图片向量，以及为什么可以做插值。</li>
-          <li>比较 AutoEncoder、VAE、GAN 的生成质量与训练稳定性差别。</li>
-          <li>诊断 GAN 常见问题：负样本太弱、D/G 失衡、逐像素 loss 误导、过拟合、FID 与训练敏感性。</li>
-        </ol>
-      </div>
-    </section>
+  </nav>
 
-    <section id="skeleton">
-      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
-      <div class="grid3">
-        <div class="box soft">
-          <h3>1. 生成任务：从向量到对象</h3>
-          <p>GAN 要训练的是一个生成器。最基本版本里，你从一个简单分布抽出随机向量 <code>z</code>，把它丢进 Generator，输出一张图片、一段句子或其他结构化对象。图片在网络里不是“画布”，而是一个很长的向量；每个维度对应像素颜色，重新排列后才成为可看的图片。</p>
-          <p>判断句：如果你不能说清 <code>z</code>、<code>G(z)</code> 和图片像素向量之间的关系，就还没真正进入 GAN 的训练问题。</p>
-        </div>
-        <div class="box ok">
-          <h3>2. 对抗训练：从评价到反馈</h3>
-          <p>Discriminator 也是 neural network。它吃一个完整对象，输出一个分数，分数越高表示越像真实资料。训练时，真实样本要高分，Generator 产生的假样本要低分；随后固定 D，让 G 产生能让 D 给高分的样本。</p>
-          <p>这里的“骗过”只是拟人化说法。真正发生的是梯度从 D 的输出一路回传到 G 的参数，让 G 朝“让 D 分数更高”的方向更新。</p>
-        </div>
-        <div class="box warn">
-          <h3>3. 大局观：为什么 GAN 有用</h3>
-          <p>逐像素相似度只能告诉你每个 component 是否接近目标，却不一定懂 component 之间的关系。手写数字多一个孤立像素，逐像素误差可能很小，但整体看起来就不像人写的数字。D 看到的是完整图片，因此更容易学到“眼睛、嘴巴、线条、区域关系”这些整体约束。</p>
-          <p>GAN 的关键不是多了一个网络，而是把 G 的反馈从局部差距换成了一个有整体视角的评价函数。</p>
-        </div>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">LI HONGYI LLM · P59 EXTENSION</div>
+      <div class="hero-meta">
+        <span class="hero-badge">58</span>
       </div>
-      <div class="checkpoint">你现在应该能做什么：看到 GAN 图示时，能指出真实样本从 database 来，假样本从 <code>G(z)</code> 来，D 的训练目标是区分二者，G 的训练目标是让 D 给假样本高分。</div>
-    </section>
-
-    <section id="terms">
-      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
-      <div class="table-wrap">
-        <table class="metric-table">
-          <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
-          <tr><td>Generator / G</td><td>从 latent vector 生成对象的网络。</td><td>一个函数 <code>G(z)</code>，输入通常来自 Gaussian 或 uniform distribution，输出图片、句子等结构化对象。</td><td>以为 G 直接“懂图片”，忽略输出本质是高维向量。</td></tr>
-          <tr><td>Discriminator / D</td><td>给完整对象打真实性分数的网络。</td><td>一个函数 <code>D(x)</code>，输入对象，输出 scalar，常被限制在 0 到 1 之间表示真实概率或真实性分数。</td><td>以为 D 会用语言告诉 G 哪里错；实际是通过梯度反馈。</td></tr>
-          <tr><td>Adversarial training</td><td>G 和 D 轮流改进。</td><td>固定 G 训练 D 区分真假，固定 D 训练 G 让假样本得高分，两个 objective 交替更新。</td><td>以为二者真的是互相“作战”；其实是同一个优化流程的两部分。</td></tr>
-          <tr><td>Latent code / z</td><td>控制生成结果的隐藏向量。</td><td>低维或中维随机向量，被 G 映射到高维对象空间；某些方向可能对应头发长度、颜色、姿态等特征。</td><td>以为每一维一定能被人工解释；实际可解释性不保证。</td></tr>
-          <tr><td>Batch size</td><td>一次训练取多少真实样本和随机向量。</td><td>从 database sample <code>N</code> 张真实图，同时 sample <code>N</code> 个 <code>z</code> 生成假图，<code>N</code> 常见如 32、64。</td><td>以为 batch size 只是速度参数；它也会影响训练稳定性。</td></tr>
-          <tr><td>AutoEncoder</td><td>先压缩再还原。</td><td>Encoder 把图片变 code，Decoder 从 code 重建图片；Decoder 可被看成一种 Generator。</td><td>以为重建 loss 低就代表随机生成质量好。</td></tr>
-          <tr><td>VAE</td><td>给 code 加噪声，让 Decoder 更稳定。</td><td>Encoder 输出均值和 variance，从分布 sample 后送入 Decoder，并用额外约束避免 variance 退化为 0。</td><td>以为 VAE 一定比 GAN 清晰；通常 VAE 更稳但可能更模糊。</td></tr>
-          <tr><td>Structure learning</td><td>输出不是单一类别，而是有结构的对象。</td><td>输出可以是 sequence、matrix、graph、tree；重点在 component 之间的关系。</td><td>只评估单个 component，忽略整体一致性。</td></tr>
-          <tr><td>Argmax generation</td><td>用 D 直接找最高分对象。</td><td>理论上可找 <code>argmax_x D(x)</code> 生成样本，但高维图片空间几乎无法穷举。</td><td>以为 D 会评价就自然会生成。</td></tr>
-          <tr><td>FID score</td><td>衡量生成图片像不像真实图片的指标。</td><td>FID 越小通常代表生成分布越接近真实分布；课程指出 GAN 对参数敏感，结果 range 很大。</td><td>只看单张好图，不看分布与稳定性。</td></tr>
-        </table>
+      <h1 class="hero-title">58_P59｜延申：Generative Adversarial Network / GAN</h1>
+      <p class="hero-desc">这一节讲的是 GAN 的基本想法。课程从“让机器生成图片或句子”出发，先定义 Generator 和 Discriminator，再用二次元头像生成说明二者怎样轮流进步。后半段把 GAN 放回 structure learning 的脉络，解释为什么只训练 Generator 会容易失去大局观，为什么只靠 Discriminator 生成又会卡在 argmax 搜索上。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../57_P58_延申_VariationalAuto_encoder_VAE/学习页.html">上一节</a>
+            <a href="../59_P60_延申_Flow_basedMethod/学习页.html">下一节</a>
       </div>
-      <p class="checkpoint">读完这一段，你应该能把“G 生成、D 评分、交替训练、整体反馈”四个词连成一句话，而不是分别背定义。</p>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="lecture">
-      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#skeleton">概念骨架</a>
+      <a href="#terms">术语表</a>
+      <a href="#lecture">讲义主线</a>
+      <a href="#source">GAN 线索</a>
+      <a href="#example">比较与原理</a>
+      <a href="#viz">交互观察</a>
+      <a href="#diagnosis">误区诊断</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="skeleton">
+        <div class="head">
+          <h2>概念骨架</h2>
+          <span class="tag">MAP</span>
+        </div>
+<ol>
+<li>生成任务：从向量到对象</li>
+</ol>
+<p>GAN 要训练的是一个生成器。最基本版本里，你从一个简单分布抽出随机向量 <code>z</code>，把它丢进 Generator，输出一张图片、一段句子或其他结构化对象。图片在网络里一个很长的向量；每个维度对应像素颜色，重新排列后才成为可看的图片。</p>
+<p>判断句：如果你不能说清 <code>z</code>、<code>G(z)</code> 和图片像素向量之间的关系，就还没真正进入 GAN 的训练问题。</p>
+<ol>
+<li>大局观：为什么 GAN 有用</li>
+</ol>
+<p>逐像素相似度只能告诉你每个 component 是否接近目标，却不一定懂 component 之间的关系。手写数字多一个孤立像素，逐像素误差可能很小，但整体看起来就不像人写的数字。D 看到的是完整图片，因此更容易学到“眼睛、嘴巴、线条、区域关系”这些整体约束。</p>
+<p>GAN 的关键把 G 的反馈从局部差距换成了一个有整体视角的评价函数。</p>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语表</h2>
+          <span class="tag">TERMS</span>
+        </div>
+<p>术语直觉解释准确说法常见误解</p>
+<p>Generator / G从 latent vector 生成对象的网络。一个函数 <code>G(z)</code>，输入通常来自 Gaussian 或 uniform distribution，输出图片、句子等结构化对象。以为 G 直接“懂图片”，忽略输出本质是高维向量。</p>
+<p>Discriminator / D给完整对象打真实性分数的网络。一个函数 <code>D(x)</code>，输入对象，输出 scalar，常被限制在 0 到 1 之间表示真实概率或真实性分数。以为 D 会用语言告诉 G 哪里错；实际是通过梯度反馈。</p>
+<p>Adversarial trainingG 和 D 轮流改进。固定 G 训练 D 区分真假，固定 D 训练 G 让假样本得高分，两个 objective 交替更新。以为二者真的是互相“作战”；其实是同一个优化流程的两部分。</p>
+<p>Latent code / z控制生成结果的隐藏向量。低维或中维随机向量，被 G 映射到高维对象空间；某些方向可能对应头发长度、颜色、姿态等特征。以为每一维一定能被人工解释；实际可解释性不保证。</p>
+<p>Batch size一次训练取多少真实样本和随机向量。从 database sample <code>N</code> 张真实图，同时 sample <code>N</code> 个 <code>z</code> 生成假图，<code>N</code> 常见如 32、64。以为 batch size 只是速度参数；它也会影响训练稳定性。</p>
+<p>AutoEncoder先压缩再还原。Encoder 把图片变 code，Decoder 从 code 重建图片；Decoder 可被看成一种 Generator。以为重建 loss 低就代表随机生成质量好。</p>
+<p>VAE给 code 加噪声，让 Decoder 更稳定。Encoder 输出均值和 variance，从分布 sample 后送入 Decoder，并用额外约束避免 variance 退化为 0。以为 VAE 一定比 GAN 清晰；通常 VAE 更稳但可能更模糊。</p>
+<p>Structure learning输出有结构的对象。输出可以是 sequence、matrix、graph、tree；重点在 component 之间的关系。只评估单个 component，忽略整体一致性。</p>
+<p>Argmax generation用 D 直接找最高分对象。理论上可找 <code>argmax_x D(x)</code> 生成样本，但高维图片空间几乎无法穷举。以为 D 会评价就自然会生成。</p>
+<p>FID score衡量生成图片像不像真实图片的指标。FID 越小通常代表生成分布越接近真实分布；课程指出 GAN 对参数敏感，结果 range 很大。只看单张好图，不看分布与稳定性。</p>
+      </section>
+      <section id="lecture">
+        <div class="head">
+          <h2>讲义主线</h2>
+          <span class="tag">LECTURE</span>
+        </div>
       <div class="grid2">
         <div class="box">
-          <h3>从随机向量到可控特征</h3>
-          <p>课程一开始先把 GAN 放在“让机器生成东西”的任务里。最基本的生成器没有文字条件、也没有图片条件，只吃一个随机向量。这个设置看起来不实用，因为你并不知道随机向量具体代表什么；但它是理解 GAN 训练的最干净版本。之后的 conditional generation 才会把文字、图片或标签作为可控条件输入。</p>
-          <p>图片生成时，G 的输出是一个高维向量。假设图片有很多像素，每个像素又有颜色通道，那么输出维度会非常长。把这个向量重新排成图片，就得到头像。课程用二次元人物头像举例：改变 latent vector 的某些维度，可能让头发变长、颜色变蓝、嘴巴张开。这说明 G 学到的不只是像素表，而是从 latent space 到图片特征的连续映射。</p>
-          <p>你现在应该能做什么：看到一张由 GAN 生成的脸，能把它拆成“抽样 z → G 输出高维向量 → reshape 成图片 → 某些 z 方向影响视觉特征”。</p>
+<h3>从随机向量到可控特征</h3>
+<p>课程一开始先把 GAN 放在“让机器生成东西”的任务里。最基本的生成器没有文字条件、也没有图片条件，只吃一个随机向量。这个设置看起来不实用，因为你并不知道随机向量具体代表什么；但它是理解 GAN 训练的最干净版本。之后的 conditional generation 才会把文字、图片或标签作为可控条件输入。</p>
+<p>图片生成时，G 的输出是一个高维向量。假设图片有很多像素，每个像素又有颜色通道，那么输出维度会非常长。把这个向量重新排成图片，就得到头像。课程用二次元人物头像举例：改变 latent vector 的某些维度，可能让头发变长、颜色变蓝、嘴巴张开。这说明 G 学到的不只是像素表，而是从 latent space 到图片特征的连续映射。</p>
+<p>你现在应该能做什么：看到一张由 GAN 生成的脸，能把它拆成“抽样 z → G 输出高维向量 → reshape 成图片 → 某些 z 方向影响视觉特征”。</p>
         </div>
         <div class="box">
-          <h3>Discriminator 不是老师说话，而是函数给分</h3>
-          <p>字幕里用了老师和学生、猎物和天敌的类比来帮助理解，但要马上回到技术对象。D 不会真的对 G 说“你少画了嘴巴”，它只输出一个 scalar。训练 D 时，真实图片被标成高分，G 产生的图片被标成低分。D 学到的判别标准会越来越细：一开始也许只看是不是彩色，后来会看有没有眼睛、嘴巴、线条是否协调。</p>
-          <p>当 D 固定后，G 与 D 可以接成一个大网络：前半段是 G，后半段是 D，输入 <code>z</code>，输出一个分数。训练 G 时只更新前半段参数，让最后的分数变大。必须固定 D，否则模型可以通过改 D 的最后一层让分数变大，而不是让图片真的变好。</p>
-          <p>判断句：训练 G 时，D 是评分器和梯度来源；训练 D 时，G 是当前假样本生产器。二者角色会在每个 iteration 中切换。</p>
+<h3>Discriminator 函数给分</h3>
+<p>字幕里用了老师和学生、猎物和天敌的类比来帮助理解，但要马上回到技术对象。D 不会真的对 G 说“你少画了嘴巴”，它只输出一个 scalar。训练 D 时，真实图片被标成高分，G 产生的图片被标成低分。D 学到的判别标准会越来越细：一开始也许只看是不是彩色，后来会看有没有眼睛、嘴巴、线条是否协调。</p>
+<p>当 D 固定后，G 与 D 可以接成一个大网络：前半段是 G，后半段是 D，输入 <code>z</code>，输出一个分数。训练 G 时只更新前半段参数，让最后的分数变大。必须固定 D，否则模型可以通过改 D 的最后一层让分数变大，而不是让图片真的变好。</p>
+<p>判断句：训练 G 时，D 是评分器和梯度来源；训练 D 时，G 是当前假样本生产器。二者角色会在每个 iteration 中切换。</p>
+<p>字幕线索 1：技术地位视频开头引用了 GAN 在无监督学习和深度学习中的影响，并提到大量 GAN 变体。学习时不用记住动物园里的每个名字，先掌握基础版的 G/D 结构，后续 LSGAN、WGAN、BGAN 才有位置放。</p>
+<p>字幕线索 2：二次元头像真实 database 提供正样本；随机初始化的 G 先产生噪声；D 学会给真实图高分、假图低分；随后 G 逐渐产生更像头像的图。更新次数越多，眼睛、嘴巴、颜色、整体轮廓逐步出现。</p>
+<p>字幕线索 3：结构化学习输出图片、句子、翻译结果都属于 structure learning。困难点所有 component 的关系要协调。GAN 的 D 正是从完整对象上给反馈。</p>
+<p>完整知识链路：GAN 把生成问题拆成“快速提出候选”和“整体评价候选”。Generator 负责从 latent code 快速生成对象，但单靠逐像素重建容易只学表象；Discriminator 负责检查完整对象是否像真实资料，但单靠它直接生成会碰到高维 argmax 难题。交替训练把两边优点接起来：G 代替手写 argmax 产生强负样本，D 给 G 提供带大局观的训练信号。</p>
         </div>
       </div>
-      <div class="grid3" style="margin-top:14px">
-        <div class="box soft"><h3>字幕线索 1：技术地位</h3><p>视频开头引用了 GAN 在无监督学习和深度学习中的影响，并提到大量 GAN 变体。学习时不用记住动物园里的每个名字，先掌握基础版的 G/D 结构，后续 LSGAN、WGAN、BGAN 才有位置放。</p></div>
-        <div class="box ok"><h3>字幕线索 2：二次元头像</h3><p>真实 database 提供正样本；随机初始化的 G 先产生噪声；D 学会给真实图高分、假图低分；随后 G 逐渐产生更像头像的图。更新次数越多，眼睛、嘴巴、颜色、整体轮廓逐步出现。</p></div>
-        <div class="box warn"><h3>字幕线索 3：结构化学习</h3><p>输出图片、句子、翻译结果都属于 structure learning。困难点不是单个像素或单个词，而是所有 component 的关系要协调。GAN 的 D 正是从完整对象上给反馈。</p></div>
-      </div>
-      <div class="note">完整知识链路：GAN 把生成问题拆成“快速提出候选”和“整体评价候选”。Generator 负责从 latent code 快速生成对象，但单靠逐像素重建容易只学表象；Discriminator 负责检查完整对象是否像真实资料，但单靠它直接生成会碰到高维 argmax 难题。交替训练把两边优点接起来：G 代替手写 argmax 产生强负样本，D 给 G 提供带大局观的训练信号。</div>
-    </section>
+      </section>
+      <section id="source">
+        <div class="head">
+          <h2>GAN 线索</h2>
+          <span class="tag">线索</span>
+        </div>
+<p>这一节字幕最核心的操作流程可以写成两个阶段。每个 iteration 先更新 Discriminator，再更新 Generator。下面公式保留原始 GAN 的直觉版本；课程也提醒，后续会讲更好的 objective，所以这里重点是看懂每一项在做什么。</p>
+        <div class="box">
+<h3>阶段 A：固定 G，只训练 D</h3>
+<ol>
+<li>从真实 database 抽 <code>N</code> 张图，作为 positive examples。</li>
+<li>从简单分布抽 <code>N</code> 个 <code>z</code>，通过当前 G 生成 <code>N</code> 张假图，作为 negative examples。</li>
+<li>更新 D，让真实图的 <code>D(x)</code> 变大，让假图的 <code>D(G(z))</code> 变小。</li>
+</ol>
+<p>这一步像训练二分类器或回归器。重要的是负样本来自当前 G，而不是固定的随机噪声；因为太弱的负样本会让 D 学到很粗糙的判别标准。</p>
+        </div>
+        <div class="box">
+<h3>阶段 B：固定 D，只训练 G</h3>
+<ol>
+<li>重新抽一批 <code>z</code>，送进 G 得到假图。</li>
+<li>把假图送进固定的 D，得到真实性分数。</li>
+<li>只更新 G，让 <code>D(G(z))</code> 越大越好。</li>
+</ol>
+<p>实现时可以把 G 和 D 接成一个大网络。D 的参数被冻结，梯度穿过 D 回到 G。这样 G 学到的是“如何产生让当前 D 认为真实的图片”，而不是直接追逐某一张 target 图片的像素。</p>
+<p>伪代码：一次 GAN training looppython</p>
+<pre><code class="language-text">for real_batch in dataloader:
+ z = sample_noise(batch_size, dim)
+ fake_batch = G(z).detach()
+ d_loss = -mean(log(D(real_batch)) + log(1 - D(fake_batch)))
+ update(D, d_loss) # 只改 Discriminator
 
-    <section id="source">
-      <div class="head"><h2>GAN 线索</h2><span class="tag">线索</span></div>
-      <p>这一节字幕最核心的操作流程可以写成两个阶段。每个 iteration 先更新 Discriminator，再更新 Generator。下面公式保留原始 GAN 的直觉版本；课程也提醒，后续会讲更好的 objective，所以这里重点是看懂每一项在做什么。</p>
-      <div class="formula">
-        训练 D：maximize
-        <span class="frac"><span class="top">1</span><span class="bottom">N</span></span>
-        <span class="sum">Σ</span> log D(x)
-        +
-        <span class="frac"><span class="top">1</span><span class="bottom">N</span></span>
-        <span class="sum">Σ</span> log(1 - D(G(z)))
-        <br>
-        训练 G：maximize
-        <span class="frac"><span class="top">1</span><span class="bottom">N</span></span>
-        <span class="sum">Σ</span> log D(G(z))
-      </div>
+ z = sample_noise(batch_size, dim)
+ fake_batch = G(z)
+ g_loss = -mean(log(D(fake_batch)))
+ update(G, g_loss) # 固定 Discriminator，只改 Generator</code></pre>
+<p>你现在应该能做什么：给出任意 GAN 代码时，先检查 D step 有没有 detach/freeze G，G step 有没有 freeze D，以及真实样本和假样本是否在同一个 batch 逻辑里被比较。</p>
+        </div>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>比较与原理</h2>
+          <span class="tag">COMPARE</span>
+        </div>
       <div class="grid2">
         <div class="box">
-          <h3>阶段 A：固定 G，只训练 D</h3>
-          <ol>
-            <li>从真实 database 抽 <code>N</code> 张图，作为 positive examples。</li>
-            <li>从简单分布抽 <code>N</code> 个 <code>z</code>，通过当前 G 生成 <code>N</code> 张假图，作为 negative examples。</li>
-            <li>更新 D，让真实图的 <code>D(x)</code> 变大，让假图的 <code>D(G(z))</code> 变小。</li>
-          </ol>
-          <p>这一步像训练二分类器或回归器。重要的是负样本来自当前 G，而不是固定的随机噪声；因为太弱的负样本会让 D 学到很粗糙的判别标准。</p>
+<h3>为什么 Generator 不能只靠 AutoEncoder 自学</h3>
+<p>课程提出第一个问题：既然 Generator 是从 code 到图片的函数，为什么不能直接用 AutoEncoder 的 Decoder 当 Generator？确实可以。Encoder 把图片压成 code，Decoder 从 code 重建图片。训练完成后，拿 Decoder 输入随机 code，就能生成图。</p>
+<p>问题在于训练资料只覆盖有限 code。Decoder 见过 <code>a</code> 能生成左斜的 1，见过 <code>b</code> 能生成右斜的 1，但输入 <code>(a+b)/2</code> 时不保证会得到正常的正面 1。VAE 通过给 code 加 noise、约束 variance，让 Decoder 对没见过的 code 更稳定；但 VAE 的重建目标仍常偏向平均化，图片可能比较糊。</p>
+<p>更深的问题是逐像素 loss 的评价不等于人的整体评价。一个孤立黑点可能只差一个 pixel，却破坏数字结构；笔画稍微变长可能差多个 pixel，但整体仍像人写的数字。GAN 引入 D，就是为了让 G 的反馈不只来自逐点距离。</p>
         </div>
         <div class="box">
-          <h3>阶段 B：固定 D，只训练 G</h3>
-          <ol>
-            <li>重新抽一批 <code>z</code>，送进 G 得到假图。</li>
-            <li>把假图送进固定的 D，得到真实性分数。</li>
-            <li>只更新 G，让 <code>D(G(z))</code> 越大越好。</li>
-          </ol>
-          <p>实现时可以把 G 和 D 接成一个大网络。D 的参数被冻结，梯度穿过 D 回到 G。这样 G 学到的是“如何产生让当前 D 认为真实的图片”，而不是直接追逐某一张 target 图片的像素。</p>
+<h3>为什么 Discriminator 不直接生成</h3>
+<p>D 的优势是大局观。完整图片送进 D 后，它可以用卷积 filter 检查是否有孤立像素、眼睛是否成对、线条是否连贯。它比逐个 component 生成更容易判断 component 之间的 correlation。</p>
+<p>但用 D 直接生成，要解的是 <code>argmax_x D(x)</code>：在所有可能图片中找一个让 D 给最高分的图片。高维图片空间太大，穷举所有像素组合几乎不可行。传统 graphical model 或 energy-based model 会对函数形式做强假设，才有机会求解；假设越强，表达能力越受限。</p>
+<p>GAN 的妙处是让 G 来近似这个 argmax。G 学着产生 D 会给高分的样本，于是不用手写搜索算法；同时 D 又能不断用 G 生成的强负样本修正自己的弱点。</p>
+<p>方法生成方式优势风险</p>
+<p>AutoEncoderDecoder 从 code 重建图片训练直观，重建目标清楚随机 code 区域不一定稳定，容易只学 reconstruction</p>
+<p>VAE从连续分布 sample code 后 decodelatent space 更平滑，训练相对稳图片可能模糊，最优视觉质量常不如 GAN</p>
+<p>Discriminator-only求 <code>argmax_x D(x)</code>有整体评价能力高维搜索困难，需要强假设</p>
+<p>GANG 生成候选，D 给整体反馈有机会生成清晰样本，能学强负样本训练敏感，G/D 失衡时不稳定</p>
         </div>
       </div>
-      <div class="codebar"><span class="label">伪代码：一次 GAN training loop</span><span class="kind">python</span></div>
-      <pre><code>for real_batch in dataloader:
-    z = sample_noise(batch_size, dim)
-    fake_batch = G(z).detach()
-    d_loss = -mean(log(D(real_batch)) + log(1 - D(fake_batch)))
-    update(D, d_loss)          # 只改 Discriminator
-
-    z = sample_noise(batch_size, dim)
-    fake_batch = G(z)
-    g_loss = -mean(log(D(fake_batch)))
-    update(G, g_loss)          # 固定 Discriminator，只改 Generator</code></pre>
-      <p class="checkpoint">你现在应该能做什么：给出任意 GAN 代码时，先检查 D step 有没有 detach/freeze G，G step 有没有 freeze D，以及真实样本和假样本是否在同一个 batch 逻辑里被比较。</p>
-    </section>
-
-    <section id="example">
-      <div class="head"><h2>比较与原理</h2><span class="tag">COMPARE</span></div>
+      </section>
+      <section id="viz">
+        <div class="head">
+          <h2>交互观察</h2>
+          <span class="tag">OBSERVE</span>
+        </div>
+<p>观察 G/D 轮流训练的直觉</p>
+<p>按钮切换训练阶段，滑块改变 latent code 与 D 的严格程度。这里不是数值仿真，只用来观察字幕里的关键直觉：G 逐步靠近真实分布，D 太弱或太强都会影响反馈质量。</p>
+<p>latent / feature space</p>
+<p>latent code</p>
+<p>D 严格度</p>
+<p>D(real)<b>0.91</b></p>
+<p>D(fake)<b>0.41</b></p>
+      </section>
+      <section id="diagnosis">
+        <div class="head">
+          <h2>误区诊断</h2>
+          <span class="tag">DIAGNOSIS</span>
+        </div>
       <div class="grid2">
         <div class="box">
-          <h3>为什么 Generator 不能只靠 AutoEncoder 自学</h3>
-          <p>课程提出第一个问题：既然 Generator 是从 code 到图片的函数，为什么不能直接用 AutoEncoder 的 Decoder 当 Generator？确实可以。Encoder 把图片压成 code，Decoder 从 code 重建图片。训练完成后，拿 Decoder 输入随机 code，就能生成图。</p>
-          <p>问题在于训练资料只覆盖有限 code。Decoder 见过 <code>a</code> 能生成左斜的 1，见过 <code>b</code> 能生成右斜的 1，但输入 <code>(a+b)/2</code> 时不保证会得到正常的正面 1。VAE 通过给 code 加 noise、约束 variance，让 Decoder 对没见过的 code 更稳定；但 VAE 的重建目标仍常偏向平均化，图片可能比较糊。</p>
-          <p>更深的问题是逐像素 loss 的评价不等于人的整体评价。一个孤立黑点可能只差一个 pixel，却破坏数字结构；笔画稍微变长可能差多个 pixel，但整体仍像人写的数字。GAN 引入 D，就是为了让 G 的反馈不只来自逐点距离。</p>
+<h3>常见坑与修法</h3>
+<ol>
+<li><b>把 GAN 当成普通二分类器。</b> 错因：只看 D，不看 G 的反向训练。后果：讲不清为什么假样本会越来越像真样本。修法：每次都写出 D step 和 G step。</li>
+<li><b>用固定随机噪声当负样本。</b> 错因：负样本太弱。后果：D 只学到“噪声不像图片”，遇到差一点的头像也可能给高分。修法：让当前 G 产生 hard negative examples。</li>
+<li><b>训练 G 时忘记固定 D。</b> 错因：把大网络整体都更新。后果：分数可以靠改评分器变大，图片不一定变好。修法：G step 中 freeze D，只让梯度穿过 D。</li>
+<li><b>只用逐像素 loss 判断生成质量。</b> 错因：把局部距离当整体合理性。后果：孤立像素、模糊平均、结构不协调。修法：引入整体评价或分布级指标。</li>
+<li><b>以为 GAN 一定比 VAE 好。</b> 错因：只看最好样本。后果：忽略 GAN 的参数敏感和训练失败。修法：同时比较稳定性、最优质量、FID、失败样本。</li>
+<li><b>以为生成图不在训练集就一定没过拟合。</b> 错因：生成任务不像普通 train/test 分类那样直接。后果：可能只是记住局部模式。修法：扩大资料、检查最近邻样本、看分布覆盖。</li>
+</ol>
         </div>
         <div class="box">
-          <h3>为什么 Discriminator 不直接生成</h3>
-          <p>D 的优势是大局观。完整图片送进 D 后，它可以用卷积 filter 检查是否有孤立像素、眼睛是否成对、线条是否连贯。它比逐个 component 生成更容易判断 component 之间的 correlation。</p>
-          <p>但用 D 直接生成，要解的是 <code>argmax_x D(x)</code>：在所有可能图片中找一个让 D 给最高分的图片。高维图片空间太大，穷举所有像素组合几乎不可行。传统 graphical model 或 energy-based model 会对函数形式做强假设，才有机会求解；假设越强，表达能力越受限。</p>
-          <p>GAN 的妙处是让 G 来近似这个 argmax。G 学着产生 D 会给高分的样本，于是不用手写搜索算法；同时 D 又能不断用 G 生成的强负样本修正自己的弱点。</p>
+<h3>易混概念对照</h3>
+<p>概念 A概念 B区别</p>
+<p>GeneratorDecoderDecoder 可以作为 Generator，但 AutoEncoder 的训练目标是重建，不等于 GAN 的对抗反馈。</p>
+<p>DiscriminatorClassifierD 可以像分类器训练，但它的输出还会成为 G 的训练信号。</p>
+<p>Pixel loss整体真实性Pixel loss 看局部差距，整体真实性看 component 关系和分布。</p>
+<p>VAE 稳定GAN 清晰VAE 参数结果更集中，GAN 最好结果可能更清晰但 range 更大。</p>
+<p>Argmax 搜索Generator 近似前者直接优化图片空间，后者学习一个从 z 到高分样本的映射。</p>
+<p>你现在应该能做什么：看到“GAN 不稳定”这句话时，不只回答“调参数”，还要检查 D/G 能力平衡、负样本强度、目标函数、batch size、资料量和评估指标。</p>
         </div>
       </div>
-      <div class="table-wrap" style="margin-top:14px">
-        <table class="metric-table">
-          <tr><th>方法</th><th>生成方式</th><th>优势</th><th>风险</th></tr>
-          <tr><td>AutoEncoder</td><td>Decoder 从 code 重建图片</td><td>训练直观，重建目标清楚</td><td>随机 code 区域不一定稳定，容易只学 reconstruction</td></tr>
-          <tr><td>VAE</td><td>从连续分布 sample code 后 decode</td><td>latent space 更平滑，训练相对稳</td><td>图片可能模糊，最优视觉质量常不如 GAN</td></tr>
-          <tr><td>Discriminator-only</td><td>求 <code>argmax_x D(x)</code></td><td>有整体评价能力</td><td>高维搜索困难，需要强假设</td></tr>
-          <tr><td>GAN</td><td>G 生成候选，D 给整体反馈</td><td>有机会生成清晰样本，能学强负样本</td><td>训练敏感，G/D 失衡时不稳定</td></tr>
-        </table>
-      </div>
-    </section>
-
-    <section id="viz">
-      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
-      <div class="viz-panel">
-        <div class="viz-head">
-          <div>
-            <h3>观察 G/D 轮流训练的直觉</h3>
-            <p>按钮切换训练阶段，滑块改变 latent code 与 D 的严格程度。这里不是数值仿真，只用来观察字幕里的关键直觉：G 逐步靠近真实分布，D 太弱或太强都会影响反馈质量。</p>
-          </div>
-          <div class="viz-actions">
-            <button type="button" data-stage="100" class="active">100 updates</button>
-            <button type="button" data-stage="1000">1000</button>
-            <button type="button" data-stage="5000">5000</button>
-            <button type="button" data-stage="50000">50000</button>
-          </div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">DRILL</span>
         </div>
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <svg class="toy-svg" viewBox="0 0 420 260" role="img" aria-label="GAN toy distribution">
-              <line class="grid-line" x1="40" y1="40" x2="40" y2="220"></line>
-              <line class="grid-line" x1="40" y1="220" x2="380" y2="220"></line>
-              <text class="axis-label" x="46" y="34">latent / feature space</text>
-              <circle class="real-dot" cx="118" cy="78" r="7"></circle>
-              <circle class="real-dot" cx="138" cy="96" r="7"></circle>
-              <circle class="real-dot" cx="118" cy="112" r="7"></circle>
-              <circle class="real-dot" cx="292" cy="156" r="7"></circle>
-              <circle class="real-dot" cx="318" cy="176" r="7"></circle>
-              <circle class="real-dot" cx="300" cy="190" r="7"></circle>
-              <circle id="fakeA" class="fake-dot" cx="70" cy="205" r="7"></circle>
-              <circle id="fakeB" class="fake-dot" cx="210" cy="210" r="7"></circle>
-              <circle id="fakeC" class="fake-dot" cx="360" cy="62" r="7"></circle>
-              <text class="axis-label" x="102" y="55">real mode A</text>
-              <text class="axis-label" x="284" y="142">real mode B</text>
-              <text class="axis-label" x="58" y="238">red = generated samples</text>
-            </svg>
-            <p id="stageText" class="checkpoint"></p>
-          </div>
-          <div class="viz-cell">
-            <div class="slider-row">
-              <label for="latentSlider">latent code</label>
-              <input id="latentSlider" type="range" min="-100" max="100" value="20">
-              <output id="latentOut">20</output>
-            </div>
-            <p id="latentText" class="note"></p>
-            <div class="slider-row">
-              <label for="strictSlider">D 严格度</label>
-              <input id="strictSlider" type="range" min="0" max="100" value="55">
-              <output id="strictOut">55</output>
-            </div>
-            <div class="prob-row"><span>D(real)</span><div class="prob-track"><div class="prob-fill" id="realScore"></div></div><b id="realScoreText">0.91</b></div>
-            <div class="prob-row"><span>D(fake)</span><div class="prob-track"><div class="prob-fill" id="fakeScore"></div></div><b id="fakeScoreText">0.41</b></div>
-            <p id="strictText" class="checkpoint"></p>
-          </div>
-        </div>
-      </div>
-      <p>观察重点：GAN 训练不是让 D 永远胜利，也不是让 G 一步到位。D 要提供足够有用的梯度，G 要产生足够强的负样本。两边差距太大时，训练会变敏感；这也是课程后面比较不同 GAN 变体和 FID score 的原因。</p>
-    </section>
-
-    <section id="diagnosis">
-      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
-      <div class="grid2">
-        <div class="box bad">
-          <h3>常见坑与修法</h3>
-          <ol>
-            <li><b>把 GAN 当成普通二分类器。</b> 错因：只看 D，不看 G 的反向训练。后果：讲不清为什么假样本会越来越像真样本。修法：每次都写出 D step 和 G step。</li>
-            <li><b>用固定随机噪声当负样本。</b> 错因：负样本太弱。后果：D 只学到“噪声不像图片”，遇到差一点的头像也可能给高分。修法：让当前 G 产生 hard negative examples。</li>
-            <li><b>训练 G 时忘记固定 D。</b> 错因：把大网络整体都更新。后果：分数可以靠改评分器变大，图片不一定变好。修法：G step 中 freeze D，只让梯度穿过 D。</li>
-            <li><b>只用逐像素 loss 判断生成质量。</b> 错因：把局部距离当整体合理性。后果：孤立像素、模糊平均、结构不协调。修法：引入整体评价或分布级指标。</li>
-            <li><b>以为 GAN 一定比 VAE 好。</b> 错因：只看最好样本。后果：忽略 GAN 的参数敏感和训练失败。修法：同时比较稳定性、最优质量、FID、失败样本。</li>
-            <li><b>以为生成图不在训练集就一定没过拟合。</b> 错因：生成任务不像普通 train/test 分类那样直接。后果：可能只是记住局部模式。修法：扩大资料、检查最近邻样本、看分布覆盖。</li>
-          </ol>
-        </div>
-        <div class="box">
-          <h3>易混概念对照</h3>
-          <div class="table-wrap">
-            <table class="metric-table">
-              <tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr>
-              <tr><td>Generator</td><td>Decoder</td><td>Decoder 可以作为 Generator，但 AutoEncoder 的训练目标是重建，不等于 GAN 的对抗反馈。</td></tr>
-              <tr><td>Discriminator</td><td>Classifier</td><td>D 可以像分类器训练，但它的输出还会成为 G 的训练信号。</td></tr>
-              <tr><td>Pixel loss</td><td>整体真实性</td><td>Pixel loss 看局部差距，整体真实性看 component 关系和分布。</td></tr>
-              <tr><td>VAE 稳定</td><td>GAN 清晰</td><td>VAE 参数结果更集中，GAN 最好结果可能更清晰但 range 更大。</td></tr>
-              <tr><td>Argmax 搜索</td><td>Generator 近似</td><td>前者直接优化图片空间，后者学习一个从 z 到高分样本的映射。</td></tr>
-            </table>
-          </div>
-          <p class="checkpoint">你现在应该能做什么：看到“GAN 不稳定”这句话时，不只回答“调参数”，还要检查 D/G 能力平衡、负样本强度、目标函数、batch size、资料量和评估指标。</p>
-        </div>
-      </div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答前先抓主线</strong><p>每题都尽量落到“谁输入什么、谁输出什么、谁被固定、谁被更新、反馈从哪里来”。不要只写术语解释。</p></div>
-        <div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起 GAN、Generator、Discriminator、random vector、VAE、structure learning、argmax 和 FID。</p></div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、基础概念</h3><p>先确认你能准确说出对象和流程。</p></div><div class="quick-review"><b>REMIND</b>基础题不是背名词，要能放回训练 loop。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-title="1. GAN 的基本目标是训练一个从随机向量生成对象的 Generator。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. GAN 的基本目标是训练一个从随机向量生成对象的 Generator。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
-          <div class="q short" data-role="homework" data-title="2. 用 1-2 句话解释 Generator 的输入和输出。"><div class="q-meta"><span class="pill">简答</span></div><h3>2. 用 1-2 句话解释 Generator 的输入和输出。</h3><textarea name="q2"></textarea></div>
-          <div class="q short" data-role="homework" data-title="3. Discriminator 输出的 scalar 表示什么？"><div class="q-meta"><span class="pill">填空</span></div><h3>3. Discriminator 输出的 scalar 表示什么？</h3><input type="text" name="q3"></div>
-          <div class="q" data-role="homework" data-title="4. 训练 G 时，应该固定 D 的参数。"><div class="q-meta"><span class="pill">判断</span></div><h3>4. 训练 G 时，应该固定 D 的参数。</h3><div class="choices"><label><input type="radio" name="q4" value="对">对</label><label><input type="radio" name="q4" value="错">错</label></div></div>
-          <div class="q short" data-role="homework" data-title="5. 为什么图片可以看成高维向量？"><div class="q-meta"><span class="pill">解释</span></div><h3>5. 为什么图片可以看成高维向量？</h3><textarea name="q5"></textarea></div>
-          <div class="q short" data-role="homework" data-title="6. batch size 在 GAN 训练中对应哪两批样本？"><div class="q-meta"><span class="pill">填空</span></div><h3>6. batch size 在 GAN 训练中对应哪两批样本？</h3><input type="text" name="q6"></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>二、训练流程</h3><p>这一组检查你能不能把算法写成可执行步骤。</p></div><div class="quick-review"><b>REMIND</b>先训 D，再训 G；每一步都说明真实样本、假样本和目标。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="7. 按顺序写出一次 GAN iteration 的两个阶段。"><div class="q-meta"><span class="pill">排序</span></div><h3>7. 按顺序写出一次 GAN iteration 的两个阶段。</h3><textarea name="q7"></textarea></div>
-          <div class="q short" data-role="homework" data-title="8. 训练 D 时，真实图和假图分别应该得到什么分数趋势？"><div class="q-meta"><span class="pill">机制</span></div><h3>8. 训练 D 时，真实图和假图分别应该得到什么分数趋势？</h3><textarea name="q8"></textarea></div>
-          <div class="q short" data-role="homework" data-title="9. 训练 G 时，为什么目标是让 D(G(z)) 变大？"><div class="q-meta"><span class="pill">解释</span></div><h3>9. 训练 G 时，为什么目标是让 D(G(z)) 变大？</h3><textarea name="q9"></textarea></div>
-          <div class="q short" data-role="homework" data-title="10. 如果 G step 没有 freeze D，可能发生什么？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>10. 如果 G step 没有 freeze D，可能发生什么？</h3><textarea name="q10"></textarea></div>
-          <div class="q short" data-role="homework" data-title="11. 解释 gradient ascent 与把 loss 加负号再做 gradient descent 的关系。"><div class="q-meta"><span class="pill">数学直觉</span></div><h3>11. 解释 gradient ascent 与把 loss 加负号再做 gradient descent 的关系。</h3><textarea name="q11"></textarea></div>
-          <div class="q" data-role="homework" data-title="12. GAN 中的 random vector distribution 完全不需要调。"><div class="q-meta"><span class="pill">判断</span></div><h3>12. GAN 中的 random vector distribution 完全不需要调。</h3><div class="choices"><label><input type="radio" name="q12" value="对">对</label><label><input type="radio" name="q12" value="错">错</label></div></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、比较与原理</h3><p>这一组把 GAN 和 AE/VAE、structure learning 接起来。</p></div><div class="quick-review"><b>REMIND</b>注意“局部像不像”和“整体是否合理”的差别。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="13. 为什么 AutoEncoder 的 Decoder 可以被看成 Generator？"><div class="q-meta"><span class="pill">对照</span></div><h3>13. 为什么 AutoEncoder 的 Decoder 可以被看成 Generator？</h3><textarea name="q13"></textarea></div>
-          <div class="q short" data-role="homework" data-title="14. VAE 为什么要给 code 加 noise，并约束 variance 不能太小？"><div class="q-meta"><span class="pill">解释</span></div><h3>14. VAE 为什么要给 code 加 noise，并约束 variance 不能太小？</h3><textarea name="q14"></textarea></div>
-          <div class="q short" data-role="homework" data-title="15. 举例说明逐像素 loss 可能误导 Generator。"><div class="q-meta"><span class="pill">例子</span></div><h3>15. 举例说明逐像素 loss 可能误导 Generator。</h3><textarea name="q15"></textarea></div>
-          <div class="q short" data-role="homework" data-title="16. structure learning 为什么像极端 one-shot 或 zero-shot 问题？"><div class="q-meta"><span class="pill">概念</span></div><h3>16. structure learning 为什么像极端 one-shot 或 zero-shot 问题？</h3><textarea name="q16"></textarea></div>
-          <div class="q short" data-role="homework" data-title="17. 为什么 Discriminator 有大局观，但直接生成很困难？"><div class="q-meta"><span class="pill">对照</span></div><h3>17. 为什么 Discriminator 有大局观，但直接生成很困难？</h3><textarea name="q17"></textarea></div>
-          <div class="q short" data-role="homework" data-title="18. GAN 如何用 Generator 近似 argmax generation？"><div class="q-meta"><span class="pill">机制</span></div><h3>18. GAN 如何用 Generator 近似 argmax generation？</h3><textarea name="q18"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、错误诊断</h3><p>这一组按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b>不要只说“调参”，要定位训练信号哪里坏了。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="19. 有人只用随机噪声当 negative examples。错因、后果、修法是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>19. 有人只用随机噪声当 negative examples。错因、后果、修法是什么？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q19"></textarea></div>
-          <div class="q short" data-role="homework" data-title="20. 生成图很清晰，但只覆盖少数样式。这个结果有什么风险？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>20. 生成图很清晰，但只覆盖少数样式。这个结果有什么风险？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q20"></textarea></div>
-          <div class="q short" data-role="homework" data-title="21. 有人说 D 这么会批评，直接用 D 生成就好了。问题在哪里？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>21. 有人说 D 这么会批评，直接用 D 生成就好了。问题在哪里？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q21"></textarea></div>
-          <div class="q short" data-role="homework" data-title="22. 有人只展示一张最好看的 GAN 结果就说模型很好。评估哪里不稳？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>22. 有人只展示一张最好看的 GAN 结果就说模型很好。评估哪里不稳？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q22"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>五、表达与迁移</h3><p>最后三题检查你能不能讲给别人听。</p></div><div class="quick-review"><b>REMIND</b>费曼题要串完整链路，不要只解释 G 和 D。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="23. 面试官问 GAN 相比 VAE 的核心差异，你会怎么答？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>23. 面试官问 GAN 相比 VAE 的核心差异，你会怎么答？</h3><textarea name="q23"></textarea></div>
-          <div class="q short" data-role="homework" data-title="24. 写出 5 条你会用来验收 GAN 生成结果的检查清单。"><div class="q-meta"><span class="pill">清单</span></div><h3>24. 写出 5 条你会用来验收 GAN 生成结果的检查清单。</h3><textarea name="q24"></textarea></div>
-          <div class="q full" data-role="homework" data-title="25. 用 6-9 句话讲清楚 GAN 的完整主线。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>25. 用 6-9 句话讲清楚 GAN 的完整主线：从随机向量、Generator、Discriminator、adversarial training，讲到 VAE 对照、structure learning、argmax 和 FID。</h3><div class="solve-note">先说问题，再说训练机制，最后说为什么有效和它的边界。</div><textarea name="q25"></textarea></div>
-        </div>
-      </div>
-    </section>
 
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          <div class="quick-review">REMIND 基础题不是背名词，要能放回训练 loop。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 1. GAN 的基本目标是训练一个从随机向量生成对象的 Generator。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 2. 用 1-2 句话解释 Generator 的输入和输出。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 3. Discriminator 输出的 scalar 表示什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 4. 训练 G 时，应该固定 D 的参数。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 5. 为什么图片可以看成高维向量？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 6. batch size 在 GAN 训练中对应哪两批样本？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、训练流程</h3></div>
+          <div class="quick-review">REMIND 先训 D，再训 G；每一步都说明真实样本、假样本和目标。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">排序</span></div>
+        <h3><b>Q:</b> 7. 按顺序写出一次 GAN iteration 的两个阶段。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">机制</span></div>
+        <h3><b>Q:</b> 8. 训练 D 时，真实图和假图分别应该得到什么分数趋势？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 9. 训练 G 时，为什么目标是让 D(G(z)) 变大？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">代码阅读</span></div>
+        <h3><b>Q:</b> 10. 如果 G step 没有 freeze D，可能发生什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">数学直觉</span></div>
+        <h3><b>Q:</b> 11. 解释 gradient ascent 与把 loss 加负号再做 gradient descent 的关系。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 12. GAN 中的 random vector distribution 完全不需要调。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、比较与原理</h3></div>
+          <div class="quick-review">REMIND 注意“局部像不像”和“整体是否合理”的差别。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 13. 为什么 AutoEncoder 的 Decoder 可以被看成 Generator？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 14. VAE 为什么要给 code 加 noise，并约束 variance 不能太小？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">例子</span></div>
+        <h3><b>Q:</b> 15. 举例说明逐像素 loss 可能误导 Generator。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">概念</span></div>
+        <h3><b>Q:</b> 16. structure learning 为什么像极端 one-shot 或 zero-shot 问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 17. 为什么 Discriminator 有大局观，但直接生成很困难？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">机制</span></div>
+        <h3><b>Q:</b> 18. GAN 如何用 Generator 近似 argmax generation？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、错误诊断</h3></div>
+          <div class="quick-review">REMIND 不要只说“调参”，要定位训练信号哪里坏了。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 19. 有人只用随机噪声当 negative examples。错因、后果、修法是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 20. 生成图很清晰，但只覆盖少数样式。这个结果有什么风险？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 21. 有人说 D 这么会批评，直接用 D 生成就好了。问题在哪里？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 22. 有人只展示一张最好看的 GAN 结果就说模型很好。评估哪里不稳？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、表达与迁移</h3></div>
+          <div class="quick-review">REMIND 费曼题要串完整链路，不要只解释 G 和 D。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 23. 面试官问 GAN 相比 VAE 的核心差异，你会怎么答？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 24. 写出 5 条你会用来验收 GAN 生成结果的检查清单。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 25. 用 6-9 句话讲清楚 GAN 的完整主线：从随机向量、Generator、Discriminator、adversarial training，讲到 VAE 对照、structure learning、argmax 和 FID。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>自学记录</h2><span class="tag">记录</span></div>
-      <p class="muted">完成练习后生成 Markdown 练习记录，便于保存、回看和分享。</p>
-      <div class="actions"><button type="button" onclick="generateRecord()">生成 Markdown 练习记录</button><button type="button" class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../../assets/study-page.js"></script>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){
-  const max=document.documentElement.scrollHeight-innerHeight;
-  progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";
-  let current=sections[0]?.id;
-  for(const section of sections){
-    const rect=section.getBoundingClientRect();
-    if(rect.top<innerHeight*.36) current=section.id;
-    section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);
-  }
-  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));
-}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-function fallbackCopy(text,onOk,onFail){
-  const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";document.body.appendChild(ta);ta.focus();ta.select();
-  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
-}
-function copyText(text,onOk,onFail){
-  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
-  else fallbackCopy(text,onOk,onFail);
-}
-document.querySelectorAll(".codebar").forEach(bar=>{
-  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
-  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});
-  bar.appendChild(btn);
-});
-const stageData={
-  100:{points:[[72,205],[214,210],[362,62]],text:"100 updates：G 还像随机画图，假样本远离真实分布。D 很容易分辨真假，反馈粗糙但方向明确。"},
-  1000:{points:[[100,165],[230,198],[344,94]],text:"1000 updates：G 开始抓到眼睛、颜色这类粗特征，但仍有很多样本落在真实分布之外。D 会变得更严格。"},
-  5000:{points:[[126,116],[272,182],[330,158]],text:"5000 updates：部分假样本贴近真实 mode，G 学到更多结构关系；如果 D/G 失衡，训练也可能在这里震荡。"},
-  50000:{points:[[132,92],[304,172],[292,188]],text:"50000 updates：理想情况下，生成分布接近真实分布。注意这不等于没有过拟合，还要看覆盖率、最近邻和 FID。"}
-};
-let currentStage="100";
-function updateStage(stage){
-  currentStage=stage;
-  document.querySelectorAll("[data-stage]").forEach(b=>b.classList.toggle("active",b.dataset.stage===stage));
-  const data=stageData[stage];
-  ["fakeA","fakeB","fakeC"].forEach((id,i)=>{const dot=document.getElementById(id);dot.setAttribute("cx",data.points[i][0]);dot.setAttribute("cy",data.points[i][1]);});
-  document.getElementById("stageText").textContent=data.text;
-  updateScores();
-}
-document.querySelectorAll("[data-stage]").forEach(btn=>btn.addEventListener("click",()=>updateStage(btn.dataset.stage)));
-const latentSlider=document.getElementById("latentSlider");
-const strictSlider=document.getElementById("strictSlider");
-function updateScores(){
-  const latent=Number(latentSlider.value), strict=Number(strictSlider.value), stage=Number(currentStage);
-  document.getElementById("latentOut").textContent=latent;
-  document.getElementById("strictOut").textContent=strict;
-  const feature=latent>45?"latent code 偏向 mode B：可以理解为朝另一组视觉特征移动。":latent<-45?"latent code 偏向 mode A：生成结果更接近第一组真实样式。":"latent code 在中间区域：插值可能平滑，也可能落在真实分布之间的空白处。";
-  document.getElementById("latentText").textContent=feature;
-  const progressTerm=Math.min(.38,Math.log10(stage)/10);
-  const realScore=Math.min(.98,.68+strict/360+progressTerm);
-  const fakeBase=.18+progressTerm+Math.max(0,100-Math.abs(latent))/380;
-  const fakeScore=Math.max(.05,Math.min(.95,fakeBase+(100-strict)/520));
-  document.getElementById("realScore").style.width=Math.round(realScore*100)+"%";
-  document.getElementById("fakeScore").style.width=Math.round(fakeScore*100)+"%";
-  document.getElementById("realScoreText").textContent=realScore.toFixed(2);
-  document.getElementById("fakeScoreText").textContent=fakeScore.toFixed(2);
-  document.getElementById("strictText").textContent=strict>75?"D 很严格：能发现细节问题，但如果 G 太弱，梯度可能变得难用。":strict<30?"D 太宽松：G 容易拿高分，但学不到足够细的整体约束。":"D 严格度适中：更像课程里希望的状态，既能区分真假，也能给 G 有用反馈。";
-}
-latentSlider.addEventListener("input",updateScores);strictSlider.addEventListener("input",updateScores);updateStage("100");
-function valueOfQuestion(q){
-  const radio=q.querySelector("input[type=radio]:checked"); if(radio) return radio.value;
-  const text=q.querySelector("textarea,input[type=text],select"); return text?text.value.trim():"";
-}
-function questionGroup(q){return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";}
-function generateRecord(){
-  const qs=[...document.querySelectorAll('[data-role="homework"]')],groups={},warnings=[];
-  qs.forEach((q,i)=>{
-    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";
-    const hint=q.querySelector(".solve-note")?.innerText.trim()||"";
-    const answer=valueOfQuestion(q);
-    if(!answer) warnings.push("第 "+(i+1)+" 题未填写："+title);
-    if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))) warnings.push("第 "+(i+1)+" 题建议补齐“错因 / 后果 / 修法”。");
-    if(q.dataset.type==="feynman"){
-      const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
-      if(answer&&answer.length<120) warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");
-      const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):[];
-      if(lack.length) warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");
-    }
-    const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
-  });
-  let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";
-  Object.keys(groups).forEach(group=>{out+="## "+group+"\n\n";groups[group].forEach(item=>{out+="### "+item.title+"\n";if(item.hint) out+="提示摘要："+item.hint+"\n\n";out+=item.answer+"\n\n";});});
-  document.getElementById("record").textContent=out;
-  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，便于保存、回看和分享。";
-}
-function copyRecord(){
-  copyText(document.getElementById("record").textContent,()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";},()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";});
-}
-</script>
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

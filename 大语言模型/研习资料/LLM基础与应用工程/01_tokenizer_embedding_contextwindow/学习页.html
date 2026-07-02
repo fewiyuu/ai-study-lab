@@ -4,656 +4,776 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>tokenizer、embedding 与 context window</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="LLM 基础与应用工程" data-unit="01">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>LLM 基础与应用工程</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">LLM 基础与应用工程</a>
+        <span class="sep">/</span>
         <span>01</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#overview"><span class="dot"></span>先抓主线</a>
-        <a href="#mechanism"><span class="dot"></span>核心机制</a>
-        <a href="#example"><span class="dot"></span>例子</a>
-        <a href="#mistakes"><span class="dot"></span>常见误区</a>
-        <a href="#checkflow"><span class="dot"></span>输入验收</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">先把输入链路看清：字符串怎样变成 token、id、向量，再怎样被窗口长度限制。后面的 Transformer、RAG、Agent 都会继续用这条链路。</div>
-    </aside>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">LLM foundation · block 01</div>
-          <h1>tokenizer、embedding 与 context window</h1>
-          <p>这节只处理一件事：文本怎样进入大模型。你会先看到 tokenizer、token id、embedding 和 context window 各自做什么，再用一个最小输入链路、一个窗口预算例子和一组诊断练习把它们连起来。这里先不追 attention 细节，也不讲训练和推理的角色边界；那些内容在后面的单元里再展开。</p>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">LLM foundation · block 01</div>
+      <div class="hero-meta">
+        <span class="hero-badge">01</span>
+      </div>
+      <h1 class="hero-title">tokenizer、embedding 与 context window</h1>
+      <p class="hero-desc">这节只处理一件事：文本怎样进入大模型。你会先看到 tokenizer、token id、embedding 和 context window 各自做什么，再用一个最小输入链路、一个窗口预算例子和一组诊断练习把它们连起来。这里先不追 attention 细节，也不讲训练和推理的角色边界；那些内容在后面的单元里再展开。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../02_Transformer与Attention直观理解/学习页.html">下一节：Transformer 与 Attention</a>
+            <a href="../../index.html">大语言模型研习资料</a>
+            <a href="../../../../index.html">研究总图</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>看到一段文本时，能说清它会先被 tokenizer 切分，再查表变成 token id。</li>
+            <li>能用形状读法解释 embedding 的输入输出，以及为什么 id 本身没有语义距离。</li>
+            <li>能给一次对话、RAG 或代码生成任务做 context window 预算，知道该先查什么。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
 
-          <div class="course-links">
-            <a href="../index.html">课程地图</a><a href="../02_Transformer与Attention直观理解/学习页.html">下一节：Transformer 与 Attention</a><a href="../../index.html">大语言模型研习资料</a><a href="../../../../index.html">研究总图</a>
-          </div>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#overview">先抓主线</a>
+      <a href="#mechanism">核心机制</a>
+      <a href="#example">例子</a>
+      <a href="#tokentrace">切分实测：同一段输入会怎么变</a>
+      <a href="#pipeline">最小流程</a>
+      <a href="#budgetlab">窗口预算演算台</a>
+      <a href="#casewalk">真实例子：一轮长 prompt 怎么被挤掉</a>
+      <a href="#checkflow">输入验收</a>
+      <a href="#mistakes">常见误区</a>
+      <a href="#boundary">先知道，先别钻</a>
+      <a href="#bridge">往后怎么接</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">goal</span>
+        </div>
+<p>先认链路</p>
+<p>把字符串、token、token id、embedding 向量、带长度限制的输入序列放进同一条链路里看，不再把它们混成一个概念。</p>
+<p>先会排错</p>
+<p>遇到答非所问、截断异常、padding 污染或窗口不够时，先查输入链路，先别急着怀疑模型“没学会”。</p>
+      </section>
+      <section id="overview">
+        <div class="head">
+          <h2>先抓主线</h2>
+          <span class="tag">overview</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>一条最小输入链</h3>
+<p>模型不会直接吃“句子”。它先把字符串切成 token，再把 token 查成 token id，接着用 embedding 表把 id 变成连续向量，最后把这些向量连同位置信息送进 Transformer。context window 则决定这次输入和生成总共能占多少 token。</p>
+<p>这条链路里，token id 只是查表用的编号；embedding 向量才是真正进入计算的表示，语义关系也体现在向量空间里。另一个常见误会是把窗口当成“模型知识上限”，它实际限制的是这一轮能看见多少上下文。</p>
         </div>
         <div class="box soft">
-          <h3>读完本页应该能做什么</h3>
-          <ul>
-  <li>看到一段文本时，能说清它会先被 tokenizer 切分，再查表变成 token id。</li>
-  <li>能用形状读法解释 embedding 的输入输出，以及为什么 id 本身没有语义距离。</li>
-  <li>能给一次对话、RAG 或代码生成任务做 context window 预算，知道该先查什么。</li>
+<h3>建议你先记住的四个判断</h3>
+<ul>
+<li>token 数不能直接用字数代替。</li>
+<li>id 大小不能代表语义远近。</li>
+<li>embedding 先查表，后续上下文混合在 Transformer 里发生。</li>
+<li>窗口预算要把系统提示、用户问题、历史、检索文本和预留输出一起算进去。</li>
 </ul>
-
         </div>
       </div>
-
-      <section id="goals">
-  <div class="head"><h2>学习目标</h2><span class="tag">goal</span></div>
-  <div class="grid3">
-    <div class="box">
-      <h3>先认链路</h3>
-      <p>把字符串、token、token id、embedding 向量、带长度限制的输入序列放进同一条链路里看，不再把它们混成一个概念。</p>
-    </div>
-    <div class="box">
-      <h3>先会验算</h3>
-      <p>看到 <code>[B, N]</code> 和 <code>[B, N, D]</code> 这类形状时，能说出哪一维是 batch，哪一维是序列长度，哪一维是向量宽度。</p>
-    </div>
-    <div class="box">
-      <h3>先会排错</h3>
-      <p>遇到答非所问、截断异常、padding 污染或窗口不够时，先查输入链路，先别急着怀疑模型“没学会”。</p>
-    </div>
-  </div>
-</section>
-
-<section id="overview">
-  <div class="head"><h2>先抓主线</h2><span class="tag">overview</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>一条最小输入链</h3>
-      <p>模型不会直接吃“句子”。它先把字符串切成 token，再把 token 查成 token id，接着用 embedding 表把 id 变成连续向量，最后把这些向量连同位置信息送进 Transformer。context window 则决定这次输入和生成总共能占多少 token。</p>
-      <p>这条链路里，token id 只是查表用的编号；embedding 向量才是真正进入计算的表示，语义关系也体现在向量空间里。另一个常见误会是把窗口当成“模型知识上限”，它实际限制的是这一轮能看见多少上下文。</p>
-    </div>
-    <div class="box soft">
-      <h3>建议你先记住的四个判断</h3>
-      <ul>
-        <li>token 数不能直接用字数代替。</li>
-        <li>id 大小不能代表语义远近。</li>
-        <li>embedding 先查表，后续上下文混合在 Transformer 里发生。</li>
-        <li>窗口预算要把系统提示、用户问题、历史、检索文本和预留输出一起算进去。</li>
-      </ul>
-    </div>
-  </div>
-</section>
-
-<section id="mechanism">
-  <div class="head"><h2>核心机制</h2><span class="tag">trace</span></div>
-  <div class="box" data-shape-tracer>
-    <div class="map" style="margin-bottom:12px">
-      <button class="pill active" type="button" data-trace-step="step-1">01 原始文本</button>
-      <button class="pill" type="button" data-trace-step="step-2">02 token</button>
-      <button class="pill" type="button" data-trace-step="step-3">03 token id</button>
-      <button class="pill" type="button" data-trace-step="step-4">04 embedding 向量</button>
-    </div>
-    <div class="grid2">
-      <div class="box active" data-trace-target="step-1">
-        <h3>字符串先进入 tokenizer</h3>
-        <p>这一步的读入对象是人类写下来的文本。输出是 token 片段和对应编号。这里先把句子切开，再决定每个片段在词表里的位置。</p>
-      </div>
-      <div class="box" data-trace-target="step-2">
-        <h3>切分结果是 token</h3>
-        <p>token 是 tokenizer 按词表和切分规则切出来的模型输入片段。它有时接近字，有时接近词，有时比词更细。切法会影响后面的长度预算和特殊标记位置。</p>
-      </div>
-      <div class="box" data-trace-target="step-3">
-        <h3>编号只是查表钥匙</h3>
-        <p>token id 是离散编号。它的作用是让程序在 embedding 表里定位到对应的一行，模型真正处理的是查表得到的向量。</p>
-      </div>
-      <div class="box" data-trace-target="step-4">
-        <h3>向量才进入计算</h3>
-        <p>embedding 把 <code>[B, N]</code> 变成 <code>[B, N, D]</code>。这里的 <code>B</code> 是 batch，<code>N</code> 是序列长度，<code>D</code> 是隐藏维度。后续层处理的是这组连续向量，而不是整数编号。</p>
-      </div>
-    </div>
-    <table class="metric-table" data-export-context="输入链路状态表" data-export-lang="table" style="margin-top:14px">
-      <tr><th>步骤</th><th>前状态 / 形状</th><th>后状态 / 形状</th><th>读什么</th><th>写什么</th><th>错了会怎样</th></tr>
-      <tr><td>原始文本</td><td>字符串</td><td>待切分文本</td><td>人类输入</td><td>无</td><td>如果文本没真正进入 tokenizer，后面所有检查都失效。</td></tr>
-      <tr><td>tokenizer</td><td>字符串</td><td>token 列表与 token id</td><td>词表与切分规则</td><td>切分结果、编号</td><td>切法不对会导致长度预算、特殊标记和检索拼接都出错。</td></tr>
-      <tr><td>embedding</td><td><code>[B, N]</code></td><td><code>[B, N, D]</code></td><td>token id、embedding 表</td><td>连续向量</td><td>如果把 id 直接送进后续层，模型根本没有可计算的表示。</td></tr>
-      <tr><td>context window</td><td>待拼接输入</td><td>已截断 / 已预算输入</td><td>系统提示、历史、检索、输出预算</td><td>保留或丢弃的 token</td><td>关键证据被挤掉时，模型只能在窗口内瞎猜。</td></tr>
-    </table>
-  </div>
-  <div class="grid2" style="margin-top:14px">
-    <div class="box">
-      <h3>为什么这个顺序重要</h3>
-      <p>顺序错了，问题会变得很像“模型不会”。比如没算 token 数，就不知道为什么 prompt 一拼长就答偏；没做 embedding 形状检查，就不知道为什么张量维度不对；没看窗口预算，就不知道是证据没进来，还是模型真的没判断出来。</p>
-    </div>
-    <div class="box info">
-      <h3>这里先不追的东西</h3>
-      <p>先别把注意力放到 attention head 分工、位置编码细节、长上下文压缩、分块检索策略和微调格式上。它们都重要，但都建立在这条输入链路已经看懂的前提下。下一节会直接接到 Transformer 与 Attention；等你学到 RAG 和 Agent，再回来看这一节里的长度预算，会更容易判断证据该放哪里、该删哪里。</p>
-    </div>
-  </div>
-</section>
-
-<section id="example">
-  <div class="head"><h2>例子</h2><span class="tag">example</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>同一句话的三层表示</h3>
-      <table class="metric-table" data-export-context="同一句话的三层表示" data-export-lang="table">
-        <tr><th>层级</th><th>样子</th><th>用途</th></tr>
-        <tr><td>文本</td><td>请解释 RAG</td><td>人能读懂，模型不能直接计算</td></tr>
-        <tr><td>token</td><td>请｜解释｜R｜AG</td><td>切分结果，实际切法由 tokenizer 决定</td></tr>
-        <tr><td>token id</td><td>421｜9182｜51｜337</td><td>整数序列，可输入 embedding 层</td></tr>
-        <tr><td>embedding</td><td>[0.12, -0.03, ...]</td><td>连续向量，进入后续神经网络计算</td></tr>
-      </table>
-      <p>这组数字只是示意，不对应真实模型。你要记住的是“先切分，再编号，再查表，再进网络”，不是记住某个特定编号。</p>
-    </div>
-    <div class="box soft">
-      <h3>一个最小窗口预算</h3>
-      <div class="formula" data-export-context="窗口预算公式" data-export-lang="math">
-        $$\text{used} = s + h + r + o$$
-        <p>其中 <code>s</code> 是系统提示，<code>h</code> 是历史对话，<code>r</code> 是检索文本，<code>o</code> 是预留输出。先算总占用，再和窗口上限比较，才知道该减哪一块。</p>
-      </div>
-      <div class="codebar"><span>检查 token 与长度</span><button class="copy" data-copy="code-token-check">复制</button></div>
-      <pre id="code-token-check" data-export-context="检查 token 与长度" data-export-lang="python"><code class="language-python">text = "请解释 RAG 和长上下文的区别。"
+      </section>
+      <section id="mechanism">
+        <div class="head">
+          <h2>核心机制</h2>
+          <span class="tag">trace</span>
+        </div>
+        <div class="box">
+<p>01 原始文本</p>
+<p>02 token</p>
+<p>03 token id</p>
+<p>04 embedding 向量</p>
+<p>字符串先进入 tokenizer</p>
+<p>这一步的读入对象是人类写下来的文本。输出是 token 片段和对应编号。这里先把句子切开，再决定每个片段在词表里的位置。</p>
+<p>切分结果是 token</p>
+<p>token 是 tokenizer 按词表和切分规则切出来的模型输入片段。它有时接近字，有时接近词，有时比词更细。切法会影响后面的长度预算和特殊标记位置。</p>
+<p>编号只是查表钥匙</p>
+<p>token id 是离散编号。它的作用是让程序在 embedding 表里定位到对应的一行，模型真正处理的是查表得到的向量。</p>
+<p>向量才进入计算</p>
+<p>embedding 把 <code>[B, N]</code> 变成 <code>[B, N, D]</code>。这里的 <code>B</code> 是 batch，<code>N</code> 是序列长度，<code>D</code> 是隐藏维度。后续层处理的是这组连续向量，而不是整数编号。</p>
+<p>步骤前状态 / 形状后状态 / 形状读什么写什么错了会怎样</p>
+<p>原始文本字符串待切分文本人类输入无如果文本没真正进入 tokenizer，后面所有检查都失效。</p>
+<p>tokenizer字符串token 列表与 token id词表与切分规则切分结果、编号切法不对会导致长度预算、特殊标记和检索拼接都出错。</p>
+<p>embedding<code>[B, N]</code><code>[B, N, D]</code>token id、embedding 表连续向量如果把 id 直接送进后续层，模型根本没有可计算的表示。</p>
+<p>context window待拼接输入已截断 / 已预算输入系统提示、历史、检索、输出预算保留或丢弃的 token关键证据被挤掉时，模型只能在窗口内瞎猜。</p>
+        </div>
+        <div class="box">
+<h3>为什么这个顺序重要</h3>
+<p>顺序错了，问题会变得很像“模型不会”。比如没算 token 数，就不知道为什么 prompt 一拼长就答偏；没做 embedding 形状检查，就不知道为什么张量维度不对；没看窗口预算，就不知道是证据没进来，还是模型真的没判断出来。</p>
+        </div>
+        <div class="box info">
+<h3>这里先不追的东西</h3>
+<p>先别把注意力放到 attention head 分工、位置编码细节、长上下文压缩、分块检索策略和微调格式上。它们都重要，但都建立在这条输入链路已经看懂的前提下。下一节会直接接到 Transformer 与 Attention；等你学到 RAG 和 Agent，再回来看这一节里的长度预算，会更容易判断证据该放哪里、该删哪里。</p>
+        </div>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>例子</h2>
+          <span class="tag">example</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>同一句话的三层表示</h3>
+<p>层级样子用途</p>
+<p>文本请解释 RAG人能读懂，模型不能直接计算</p>
+<p>token请｜解释｜R｜AG切分结果，实际切法由 tokenizer 决定</p>
+<p>token id421｜9182｜51｜337整数序列，可输入 embedding 层</p>
+<p>embedding[0.12, -0.03, ...]连续向量，进入后续神经网络计算</p>
+<p>这组数字只是示意，不对应真实模型。你要记住的是“先切分，再编号，再查表，再进网络”，不是记住某个特定编号。</p>
+        </div>
+        <div class="box soft">
+<h3>一个最小窗口预算</h3>
+<p>$$\text{used} = s + h + r + o$$</p>
+<p>其中 <code>s</code> 是系统提示，<code>h</code> 是历史对话，<code>r</code> 是检索文本，<code>o</code> 是预留输出。先算总占用，再和窗口上限比较，才知道该减哪一块。</p>
+<p>检查 token 与长度复制</p>
+<pre><code class="language-python">text = "请解释 RAG 和长上下文的区别。"
 tokens = tokenizer.tokenize(text)
 ids = tokenizer.encode(text, add_special_tokens=True)
 
 print(tokens)
 print(ids)
 print(len(ids))</code></pre>
-      <p>这段代码的检查重点只有一个：不要拿字数代替 token 数。长度一旦超预算，先查 tokenizer 结果，再查后面拼进来的历史和检索片段。</p>
-    </div>
-  </div>
-</section>
-
-<section id="tokentrace">
-  <div class="head"><h2>切分实测：同一段输入会怎么变</h2><span class="tag">trace</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>中文、英文、代码放在一起看</h3>
-      <p>真实工作里，你很少只处理一种文本。更多时候，是中文问题、英文术语和代码片段混在一起。tokenizer 会把它们拆成不同的片段形态：中文专业词可能被切成几个子词，英文长词可能被拆开，代码里的符号和空格也会变成切分信号。</p>
-      <p>这就是为什么“看起来字不多”的 prompt 仍然可能很长。只要混进了路径、JSON、函数名、报错和术语，token 数就会比肉眼预期高很多。对这种输入，最稳妥的习惯是直接打印 tokenizer 的结果，不要靠眼睛估 token 数。</p>
-    </div>
-    <div class="box soft">
-      <h3>一个最小切分脚本</h3>
-      <div class="codebar"><span>看三种输入的 token 数</span><button class="copy" data-copy="code-token-trace">复制</button></div>
-      <pre id="code-token-trace" data-export-context="看三种输入的 token 数" data-export-lang="python"><code class="language-python">samples = {
-    "中文": "请解释长上下文为什么会超窗。",
-    "英文": "Explain why long context can overflow the window.",
-    "代码": "tokenizer(prompt, truncation=True, return_tensors='pt')",
+<p>这段代码的检查重点只有一个：不要拿字数代替 token 数。长度一旦超预算，先查 tokenizer 结果，再查后面拼进来的历史和检索片段。</p>
+        </div>
+      </div>
+      </section>
+      <section id="tokentrace">
+        <div class="head">
+          <h2>切分实测：同一段输入会怎么变</h2>
+          <span class="tag">trace</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>中文、英文、代码放在一起看</h3>
+<p>真实工作里，你很少只处理一种文本。更多时候，是中文问题、英文术语和代码片段混在一起。tokenizer 会把它们拆成不同的片段形态：中文专业词可能被切成几个子词，英文长词可能被拆开，代码里的符号和空格也会变成切分信号。</p>
+<p>这就是为什么“看起来字不多”的 prompt 仍然可能很长。只要混进了路径、JSON、函数名、报错和术语，token 数就会比肉眼预期高很多。对这种输入，最稳妥的习惯是直接打印 tokenizer 的结果，不要靠眼睛估 token 数。</p>
+        </div>
+        <div class="box soft">
+<h3>一个最小切分脚本</h3>
+<p>看三种输入的 token 数复制</p>
+<pre><code class="language-python">samples = {
+ "中文": "请解释长上下文为什么会超窗。",
+ "英文": "Explain why long context can overflow the window.",
+ "代码": "tokenizer(prompt, truncation=True, return_tensors='pt')",
 }
 for label, text in samples.items():
-    pieces = tokenizer.tokenize(text)
-    ids = tokenizer.encode(text, add_special_tokens=True)
-    print(label, len(pieces), len(ids))</code></pre>
-      <p>这段脚本的目的，是让你看到三类输入的切分差异。通常你会发现：英文长词和代码片段的 token 数增长比直觉更快，中文专业词则可能被拆成更细的片段。</p>
-    </div>
-  </div>
-  <table class="metric-table" data-export-context="切分实测观察表" data-export-lang="table">
-    <tr><th>输入类型</th><th>常见切分现象</th><th>下一步检查</th></tr>
-    <tr><td>中文说明</td><td>专业词、数字和标点可能各自占位</td><td>看是否接近窗口边界</td></tr>
-    <tr><td>英文长句</td><td>词根、词缀、空格模式会影响 token 数</td><td>看是否和中文预算一致</td></tr>
-    <tr><td>代码与路径</td><td>括号、引号、斜杠、下划线都会增加片段数</td><td>看是否需要先摘出关键片段</td></tr>
-  </table>
-  <p>这个实测的意义，是让你把“输入长短”改写成一个可以验证的动作。以后你看到混合型 prompt，就先跑一次 tokenizer，再决定是否要删历史、压缩检索，或者把代码和说明拆开。这样做的好处是，很多原来靠猜的判断都能落在一个明确的检查步骤上。</p>
-  <p>做完这个小实测后，再回到练习 1、2、5 和 17 复答一次。你会更容易说清楚：到底是哪里把 token 数推高了，为什么同样一段文本在不同模型里会有不同的预算压力，以及为什么“字数不多”并不等于“窗口很轻松”。</p>
-</section>
-
-<section id="pipeline">
-  <div class="head"><h2>最小流程</h2><span class="tag">pipeline</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>从输入到可检查张量</h3>
-      <p>最小输入流程是：准备文本，调用 tokenizer，得到 <code>input_ids</code> 和 <code>attention_mask</code>，再送入模型。padding 负责补齐 batch 里短样本，attention mask 告诉模型哪些位置是真 token，哪些只是补齐。</p>
-      <p>一个稳妥的做法是把这四件事都做成检查动作：先打印 token 数，再看头尾片段，再确认 mask，最后检查实际送入模型的形状。这样你更容易判断问题出在 tokenizer、长度预算还是后续层。</p>
-      <p>如果你把这一步写进代码习惯，很多“模型奇怪”的问题会提前变成输入检查问题。比如一个 prompt 明明只有几百字，却在拼接检索和历史之后接近窗口上限；或者某个模型的特殊标记位置错了，结果看起来像“角色混乱”。这些问题在模型层里不容易看出来，在输入层里一眼就能看见。</p>
-    </div>
-    <div class="box warn">
-      <h3>错误和修法</h3>
-      <div class="codebar"><span>静默截断示例</span><button class="copy" data-copy="code-truncation-bad">复制</button></div>
-      <pre id="code-truncation-bad" data-export-context="静默截断示例" data-export-lang="python"><code class="language-python">encoded = tokenizer(
-    long_prompt,
-    max_length=4096,
-    truncation=True,
-    return_tensors="pt"
+ pieces = tokenizer.tokenize(text)
+ ids = tokenizer.encode(text, add_special_tokens=True)
+ print(label, len(pieces), len(ids))</code></pre>
+<p>这段脚本的目的，是让你看到三类输入的切分差异。通常你会发现：英文长词和代码片段的 token 数增长比直觉更快，中文专业词则可能被拆成更细的片段。</p>
+<table class="metric-table">
+<tr><th>输入类型</th><th>常见切分现象</th><th>下一步检查</th></tr>
+<tr><td>中文说明</td><td>专业词、数字和标点可能各自占位</td><td>看是否接近窗口边界</td></tr>
+<tr><td>英文长句</td><td>词根、词缀、空格模式会影响 token 数</td><td>看是否和中文预算一致</td></tr>
+<tr><td>代码与路径</td><td>括号、引号、斜杠、下划线都会增加片段数</td><td>看是否需要先摘出关键片段</td></tr>
+</table>
+<p>这个实测的意义，是让你把“输入长短”改写成一个可以验证的动作。以后你看到混合型 prompt，就先跑一次 tokenizer，再决定是否要删历史、压缩检索，或者把代码和说明拆开。这样做的好处是，很多原来靠猜的判断都能落在一个明确的检查步骤上。</p>
+<p>做完这个小实测后，再回到练习 1、2、5 和 17 复答一次。你会更容易说清楚：到底是哪里把 token 数推高了，为什么同样一段文本在不同模型里会有不同的预算压力，以及为什么“字数不多”并不等于“窗口很轻松”。</p>
+        </div>
+      </div>
+      </section>
+      <section id="pipeline">
+        <div class="head">
+          <h2>最小流程</h2>
+          <span class="tag">pipeline</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>从输入到可检查张量</h3>
+<p>最小输入流程是：准备文本，调用 tokenizer，得到 <code>input_ids</code> 和 <code>attention_mask</code>，再送入模型。padding 负责补齐 batch 里短样本，attention mask 告诉模型哪些位置是真 token，哪些只是补齐。</p>
+<p>一个稳妥的做法是把这四件事都做成检查动作：先打印 token 数，再看头尾片段，再确认 mask，最后检查实际送入模型的形状。这样你更容易判断问题出在 tokenizer、长度预算还是后续层。</p>
+<p>如果你把这一步写进代码习惯，很多“模型奇怪”的问题会提前变成输入检查问题。比如一个 prompt 明明只有几百字，却在拼接检索和历史之后接近窗口上限；或者某个模型的特殊标记位置错了，结果看起来像“角色混乱”。这些问题在模型层里不容易看出来，在输入层里一眼就能看见。</p>
+        </div>
+        <div class="box warn">
+<h3>错误和修法</h3>
+<p>静默截断示例复制</p>
+<pre><code class="language-python">encoded = tokenizer(
+ long_prompt,
+ max_length=4096,
+ truncation=True,
+ return_tensors="pt"
 )
 answer = model.generate(**encoded)</code></pre>
-      <p>这段代码能跑，但不够稳。它没有说明到底截掉了哪一段，也没有确认关键证据是否还在。对长文档任务，更可靠的做法是先统计长度、明确截断方向、再决定要不要分块和重排。</p>
-    </div>
-  </div>
-  <div class="box" style="margin-top:14px">
-    <div class="codebar"><span>编码后验收</span><button class="copy" data-copy="code-encoding-check">复制</button></div>
-    <pre id="code-encoding-check" data-export-context="编码后验收" data-export-lang="python"><code class="language-python">encoded = tokenizer(
-    prompt,
-    max_length=8192,
-    padding="longest",
-    truncation=True,
-    return_tensors="pt"
+<p>这段代码能跑，但不够稳。它没有说明到底截掉了哪一段，也没有确认关键证据是否还在。对长文档任务，更可靠的做法是先统计长度、明确截断方向、再决定要不要分块和重排。</p>
+        </div>
+        <div class="box">
+<p>编码后验收复制</p>
+<pre><code class="language-python">encoded = tokenizer(
+ prompt,
+ max_length=8192,
+ padding="longest",
+ truncation=True,
+ return_tensors="pt"
 )
 
 print(encoded["input_ids"].shape)
 print(encoded["attention_mask"].sum(dim=1))
 print(tokenizer.decode(encoded["input_ids"][0][-80:]))</code></pre>
-    <p>第一行看 batch 和序列长度，第二行看真实 token 数，第三行看尾部是否真的保留了你要的内容。删掉这三步，程序还在，判断就没了。</p>
-  </div>
-</section>
-
-<section id="budgetlab">
-  <div class="head"><h2>窗口预算演算台</h2><span class="tag">lab</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>把预算拆成能看见的块</h3>
-      <p>一段 prompt 变长以后，最难的是看不出是哪一块把窗口吃掉了。把系统提示、用户问题、历史对话、检索片段和预留输出拆开，是为了让你先看总账，再看每一笔明细。</p>
-      <p>下面这个小实验用三种场景来模拟：短句问答、长历史对话、RAG 拼接。每次切换场景时，先看总占用，再看剩余，再看最容易被挤掉的对象。这样你能把“答非所问”翻译成一个具体检查动作。</p>
-      <div class="codebar"><span>预算公式</span><button class="copy" data-copy="code-budget-formula">复制</button></div>
-      <pre id="code-budget-formula" data-export-context="预算公式" data-export-lang="text"><code>总占用 = 系统提示 + 用户问题 + 历史对话 + 检索片段 + 预留输出
-先看总占用，再看剩余额度，再决定削减哪一块。</code></pre>
-    </div>
-    <div class="box warn">
-      <div class="terminal-lab" data-terminal-lab>
-        <div class="terminal-controls">
-          <button class="ghost active" data-terminal-case="case-1">短句</button>
-          <button class="ghost" data-terminal-case="case-2">长历史</button>
-          <button class="ghost" data-terminal-case="case-3">RAG 拼接</button>
+<p>第一行看 batch 和序列长度，第二行看真实 token 数，第三行看尾部是否真的保留了你要的内容。删掉这三步，程序还在，判断就没了。</p>
         </div>
-        <pre class="terminal-output" aria-live="polite">短句：系统提示 700 + 用户问题 120 + 预留输出 300 = 1120
-判断：窗口很宽松，重点是确认 tokenizer 的切分和特殊标记。</pre>
-        <template data-terminal-output="case-1">短句：系统提示 700 + 用户问题 120 + 预留输出 300 = 1120
-判断：窗口很宽松，重点是确认 tokenizer 的切分和特殊标记。</template>
-        <template data-terminal-output="case-2">长历史：系统提示 700 + 历史对话 8000 + 用户问题 180 + 预留输出 1200 = 10080
-判断：窗口已经明显吃紧。下一步先删旧轮次，再确认关键事实没有被挤掉。</template>
-        <template data-terminal-output="case-3">RAG 拼接：系统提示 700 + 用户问题 140 + 8 段检索文本 8400 + 预留输出 1200 = 10440
-判断：要先重排检索结果，保留最相关的少数段，再检查末尾证据有没有进入窗口。</template>
       </div>
-    </div>
-  </div>
-  <table class="metric-table" data-export-context="窗口预算三场景" data-export-lang="table">
-    <tr><th>场景</th><th>最容易出问题的部分</th><th>先做什么</th></tr>
-    <tr><td>短句问答</td><td>特殊标记和基础切分</td><td>看 tokenizer 输出和长度</td></tr>
-    <tr><td>长历史对话</td><td>旧轮次把新问题挤掉</td><td>删旧轮次并预留输出</td></tr>
-    <tr><td>RAG 拼接</td><td>检索片段太多，证据尾部消失</td><td>重排、裁剪、再拼接</td></tr>
-  </table>
-  <p>这个演算台的目的，是让你养成一个顺序：先算 token 预算，再看输入结构，最后才谈模型效果。只要输入已经不稳，后面的 attention、检索、对话模板都只是放大问题。它也会直接影响后面的评测结果，因为很多“模型不稳定”的现象，其实是预算和截断没有统一。</p>
-</section>
-
-<section id="casewalk">
-  <div class="head"><h2>真实例子：一轮长 prompt 怎么被挤掉</h2><span class="tag">case</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>把一轮客服问答拆成账本</h3>
-      <p>假设你在做客服问答。系统提示占 620 token，用户问题占 140，历史对话占 1320，检索片段占 2840，预留输出占 900。总占用是 5820。若窗口上限只有 4096，这一轮会超出 1724 token；若窗口是 8192，它表面上能放下，但只要再补 8 个 few-shot 例子，每个 140 token，就会逼近 9300，把尾部证据推到窗口外。</p>
-      <p>这个例子先让你看哪一块该减：系统提示通常保留，用户问题必须完整保留，历史对话可以压缩，检索片段适合重排后裁短，预留输出不能随便砍。长度预算不是最后才补的步骤，它直接决定输入结构。</p>
-      <p>如果你只看总 token，很容易把问题误判成“模型不懂”。实际上，很多失败只是因为最该保留的证据被历史和检索挤出窗口了。这个判断在 RAG、Agent、长对话和代码生成里都会反复出现。</p>
-    </div>
-    <div class="box">
-      <table class="metric-table" data-export-context="长 prompt 预算拆账" data-export-lang="table">
-        <tr><th>块</th><th>token</th><th>先不动还是先减</th><th>如果减错</th></tr>
-        <tr><td>system</td><td>620</td><td>先不动</td><td>角色和约束会丢</td></tr>
-        <tr><td>user</td><td>140</td><td>先不动</td><td>问题本身不完整</td></tr>
-        <tr><td>history</td><td>1320</td><td>优先压缩</td><td>前文重复占位</td></tr>
-        <tr><td>retrieval</td><td>2840</td><td>先重排再裁短</td><td>关键证据被挤出尾部</td></tr>
-        <tr><td>output reserve</td><td>900</td><td>不能随便砍</td><td>模型没地方完成回答</td></tr>
-      </table>
-      <p>这张表的读法很直接：先锁住不能丢的块，再处理可以压缩的块。删历史不等于删结论，裁检索不等于删证据，减少预留输出会直接伤到回答完整度。你真正要找的是“最少删哪一块，才不会把答案结构打坏”。</p>
-    </div>
-  </div>
-  <div class="box" style="margin-top:14px">
-    <div class="codebar"><span>一行预算检查</span><button class="copy" data-copy="code-budget-check">复制</button></div>
-    <pre id="code-budget-check" data-export-context="一行预算检查" data-export-lang="python"><code class="language-python">case_blocks = {"system": 620, "user": 140, "history": 1320, "retrieval": 2840, "reserve": 900}
+      </section>
+      <section id="budgetlab">
+        <div class="head">
+          <h2>窗口预算演算台</h2>
+          <span class="tag">lab</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>把预算拆成能看见的块</h3>
+<p>一段 prompt 变长以后，最难的是看不出是哪一块把窗口吃掉了。把系统提示、用户问题、历史对话、检索片段和预留输出拆开，是为了让你先看总账，再看每一笔明细。</p>
+<p>下面这个小实验用三种场景来模拟：短句问答、长历史对话、RAG 拼接。每次切换场景时，先看总占用，再看剩余，再看最容易被挤掉的对象。这样你能把“答非所问”翻译成一个具体检查动作。</p>
+<p>预算公式复制</p>
+<pre><code class="language-text">总占用 = 系统提示 + 用户问题 + 历史对话 + 检索片段 + 预留输出
+先看总占用，再看剩余额度，再决定削减哪一块。</code></pre>
+        </div>
+        <div class="box warn">
+<div class="table-wrap"><table class="metric-table">
+<tr><th>短句</th><th>长历史</th><th>RAG 拼接</th></tr>
+<tr><td>短句：系统提示 700 + 用户问题 120 + 预留输出 300 = 1120</td><td>判断：窗口很宽松，重点是确认 tokenizer 的切分和特殊标记。</td><td>短句：系统提示 700 + 用户问题 120 + 预留输出 300 = 1120</td></tr>
+<tr><td>判断：窗口很宽松，重点是确认 tokenizer 的切分和特殊标记。</td><td>长历史：系统提示 700 + 历史对话 8000 + 用户问题 180 + 预留输出 1200 = 10080</td><td>判断：窗口已经明显吃紧。下一步先删旧轮次，再确认关键事实没有被挤掉。</td></tr>
+</table></div>
+<p>RAG 拼接：系统提示 700 + 用户问题 140 + 8 段检索文本 8400 + 预留输出 1200 = 10440</p>
+<p>判断：要先重排检索结果，保留最相关的少数段，再检查末尾证据有没有进入窗口。</p>
+<table class="metric-table">
+<tr><th>场景</th><th>最容易出问题的部分</th><th>先做什么</th></tr>
+<tr><td>短句问答</td><td>特殊标记和基础切分</td><td>看 tokenizer 输出和长度</td></tr>
+<tr><td>长历史对话</td><td>旧轮次把新问题挤掉</td><td>删旧轮次并预留输出</td></tr>
+<tr><td>RAG 拼接</td><td>检索片段太多，证据尾部消失</td><td>重排、裁剪、再拼接</td></tr>
+</table>
+<p>这个演算台的目的，是让你养成一个顺序：先算 token 预算，再看输入结构，最后才谈模型效果。只要输入已经不稳，后面的 attention、检索、对话模板都只是放大问题。它也会直接影响后面的评测结果，因为很多“模型不稳定”的现象，其实是预算和截断没有统一。</p>
+        </div>
+      </div>
+      </section>
+      <section id="casewalk">
+        <div class="head">
+          <h2>真实例子：一轮长 prompt 怎么被挤掉</h2>
+          <span class="tag">case</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>把一轮客服问答拆成账本</h3>
+<p>假设你在做客服问答。系统提示占 620 token，用户问题占 140，历史对话占 1320，检索片段占 2840，预留输出占 900。总占用是 5820。若窗口上限只有 4096，这一轮会超出 1724 token；若窗口是 8192，它表面上能放下，但只要再补 8 个 few-shot 例子，每个 140 token，就会逼近 9300，把尾部证据推到窗口外。</p>
+<p>这个例子先让你看哪一块该减：系统提示通常保留，用户问题必须完整保留，历史对话可以压缩，检索片段适合重排后裁短，预留输出不能随便砍。长度预算不是最后才补的步骤，它直接决定输入结构。</p>
+<p>如果你只看总 token，很容易把问题误判成“模型不懂”。实际上，很多失败只是因为最该保留的证据被历史和检索挤出窗口了。这个判断在 RAG、Agent、长对话和代码生成里都会反复出现。</p>
+        </div>
+        <div class="box">
+<p>块token先不动还是先减如果减错</p>
+<p>system620先不动角色和约束会丢</p>
+<p>user140先不动问题本身不完整</p>
+<p>history1320优先压缩前文重复占位</p>
+<p>retrieval2840先重排再裁短关键证据被挤出尾部</p>
+<p>output reserve900不能随便砍模型没地方完成回答</p>
+<p>这张表的读法很直接：先固定住不能丢的块，再处理可以压缩的块。删历史不等于删结论，裁检索不等于删证据，减少预留输出会直接伤到回答完整度。你真正要找的是“最少删哪一块，才不会把答案结构打坏”。</p>
+        </div>
+        <div class="box">
+<p>一行预算检查复制</p>
+<pre><code class="language-python">case_blocks = {"system": 620, "user": 140, "history": 1320, "retrieval": 2840, "reserve": 900}
 used = sum(case_blocks.values())
 limit = 4096
 overflow = used - limit
 print(used, overflow)
-if overflow > 0:
-    print("先压缩 history，再重排 retrieval，最后确认 reserve")</code></pre>
-    <p>这段代码的作用，是让你一眼看到超出的 token 来自哪里。遇到这种超额时，先看最后一个仍然影响答案的块，通常是检索尾部或最旧的历史轮次。</p>
-    <p>做完这个检查后，回到练习 11、12 和 17 再答一遍。目标是把“要删哪一块、为什么先删它”说清。只要你能把这轮预算讲明白，后面的 prompt 结构、RAG 拼接和 Agent 观察记录都会更好改。</p>
-    <div class="box info" style="margin-top:14px">
-      <h3>一个能直接迁移的判断顺序</h3>
-      <p>先看是否超窗，再看是否丢证据，再看是否挤掉输出预算，最后才决定删历史还是裁检索。这个顺序能帮你避免两个常见误判：第一，把“放得下”误当成“放得对”；第二，把“模型答偏”误当成“模型不懂”。只要你手里有一份输入账本，这两个误判都会少很多。</p>
-      <p>如果要把这节课变成日常动作，最有用的做法是：每次做长 prompt 前，先写一个很小的 token 账本；每次改 RAG 片段前，先看证据是否被挤到尾部；每次追问回答偏差时，先检查输入是否真的含有那条关键条件。这个动作不花太多时间，但能把很多排错路径缩短一大截。</p>
-    </div>
-  </div>
-</section>
-
-<section id="checkflow">
-  <div class="head"><h2>输入验收</h2><span class="tag">check</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>长 prompt 出问题时先看这四步</h3>
-      <p>先看 tokenizer 输出，再看 attention_mask 和 padding，再看尾部 decode，最后回头算 system、user、history、retrieval 和 reserve 的账。这个顺序能把“像理解错了”拆成四个检查点：切分有没有变长，输入有没有被截断，补齐有没有混进计算，关键条件有没有留到最后。</p>
-      <p>只要其中一项没过，后面的 attention、检索和对话模板都只能在错误输入上继续工作。很多时候，模型本身没有先坏，先坏的是输入账本。</p>
-    </div>
-    <div class="box soft">
-      <table data-export-context="输入验收顺序表" data-export-lang="table" class="metric-table">
-        <tr><th>顺序</th><th>检查什么</th><th>为什么先看它</th></tr>
-        <tr><td>1</td><td>tokenizer 输出和真实 token 数</td><td>先确认输入是否比眼睛看到的更长。</td></tr>
-        <tr><td>2</td><td>attention_mask 和 padding</td><td>先确认补齐位置有没有被误算成内容。</td></tr>
-        <tr><td>3</td><td>decode 的尾部片段</td><td>先确认关键条件有没有留在窗口里。</td></tr>
-        <tr><td>4</td><td>system / user / history / retrieval / reserve</td><td>先看是哪一块把窗口吃掉了。</td></tr>
-      </table>
-    </div>
-  </div>
-  <div class="box" style="margin-top:14px">
-    <div class="codebar"><span>最小排错动作</span><button class="copy" data-copy="code-checkflow">复制</button></div>
-    <pre id="code-checkflow" data-export-context="最小排错动作" data-export-lang="python"><code class="language-python">encoded = tokenizer(prompt, truncation=True, return_tensors="pt")
+if overflow &gt; 0:
+ print("先压缩 history，再重排 retrieval，最后确认 reserve")</code></pre>
+<p>这段代码的作用，是让你一眼看到超出的 token 来自哪里。遇到这种超额时，先看最后一个仍然影响答案的块，通常是检索尾部或最旧的历史轮次。</p>
+<p>做完这个检查后，回到练习 11、12 和 17 再答一遍。目标是把“要删哪一块、为什么先删它”说清。只要你能把这轮预算讲明白，后面的 prompt 结构、RAG 拼接和 Agent 观察记录都会更好改。</p>
+<p>一个能直接迁移的判断顺序</p>
+<p>先看是否超窗，再看是否丢证据，再看是否挤掉输出预算，最后才决定删历史还是裁检索。这个顺序能帮你避免两个常见误判：第一，把“放得下”误当成“放得对”；第二，把“模型答偏”误当成“模型不懂”。只要你手里有一份输入账本，这两个误判都会少很多。</p>
+<p>如果要把这节课变成日常动作，最有用的做法是：每次做长 prompt 前，先写一个很小的 token 账本；每次改 RAG 片段前，先看证据是否被挤到尾部；每次追问回答偏差时，先检查输入是否真的含有那条关键条件。这个动作不花太多时间，但能把很多排错路径缩短一大截。</p>
+        </div>
+      </div>
+      </section>
+      <section id="checkflow">
+        <div class="head">
+          <h2>输入验收</h2>
+          <span class="tag">check</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>长 prompt 出问题时先看这四步</h3>
+<p>先看 tokenizer 输出，再看 attention_mask 和 padding，再看尾部 decode，最后回头算 system、user、history、retrieval 和 reserve 的账。这个顺序能把“像理解错了”拆成四个检查点：切分有没有变长，输入有没有被截断，补齐有没有混进计算，关键条件有没有留到最后。</p>
+<p>只要其中一项没过，后面的 attention、检索和对话模板都只能在错误输入上继续工作。很多时候，模型本身没有先坏，先坏的是输入账本。</p>
+        </div>
+        <div class="box soft">
+<p>顺序检查什么为什么先看它</p>
+<p>1tokenizer 输出和真实 token 数先确认输入是否比眼睛看到的更长。</p>
+<p>2attention_mask 和 padding先确认补齐位置有没有被误算成内容。</p>
+<p>3decode 的尾部片段先确认关键条件有没有留在窗口里。</p>
+<p>4system / user / history / retrieval / reserve先看是哪一块把窗口吃掉了。</p>
+        </div>
+        <div class="box">
+<p>最小排错动作复制</p>
+<pre><code class="language-python">encoded = tokenizer(prompt, truncation=True, return_tensors="pt")
 print(encoded["input_ids"].shape)
 print(encoded["attention_mask"].sum(dim=1))
 print(tokenizer.decode(encoded["input_ids"][0][-60:]))</code></pre>
-    <p>这三行够用来找大多数输入问题。先看长度，再看有效 token，再看尾部内容。它们不替代完整评测，但能让你很快知道问题是切分、截断还是证据位置。</p>
-  </div>
-</section>
-
-<section id="mistakes">
-  <div class="head"><h2>常见误区</h2><span class="tag">debug</span></div>
-  <div class="grid2">
-    <div class="box redsoft">
-      <h3>最常见的五个误区</h3>
-      <table class="metric-table" data-export-context="常见误区表" data-export-lang="table">
-        <tr><th>误区</th><th>错因</th><th>后果</th><th>修法</th></tr>
-        <tr><td>把 token 当字数</td><td>用肉眼长度代替 tokenizer 结果</td><td>窗口预算失真</td><td>用目标模型 tokenizer 统计</td></tr>
-        <tr><td>把 id 当语义向量</td><td>看到整数就想比较大小</td><td>误读模型输入</td><td>区分 id 查表和 embedding 计算</td></tr>
-        <tr><td>以为 embedding 会读上下文</td><td>把静态查表和上下文混在一起</td><td>解释不清“苹果”的不同语境</td><td>说明上下文混合发生在后续层</td></tr>
-        <tr><td>以为窗口越长越好</td><td>忽略成本和噪声</td><td>延迟高、费用高、重点被淹没</td><td>先检索筛选，再放入窗口</td></tr>
-        <tr><td>只开 truncation 不看结果</td><td>把“能运行”当“输入正确”</td><td>关键证据丢失</td><td>打印长度和解码片段</td></tr>
-      </table>
-      <p>如果你遇到“模型突然忘了前文”或者“回答和文档末尾对不上”，先不要改模型参数，先回到这张表看输入端有没有把真正要看的内容送进去。很多问题在这里就能找到头绪。</p>
-    </div>
-    <div class="box">
-      <h3>三组经常混在一起的概念</h3>
-      <table class="metric-table" data-export-context="概念区分表" data-export-lang="table">
-        <tr><th>概念对</th><th>准确区别</th><th>判断方法</th></tr>
-        <tr><td>token / word</td><td>word 是语言里的词；token 是 tokenizer 产生的模型输入片段。</td><td>看 tokenizer 输出，不用肉眼猜。</td></tr>
-        <tr><td>token id / embedding</td><td>id 是离散编号；embedding 是查表得到的连续向量。</td><td>看形状：<code>[B, N]</code> 常变成 <code>[B, N, D]</code>。</td></tr>
-        <tr><td>context window / 模型知识</td><td>窗口是单次输入长度；知识来自训练参数和当前输入。</td><td>问自己：证据是否真的进了这次输入。</td></tr>
-        <tr><td>padding / truncation</td><td>padding 是补齐短样本；truncation 是裁掉长样本。</td><td>padding 配 mask，truncation 查保留内容。</td></tr>
-      </table>
-      <p>概念区分的目标，是让你在代码里看到 input_ids、attention_mask、max_length 这些字段时，马上想到它们各自对应哪一步：谁在切分，谁在补齐，谁在截断，谁在屏蔽。这个判断习惯会在后面的 RAG、Prompt、Eval 和 Agent 里反复用到。</p>
-    </div>
-  </div>
-</section>
-
-<section id="boundary">
-  <div class="head"><h2>先知道，先别钻</h2><span class="tag">boundary</span></div>
-  <div class="box info">
-    <p>这节课已经够你开始算输入预算了，但还没有进入 attention head 的分工、位置编码的数学细节、长上下文压缩、RAG 分块策略、微调格式和训练损失。先把“文本如何变成可计算输入”这件事看懂，再去看后面的单元会顺很多。下一节会直接接到 Transformer 与 Attention；等你学到 RAG 和 Agent，再回来看这一节里的长度预算，会更容易判断证据该放哪里、该删哪里。</p>
-    <p>如果你现在还在分不清 tokenizer 和 embedding，可以先只记一句：前者负责切分和编号，后者负责把编号变成可计算向量。最实用的检查顺序是：打印 tokenizer 输出，数 token，确认 mask，再看尾部 decode。只要这四步稳，很多“模型好像没理解”的感觉都会变成具体的输入问题。</p>
-  </div>
-</section>
-
-<section id="bridge">
-  <div class="head"><h2>往后怎么接</h2><span class="tag">bridge</span></div>
-  <div class="grid3">
-    <div class="box">
-      <h3>接 Transformer</h3>
-      <p>下一节会看向量怎样在序列里互相影响。这里先记住：Transformer 读的是 embedding 后的序列，不是原始字符串。</p>
-    </div>
-    <div class="box">
-      <h3>接 RAG</h3>
-      <p>RAG 要做的是把检索文本放进窗口，并控制它们不要挤掉系统提示、问题和关键证据。预算逻辑是这一节的直接迁移。</p>
-    </div>
-    <div class="box">
-      <h3>接 Agent</h3>
-      <p>Agent 调工具、写观察、再把结果送回模型时，也会重复面对 token 预算和截断问题。输入链路看懂了，后面才知道哪里该压缩，哪里该保留。</p>
-    </div>
-  </div>
-  <div class="box" style="margin-top:14px">
-    <h3>下一步检查清单</h3>
-    <p>学完这一节，最值得顺手做的事有三件：在本机找一个 tokenizer，打印一段中文和一段英文的 token 数；把一个短 prompt 和一个长 prompt 各自做一次长度预算；再看一个模型调用里是否明确传了 attention mask 和截断策略。做完这三件事，后面的课程页就不只是概念页了，它会变成你读代码、看日志、查输入的工具。</p>
-  </div>
-</section>
-
-
+<p>这三行够用来找大多数输入问题。先看长度，再看有效 token，再看尾部内容。它们不替代完整评测，但能让你很快知道问题是切分、截断还是证据位置。</p>
+        </div>
+      </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区</h2>
+          <span class="tag">debug</span>
+        </div>
+      <div class="grid2">
+        <div class="box redsoft">
+<h3>最常见的五个误区</h3>
+<p>误区错因后果修法</p>
+<p>把 token 当字数用肉眼长度代替 tokenizer 结果窗口预算失真用目标模型 tokenizer 统计</p>
+<p>把 id 当语义向量看到整数就想比较大小误读模型输入区分 id 查表和 embedding 计算</p>
+<p>以为 embedding 会读上下文把静态查表和上下文混在一起解释不清“苹果”的不同语境说明上下文混合发生在后续层</p>
+<p>以为窗口越长越好忽略成本和噪声延迟高、费用高、重点被淹没先检索筛选，再放入窗口</p>
+<p>只开 truncation 不看结果把“能运行”当“输入正确”关键证据丢失打印长度和解码片段</p>
+<p>如果你遇到“模型突然忘了前文”或者“回答和文档末尾对不上”，先不要改模型参数，先回到这张表看输入端有没有把真正要看的内容送进去。很多问题在这里就能找到头绪。</p>
+        </div>
+        <div class="box">
+<h3>三组经常混在一起的概念</h3>
+<p>概念对准确区别判断方法</p>
+<p>token / wordword 是语言里的词；token 是 tokenizer 产生的模型输入片段。看 tokenizer 输出，不用肉眼猜。</p>
+<p>token id / embeddingid 是离散编号；embedding 是查表得到的连续向量。看形状：<code>[B, N]</code> 常变成 <code>[B, N, D]</code>。</p>
+<p>context window / 模型知识窗口是单次输入长度；知识来自训练参数和当前输入。问自己：证据是否真的进了这次输入。</p>
+<p>padding / truncationpadding 是补齐短样本；truncation 是裁掉长样本。padding 配 mask，truncation 查保留内容。</p>
+<p>概念区分的目标，是让你在代码里看到 input_ids、attention_mask、max_length 这些字段时，马上想到它们各自对应哪一步：谁在切分，谁在补齐，谁在截断，谁在屏蔽。这个判断习惯会在后面的 RAG、Prompt、Eval 和 Agent 里反复用到。</p>
+        </div>
+      </div>
+      </section>
+      <section id="boundary">
+        <div class="head">
+          <h2>先知道，先别钻</h2>
+          <span class="tag">boundary</span>
+        </div>
+        <div class="box info">
+<p>这节课已经够你开始算输入预算了，但还没有进入 attention head 的分工、位置编码的数学细节、长上下文压缩、RAG 分块策略、微调格式和训练损失。先把“文本如何变成可计算输入”这件事看懂，再去看后面的单元会顺很多。下一节会直接接到 Transformer 与 Attention；等你学到 RAG 和 Agent，再回来看这一节里的长度预算，会更容易判断证据该放哪里、该删哪里。</p>
+<p>如果你现在还在分不清 tokenizer 和 embedding，可以先只记一句：前者负责切分和编号，后者负责把编号变成可计算向量。最实用的检查顺序是：打印 tokenizer 输出，数 token，确认 mask，再看尾部 decode。只要这四步稳，很多“模型好像没理解”的感觉都会变成具体的输入问题。</p>
+        </div>
+      </section>
+      <section id="bridge">
+        <div class="head">
+          <h2>往后怎么接</h2>
+          <span class="tag">bridge</span>
+        </div>
+<p>接 Transformer</p>
+<p>下一节会看向量怎样在序列里互相影响。这里先记住：Transformer 读的是 embedding 后的序列，不是原始字符串。</p>
+<p>接 Agent</p>
+<p>Agent 调工具、写观察、再把结果送回模型时，也会重复面对 token 预算和截断问题。输入链路看懂了，后面才知道哪里该压缩，哪里该保留。</p>
+      </section>
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-intro">
-  <div class="box soft">
-    <h3>怎么答才算会</h3>
-    <p>先把对象说清，再说依赖和后果。结构化题尽量用“错因、表现、修法”来答；开放题至少要提到 tokenizer、token id、embedding、context window 这四个对象里的相关关系。</p>
-  </div>
-  <div class="box info">
-    <h3>检查重点</h3>
-    <p>这页最重要的不是背词，而是能不能看懂输入链路、形状变化和长度预算。答题时如果提到 token 数、mask、截断或预算，记得说明你是在检查哪一步。</p>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>一、基础判断</h3><p>这一组检查你能不能把概念边界说对。</p></div>
-    <div class="quick-review">先把四个对象分开：tokenizer 负责切分，id 负责查表，embedding 负责变向量，window 负责限长。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q1" data-group="基础判断" data-title="token 的定义" data-answer="错">
-      <div class="q-meta"><span class="pill" data-type="true/false">true/false</span></div>
-      <h3>1. token 一定等于中文里的一个字或英文里的一个单词。</h3>
-      <div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q2" data-group="基础判断" data-title="tokenizer 输出" data-answer="token 和 token id">
-      <div class="q-meta"><span class="pill" data-type="choice">choice</span></div>
-      <h3>2. tokenizer 的主要输出是什么？</h3>
-      <div class="choices"><label><input type="radio" name="q2" value="token 和 token id">token 和 token id</label><label><input type="radio" name="q2" value="训练后的模型参数">训练后的模型参数</label><label><input type="radio" name="q2" value="最终回答文本">最终回答文本</label></div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q short" data-question="q3" data-group="基础判断" data-title="输入顺序">
-      <div class="q-meta"><span class="pill" data-type="ordering">ordering</span></div>
-      <h3>3. 请把这四步按顺序写出来：embedding 向量、原始文本、token id、token。</h3>
-      <p class="solve-note">答题时先写最早出现的对象，再一路写到能进入模型的表示。</p>
-      <textarea name="q3"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>标准顺序是：原始文本 → token → token id → embedding 向量。要点是先切分，再编号，再查表，最后得到连续向量。</p></details>
-    </div>
-    <div class="q short" data-question="q4" data-group="基础判断" data-title="id 的边界">
-      <div class="q-meta"><span class="pill" data-type="synthesis">synthesis</span></div>
-      <h3>4. 为什么不能根据 token id 的大小判断两个 token 语义是否接近？</h3>
-      <p class="solve-note">回答时至少说出“id 是查表钥匙”“语义来自向量空间”这两层。</p>
-      <textarea name="q4"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>因为 token id 只是词表里的编号，编号大小不表示语义距离。真正的语义关系来自 embedding 和后续上下文表示，不来自编号本身。一个合格答案要把“编号”和“表示”分开。</p></details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>二、形状和代码阅读</h3><p>这一组检查你能不能从张量形状看出每一步在做什么。</p></div>
-    <div class="quick-review">记住最常见的形状转变：<code>[B, N]</code> 进入 embedding 后通常变成 <code>[B, N, D]</code>。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q5" data-group="形状和代码阅读" data-title="embedding 输出形状" data-answer="[2, 128, 768]">
-      <div class="q-meta"><span class="pill" data-type="choice">choice</span></div>
-      <h3>5. <code>input_ids</code> 形状是 <code>[2, 128]</code>，hidden size 是 768，embedding 输出形状通常是哪一个？</h3>
-      <div class="choices">
-        <label><input type="radio" name="q5" value="[2, 128]">[2, 128]</label>
-        <label><input type="radio" name="q5" value="[2, 128, 768]">[2, 128, 768]</label>
-        <label><input type="radio" name="q5" value="[768, 128]">[768, 128]</label>
+      <div class="practice-intro">
+      <div class="box soft">
+<h3>怎么答才算会</h3>
+<p>先把对象说清，再说依赖和后果。结构化题尽量用“错因、表现、修法”来答；开放题至少要提到 tokenizer、token id、embedding、context window 这四个对象里的相关关系。</p>
       </div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q short" data-question="q6" data-group="形状和代码阅读" data-title="attention mask">
-      <div class="q-meta"><span class="pill" data-type="code reading">code reading</span></div>
-      <h3>6. padding 后为什么还需要 attention mask？</h3>
-      <p class="solve-note">从“哪些位置是真 token，哪些位置只是补齐”作答，不要只说“为了正确”。</p>
+      <div class="box info">
+<h3>检查重点</h3>
+<p>这页最重要的不是背词，而是能不能看懂输入链路、形状变化和长度预算。答题时如果提到 token 数、mask、截断或预算，记得说明你是在检查哪一步。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础判断</h3></div>
+          <div class="quick-review">先把四个对象分开：tokenizer 负责切分，id 负责查表，embedding 负责变向量，window 负责限长。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="错">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> 1. token 一定等于中文里的一个字或英文里的一个单词。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q1" value="对">对</label>
+      <label><input type="radio" name="q1" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>错</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="token 和 token id">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 2. tokenizer 的主要输出是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q2" value="token 和 token id">token 和 token id</label>
+      <label><input type="radio" name="q2" value="训练后的模型参数">训练后的模型参数</label>
+      <label><input type="radio" name="q2" value="最终回答文本">最终回答文本</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>token 和 token id</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">ordering</span></div>
+        <h3><b>Q:</b> 3. 请把这四步按顺序写出来：embedding 向量、原始文本、token id、token。</h3>
+
+
+      <textarea name="q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。标准顺序是：原始文本 → token → token id → embedding 向量。要点是先切分，再编号，再查表，最后得到连续向量。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 4. 为什么不能根据 token id 的大小判断两个 token 语义是否接近？</h3>
+
+
+      <textarea name="q4"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。因为 token id 只是词表里的编号，编号大小不表示语义距离。真正的语义关系来自 embedding 和后续上下文表示，不来自编号本身。一个合格答案要把“编号”和“表示”分开。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、形状和代码阅读</h3></div>
+          <div class="quick-review">记住最常见的形状转变： [B, N] 进入 embedding 后通常变成 [B, N, D] 。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="[2, 128, 768]">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 5. <code>input_ids</code> 形状是 <code>[2, 128]</code>，hidden size 是 768，embedding 输出形状通常是哪一个？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q5" value="[2, 128]">[2, 128]</label>
+      <label><input type="radio" name="q5" value="[2, 128, 768]">[2, 128, 768]</label>
+      <label><input type="radio" name="q5" value="[768, 128]">[768, 128]</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>[2, 128, 768]</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">code reading</span></div>
+        <h3><b>Q:</b> 6. padding 后为什么还需要 attention mask？</h3>
+
+
       <textarea name="q6"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>padding 会把短样本补到和长样本同样长，但补出来的位置不是内容。attention mask 用来告诉模型哪些位置要参与计算、哪些位置要忽略，否则补齐部分会被误当成真实 token，影响结果。</p></details>
-    </div>
-    <div class="q short" data-question="q7" data-group="形状和代码阅读" data-title="长度检查" data-answer="真实 token 数">
-      <div class="q-meta"><span class="pill" data-type="choice">choice</span></div>
-      <h3>7. <code>attention_mask.sum(dim=1)</code> 常用来检查什么？</h3>
-      <div class="choices"><label><input type="radio" name="q7" value="真实 token 数">真实 token 数</label><label><input type="radio" name="q7" value="embedding 表大小">embedding 表大小</label><label><input type="radio" name="q7" value="模型层数">模型层数</label></div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q short" data-question="q8" data-group="形状和代码阅读" data-title="特殊标记">
-      <div class="q-meta"><span class="pill" data-type="scenario transfer">scenario transfer</span></div>
-      <h3>8. 为什么不同模型的特殊标记不能随便混用？</h3>
-      <p class="solve-note">答题时要说到“格式约定”和“模型词表”这两个点。</p>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。padding 会把短样本补到和长样本同样长，但补出来的位置不是内容。attention mask 用来告诉模型哪些位置要参与计算、哪些位置要忽略，否则补齐部分会被误当成真实 token，影响结果。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="真实 token 数">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 7. <code>attention_mask.sum(dim=1)</code> 常用来检查什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q7" value="真实 token 数">真实 token 数</label>
+      <label><input type="radio" name="q7" value="embedding 表大小">embedding 表大小</label>
+      <label><input type="radio" name="q7" value="模型层数">模型层数</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>真实 token 数</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">scenario-transfer</span></div>
+        <h3><b>Q:</b> 8. 为什么不同模型的特殊标记不能随便混用？</h3>
+
+
       <textarea name="q8"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>不同模型对开始、结束、分隔、填充等特殊标记的约定不同，词表也不同。混用会让输入格式不对，轻则长度和对话角色错位，重则模型读到的是错误标记。</p></details>
-    </div>
-  </div>
-</div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。不同模型对开始、结束、分隔、填充等特殊标记的约定不同，词表也不同。混用会让输入格式不对，轻则长度和对话角色错位，重则模型读到的是错误标记。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、窗口预算与故障判断</h3></div>
+          <div class="quick-review">窗口只管这一次输入和生成，不管模型训练时见过什么。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 9. 用一句话解释 context window。</h3>
 
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>三、窗口预算与故障判断</h3><p>这一组把窗口限制放到真实任务里判断。</p></div>
-    <div class="quick-review">窗口只管这一次输入和生成，不管模型训练时见过什么。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q short" data-question="q9" data-group="窗口预算与故障判断" data-title="窗口定义">
-      <div class="q-meta"><span class="pill" data-type="synthesis">synthesis</span></div>
-      <h3>9. 用一句话解释 context window。</h3>
+
       <textarea name="q9"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>context window 是模型一次输入和生成过程中能同时处理的 token 长度上限。好的答案要强调“单次”和“长度上限”，不要写成“模型懂多少知识”。</p></details>
-    </div>
-    <div class="q short" data-question="q10" data-group="窗口预算与故障判断" data-title="长窗口判断" data-answer="错">
-      <div class="q-meta"><span class="pill" data-type="true/false">true/false</span></div>
-      <h3>10. context window 越长，回答质量一定越好。</h3>
-      <div class="choices"><label><input type="radio" name="q10" value="对">对</label><label><input type="radio" name="q10" value="错">错</label></div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q short" data-question="q11" data-group="窗口预算与故障判断" data-title="预算场景">
-      <div class="q-meta"><span class="pill" data-type="checklist">checklist</span></div>
-      <h3>11. 你要把系统提示、历史对话、5 段检索文本放入模型。应该先检查哪三件事？</h3>
-      <p class="solve-note">至少说出 token 预算、关键证据位置、预留输出三项。</p>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。context window 是模型一次输入和生成过程中能同时处理的 token 长度上限。好的答案要强调“单次”和“长度上限”，不要写成“模型懂多少知识”。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="错">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> 10. context window 越长，回答质量一定越好。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q10" value="对">对</label>
+      <label><input type="radio" name="q10" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>错</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">checklist</span></div>
+        <h3><b>Q:</b> 11. 你要把系统提示、历史对话、5 段检索文本放入模型。应该先检查哪三件事？</h3>
+
+
       <textarea name="q11"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>至少要检查三件事：各部分 token 数是否超预算；关键证据是否真的在保留片段里；是否给输出预留了足够长度。更完整的答案可以再加上截断方向、重复片段和检索重排。</p></details>
-    </div>
-    <div class="q short" data-question="q12" data-group="窗口预算与故障判断" data-title="截断风险">
-      <div class="q-meta"><span class="pill" data-type="diagnosis">diagnosis</span></div>
-      <h3>12. 模型忽略了文档末尾的关键条件，可能和 context window 有什么关系？</h3>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。至少要检查三件事：各部分 token 数是否超预算；关键证据是否真的在保留片段里；是否给输出预留了足够长度。更完整的答案可以再加上截断方向、重复片段和检索重排。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> 12. 模型忽略了文档末尾的关键条件，可能和 context window 有什么关系？</h3>
+
+
       <textarea name="q12"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>最常见的原因是文档末尾被截掉、被压缩掉，或者在拼接检索文本时被别的内容挤出窗口。好的答案要把“没看见”与“没判断出来”区分开。</p></details>
-    </div>
-  </div>
-</div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。最常见的原因是文档末尾被截掉、被压缩掉，或者在拼接检索文本时被别的内容挤出窗口。好的答案要把“没看见”与“没判断出来”区分开。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、错误诊断和迁移</h3></div>
+          <div class="quick-review">先找输入链路，再决定问题出在窗口、切分还是模型。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q13" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">13</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> 13. 有人说“这段只有 2000 个汉字，所以肯定不到 2000 token”。错在哪、后果是什么、怎么修？</h3>
 
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>四、错误诊断和迁移</h3><p>这一组要求你定位错因、说明后果，并给出修法。</p></div>
-    <div class="quick-review">先找输入链路，再决定问题出在窗口、切分还是模型。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q short" data-question="q13" data-group="错误诊断和迁移" data-title="只看字数">
-      <div class="q-meta"><span class="pill" data-type="diagnosis">diagnosis</span></div>
-      <h3>13. 有人说“这段只有 2000 个汉字，所以肯定不到 2000 token”。错在哪、后果是什么、怎么修？</h3>
+
       <textarea name="q13"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>错因是把字数当成 token 数。后果是窗口预算不准，可能把 prompt 拼太长。修法是用目标模型 tokenizer 统计 token，再按 token 预算安排系统提示、历史、检索和输出。</p></details>
-    </div>
-    <div class="q short" data-question="q14" data-group="错误诊断和迁移" data-title="id 当语义">
-      <div class="q-meta"><span class="pill" data-type="diagnosis">diagnosis</span></div>
-      <h3>14. 有人用 token id 的差值衡量两个词相似度。错因和修法是什么？</h3>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。错因是把字数当成 token 数。后果是窗口预算不准，可能把 prompt 拼太长。修法是用目标模型 tokenizer 统计 token，再按 token 预算安排系统提示、历史、检索和输出。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q14" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">14</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> 14. 有人用 token id 的差值衡量两个词相似度。错因和修法是什么？</h3>
+
+
       <textarea name="q14"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>错因是把离散编号当成连续语义坐标。修法是区分“id 负责查表”和“embedding 负责表示”，语义相似度应该看向量空间或任务表现，而不是看编号差值。</p></details>
-    </div>
-    <div class="q short" data-question="q15" data-group="错误诊断和迁移" data-title="静默截断" data-answer="错">
-      <div class="q-meta"><span class="pill" data-type="true/false">true/false</span></div>
-      <h3>15. 代码设置 <code>truncation=True</code> 后，不再检查解码片段也没关系。</h3>
-      <div class="choices"><label><input type="radio" name="q15" value="对">对</label><label><input type="radio" name="q15" value="错">错</label></div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q short" data-question="q16" data-group="错误诊断和迁移" data-title="mask 缺失" data-answer="补齐位置被当成真实内容来计算">
-      <div class="q-meta"><span class="pill" data-type="choice">choice</span></div>
-      <h3>16. batch 里做了 padding，但没有传 attention mask，最直接的风险是什么？</h3>
-      <div class="choices"><label><input type="radio" name="q16" value="补齐位置被当成真实内容来计算">补齐位置被当成真实内容来计算</label><label><input type="radio" name="q16" value="embedding 表自动变小">embedding 表自动变小</label><label><input type="radio" name="q16" value="词表自动扩展">词表自动扩展</label></div>
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q short" data-question="q17" data-group="错误诊断和迁移" data-title="RAG 场景" data-answer="token 预算">
-      <div class="q-meta"><span class="pill" data-type="fill">fill</span></div>
-      <h3>17. RAG 系统把 20 段文档全塞进 prompt，结果回答变差。你会先做哪一步？</h3>
-      <input type="text" name="q17" data-answer="token 预算" placeholder="例如：token 预算">
-      <button class="check" type="button">检查</button><div class="feedback"></div>
-    </div>
-    <div class="q short" data-question="q18" data-group="错误诊断和迁移" data-title="聊天历史">
-      <div class="q-meta"><span class="pill" data-type="synthesis">synthesis</span></div>
-      <h3>18. 多轮聊天里，为什么要管理历史消息，而不是无限追加？</h3>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。错因是把离散编号当成连续语义坐标。修法是区分“id 负责查表”和“embedding 负责表示”，语义相似度应该看向量空间或任务表现，而不是看编号差值。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q15" data-group="" data-title="" data-answer="错">
+        <div class="q-meta"><span class="pill">15</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> 15. 代码设置 <code>truncation=True</code> 后，不再检查解码片段也没关系。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q15" value="对">对</label>
+      <label><input type="radio" name="q15" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>错</p>
+        </details>
+      </article>
+      <article class="q" data-question="q16" data-group="" data-title="" data-answer="补齐位置被当成真实内容来计算">
+        <div class="q-meta"><span class="pill">16</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 16. batch 里做了 padding，但没有传 attention mask，最直接的风险是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q16" value="补齐位置被当成真实内容来计算">补齐位置被当成真实内容来计算</label>
+      <label><input type="radio" name="q16" value="embedding 表自动变小">embedding 表自动变小</label>
+      <label><input type="radio" name="q16" value="词表自动扩展">词表自动扩展</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>补齐位置被当成真实内容来计算</p>
+        </details>
+      </article>
+      <article class="q" data-question="q17" data-group="" data-title="" data-answer="token 预算">
+        <div class="q-meta"><span class="pill">17</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 17. RAG 系统把 20 段文档全塞进 prompt，结果回答变差。你会先做哪一步？</h3>
+
+
+      <textarea name="q17"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>token 预算</p>
+        </details>
+      </article>
+      <article class="q" data-question="q18" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">18</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 18. 多轮聊天里，为什么要管理历史消息，而不是无限追加？</h3>
+
+
       <textarea name="q18"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>因为窗口有限，历史越长越容易挤掉新问题、系统提示或关键证据；同时更长输入会提高延迟和成本。好的答案要把“限长”和“预算”都说出来。</p></details>
-    </div>
-  </div>
-</div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。因为窗口有限，历史越长越容易挤掉新问题、系统提示或关键证据；同时更长输入会提高延迟和成本。好的答案要把“限长”和“预算”都说出来。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、表达输出</h3></div>
+          <div class="quick-review">把 tokenizer、token id、embedding、context window、截断和 attention mask 串起来。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q19" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">19</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 19. 用 6-9 句话解释：一段文本是怎样变成大模型可处理输入的。</h3>
 
-<div class="practice-group">
-  <div class="group-head">
-    <div><h3>五、表达输出</h3><p>最后两题检查你能不能完整讲清输入链路，并写出验收清单。</p></div>
-    <div class="quick-review">把 tokenizer、token id、embedding、context window、截断和 attention mask 串起来。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q full" data-question="q19" data-group="表达输出" data-title="费曼解释">
-      <div class="q-meta"><span class="pill" data-type="synthesis">synthesis</span></div>
-      <h3>19. 用 6-9 句话解释：一段文本是怎样变成大模型可处理输入的。</h3>
-      <p class="solve-note">至少包含 tokenizer、token id、embedding、context window、截断和 attention mask。</p>
+
       <textarea name="q19"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>参考答案应先说明文本被 tokenizer 切分，再编号成 token id，然后通过 embedding 查表变成向量，接着由 padding、mask 和 window 预算控制输入长度，最后再进入模型。评分时看有没有把对象、顺序和边界说清。</p></details>
-    </div>
-    <div class="q full" data-question="q20" data-group="表达输出" data-title="最小验收清单">
-      <div class="q-meta"><span class="pill" data-type="checklist">checklist</span></div>
-      <h3>20. 如果让别人写一个 prompt 编码函数，你会用哪 6 条清单验收它？</h3>
-      <p class="solve-note">建议从长度、特殊标记、mask、截断、尾部解码、窗口预算六个方向答。</p>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。参考答案应先说明文本被 tokenizer 切分，再编号成 token id，然后通过 embedding 查表变成向量，接着由 padding、mask 和 window 预算控制输入长度，最后再进入模型。评分时看有没有把对象、顺序和边界说清。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q20" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">20</span><span class="pill">checklist</span></div>
+        <h3><b>Q:</b> 20. 如果让别人写一个 prompt 编码函数，你会用哪 6 条清单验收它？</h3>
+
+
       <textarea name="q20"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>至少要验收：是否按目标 tokenizer 统计 token；是否加入正确特殊标记；是否返回 attention mask；是否明确 truncation 策略；是否检查尾部解码片段；是否预留输出并做总 token 预算。答案不要求逐字一致，但要覆盖这六项里的大部分。</p></details>
-    </div>
-  </div>
-</div>
-
-      </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。至少要验收：是否按目标 tokenizer 统计 token；是否加入正确特殊标记；是否返回 attention mask；是否明确 truncation 策略；是否检查尾部解码片段；是否预留输出并做总 token 预算。答案不要求逐字一致，但要覆盖这六项里的大部分。</p>
+        </details>
+      </article>
         </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
-        </div>
+      </div>
       </section>
-
-      <section id="sources">
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-  <li><strong>课程地图</strong>：课程根目录的 <code>index.html</code>，用于确认这节课是整门课的第一个基础单元，并据此确定和后续单元的顺序关系。</li>
-  <li><strong>现有学习页</strong>：同目录旧版 <code>学习页.html</code>，作为本节的内容底稿，保留 tokenizer、token id、embedding、context window、padding、truncation、mask、形状检查和窗口预算这些核心内容。</li>
-  <li><strong>本次重构快照</strong>：<code>2026-06-21</code>，用于记录这次页面改写的时间边界，方便以后回看课程地图和页面结构是否已经变化。</li>
+<ul>
+<li><b>课程地图</b>：课程根目录的 <code>index.html</code>，用于确认这节课是整门课的第一个基础单元，并据此确定和后续单元的顺序关系。</li>
+<li><b>现有学习页</b>：同目录旧版 <code>学习页.html</code>，作为本节的内容底稿，保留 tokenizer、token id、embedding、context window、padding、truncation、mask、形状检查和窗口预算这些核心内容。</li>
+<li><b>本次重构快照</b>：<code>2026-06-21</code>，用于记录这次页面改写的时间边界，方便以后回看课程地图和页面结构是否已经变化。</li>
 </ul>
-
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

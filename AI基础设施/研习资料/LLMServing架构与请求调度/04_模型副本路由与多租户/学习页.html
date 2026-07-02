@@ -4,767 +4,587 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>模型副本、路由与多租户</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="LLM Serving 架构与请求调度" data-unit="Unit 04">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>LLM Serving 架构与请求调度</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">LLM Serving 架构与请求调度</a>
+        <span class="sep">/</span>
         <span>Unit 04</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#position"><span class="dot"></span>课程位置</a>
-        <a href="#map"><span class="dot"></span>概念骨架</a>
-        <a href="#terms"><span class="dot"></span>术语与误区</a>
-        <a href="#routing-loop"><span class="dot"></span>路由回路</a>
-        <a href="#ledger"><span class="dot"></span>路由账本</a>
-        <a href="#replica"><span class="dot"></span>副本负载</a>
-        <a href="#tenant"><span class="dot"></span>多租户隔离</a>
-        <a href="#cache"><span class="dot"></span>缓存亲和</a>
-        <a href="#release"><span class="dot"></span>版本与灰度</a>
-        <a href="#diagnostics"><span class="dot"></span>诊断实验室</a>
-        <a href="#metrics"><span class="dot"></span>指标分解</a>
-        <a href="#bridge"><span class="dot"></span>下一步</a>
-        <a href="#boundary"><span class="dot"></span>边界</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">请求已经被接纳以后，路由层要说明它为什么去这个模型、这个版本、这个租户池和这个副本。</div>
-    </aside>
-
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">Unit 04｜副本路由与租户隔离</div>
-          <h1>模型副本、路由与多租户</h1>
-          <p>上一单元已经回答“新请求该不该进入服务”。这页从接纳后的下一步开始：同一个公开模型名背后可能有多个模型版本、多个租户池、多个 GPU 副本和不同缓存状态，路由层必须给出可解释的选择。</p>
-<p>本页会用一条请求贯穿：先解析租户和模型别名，再过滤候选副本，最后在公平性、缓存亲和、延迟和灰度安全之间做取舍。自动伸缩、资源隔离和完整 SLO 规划会在后续单元展开。</p>
-
-          <div class="course-links">
-            <a href="../index.html">课程地图</a><a href="../03_队列Admission_Control与背压/学习页.html">上一单元</a><a href="../05_自动伸缩批处理与资源隔离/学习页.html">下一单元</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>读完这页应该能做什么</h3>
-          <ul>
-  <li>能追踪一次请求如何从 public model name 映射到 model family、version、tenant pool 和 replica。</li>
-  <li>能设计一条最小 route log，留下 tenant、model version、candidate set、route reason、cache signal 和最终副本。</li>
-  <li>能区分 hot tenant、cache-unfriendly routing、版本漂移和副本失效这几类常见问题。</li>
-</ul>
-
-        </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
+    </div>
+  </nav>
 
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Unit 04｜副本路由与租户隔离</div>
+      <div class="hero-meta">
+        <span class="hero-badge">Unit 04</span>
+      </div>
+      <h1 class="hero-title">模型副本、路由与多租户</h1>
+      <p class="hero-desc">上一单元已经回答“新请求该不该进入服务”。这页从接纳后的下一步开始：同一个公开模型名背后可能有多个模型版本、多个租户池、多个 GPU 副本和不同缓存状态，路由层必须给出可解释的选择。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../03_队列Admission_Control与背压/学习页.html">上一单元</a>
+            <a href="../05_自动伸缩批处理与资源隔离/学习页.html">下一单元</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>能追踪一次请求如何从 public model name 映射到 model family、version、tenant pool 和 replica。</li>
+            <li>能设计一条最小 route log，留下 tenant、model version、candidate set、route reason、cache signal 和最终副本。</li>
+            <li>能区分 hot tenant、cache-unfriendly routing、版本漂移和副本失效这几类常见问题。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#position">课程位置</a>
+      <a href="#map">概念骨架</a>
+      <a href="#terms">术语与误区</a>
+      <a href="#routing-loop">路由回路</a>
+      <a href="#ledger">路由账本</a>
+      <a href="#replica">副本负载</a>
+      <a href="#tenant">多租户隔离</a>
+      <a href="#cache">缓存亲和</a>
+      <a href="#release">版本与灰度</a>
+      <a href="#diagnostics">诊断实验室</a>
+      <a href="#metrics">指标分解</a>
+      <a href="#bridge">下一步</a>
+      <a href="#boundary">边界</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
-  <div class="head">
-    <h2>学习目标</h2>
-    <span class="tag">target</span>
-  </div>
-  <p>模型副本和路由看起来像负载均衡问题，但 LLM Serving 里的“负载”不只是一条 HTTP 连接。一个请求可能属于某个租户，命中某个 prompt 前缀缓存，使用某个模型版本，还会占用不同数量的 KV cache 和 decode slots。路由层的工作，是把这些信息变成可解释的分配结果。</p>
-  <div class="grid">
-    <div class="box">
-      <h3>能画路径</h3>
-      <p>从 `model=gpt-x`、tenant、headers 和请求体出发，画出 model alias、version、tenant pool、candidate replicas 和 final replica 的路径。</p>
-    </div>
-    <div class="box">
-      <h3>能做取舍</h3>
-      <p>知道什么时候优先 cache locality，什么时候优先 fairness，什么时候要把 canary、专属租户或低优先级流量隔开。</p>
-    </div>
-    <div class="box">
-      <h3>能查事故</h3>
-      <p>看到 p99 上升、某租户被拖慢、cache hit 下降或某版本错误率异常时，能从 route log 和 replica metrics 找到入口。</p>
-    </div>
-  </div>
-  <p>这一页的重点不是写出最聪明的路由算法，而是把路由决策变成能读、能复盘、能逐步改进的系统动作。</p>
-</section>
-
-<section id="position">
-  <div class="head">
-    <h2>课程位置</h2>
-    <span class="tag">sequence</span>
-  </div>
-  <p>上一单元讲 Admission Control：容量不够时，新请求应该接收、排队、拒绝还是降级。接纳之后，系统才进入本页的问题：已接请求应该去哪个模型版本、哪个租户资源池、哪个 replica。</p>
-  <p>下一单元会讲自动伸缩、批处理和资源隔离。它们会改变副本数量、batching 行为和资源边界；本页先固定在“当前已有这些副本时，路由层怎么做选择”。这个顺序能避免一个常见误判：把 p99 上升直接归因到扩容不足，却没有看到路由把热租户、长请求或新版本流量压到了同一个副本。</p>
-  <div class="table-wrap">
-    <table data-export-context="单元位置与输入输出" data-export-lang="table">
-      <thead>
-        <tr><th>阶段</th><th>输入</th><th>本页处理</th><th>后续交给谁</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>Admission 之后</td><td>已接请求、tenant、model name、deadline、estimated work</td><td>解析模型、选择租户池、过滤候选副本</td><td>replica 内部队列和引擎 scheduler</td></tr>
-        <tr><td>执行之前</td><td>replica health、queue depth、cache signal、version policy</td><td>打分、选路、写 route log</td><td>prefill、decode、stream</td></tr>
-        <tr><td>事故复盘时</td><td>p99、TTFT、cache hit、tenant error rate、route reason</td><td>判断是路由倾斜、租户争用、版本异常还是缓存失效</td><td>SLO、autoscaling、容量规划</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>读到这里，你应该先能把“该不该接”和“接了以后交给谁”分开。前者保护服务入口，后者决定请求落点。</p>
-</section>
-
-<section id="map">
-  <div class="head">
-    <h2>概念骨架</h2>
-    <span class="tag">map</span>
-  </div>
-  <p>一个生产 LLM endpoint 往往只有一个公开模型名，背后却有更多层：模型别名、版本、租户策略、资源池、副本和引擎状态。路由层越早把这些层写清楚，后面查问题越省力。</p>
-  <div class="grid">
-    <div class="box">
-      <h3>model alias</h3>
-      <p>客户端看到的模型名，例如 `chat-prod`。它通常不是一个固定文件，而是指向某个模型家族和版本策略。</p>
-    </div>
-    <div class="box">
-      <h3>tenant policy</h3>
-      <p>租户身份决定 quota、优先级、隔离池、灰度资格和日志字段。没有这层，公平性只能停在“每个请求都一样”。</p>
-    </div>
-    <div class="box">
-      <h3>replica set</h3>
-      <p>同一模型版本的多个运行副本。副本可能负载不同、缓存不同、健康状态不同，不能只按请求数平均分。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="路由层输入输出" data-export-lang="table">
-      <thead>
-        <tr><th>路由层对象</th><th>读取什么</th><th>产出什么</th><th>缺失时的症状</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>模型解析</td><td>public model name、alias config、version policy</td><td>model family、target version、fallback version</td><td>同名模型指到错误版本，灰度回滚困难</td></tr>
-        <tr><td>租户选择</td><td>tenant id、quota、priority、isolation class</td><td>tenant pool、rate class、admission budget</td><td>热租户拖慢普通租户，VIP 和低优先级请求混跑</td></tr>
-        <tr><td>副本过滤</td><td>health、warm state、capacity、model version、region</td><td>candidate replicas</td><td>请求打到冷副本、坏副本或版本不匹配副本</td></tr>
-        <tr><td>副本打分</td><td>queue、inflight tokens、cache hint、recent errors</td><td>selected replica、route reason</td><td>p99 抖动、cache hit 下降、热点副本越来越热</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>一个好用的路由层不一定复杂，但它一定要把“为什么选它”写出来。否则每一次事故都会退回猜测。</p>
-</section>
-
-<section id="terms">
-  <div class="head">
-    <h2>术语与误区</h2>
-    <span class="tag">terms</span>
-  </div>
-  <p>路由相关术语容易被普通负载均衡经验带偏。LLM Serving 的副本状态包含 GPU 队列、KV cache、模型版本、stream 生命周期和租户策略，这些状态变化比普通无状态 HTTP 服务更快。</p>
-  <div class="table-wrap">
-    <table data-export-context="路由术语与误区" data-export-lang="table">
-      <thead>
-        <tr><th>术语</th><th>直觉解释</th><th>在 LLM Serving 中的含义</th><th>常见误区</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>replica</td><td>同一个服务的多个副本</td><td>通常持有同一模型或同一版本的运行实例，背后占用 GPU、KV cache 和引擎队列</td><td>以为副本是完全无状态，可以像普通 Web worker 一样随意轮询</td></tr>
-        <tr><td>router</td><td>把请求送到某个后端</td><td>读取模型、租户、健康、负载、缓存和版本策略后选择候选副本</td><td>只看最少连接数，忽略长上下文和缓存亲和</td></tr>
-        <tr><td>tenant</td><td>调用服务的一类客户或业务</td><td>决定 quota、优先级、隔离池、审计字段和公平性规则</td><td>只在鉴权层识别租户，路由和指标里不再带 tenant</td></tr>
-        <tr><td>affinity</td><td>偏向把相似请求送到同一处</td><td>可用于 prefix cache、模型热身状态、会话上下文或区域亲和</td><td>为了命中缓存，把同一类请求压成单点热点</td></tr>
-        <tr><td>canary</td><td>小流量试新版本</td><td>按租户、比例、模型别名或请求特征把一部分流量导向新版本</td><td>只记录总体错误率，不记录 version 和 route reason</td></tr>
-        <tr><td>fairness</td><td>让各类请求不互相拖垮</td><td>常通过配额、权重、隔离池、优先级队列和限流组合实现</td><td>把公平性等同于“每个请求同权”，忽略 token 工作量差异</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>最实用的检查是：每个请求是否能回答这四件事：它代表哪个 tenant，目标 model version 是什么，候选 replicas 有哪些，最终选择的 reason code 是什么。</p>
-</section>
-
-<section id="routing-loop">
-  <div class="head">
-    <h2>路由回路</h2>
-    <span class="tag">trace</span>
-  </div>
-  <p>把路由写成一个短回路会更容易调试：解析身份，过滤候选副本，按策略打分，写出决策证据。每一步都应留下最少但够用的字段。</p>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button class="trace-line active" data-trace-step="step-1">
-        <code>resolve</code><span>model alias、tenant、version policy</span>
-      </button>
-      <button class="trace-line" data-trace-step="step-2">
-        <code>filter</code><span>health、version、tenant pool、region</span>
-      </button>
-      <button class="trace-line" data-trace-step="step-3">
-        <code>score</code><span>load、cache、fairness、recent errors</span>
-      </button>
-      <button class="trace-line" data-trace-step="step-4">
-        <code>commit</code><span>selected replica、route reason、log</span>
-      </button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="step-1">
-        <b>解析身份</b><span>request identity</span><p>从 headers、token、model 字段和路由配置得到 tenant、model family、target version 和灰度资格。这里解析错，后面再均衡也会把流量送错。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-2">
-        <b>过滤候选</b><span>candidate set</span><p>先去掉 unhealthy、副本版本不匹配、租户无权限、区域不合适或冷启动未完成的副本。过滤阶段回答“谁能接”。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-3">
-        <b>策略打分</b><span>routing score</span><p>对候选副本按有效负载、缓存亲和、公平性欠账和近期错误打分。打分阶段回答“谁更适合接”。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-4">
-        <b>提交结果</b><span>route log</span><p>最终选择必须写入 route log：候选集合、选中副本、route reason、fallback 情况和关键分数。事故复盘依赖这些字段。</p>
-      </div>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="路由回路读写表" data-export-lang="table">
-      <thead>
-        <tr><th>步骤</th><th>读取</th><th>写出</th><th>错误后果</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>resolve</td><td>model alias、tenant token、routing config</td><td>tenant_id、model_version、policy class</td><td>流量进错版本或错租户池</td></tr>
-        <tr><td>filter</td><td>replica health、version、pool membership</td><td>candidate_replicas</td><td>坏副本、冷副本或不兼容版本进入候选</td></tr>
-        <tr><td>score</td><td>queue depth、inflight tokens、cache hint、fairness debt</td><td>score per replica、route reason</td><td>热点副本持续被选中，p99 抖动</td></tr>
-        <tr><td>commit</td><td>selected replica、fallback rule、request id</td><td>route log、metrics tags、trace span</td><td>事故时无法还原请求为什么去那里</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>这一节的检查动作很简单：拿一条线上请求，能不能还原它的 candidate set。如果不能，route log 还不够用。</p>
-</section>
-
-<section id="ledger">
-  <div class="head">
-    <h2>路由账本</h2>
-    <span class="tag">state</span>
-  </div>
-  <p>路由层最怕“当时看起来没问题”。要让后来的人能复盘，日志不能只写 selected replica。至少要记录请求身份、候选范围、过滤原因、打分信号和最终动作。</p>
-  <div class="table-wrap">
-    <table data-export-context="最小路由账本" data-export-lang="table">
-      <thead>
-        <tr><th>字段</th><th>示例</th><th>复盘用途</th><th>缺失风险</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>request_id</td><td>`req-8f2a`</td><td>串联网关、路由、副本和 stream 日志</td><td>只能看聚合指标，无法追单个请求</td></tr>
-        <tr><td>tenant_id</td><td>`tenant-pro`</td><td>判断是否热租户、是否被隔离策略影响</td><td>租户争用被平均值掩盖</td></tr>
-        <tr><td>model_version</td><td>`chat-prod:v17`</td><td>对齐 canary、回滚和版本错误率</td><td>新旧版本问题混在一起</td></tr>
-        <tr><td>candidate_count</td><td>`5 -> 3`</td><td>知道过滤前后候选数量</td><td>以为有很多副本，实际可用候选很少</td></tr>
-        <tr><td>filter_reason</td><td>`version_mismatch, unhealthy`</td><td>解释为什么某些副本不可选</td><td>无法区分健康问题和策略问题</td></tr>
-        <tr><td>route_reason</td><td>`cache_affinity_within_load_budget`</td><td>解释最终选择</td><td>只能看到结果，看不到决策依据</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar"><span>route log 最小字段</span><button class="copy" data-copy="route-log-json">复制</button></div>
-  <pre id="route-log-json" data-export-context="route log 最小字段" data-export-lang="python"><code class="language-python">route_log = {
-    "request_id": "req-8f2a",
-    "tenant_id": "tenant-pro",
-    "model_alias": "chat-prod",
-    "model_version": "chat-prod:v17",
-    "candidate_replicas_before": ["r1", "r2", "r3", "r4", "r5"],
-    "candidate_replicas_after": ["r1", "r3", "r5"],
-    "filter_reason": {"r2": "unhealthy", "r4": "version_mismatch"},
-    "selected_replica": "r3",
-    "route_reason": "cache_affinity_within_load_budget",
-    "cache_hint": "prefix_hash:9b21",
-    "score": {"r1": 0.62, "r3": 0.81, "r5": 0.58}
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">target</span>
+        </div>
+<p>模型副本和路由看起来像负载均衡问题，但 LLM Serving 里的“负载”不只是一条 HTTP 连接。一个请求可能属于某个租户，命中某个 prompt 前缀缓存，使用某个模型版本，还会占用不同数量的 KV cache 和 decode slots。路由层的工作，是把这些信息变成可解释的分配结果。</p>
+        <div class="box">
+<h3>能做取舍</h3>
+<p>知道什么时候优先 cache locality，什么时候优先 fairness，什么时候要把 canary、专属租户或低优先级流量隔开。</p>
+        </div>
+        <div class="box">
+<h3>能查事故</h3>
+<p>看到 p99 上升、某租户被拖慢、cache hit 下降或某版本错误率异常时，能从 route log 和 replica metrics 找到入口。</p>
+<p>这一页的重点把路由决策变成能读、能复盘、能逐步改进的系统动作。</p>
+        </div>
+      </section>
+      <section id="position">
+        <div class="head">
+          <h2>课程位置</h2>
+          <span class="tag">sequence</span>
+        </div>
+<p>上一单元讲 Admission Control：容量不够时，新请求应该接收、排队、拒绝还是降级。接纳之后，系统才进入本页的问题：已接请求应该去哪个模型版本、哪个租户资源池、哪个 replica。</p>
+<p>阶段输入本页处理后续交给谁</p>
+<p>读到这里，你应该先能把“该不该接”和“接了以后交给谁”分开。前者保护服务入口，后者决定请求落点。</p>
+      </section>
+      <section id="map">
+        <div class="head">
+          <h2>概念骨架</h2>
+          <span class="tag">map</span>
+        </div>
+<p>一个生产 LLM endpoint 往往只有一个公开模型名，背后却有更多层：模型别名、版本、租户策略、资源池、副本和引擎状态。路由层越早把这些层写清楚，后面查问题越省力。</p>
+        <div class="box">
+<h3>tenant policy</h3>
+<p>租户身份决定 quota、优先级、隔离池、灰度资格和日志字段。没有这层，公平性只能停在“每个请求都一样”。</p>
+        </div>
+        <div class="box">
+<h3>replica set</h3>
+<p>同一模型版本的多个运行副本。副本可能负载不同、缓存不同、健康状态不同，不能只按请求数平均分。</p>
+<p>路由层对象读取什么产出什么缺失时的症状</p>
+<p>模型解析public model name、alias config、version policymodel family、target version、fallback version同名模型指到错误版本，灰度回滚困难</p>
+<p>租户选择tenant id、quota、priority、isolation classtenant pool、rate class、admission budget热租户拖慢普通租户，VIP 和低优先级请求混跑</p>
+<p>副本过滤health、warm state、capacity、model version、regioncandidate replicas请求打到冷副本、坏副本或版本不匹配副本</p>
+<p>副本打分queue、inflight tokens、cache hint、recent errorsselected replica、route reasonp99 抖动、cache hit 下降、热点副本越来越热</p>
+<p>一个好用的路由层不一定复杂，但它一定要把“为什么选它”写出来。否则每一次事故都会退回猜测。</p>
+        </div>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语与误区</h2>
+          <span class="tag">terms</span>
+        </div>
+<p>路由相关术语容易被普通负载均衡经验带偏。LLM Serving 的副本状态包含 GPU 队列、KV cache、模型版本、stream 生命周期和租户策略，这些状态变化比普通无状态 HTTP 服务更快。</p>
+<p>replica同一个服务的多个副本通常持有同一模型或同一版本的运行实例，背后占用 GPU、KV cache 和引擎队列以为副本是完全无状态，可以像普通 Web worker 一样随意轮询</p>
+<p>router把请求送到某个后端读取模型、租户、健康、负载、缓存和版本策略后选择候选副本只看最少连接数，忽略长上下文和缓存亲和</p>
+<p>tenant调用服务的一类客户或业务决定 quota、优先级、隔离池、审计字段和公平性规则只在鉴权层识别租户，路由和指标里不再带 tenant</p>
+<p>affinity偏向把相似请求送到同一处可用于 prefix cache、模型热身状态、会话上下文或区域亲和为了命中缓存，把同一类请求压成单点热点</p>
+<p>canary小流量试新版本按租户、比例、模型别名或请求特征把一部分流量导向新版本只记录总体错误率，不记录 version 和 route reason</p>
+<p>fairness让各类请求不互相拖垮常通过配额、权重、隔离池、优先级队列和限流组合实现把公平性等同于“每个请求同权”，忽略 token 工作量差异</p>
+      </section>
+      <section id="routing-loop">
+        <div class="head">
+          <h2>路由回路</h2>
+          <span class="tag">trace</span>
+        </div>
+<p>把路由写成一个短回路会更容易调试：解析身份，过滤候选副本，按策略打分，写出决策证据。每一步都应留下最少但够用的字段。</p>
+<p>resolvemodel alias、tenant token、routing configtenant_id、model_version、policy class流量进错版本或错租户池</p>
+<p>filterreplica health、version、pool membershipcandidate_replicas坏副本、冷副本或不兼容版本进入候选</p>
+<p>scorequeue depth、inflight tokens、cache hint、fairness debtscore per replica、route reason热点副本持续被选中，p99 抖动</p>
+<p>commitselected replica、fallback rule、request idroute log、metrics tags、trace span事故时无法还原请求为什么去那里</p>
+      </section>
+      <section id="ledger">
+        <div class="head">
+          <h2>路由账本</h2>
+          <span class="tag">state</span>
+        </div>
+<p>路由层最怕“当时看起来没问题”。要让后来的人能复盘，日志不能只写 selected replica。至少要记录请求身份、候选范围、过滤原因、打分信号和最终动作。</p>
+<p>request_id<code>req-8f2a</code>串联网关、路由、副本和 stream 日志只能看聚合指标，无法追单个请求</p>
+<p>tenant_id<code>tenant-pro</code>判断是否热租户、是否被隔离策略影响租户争用被平均值掩盖</p>
+<p>model_version<code>chat-prod:v17</code>对齐 canary、回滚和版本错误率新旧版本问题混在一起</p>
+<p>candidate_count<code>5 -> 3</code>知道过滤前后候选数量以为有很多副本，实际可用候选很少</p>
+<p>filter_reason<code>version_mismatch, unhealthy</code>解释为什么某些副本不可选无法区分健康问题和策略问题</p>
+<p>route_reason<code>cache_affinity_within_load_budget</code>解释最终选择只能看到结果，看不到决策依据</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-ledger-1">复制</button></div>
+        <pre id="code-ledger-1" data-export-context="代码" data-export-lang="python"><code class="language-python">route_log = {
+ "request_id": "req-8f2a",
+ "tenant_id": "tenant-pro",
+ "model_alias": "chat-prod",
+ "model_version": "chat-prod:v17",
+ "candidate_replicas_before": ["r1", "r2", "r3", "r4", "r5"],
+ "candidate_replicas_after": ["r1", "r3", "r5"],
+ "filter_reason": {"r2": "unhealthy", "r4": "version_mismatch"},
+ "selected_replica": "r3",
+ "route_reason": "cache_affinity_within_load_budget",
+ "cache_hint": "prefix_hash:9b21",
+ "score": {"r1": 0.62, "r3": 0.81, "r5": 0.58}
 }</code></pre>
-  <p>字段不用一开始就很多，但要稳定。事故里临时加字段，通常已经晚了。</p>
-</section>
-
-<section id="replica">
-  <div class="head">
-    <h2>副本负载</h2>
-    <span class="tag">score</span>
-  </div>
-  <p>普通服务常用 round-robin 或 least-connections。LLM 副本更难，因为请求的成本差异大：一个 64k prompt 的 prefill，和一个短问答的 decode，不应该按同一条连接计算。路由分数至少要看当前队列、运行中 token、KV cache headroom、错误率和缓存亲和。</p>
-  <div class="math-block" data-export-context="副本有效负载公式" data-export-lang="math">
-    $$effective\_load = w_q \cdot queue\_work + w_t \cdot inflight\_tokens + w_k \cdot kv\_pressure + w_e \cdot recent\_errors - w_c \cdot cache\_benefit$$
-    <p>`queue_work` 表示等待中的估算工作量，`inflight_tokens` 表示正在占用 decode/prefill 的 token 压力，`kv_pressure` 表示 KV cache 余量不足带来的风险，`recent_errors` 惩罚近期异常，`cache_benefit` 是命中 prefix cache 或 warm state 的收益。</p>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="副本负载维度" data-export-lang="table">
-      <thead>
-        <tr><th>信号</th><th>为什么要看</th><th>错误用法</th><th>更稳的读法</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>queue depth</td><td>表示副本内部等待压力</td><td>只数请求，不估工作量</td><td>按 prompt tokens、max output 和等待时间估算 queue_work</td></tr>
-        <tr><td>inflight tokens</td><td>比连接数更接近 GPU 工作</td><td>把 stream 中连接都当成同等成本</td><td>区分 prefill 压力和 decode 长尾</td></tr>
-        <tr><td>KV cache headroom</td><td>决定是否还能承接长上下文</td><td>只看 GPU utilization</td><td>低 headroom 时惩罚长请求或切换池</td></tr>
-        <tr><td>cache hint</td><td>命中缓存可降低 TTFT</td><td>为了缓存把热点继续压到同一副本</td><td>只在负载预算内奖励亲和</td></tr>
-        <tr><td>recent errors</td><td>捕捉局部坏副本</td><td>等健康检查彻底失败才摘除</td><td>用短窗口错误率降低路由权重</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar"><span>副本打分伪代码</span><button class="copy" data-copy="replica-score">复制</button></div>
-  <pre id="replica-score" data-export-context="副本打分伪代码" data-export-lang="python"><code class="language-python">def score_replica(replica, request, policy):
-    load = (
-        policy.w_queue * replica.estimated_queue_work
-        + policy.w_tokens * replica.inflight_tokens
-        + policy.w_kv * replica.kv_pressure
-        + policy.w_error * replica.recent_error_rate
-    )
-    cache_bonus = policy.w_cache * cache_affinity(replica, request.prefix_hash)
-    fairness_penalty = tenant_debt(request.tenant_id, replica.pool_id)
-    return load + fairness_penalty - cache_bonus</code></pre>
-  <p>公式不要求一次定准权重。更重要的是先把信号拆开，这样 p99 变差时能知道是队列、token、KV cache、错误率还是缓存策略在起作用。</p>
-</section>
-
-<section id="tenant">
-  <div class="head">
-    <h2>多租户隔离</h2>
-    <span class="tag">tenant</span>
-  </div>
-  <p>多租户不是在鉴权里识别 `tenant_id` 就结束了。路由层要继续带着 tenant 信息做 quota、优先级、池选择和指标标签。否则一个热租户会通过长上下文、密集重试或高输出上限拖慢所有人。</p>
-  <div class="table-wrap">
-    <table data-export-context="多租户路由策略" data-export-lang="table">
-      <thead>
-        <tr><th>策略</th><th>适合场景</th><th>代价</th><th>诊断信号</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>共享池 + 权重</td><td>租户多、负载较均匀、成本敏感</td><td>隔离弱，热租户仍可能影响尾延迟</td><td>tenant p99、per-tenant queue wait、fairness debt</td></tr>
-        <tr><td>专属池</td><td>VIP、合规隔离、稳定大客户</td><td>资源碎片和空闲成本</td><td>pool utilization、reserved capacity、spillover rate</td></tr>
-        <tr><td>分级池</td><td>免费/标准/企业不同承诺</td><td>策略更复杂，需要清楚的降级路径</td><td>class-level SLO、throttle rate、fallback reason</td></tr>
-        <tr><td>长请求隔离</td><td>长上下文、批量总结、离线任务混入在线服务</td><td>需要额外队列和容量预算</td><td>prompt_tokens p95、prefill pressure、online p99</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar"><span>tenant policy 示例</span><button class="copy" data-copy="tenant-policy">复制</button></div>
-  <pre id="tenant-policy" data-export-context="tenant policy 示例" data-export-lang="python"><code class="language-python">tenant_policy = {
-    "tenant-pro": {
-        "pool": "enterprise",
-        "priority": 90,
-        "max_queue_work": 120_000,
-        "canary_allowed": True,
-        "spillover": "standard_when_enterprise_full"
-    },
-    "tenant-free": {
-        "pool": "shared",
-        "priority": 20,
-        "max_queue_work": 8_000,
-        "canary_allowed": False,
-        "spillover": "reject_with_retry_after"
-    }
+<p>字段不用一开始就很多，但要稳定。事故里临时加字段，通常已经晚了。</p>
+        </div>
+      </section>
+      <section id="replica">
+        <div class="head">
+          <h2>副本负载</h2>
+          <span class="tag">score</span>
+        </div>
+<p>普通服务常用 round-robin 或 least-connections。LLM 副本更难，因为请求的成本差异大：一个 64k prompt 的 prefill，和一个短问答的 decode，不应该按同一条连接计算。路由分数至少要看当前队列、运行中 token、KV cache headroom、错误率和缓存亲和。</p>
+<p><code>queue_work</code> 表示等待中的估算工作量，<code>inflight_tokens</code> 表示正在占用 decode/prefill 的 token 压力，<code>kv_pressure</code> 表示 KV cache 余量不足带来的风险，<code>recent_errors</code> 惩罚近期异常，<code>cache_benefit</code> 是命中 prefix cache 或 warm state 的收益。</p>
+<p>queue depth表示副本内部等待压力只数请求，不估工作量按 prompt tokens、max output 和等待时间估算 queue_work</p>
+<p>inflight tokens比连接数更接近 GPU 工作把 stream 中连接都当成同等成本区分 prefill 压力和 decode 长尾</p>
+<p>KV cache headroom决定是否还能承接长上下文只看 GPU utilization低 headroom 时惩罚长请求或切换池</p>
+<p>cache hint命中缓存可降低 TTFT为了缓存把热点继续压到同一副本只在负载预算内奖励亲和</p>
+<p>recent errors捕捉局部坏副本等健康检查彻底失败才摘除用短窗口错误率降低路由权重</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-replica-1">复制</button></div>
+        <pre id="code-replica-1" data-export-context="代码" data-export-lang="python"><code class="language-python">def score_replica(replica, request, policy):
+ load = (
+ policy.w_queue * replica.estimated_queue_work
+ + policy.w_tokens * replica.inflight_tokens
+ + policy.w_kv * replica.kv_pressure
+ + policy.w_error * replica.recent_error_rate
+ )
+ cache_bonus = policy.w_cache * cache_affinity(replica, request.prefix_hash)
+ fairness_penalty = tenant_debt(request.tenant_id, replica.pool_id)
+ return load + fairness_penalty - cache_bonus</code></pre>
+<p>公式不要求一次定准权重。更重要的是先把信号拆开，这样 p99 变差时能知道是队列、token、KV cache、错误率还是缓存策略在起作用。</p>
+        </div>
+      </section>
+      <section id="tenant">
+        <div class="head">
+          <h2>多租户隔离</h2>
+          <span class="tag">tenant</span>
+        </div>
+<p>多租户不是在鉴权里识别 <code>tenant_id</code> 就结束了。路由层要继续带着 tenant 信息做 quota、优先级、池选择和指标标签。否则一个热租户会通过长上下文、密集重试或高输出上限拖慢所有人。</p>
+<p>共享池 + 权重租户多、负载较均匀、成本敏感隔离弱，热租户仍可能影响尾延迟tenant p99、per-tenant queue wait、fairness debt</p>
+<p>专属池VIP、合规隔离、稳定大客户资源碎片和空闲成本pool utilization、reserved capacity、spillover rate</p>
+<p>分级池免费/标准/企业不同承诺策略更复杂，需要清楚的降级路径class-level SLO、throttle rate、fallback reason</p>
+<p>长请求隔离长上下文、批量总结、离线任务混入在线服务需要额外队列和容量预算prompt_tokens p95、prefill pressure、online p99</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-tenant-1">复制</button></div>
+        <pre id="code-tenant-1" data-export-context="代码" data-export-lang="python"><code class="language-python">tenant_policy = {
+ "tenant-pro": {
+ "pool": "enterprise",
+ "priority": 90,
+ "max_queue_work": 120_000,
+ "canary_allowed": True,
+ "spillover": "standard_when_enterprise_full"
+ },
+ "tenant-free": {
+ "pool": "shared",
+ "priority": 20,
+ "max_queue_work": 8_000,
+ "canary_allowed": False,
+ "spillover": "reject_with_retry_after"
+ }
 }</code></pre>
-  <p>如果指标只按 endpoint 聚合，你几乎看不到租户争用。至少把 `tenant_id`、`tenant_class`、`pool_id` 和 `route_reason` 作为指标或日志标签保留下来。</p>
-</section>
-
-<section id="cache">
-  <div class="head">
-    <h2>缓存亲和</h2>
-    <span class="tag">cache</span>
-  </div>
-  <p>LLM 服务常希望相似 prompt、同一会话或相同 prefix 的请求落到已有缓存的副本上。这个策略能降低 TTFT，但它也会制造热点：如果所有相似请求都被路由到同一副本，缓存命中率会上升，p99 也可能上升。</p>
-  <div class="table-wrap">
-    <table data-export-context="缓存亲和取舍" data-export-lang="table">
-      <thead>
-        <tr><th>路由选择</th><th>收益</th><th>风险</th><th>保护条件</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>强 cache affinity</td><td>TTFT 下降，prefill 重复工作减少</td><td>热点副本更热，租户之间互相影响</td><td>只在 effective_load 低于阈值时启用</td></tr>
-        <tr><td>弱 cache bonus</td><td>兼顾缓存和负载均衡</td><td>命中率不如强亲和</td><td>把 cache 作为打分奖励，不作为硬过滤</td></tr>
-        <tr><td>忽略缓存</td><td>实现简单，副本负载更平均</td><td>重复 prefill 增多，TTFT 上升</td><td>低峰、短 prompt 或缓存收益不明显时可接受</td></tr>
-        <tr><td>按租户分缓存池</td><td>避免跨租户热点和合规风险</td><td>缓存复用范围变小</td><td>专属租户、敏感数据或稳定大客户</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="math-block" data-export-context="缓存亲和保护条件" data-export-lang="math">
-    $$choose\_cached\_replica \iff cache\_hit = true \land effective\_load < load\_budget \land tenant\_budget > 0$$
-    <p>这条规则故意把 cache hit 放在三个条件之一，而不是唯一条件。缓存命中只能说明“可能更快”，不能说明“这个副本现在还能稳稳接”。</p>
-  </div>
-  <p>排查 cache-aware routing 时，别只看全局 cache hit rate。要同时看命中后的 TTFT、选中副本的 effective_load、tenant p99 和 fallback reason。</p>
-</section>
-
-<section id="release">
-  <div class="head">
-    <h2>版本与灰度</h2>
-    <span class="tag">release</span>
-  </div>
-  <p>多版本路由让模型更新可控，但它也会让事故更难看清。一次错误率上升，可能来自新模型版本、某个 adapter、某个量化配置、某个租户触发的输入分布，也可能只是灰度流量被路由到了不稳定副本。</p>
-  <div class="table-wrap">
-    <table data-export-context="版本路由与灰度检查" data-export-lang="table">
-      <thead>
-        <tr><th>检查项</th><th>为什么需要</th><th>日志字段</th><th>常见失败</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>alias 到版本映射</td><td>确认公开模型名实际指向谁</td><td>model_alias、model_version</td><td>回滚后部分副本仍服务旧映射</td></tr>
-        <tr><td>canary eligibility</td><td>限制哪些租户或请求能进新版本</td><td>canary_allowed、canary_bucket</td><td>高价值租户误入实验版本</td></tr>
-        <tr><td>版本级指标</td><td>区分整体错误和单版本错误</td><td>version、adapter、quantization</td><td>聚合错误率看起来正常，单版本已异常</td></tr>
-        <tr><td>fallback path</td><td>新版本失败时能否回到稳定版本</td><td>fallback_version、fallback_reason</td><td>fallback 没写日志，事故后无法确认发生过</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar"><span>版本路由伪代码</span><button class="copy" data-copy="version-route">复制</button></div>
-  <pre id="version-route" data-export-context="版本路由伪代码" data-export-lang="python"><code class="language-python">def resolve_version(model_alias, tenant, request, rollout):
-    stable = rollout[model_alias].stable_version
-    canary = rollout[model_alias].canary_version
-    if tenant.canary_allowed and in_bucket(request.id, rollout[model_alias].canary_percent):
-        return canary, "canary_bucket"
-    return stable, "stable_default"</code></pre>
-  <p>灰度策略要和 route log 放在一起看。只知道“10% 流量进新版本”不够，还要知道是哪 10%、按什么规则进、失败后有没有 fallback。</p>
-</section>
-
-<section id="diagnostics">
-  <div class="head">
-    <h2>诊断实验室</h2>
-    <span class="tag">lab</span>
-  </div>
-  <p>下面四个场景都是路由层常见事故。先看症状，再决定查哪一组字段。不要一上来就扩容；如果路由把流量压偏，扩容只能暂时把症状摊薄。</p>
-  <div class="terminal-lab" data-terminal-lab>
-    <div class="terminal-controls">
-      <button class="ghost active" data-terminal-case="case-1">热租户</button>
-      <button class="ghost" data-terminal-case="case-2">缓存热点</button>
-      <button class="ghost" data-terminal-case="case-3">版本漂移</button>
-      <button class="ghost" data-terminal-case="case-4">坏副本</button>
-    </div>
-    <pre class="terminal-output" aria-live="polite">$ route-diagnose hot-tenant
-tenant=tenant-free
-tenant_rps=7.4x_baseline
-shared_pool_p99_ms=11800
-enterprise_pool_p99_ms=2100
-route_reason=shared_pool_default
-hint=先看 per-tenant queue wait 和 fairness debt</pre>
-    <template data-terminal-output="case-1">$ route-diagnose hot-tenant
-tenant=tenant-free
-tenant_rps=7.4x_baseline
-shared_pool_p99_ms=11800
-enterprise_pool_p99_ms=2100
-route_reason=shared_pool_default
-hint=共享池被单个租户打热。先看 per-tenant queue wait、fairness debt、tenant throttle，再决定是否限流或把长请求切到独立池。</template>
-    <template data-terminal-output="case-2">$ route-diagnose cache-hotspot
-prefix_hash=9b21
-cache_hit_rate=82%
-selected_replica=r3
-r3_effective_load=0.94
-global_p99_ms=9400
-hint=缓存命中率高但 p99 高，说明 cache affinity 过强。把 cache 从硬过滤改成打分 bonus，并设置 load budget。</template>
-    <template data-terminal-output="case-3">$ route-diagnose version-drift
-model_alias=chat-prod
-stable_version=v17
-canary_version=v18
-error_rate_v17=0.3%
-error_rate_v18=6.9%
-fallback_reason=missing
-hint=先按 version 拆错误率，再查 canary eligibility 和 fallback path。只看 alias 聚合会掩盖新版本问题。</template>
-    <template data-terminal-output="case-4">$ route-diagnose bad-replica
-replica=r4
-health=passing
-recent_error_rate=11.2%
-route_weight=normal
-candidate_filter=none
-hint=健康检查还没摘除，但短窗口错误率已经异常。路由分数应惩罚 recent_errors，必要时临时 drain r4。</template>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="路由事故诊断表" data-export-lang="table">
-      <thead>
-        <tr><th>症状</th><th>先查字段</th><th>可能根因</th><th>优先修复</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>单个租户把 p99 拉高</td><td>tenant_id、tenant_class、queue wait、fairness debt</td><td>共享池隔离不足或长请求未分流</td><td>限流、权重调整、长请求隔离或专属池</td></tr>
-        <tr><td>cache hit 高但尾延迟差</td><td>prefix_hash、selected_replica、effective_load</td><td>cache affinity 过强形成热点</td><td>给 cache bonus 加 load budget</td></tr>
-        <tr><td>新版本错误率异常</td><td>model_version、canary_bucket、fallback_reason</td><td>灰度资格过宽或 fallback 缺失</td><td>暂停 canary，按版本回滚并补日志</td></tr>
-        <tr><td>某副本持续报错</td><td>recent_error_rate、health、route_weight</td><td>健康检查滞后或局部坏副本未降权</td><td>降低权重、drain 副本、缩短异常窗口</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>这个实验室的用法是：先按症状选场景，再把字段补进你自己的 route log。字段补齐后，很多“系统不稳定”会变成具体的路由问题。</p>
-</section>
-
-<section id="metrics">
-  <div class="head">
-    <h2>指标分解</h2>
-    <span class="tag">metrics</span>
-  </div>
-  <p>路由指标要同时能看全局、租户、版本和副本。只看全局 QPS、平均延迟和 GPU utilization，通常发现不了路由倾斜。</p>
-  <div class="math-block" data-export-context="路由延迟分解" data-export-lang="math">
-    $$request\_latency = route\_ms + replica\_queue\_ms + prefill\_ms + decode\_ms + stream\_send\_ms$$
-    <p>`route_ms` 是路由层决策本身的开销，`replica_queue_ms` 是被选副本内部等待。路由错误常表现为 route_ms 很小，但 replica_queue_ms 或 TTFT 在某些 tenant/version/replica 标签下异常。</p>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="路由指标清单" data-export-lang="table">
-      <thead>
-        <tr><th>指标</th><th>维度标签</th><th>说明</th><th>异常解释</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>route_decision_total</td><td>tenant、model_version、route_reason</td><td>每类路由决策数量</td><td>某 reason 突然增加，说明策略或候选状态变化</td></tr>
-        <tr><td>candidate_count</td><td>model_version、pool_id</td><td>过滤后可用副本数量</td><td>候选数下降会让少数副本承压</td></tr>
-        <tr><td>replica_queue_ms</td><td>replica_id、tenant_class</td><td>选中副本内部等待</td><td>路由倾斜或副本局部过载</td></tr>
-        <tr><td>cache_affinity_hit</td><td>prefix_hash bucket、tenant、replica</td><td>缓存亲和是否生效</td><td>hit 高但 p99 高，说明热点风险</td></tr>
-        <tr><td>version_error_rate</td><td>model_version、canary_bucket</td><td>按版本拆错误率</td><td>新版本问题被 alias 聚合掩盖</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>指标维度不是越多越好。最少要保留 tenant、model_version、replica_id、pool_id 和 route_reason，先保证能回答“谁被送到哪里，为什么”。</p>
-</section>
-
-<section id="bridge">
-  <div class="head">
-    <h2>下一步</h2>
-    <span class="tag">next</span>
-  </div>
-  <p>读完本页后，下一步不是马上写更复杂的路由算法，而是把路由证据补齐：route log、candidate set、route reason、per-tenant 指标、version 标签和副本短窗口异常。证据稳定以后，再讨论权重、cache bonus、隔离池和灰度策略。</p>
-  <div class="table-wrap">
-    <table data-export-context="路由落地检查清单" data-export-lang="table">
-      <thead>
-        <tr><th>要做的事</th><th>最低实现</th><th>检查方式</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>补 route log</td><td>request_id、tenant、version、candidate_count、selected_replica、route_reason</td><td>随机抽一条请求能还原选路过程</td></tr>
-        <tr><td>拆指标标签</td><td>按 tenant、version、pool、replica 看 p95/p99 和错误率</td><td>同一 endpoint 下能看到局部异常</td></tr>
-        <tr><td>保护缓存亲和</td><td>cache bonus 受 load budget 约束</td><td>cache hit 上升时 p99 不应同步爆炸</td></tr>
-        <tr><td>记录灰度原因</td><td>canary_bucket、fallback_reason</td><td>新版本异常时能快速回滚并确认流量归属</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>下一单元会把“已有副本怎么选”推进到“副本数量、batching 和资源边界怎么变化”。这时路由指标会变成 autoscaling 和资源隔离的输入。</p>
-</section>
-
-<section id="boundary">
-  <div class="head">
-    <h2>边界</h2>
-    <span class="tag">scope</span>
-  </div>
-  <p>这里先不展开四件事：完整 autoscaling 策略、GPU/MIG 等资源隔离细节、服务网格层面的全局流量治理、计费和商业配额。它们都会影响路由，但如果现在一起学，容易把“当前请求为什么去这个副本”这条主线冲散。</p>
-  <div class="table-wrap">
-    <table data-export-context="本页边界与后续单元" data-export-lang="table">
-      <thead>
-        <tr><th>暂不深入</th><th>为什么先放下</th><th>后续位置</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>autoscaling</td><td>它改变副本数量；本页先学已有副本间如何选择</td><td>Unit 05</td></tr>
-        <tr><td>batching</td><td>它在副本内部影响吞吐；本页只看路由如何把请求交给副本</td><td>Unit 05</td></tr>
-        <tr><td>SLO capacity planning</td><td>它需要跨入口、路由、执行和观测综合分析</td><td>Unit 06</td></tr>
-        <tr><td>框架部署细节</td><td>Ray Serve LLM 等框架会把这些概念落成配置和部署形态</td><td>Unit 07</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>边界清楚后，你现在应该能拿一条线上请求，解释它的模型版本、租户池、候选副本和最终 route reason。</p>
-</section>
-
-
+<p>如果指标只按 endpoint 聚合，你几乎看不到租户争用。至少把 <code>tenant_id</code>、<code>tenant_class</code>、<code>pool_id</code> 和 <code>route_reason</code> 作为指标或日志标签保留下来。</p>
+        </div>
+      </section>
+      <section id="cache">
+        <div class="head">
+          <h2>缓存亲和</h2>
+          <span class="tag">cache</span>
+        </div>
+<p>LLM 服务常希望相似 prompt、同一会话或相同 prefix 的请求落到已有缓存的副本上。这个策略能降低 TTFT，但它也会制造热点：如果所有相似请求都被路由到同一副本，缓存命中率会上升，p99 也可能上升。</p>
+<p>强 cache affinityTTFT 下降，prefill 重复工作减少热点副本更热，租户之间互相影响只在 effective_load 低于阈值时启用</p>
+<p>弱 cache bonus兼顾缓存和负载均衡命中率不如强亲和把 cache 作为打分奖励，不作为硬过滤</p>
+<p>忽略缓存实现简单，副本负载更平均重复 prefill 增多，TTFT 上升低峰、短 prompt 或缓存收益不明显时可接受</p>
+<p>按租户分缓存池避免跨租户热点和合规风险缓存复用范围变小专属租户、敏感数据或稳定大客户</p>
+<p>这条规则故意把 cache hit 放在三个条件之一，而不是唯一条件。缓存命中只能说明“可能更快”，不能说明“这个副本现在还能稳稳接”。</p>
+      </section>
+      <section id="release">
+        <div class="head">
+          <h2>版本与灰度</h2>
+          <span class="tag">release</span>
+        </div>
+<p>多版本路由让模型更新可控，但它也会让事故更难看清。一次错误率上升，可能来自新模型版本、某个 adapter、某个量化配置、某个租户触发的输入分布，也可能只是灰度流量被路由到了不稳定副本。</p>
+<p>alias 到版本映射确认公开模型名实际指向谁model_alias、model_version回滚后部分副本仍服务旧映射</p>
+<p>canary eligibility限制哪些租户或请求能进新版本canary_allowed、canary_bucket高价值租户误入实验版本</p>
+<p>版本级指标区分整体错误和单版本错误version、adapter、quantization聚合错误率看起来正常，单版本已异常</p>
+<p>fallback path新版本失败时能否回到稳定版本fallback_version、fallback_reasonfallback 没写日志，事故后无法确认发生过</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-release-1">复制</button></div>
+        <pre id="code-release-1" data-export-context="代码" data-export-lang="python"><code class="language-python">def resolve_version(model_alias, tenant, request, rollout):
+ stable = rollout[model_alias].stable_version
+ canary = rollout[model_alias].canary_version
+ if tenant.canary_allowed and in_bucket(request.id, rollout[model_alias].canary_percent):
+ return canary, "canary_bucket"
+ return stable, "stable_default"</code></pre>
+<p>灰度策略要和 route log 放在一起看。只知道“10% 流量进新版本”不够，还要知道是哪 10%、按什么规则进、失败后有没有 fallback。</p>
+        </div>
+      </section>
+      <section id="diagnostics">
+        <div class="head">
+          <h2>诊断实验室</h2>
+          <span class="tag">lab</span>
+        </div>
+<p>下面四个场景都是路由层常见事故。先看症状，再决定查哪一组字段。不要一上来就扩容；如果路由把流量压偏，扩容只能暂时把症状摊薄。</p>
+<p>单个租户把 p99 拉高tenant_id、tenant_class、queue wait、fairness debt共享池隔离不足或长请求未分流限流、权重调整、长请求隔离或专属池</p>
+<p>cache hit 高但尾延迟差prefix_hash、selected_replica、effective_loadcache affinity 过强形成热点给 cache bonus 加 load budget</p>
+<p>新版本错误率异常model_version、canary_bucket、fallback_reason灰度资格过宽或 fallback 缺失暂停 canary，按版本回滚并补日志</p>
+<p>某副本持续报错recent_error_rate、health、route_weight健康检查滞后或局部坏副本未降权降低权重、drain 副本、缩短异常窗口</p>
+      </section>
+      <section id="metrics">
+        <div class="head">
+          <h2>指标分解</h2>
+          <span class="tag">metrics</span>
+        </div>
+<p>路由指标要同时能看全局、租户、版本和副本。只看全局 QPS、平均延迟和 GPU utilization，通常发现不了路由倾斜。</p>
+<p><code>route_ms</code> 是路由层决策本身的开销，<code>replica_queue_ms</code> 是被选副本内部等待。路由错误常表现为 route_ms 很小，但 replica_queue_ms 或 TTFT 在某些 tenant/version/replica 标签下异常。</p>
+<p>route_decision_totaltenant、model_version、route_reason每类路由决策数量某 reason 突然增加，说明策略或候选状态变化</p>
+<p>candidate_countmodel_version、pool_id过滤后可用副本数量候选数下降会让少数副本承压</p>
+<p>replica_queue_msreplica_id、tenant_class选中副本内部等待路由倾斜或副本局部过载</p>
+<p>cache_affinity_hitprefix_hash bucket、tenant、replica缓存亲和是否生效hit 高但 p99 高，说明热点风险</p>
+<p>version_error_ratemodel_version、canary_bucket按版本拆错误率新版本问题被 alias 聚合掩盖</p>
+      </section>
+      <section id="bridge">
+        <div class="head">
+          <h2>下一步</h2>
+          <span class="tag">next</span>
+        </div>
+<p>读完本页后，下一步把路由证据补齐：route log、candidate set、route reason、per-tenant 指标、version 标签和副本短窗口异常。证据稳定以后，再讨论权重、cache bonus、隔离池和灰度策略。</p>
+<p>补 route logrequest_id、tenant、version、candidate_count、selected_replica、route_reason随机抽一条请求能还原选路过程</p>
+<p>拆指标标签按 tenant、version、pool、replica 看 p95/p99 和错误率同一 endpoint 下能看到局部异常</p>
+<p>保护缓存亲和cache bonus 受 load budget 约束cache hit 上升时 p99 不应同步爆炸</p>
+<p>记录灰度原因canary_bucket、fallback_reason新版本异常时能快速回滚并确认流量归属</p>
+      </section>
+      <section id="boundary">
+        <div class="head">
+          <h2>边界</h2>
+          <span class="tag">scope</span>
+        </div>
+<p>这里先不展开四件事：完整 autoscaling 策略、GPU/MIG 等资源隔离细节、服务网格层面的全局流量治理、计费和商业配额。它们都会影响路由，但如果现在一起学，容易把“当前请求为什么去这个副本”这条主线冲散。</p>
+<p>autoscaling它改变副本数量；本页先学已有副本间如何选择Unit 05</p>
+<p>batching它在副本内部影响吞吐；本页只看路由如何把请求交给副本Unit 05</p>
+<p>SLO capacity planning它需要跨入口、路由、执行和观测综合分析Unit 06</p>
+<p>框架部署细节Ray Serve LLM 等框架会把这些概念落成配置和部署形态Unit 07</p>
+      </section>
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>一、概念定位</h3>
-      <p>先把 Admission、routing、replica、tenant 这几个位置分清，后面的诊断才不会串层。</p>
-    </div>
-    <span class="quick-review">复盘时看你是否能说出“接纳后才路由”。</span>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q1" data-group="一、概念定位" data-title="路由层回答什么问题" data-answer="B" data-explain="路由层处理的是已接请求的落点：模型版本、租户池和副本。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">定位</span></div>
-      <h3>路由层回答什么问题</h3>
-      <p>下面哪个问题最符合本页的路由层职责？</p>
-      <label><input type="radio" name="q1" value="A"> 新请求是否应该被入口拒绝。</label>
-      <label><input type="radio" name="q1" value="B"> 已接请求应该去哪个模型版本、租户池和副本。</label>
-      <label><input type="radio" name="q1" value="C"> GPU kernel 应该如何优化矩阵乘法。</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q" data-question="q2" data-group="一、概念定位" data-title="副本是否无状态" data-answer="B" data-explain="LLM 副本有队列、KV cache、warm state、错误窗口和模型版本，不能按普通无状态 worker 理解。">
-      <div class="q-meta"><span class="pill">true/false</span><span class="pill">误区</span></div>
-      <h3>副本是否无状态</h3>
-      <p>“同一模型的 replicas 都可以完全当成无状态 HTTP workers 轮询。”这个判断对吗？</p>
-      <label><input type="radio" name="q2" value="A"> 对，副本之间没有任何差异。</label>
-      <label><input type="radio" name="q2" value="B"> 不对，副本有队列、缓存、版本和短窗口异常。</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q" data-question="q3" data-group="一、概念定位" data-title="路由日志关键字段">
-      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">route log</span></div>
-      <h3>路由日志关键字段</h3>
-      <p>哪些字段能帮助你复盘一次请求为什么被送到某个副本？</p>
-      <label><input type="checkbox" name="q3" value="tenant_id"> tenant_id / tenant_class。</label>
-      <label><input type="checkbox" name="q3" value="model_version"> model_alias / model_version。</label>
-      <label><input type="checkbox" name="q3" value="route_reason"> candidate_replicas、selected_replica、route_reason。</label>
-      <label><input type="checkbox" name="q3" value="only_global_qps"> 只记录全局 QPS。</label>
-      <details>
-        <summary>展开反馈</summary>
-        <p>前三项是最小可用字段；只记录全局 QPS 无法还原单个请求的选路过程，也看不到局部副本、版本或租户问题。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>二、路由决策</h3>
-      <p>这一组检查你能不能把副本状态转成可解释的选择，而不是只做轮询。</p>
-    </div>
-    <span class="quick-review">复盘时看你是否同时考虑负载、缓存、公平性和错误窗口。</span>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q4" data-group="二、路由决策" data-title="强缓存亲和的风险" data-answer="C" data-explain="cache affinity 不能作为唯一条件；如果选中副本 effective_load 已经很高，继续送流量会拉高 p99。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">cache</span></div>
-      <h3>强缓存亲和的风险</h3>
-      <p>某 prefix 在 r3 上 cache hit 很高，但 r3 的 effective_load 已到 0.94。最稳的动作是什么？</p>
-      <label><input type="radio" name="q4" value="A"> 所有相同 prefix 继续强制路由到 r3。</label>
-      <label><input type="radio" name="q4" value="B"> 完全删除缓存相关信号。</label>
-      <label><input type="radio" name="q4" value="C"> 把 cache 作为 bonus，并受 load budget 约束。</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q" data-question="q5" data-group="二、路由决策" data-title="候选副本过滤">
-      <div class="q-meta"><span class="pill">scenario</span><span class="pill">filter</span></div>
-      <h3>候选副本过滤</h3>
-      <p>请求目标是 `chat-prod:v18`，tenant 只能进入 `enterprise` pool。哪些副本应该先被过滤掉？</p>
-      <label><input type="checkbox" name="q5" value="unhealthy"> health=unhealthy 的副本。</label>
-      <label><input type="checkbox" name="q5" value="version_mismatch"> 只运行 `chat-prod:v17` 的副本。</label>
-      <label><input type="checkbox" name="q5" value="wrong_pool"> 不属于 `enterprise` pool 的副本。</label>
-      <label><input type="checkbox" name="q5" value="lower_queue"> queue depth 更低且版本、pool、health 都正确的副本。</label>
-      <details>
-        <summary>展开反馈</summary>
-        <p>前三项都应过滤；最后一项是候选副本，应该进入打分阶段。过滤阶段回答“谁能接”，打分阶段才回答“谁更适合接”。</p>
-      </details>
-    </div>
-
-    <div class="q full" data-question="q6" data-group="二、路由决策" data-title="写一条路由规则">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">policy</span></div>
-      <h3>写一条路由规则</h3>
-      <p>写一条最小路由规则，要求同时处理 replica health、model_version、cache bonus 和 load budget。</p>
-      <p class="solve-note">答案至少包含：过滤条件、打分信号、最终 route_reason。不要把缓存命中写成唯一硬条件。</p>
-      <textarea name="q6" placeholder="例如：先过滤 unhealthy/version_mismatch，再在 effective_load < budget 的候选里给 cache hit 加 bonus..."></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>合格答案应先过滤 unhealthy、version mismatch 和 pool mismatch；然后用 queue_work、inflight_tokens、kv_pressure、recent_errors 计算负载；最后在负载预算内给 cache hit 加 bonus。route_reason 可以写成 `cache_affinity_within_load_budget` 或 `least_effective_load`。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>三、租户与版本诊断</h3>
-      <p>这一组把局部异常拆到 tenant、pool、version 和 replica 四个维度。</p>
-    </div>
-    <span class="quick-review">复盘时看你是否避免只看 endpoint 聚合指标。</span>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q7" data-group="三、租户与版本诊断" data-title="热租户先看什么" data-answer="A" data-explain="热租户问题要先按 tenant 看 queue wait、p99、fairness debt 和 throttle，而不是只看全局 GPU。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">tenant</span></div>
-      <h3>热租户先看什么</h3>
-      <p>全局 p99 上升，日志显示 `tenant-free` 的 RPS 是平时 7 倍。优先看哪组指标？</p>
-      <label><input type="radio" name="q7" value="A"> per-tenant queue wait、tenant p99、fairness debt、throttle rate。</label>
-      <label><input type="radio" name="q7" value="B"> 只看全局平均 latency。</label>
-      <label><input type="radio" name="q7" value="C"> 只看模型文件大小。</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q" data-question="q8" data-group="三、租户与版本诊断" data-title="灰度事故字段">
-      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">canary</span></div>
-      <h3>灰度事故字段</h3>
-      <p>新版本错误率异常时，哪些字段能快速判断是否是灰度路由问题？</p>
-      <label><input type="checkbox" name="q8" value="model_version"> model_version。</label>
-      <label><input type="checkbox" name="q8" value="canary_bucket"> canary_bucket / canary_allowed。</label>
-      <label><input type="checkbox" name="q8" value="fallback_reason"> fallback_reason。</label>
-      <label><input type="checkbox" name="q8" value="only_alias"> 只有 model_alias。</label>
-      <details>
-        <summary>展开反馈</summary>
-        <p>前三项能判断流量是否进入新版本、为什么进入、失败后是否 fallback。只有 alias 会把稳定版本和灰度版本混在一起。</p>
-      </details>
-    </div>
-
-    <div class="q" data-question="q9" data-group="三、租户与版本诊断" data-title="首选隔离手段" data-answer="C" data-explain="长上下文在线拖慢短请求时，优先考虑长请求隔离或单独队列，而不是只提高总并发。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">isolation</span></div>
-      <h3>首选隔离手段</h3>
-      <p>某租户开始提交大量 64k prompt，总 RPS 不高，但在线短问答 TTFT 明显上升。更合理的路由动作是什么？</p>
-      <label><input type="radio" name="q9" value="A"> 只把 queue limit 调大。</label>
-      <label><input type="radio" name="q9" value="B"> 把所有租户继续混在同一 shared pool。</label>
-      <label><input type="radio" name="q9" value="C"> 把长请求分到隔离池或专门队列，并给在线短请求保留预算。</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>四、落地设计</h3>
-      <p>最后把字段、指标和策略组合成一个可上线的最小方案。</p>
-    </div>
-    <span class="quick-review">复盘时看你是否留下证据，而不是只写“均衡负载”。</span>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q10" data-group="四、落地设计" data-title="最小 route reason" data-answer="route_reason" data-explain="route_reason 是事故复盘里解释最终选择的最短字段名。">
-      <div class="q-meta"><span class="pill">short fill</span><span class="pill">日志</span></div>
-      <h3>最小 route reason</h3>
-      <p>为了记录“为什么选中这个副本”，route log 里最应该保留的字段名是什么？</p>
-      <label>字段名：<input type="text" name="q10" data-answer="route_reason,reason" data-explain="推荐使用 route_reason，至少要有等价的 reason 字段。"></label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q" data-question="q11" data-group="四、落地设计" data-title="上线前检查">
-      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">launch</span></div>
-      <h3>上线前检查</h3>
-      <p>要把一个多版本、多租户 endpoint 上线，哪些检查最贴近本页内容？</p>
-      <label><input type="checkbox" name="q11" value="candidate"> 能导出 candidate set 和 filter reason。</label>
-      <label><input type="checkbox" name="q11" value="tenant_metrics"> 指标按 tenant / pool / replica / version 拆分。</label>
-      <label><input type="checkbox" name="q11" value="fallback"> canary 有 fallback_reason 和回滚路径。</label>
-      <label><input type="checkbox" name="q11" value="no_logs"> 不需要 route log，只看总体成功率。</label>
-      <details>
-        <summary>展开反馈</summary>
-        <p>前三项是最小上线检查；只看总体成功率会掩盖局部租户、灰度版本或坏副本问题。</p>
-      </details>
-    </div>
-
-    <div class="q full" data-question="q12" data-group="四、落地设计" data-title="设计一个最小路由账本">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">ledger</span></div>
-      <h3>设计一个最小路由账本</h3>
-      <p>为一个 OpenAI-compatible chat endpoint 设计 8-10 个 route log 字段，并说明其中 3 个字段能诊断什么问题。</p>
-      <p class="solve-note">至少覆盖 tenant、model_version、candidate set、selected replica、route_reason、cache 或 error signal。</p>
-      <textarea name="q12" placeholder="字段：request_id, tenant_id, model_alias, model_version, candidate_count...；诊断：..."></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>可用字段包括 `request_id`、`tenant_id`、`tenant_class`、`model_alias`、`model_version`、`candidate_replicas_before/after`、`filter_reason`、`selected_replica`、`route_reason`、`cache_hint`、`recent_error_rate`、`score`。说明部分至少要能把字段映射到热租户、灰度版本异常、cache 热点或坏副本之一。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-      </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、概念定位</h3></div>
+          
         </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="已接请求应该去哪个模型版本、租户池和副本。">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 路由层回答什么问题</h3>
 
-      <section id="sources">
+      <div class="choices">
+      <label><input type="radio" name="q1" value="新请求是否应该被入口拒绝。">新请求是否应该被入口拒绝。</label>
+      <label><input type="radio" name="q1" value="已接请求应该去哪个模型版本、租户池和副本。">已接请求应该去哪个模型版本、租户池和副本。</label>
+      <label><input type="radio" name="q1" value="GPU kernel 应该如何优化矩阵乘法。">GPU kernel 应该如何优化矩阵乘法。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>已接请求应该去哪个模型版本、租户池和副本。。路由层处理的是已接请求的落点：模型版本、租户池和副本。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="不对，副本有队列、缓存、版本和短窗口异常。">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> 副本是否无状态</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q2" value="对，副本之间没有任何差异。">对，副本之间没有任何差异。</label>
+      <label><input type="radio" name="q2" value="不对，副本有队列、缓存、版本和短窗口异常。">不对，副本有队列、缓存、版本和短窗口异常。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>不对，副本有队列、缓存、版本和短窗口异常。。LLM 副本有队列、KV cache、warm state、错误窗口和模型版本，不能按普通无状态 worker 理解。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">debug-checklist</span></div>
+        <h3><b>Q:</b> 路由日志关键字段</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q3" value="/ tenant_class。">/ tenant_class。</label>
+      <label><input type="radio" name="q3" value="model_alias / model_version。">model_alias / model_version。</label>
+      <label><input type="radio" name="q3" value="candidate_replicas、selected_replica、route_reason。">candidate_replicas、selected_replica、route_reason。</label>
+      <label><input type="radio" name="q3" value="只记录全局 QPS。">只记录全局 QPS。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。前三项是最小可用字段；只记录全局 QPS 无法还原单个请求的选路过程，也看不到局部副本、版本或租户问题。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、路由决策</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="把 cache 作为 bonus，并受 load budget 约束。">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 强缓存亲和的风险</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q4" value="所有相同 prefix 继续强制路由到 r3。">所有相同 prefix 继续强制路由到 r3。</label>
+      <label><input type="radio" name="q4" value="完全删除缓存相关信号。">完全删除缓存相关信号。</label>
+      <label><input type="radio" name="q4" value="把 cache 作为 bonus，并受 load budget 约束。">把 cache 作为 bonus，并受 load budget 约束。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>把 cache 作为 bonus，并受 load budget 约束。。cache affinity 不能作为唯一条件；如果选中副本 effective_load 已经很高，继续送流量会拉高 p99。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">scenario transfer</span></div>
+        <h3><b>Q:</b> 候选副本过滤</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q5" value="health=unhealthy 的副本。">health=unhealthy 的副本。</label>
+      <label><input type="radio" name="q5" value="只运行 `chat-prod:v17` 的副本。">只运行 <code>chat-prod:v17</code> 的副本。</label>
+      <label><input type="radio" name="q5" value="不属于 `enterprise` pool 的副本。">不属于 <code>enterprise</code> pool 的副本。</label>
+      <label><input type="radio" name="q5" value="queue depth 更低且版本、pool、health 都正确的副本。">queue depth 更低且版本、pool、health 都正确的副本。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。前三项都应过滤；最后一项是候选副本，应该进入打分阶段。过滤阶段回答“谁能接”，打分阶段才回答“谁更适合接”。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 写一条路由规则</h3>
+
+
+      <textarea name="q6"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。合格答案应先过滤 unhealthy、version mismatch 和 pool mismatch；然后用 queue_work、inflight_tokens、kv_pressure、recent_errors 计算负载；最后在负载预算内给 cache hit 加 bonus。route_reason 可以写成 <code>cache_affinity_within_load_budget</code> 或 <code>least_effective_load</code>。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、租户与版本诊断</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="per-tenant queue wait、tenant p99、fairness debt、throttle rate。">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 热租户先看什么</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q7" value="per-tenant queue wait、tenant p99、fairness debt、throttle rate。">per-tenant queue wait、tenant p99、fairness debt、throttle rate。</label>
+      <label><input type="radio" name="q7" value="只看全局平均 latency。">只看全局平均 latency。</label>
+      <label><input type="radio" name="q7" value="只看模型文件大小。">只看模型文件大小。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>per-tenant queue wait、tenant p99、fairness debt、throttle rate。。热租户问题要先按 tenant 看 queue wait、p99、fairness debt 和 throttle，而不是只看全局 GPU。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">debug-checklist</span></div>
+        <h3><b>Q:</b> 灰度事故字段</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q8" value="。">。</label>
+      <label><input type="radio" name="q8" value="/ canary_allowed。">/ canary_allowed。</label>
+      <label><input type="radio" name="q8" value="。">。</label>
+      <label><input type="radio" name="q8" value="只有 model_alias。">只有 model_alias。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。前三项能判断流量是否进入新版本、为什么进入、失败后是否 fallback。只有 alias 会把稳定版本和灰度版本混在一起。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="把长请求分到隔离池或专门队列，并给在线短请求保留预算。">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 首选隔离手段</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q9" value="只把 queue limit 调大。">只把 queue limit 调大。</label>
+      <label><input type="radio" name="q9" value="把所有租户继续混在同一 shared pool。">把所有租户继续混在同一 shared pool。</label>
+      <label><input type="radio" name="q9" value="把长请求分到隔离池或专门队列，并给在线短请求保留预算。">把长请求分到隔离池或专门队列，并给在线短请求保留预算。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>把长请求分到隔离池或专门队列，并给在线短请求保留预算。。长上下文在线拖慢短请求时，优先考虑长请求隔离或单独队列，而不是只提高总并发。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、落地设计</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="route_reason">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">short-fill</span></div>
+        <h3><b>Q:</b> 最小 route reason</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q10" value="字段名：">字段名：</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>route_reason。route_reason 是事故复盘里解释最终选择的最短字段名。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">debug-checklist</span></div>
+        <h3><b>Q:</b> 上线前检查</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q11" value="能导出 candidate set 和 filter reason。">能导出 candidate set 和 filter reason。</label>
+      <label><input type="radio" name="q11" value="指标按 tenant / pool / replica / version 拆分。">指标按 tenant / pool / replica / version 拆分。</label>
+      <label><input type="radio" name="q11" value="canary 有 fallback_reason 和回滚路径。">canary 有 fallback_reason 和回滚路径。</label>
+      <label><input type="radio" name="q11" value="不需要 route log，只看总体成功率。">不需要 route log，只看总体成功率。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。前三项是最小上线检查；只看总体成功率会掩盖局部租户、灰度版本或坏副本问题。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 设计一个最小路由账本</h3>
+
+
+      <textarea name="q12"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。可用字段包括 <code>request_id</code>、<code>tenant_id</code>、<code>tenant_class</code>、<code>model_alias</code>、<code>model_version</code>、<code>candidate_replicas_before/after</code>、<code>filter_reason</code>、<code>selected_replica</code>、<code>route_reason</code>、<code>cache_hint</code>、<code>recent_error_rate</code>、<code>score</code>。说明部分至少要能把字段映射到热租户、灰度版本异常、cache 热点或坏副本之一。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <div class="source-list">
-  <a href="https://docs.ray.io/en/latest/serve/llm/index.html">Ray Serve LLM documentation</a>
-  <a href="https://docs.ray.io/en/latest/serve/index.html">Ray Serve documentation</a>
-  <a href="https://docs.vllm.ai/en/latest/">vLLM documentation</a>
-  <a href="https://docs.sglang.ai/">SGLang documentation</a>
-  <a href="https://nvidia.github.io/TensorRT-LLM/">TensorRT-LLM documentation</a>
-  <a href="../index.html#sources">课程地图中的公开资料边界</a>
-</div>
 
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

@@ -4,369 +4,580 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P13｜自注意力机制（下）</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="matrix,Q,K,V,attention matrix,parallel,multi-head,positional encoding,truncated attention,CNN,RNN,GNN,complexity,Transformer">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Self-attention 下</strong><span>P13。从单个输出的手算流程，升级到矩阵并行、多头、位置资讯和工程取舍。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#matrix"><span class="dot"></span>矩阵化并行</a>
-      <a href="#params"><span class="dot"></span>参数与尺寸</a>
-      <a href="#multihead"><span class="dot"></span>Multi-head</a>
-      <a href="#position"><span class="dot"></span>位置编码</a>
-      <a href="#complexity"><span class="dot"></span>长序列成本</a>
-      <a href="#relations"><span class="dot"></span>CNN/RNN/GNN</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#terms"><span class="dot"></span>术语与检查</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">这一节的判断句：self-attention 的所有输出可以并行计算，但 attention matrix 是 L×L，所以长序列会带来平方级计算与记忆体成本。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P13</div>
-        <h1>Self-attention 从公式到工程取舍</h1>
-        <p>P12 已经手算过如何从一排输入向量得到一个输出 <code>b_i</code>。P13 往前推一步：实际训练时不会先算 <code>b₁</code> 再算 <code>b₂</code>，而是把所有位置拼成矩阵，一次算出所有 query、key、value、attention matrix 和输出。</p>
-        <p>这节还补上三个关键扩展：multi-head 让模型同时学习多种相关性；positional encoding 把位置资讯塞进本来不懂顺序的 attention；长序列任务需要处理 <code>L × L</code> attention matrix 的成本。最后用 CNN、RNN、GNN 对照，帮你知道 self-attention 不是孤立技巧，而是一类可变形的序列建模框架。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>用矩阵乘法写出 self-attention 的完整流程。</li>
-          <li>说明哪些矩阵是学习参数，哪些只是固定计算。</li>
-          <li>解释 multi-head 为什么需要多个 Q/K/V 子空间。</li>
-          <li>说明 positional encoding 解决什么缺口。</li>
-          <li>比较 self-attention 与 CNN、RNN、GNN 的关系。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">map</span></div>
-      <p>P13 的第一件事，是把逐个位置的计算改写成矩阵计算。把所有输入向量拼成矩阵 <code>I</code>，分别乘上 <code>WQ</code>、<code>WK</code>、<code>WV</code>，得到 <code>Q</code>、<code>K</code>、<code>V</code>。接着计算所有 query 与所有 key 的内积，得到 attention matrix。</p>
-      <p>第二件事，是理解 attention matrix 的意义。它的每一列或每一行，取决于你采用的排布习惯，表示某个位置对所有位置的 attention score。通过 softmax 得到权重矩阵后，再与 <code>V</code> 相乘，就一次得到所有输出向量。</p>
-      <p>第三件事，是把 self-attention 放进真实模型设计里：multi-head 用多组相关性看同一段资料；位置编码告诉模型 token 的顺序；truncated attention 在长语音序列中只看局部范围；图像、RNN、graph 场景则展示它和其他架构的关系。</p>
-      <div class="map">
-        <span class="node">I</span><span class="arrow">× WQ/WK/WV →</span>
-        <span class="node">Q K V</span><span class="arrow">→</span>
-        <span class="node">attention matrix</span><span class="arrow">→</span>
-        <span class="node">O</span><span class="arrow">+</span>
-        <span class="node">multi-head / position / efficient variants</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P13</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="grid3">
-        <div class="box soft"><h3>直觉</h3><p>把 P12 的一题一题手算，打包成一次矩阵运算。</p></div>
-        <div class="box info"><h3>正式说法</h3><p>Self-attention layer 的学习参数主要是 <code>WQ</code>、<code>WK</code>、<code>WV</code>；其余是矩阵乘法、normalization 与加权和。</p></div>
-        <div class="box warn"><h3>关键边界</h3><p>注意不同教材可能把向量放成 row 或 column，公式会转置变化，但计算含义不变。</p></div>
+      <h1 class="hero-title">P13｜自注意力机制（下）</h1>
+      <p class="hero-desc">P12 已经手算过如何从一排输入向量得到一个输出 b_i 。P13 往前推一步：实际训练时不会先算 b₁ 再算 b₂ ，而是把所有位置拼成矩阵，一次算出所有 query、key、value、attention matrix 和输出。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P12_自注意力机制_Self-attention/学习页.html">上一节</a>
+            <a href="../P14_批次标准化_Batch_Normalization/学习页.html">下一节</a>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>看到 self-attention 图时，能把箭头翻译成矩阵乘法，而不是只看彩色方块。</p></div>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="matrix">
-      <div class="head"><h2>矩阵化：所有输出同时算出来</h2><span class="tag">parallel</span></div>
-      <p>P12 是从 <code>b₁</code> 开始讲：拿 <code>q₁</code> 去和所有 key 算分数，再加权所有 value 得到 <code>b₁</code>。P13 强调，同样操作可以对所有位置并行做。你不需要先得到 <code>b₁</code>，再得到 <code>b₂</code>，它们没有依赖顺序。</p>
-      <p>把 <code>a₁</code> 到 <code>a₄</code> 拼成输入矩阵 <code>I</code>。每个位置都乘上同一个 <code>WQ</code>，得到所有 query；每个位置都乘上同一个 <code>WK</code>，得到所有 key；每个位置都乘上同一个 <code>WV</code>，得到所有 value。这就是并行的第一步。</p>
-      <p>接着，所有 query 与所有 key 的内积也能一次做完。课程投影片采用 column vector 的画法，所以会写成类似 <code>KᵀQ</code> 得到 attention matrix；很多代码会把序列放在 row 维度，于是写成 <code>QKᵀ</code>。不要被转置方向吓到，只要记住矩阵中的每个格子都是某个 <code>q_i</code> 与某个 <code>k_j</code> 的 dot product。</p>
-      <div class="formula">
-        Q = I W<sub>Q</sub>, &nbsp; K = I W<sub>K</sub>, &nbsp; V = I W<sub>V</sub><br>
-        A = Q K<sup>T</sup>, &nbsp; A' = softmax(A), &nbsp; O = A' V
+        </ul>
       </div>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：矩阵尺寸检查</h3>
-            <div class="slider-row"><label for="lenSlider">sequence 长度 L</label><input id="lenSlider" type="range" min="2" max="12" step="1" value="6"><strong id="lenOut">6</strong></div>
-            <div class="slider-row"><label for="dimSlider">向量维度 d</label><input id="dimSlider" type="range" min="2" max="16" step="1" value="8"><strong id="dimOut">8</strong></div>
-            <table class="metric-table">
-              <tbody id="shapeRows"></tbody>
-            </table>
-          </div>
-          <div class="viz-note">
-            <h3 id="shapeTitle">L=6, d=8</h3>
-            <p id="shapeText">Attention matrix 的大小只由序列长度决定，是 L×L；向量维度影响 Q/K/V 和每次 dot product 的成本。</p>
-          </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#matrix">矩阵化：所有输出同时算出来</a>
+      <a href="#params">哪些是参数，哪些只是计算</a>
+      <a href="#multihead">Multi-head：同一段序列的多种相关性</a>
+      <a href="#position">位置编码：让模型知道谁在前、谁在后</a>
+      <a href="#complexity">长序列成本：L×L attention matrix</a>
+      <a href="#relations">和 CNN、RNN、GNN 的关系</a>
+      <a href="#code">最小代码：矩阵化、多头、mask</a>
+      <a href="#mistakes">常见误区与修正</a>
+      <a href="#terms">术语与检查：把 P13 讲成一张工程图</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">map</span>
         </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>给定序列长度和向量维度，写出 Q/K/V、attention matrix、输出 O 的形状。</p></div>
-    </section>
-
-    <section id="params">
-      <div class="head"><h2>哪些是参数，哪些只是计算</h2><span class="tag">learned weights</span></div>
-      <p>Self-attention 看起来步骤很多，但需要从训练资料学出来的，核心是 <code>WQ</code>、<code>WK</code>、<code>WV</code> 这些矩阵。它们决定了什么样的 query、key、value 表示更适合任务。</p>
-      <p>Dot product、softmax、weighted sum 这些不是“额外要学的参数”，而是固定运算。训练时，loss 会通过这些运算把梯度传回 <code>WQ/WK/WV</code>，让模型慢慢学会怎样产生更有用的 attention pattern。</p>
-      <p>这点很重要，因为很多初学者会误以为 attention score 是直接存起来的参数。不是。Attention score 是当前输入动态算出来的：换一个句子、换一段语音、换一张图片，score matrix 都会不同。</p>
-      <table class="metric-table">
-        <thead><tr><th>对象</th><th>是否学习参数</th><th>作用</th></tr></thead>
-        <tbody>
-          <tr><td>WQ / WK / WV</td><td>是</td><td>把输入映射成 query、key、value。</td></tr>
-          <tr><td>Attention score A</td><td>不是</td><td>由当前 Q/K 动态计算出来。</td></tr>
-          <tr><td>Softmax / normalization</td><td>不是</td><td>把分数变成可加权的比例。</td></tr>
-          <tr><td>输出 O</td><td>不是参数</td><td>当前输入经过 attention 后的结果。</td></tr>
-        </tbody>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>读模型图时，指出 attention layer 中哪些矩阵会被训练更新。</p></div>
-    </section>
-
-    <section id="multihead">
-      <div class="head"><h2>Multi-head：同一段序列的多种相关性</h2><span class="tag">multi-head</span></div>
-      <p>单头 attention 只有一种 query/key/value 空间，它会学习一种“相关”的定义。但现实任务里，相关性可能有很多种：词性标注可能要看语法关系，也要看词义关系；语音可能要看局部发音，也要看较长的节奏；翻译可能同时需要对齐词、短语和句法结构。</p>
-      <p>Multi-head self-attention 的直觉是：让不同 head 学不同类型的相关性。每个 head 有自己的 Q/K/V 子空间，分别计算 attention，得到多个输出片段。然后把这些片段 concat 起来，再乘上一个矩阵，合成当前层的输出。</p>
-      <p>Head 数目是 hyperparameter。更多 head 不一定永远更好，因为它会影响参数量、计算量和过拟合风险；有些作业或小任务可能少一点 head 就够，有些翻译或语音任务则可能需要更多 head 才能捕捉多种关系。</p>
-      <div class="formula">
-        head<sub>r</sub> = Attention(Q<sub>r</sub>, K<sub>r</sub>, V<sub>r</sub>)<br>
-        output = Linear(concat(head<sub>1</sub>, head<sub>2</sub>, ..., head<sub>h</sub>))
-      </div>
-      <div class="grid3">
-        <div class="box soft"><h3>一个 head</h3><p>只学习一种匹配视角，结构简单。</p></div>
-        <div class="box info"><h3>多个 head</h3><p>并行学习多种相关性，再合并。</p></div>
-        <div class="box warn"><h3>调参</h3><p>Head 数不是越多越好，要看任务、资料量和计算预算。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释 multi-head 不是重复算同一件事，而是让不同 head 学不同关系。</p></div>
-    </section>
-
-    <section id="position">
-      <div class="head"><h2>位置编码：让模型知道谁在前、谁在后</h2><span class="tag">position</span></div>
-      <p>到目前为止的 self-attention 本身没有顺序概念。投影片上写 <code>a₁</code>、<code>a₂</code>、<code>a₃</code> 是为了人类理解；对 attention 运算来说，每个位置执行的是同一套操作。位置 1 和位置 4 并不会天然更远，位置 2 和位置 3 也不会天然更近。</p>
-      <p>这会带来问题。许多任务需要位置资讯：词性标注里，句首、句中、句尾可能影响词性判断；语音和文字都强烈依赖顺序。如果模型不知道顺序，它只能根据内容向量本身做判断。</p>
-      <p>Positional encoding 的做法是给每个位置一个专属向量 <code>e_i</code>，再把它加到输入 <code>a_i</code> 上。这样模型看到的不只是词或 frame 的内容，也包含“我在第几个位置”的信息。最早 Transformer 使用 sin/cos 规则产生位置向量；后来也有可学习的位置向量、用网络生成的位置向量等许多变形。</p>
-      <div class="formula">
-        input at position i: &nbsp; aᵢ + eᵢ<br>
-        eᵢ can be handcrafted, sinusoidal, learned, or generated by another model
-      </div>
-      <div class="box warn"><h3>别背死 sin/cos</h3><p>课程强调 positional encoding 仍是研究问题。Sin/cos 是经典选择，不是唯一真理；你需要理解它解决“位置资讯缺失”，而不是只背公式长相。</p></div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说明为什么纯 self-attention 对顺序不敏感，以及 positional encoding 如何补上顺序。</p></div>
-    </section>
-
-    <section id="complexity">
-      <div class="head"><h2>长序列成本：L×L attention matrix</h2><span class="tag">complexity</span></div>
-      <p>Self-attention 的强项是每个位置都能看全序列；代价是要计算所有位置对所有位置的相关性。如果序列长度是 <code>L</code>，attention matrix 就是 <code>L × L</code>。当 <code>L</code> 很大时，计算量和记忆体都会变得可观。</p>
-      <p>语音特别容易遇到这个问题。一秒可能有 100 个 frame，五秒就 500 个 frame，一句话可能上千个 frame。完整 attention matrix 会迅速变大。因此语音任务中常见 truncated self-attention：不看整句，只看当前附近的一段范围。</p>
-      <p>这不是随便砍掉信息，而是利用任务理解。如果判断某个音素主要依赖前后一定范围，没必要让每个 frame 都和全句所有 frame 计算 attention。更广泛地，efficient Transformer、Linformer、Performer、Reformer 等变形，都是在尝试减少 self-attention 的成本。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：长度平方成本</h3>
-            <div class="slider-row"><label for="costSlider">sequence 长度 L</label><input id="costSlider" type="range" min="16" max="2048" step="16" value="256"><strong id="costOut">256</strong></div>
-            <div class="barrow"><span>full attention</span><div class="bar"><div class="fill red" id="fullBar"></div></div><strong id="fullOut">65,536</strong></div>
-            <div class="barrow"><span>window=64</span><div class="bar"><div class="fill blue" id="truncBar"></div></div><strong id="truncOut">16,384</strong></div>
-            <div class="matrix" id="matrixViz"></div>
-            <p class="muted">绿色表示完整 attention 的全矩阵；蓝色表示只看局部 band 的 truncated attention。</p>
-          </div>
-          <div class="viz-note">
-            <h3 id="costTitle">L=256</h3>
-            <p id="costText">完整 attention 需要 L² 个位置对；局部窗口把计算限制在附近范围，速度更快但会牺牲远距离连接。</p>
-          </div>
+<p>P13 的第一件事，是把逐个位置的计算改写成矩阵计算。把所有输入向量拼成矩阵 <code>I</code>，分别乘上 <code>WQ</code>、<code>WK</code>、<code>WV</code>，得到 <code>Q</code>、<code>K</code>、<code>V</code>。接着计算所有 query 与所有 key 的内积，得到 attention matrix。</p>
+<p>第三件事，是把 self-attention 放进真实模型设计里：multi-head 用多组相关性看同一段资料；位置编码告诉模型 token 的顺序；truncated attention 在长语音序列中只看局部范围；图像、RNN、graph 场景则展示它和其他架构的关系。</p>
+<p>直觉把 P12 的一题一题手算，打包成一次矩阵运算。</p>
+<p>正式说法Self-attention layer 的学习参数主要是 <code>WQ</code>、<code>WK</code>、<code>WV</code>；其余是矩阵乘法、normalization 与加权和。</p>
+<p>关键边界注意不同教材可能把向量放成 row 或 column，公式会转置变化，但计算含义不变。</p>
+      </section>
+      <section id="matrix">
+        <div class="head">
+          <h2>矩阵化：所有输出同时算出来</h2>
+          <span class="tag">parallel</span>
         </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>看到长序列任务时，主动检查 attention matrix 的尺寸和是否需要局部化或高效变形。</p></div>
-    </section>
-
-    <section id="relations">
-      <div class="head"><h2>和 CNN、RNN、GNN 的关系</h2><span class="tag">architecture compare</span></div>
-      <p>Self-attention 可以用于图像。把一张图片看成很多 pixel 或 patch，每个 pixel/patch 是一个向量，就能套用 attention。与 CNN 相比，CNN 的 receptive field 是人工设定的局部范围；self-attention 则让模型自己用 attention 找相关位置。可以说 CNN 是一种受限制的 attention，attention 是更 flexible 的 CNN。</p>
-      <p>但更 flexible 不等于总是更好。P13 提到 Vision Transformer 相关实验：资料量少时，CNN 的限制反而是一种好归纳偏置，可能比 self-attention 更稳；资料量非常大时，self-attention 的弹性可以吃到更多资料带来的好处。这和前面讲的 overfitting 与模型弹性一致。</p>
-      <p>RNN 也处理 sequence，但它通常按时间一步步处理，当前 hidden state 依赖前一步 hidden state。即使双向 RNN 能看左右文，远距离信息也要被 memory 一路传递。Self-attention 则可以让远处位置直接通过 query/key 匹配，且所有输出并行产生。</p>
-      <p>Graph 上也能用 attention。Graph 的 edge 已经告诉我们哪些节点相关，因此可以只在有边连接的节点之间计算 attention score；没有边的 score 直接设为 0。这类受 graph 结构限制的 attention，就接近某些 Graph Neural Network 的做法。</p>
-      <table class="metric-table">
-        <thead><tr><th>架构</th><th>核心限制/优势</th><th>与 self-attention 的关系</th></tr></thead>
-        <tbody>
-          <tr><td>CNN</td><td>人工设定局部 receptive field</td><td>可看成受限制的 attention；数据少时更稳。</td></tr>
-          <tr><td>RNN</td><td>按时间递推，较难并行</td><td>都处理 sequence，但 attention 可直接连远处并并行输出。</td></tr>
-          <tr><td>GNN</td><td>使用 graph edge 组织信息传播</td><td>只在相连节点算 attention 时，类似图上的 attention/GNN。</td></tr>
-        </tbody>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>根据任务资料量、序列长度、结构先验，说明为什么可能选 CNN、self-attention、RNN 或 graph attention。</p></div>
-    </section>
-
-    <section id="code">
-      <div class="head"><h2>最小代码：矩阵化、多头、mask</h2><span class="tag">minimal code</span></div>
-      <p>下面代码用 row-major 的常见写法：<code>X</code> 的 shape 是 <code>[L, d]</code>，每一行一个位置。它展示三个关键点：一是所有输出并行算出；二是 multi-head 只是把投影后的维度拆成多个 head；三是可以用 mask 把某些位置对禁止掉，例如 graph edge mask 或 truncated attention mask。</p>
-      <div class="codebar"><span class="label">正确示例：矩阵化 attention 与 mask</span><span class="kind">python</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">attention</span>(X, Wq, Wk, Wv, mask=None):
-    Q = X @ Wq              <span class="cmt"># [L, d_head]</span>
-    K = X @ Wk              <span class="cmt"># [L, d_head]</span>
-    V = X @ Wv              <span class="cmt"># [L, d_head]</span>
-    scores = Q @ K.T        <span class="cmt"># [L, L]</span>
-    <span class="kw">if</span> mask <span class="kw">is not</span> None:
-        scores = scores + mask  <span class="cmt"># 不允许看的格子加上很大的负数</span>
-    weights = softmax(scores, axis=-<span class="num">1</span>)
-    O = weights @ V         <span class="cmt"># [L, d_head]，所有位置同时输出</span>
-    <span class="kw">return</span> O, weights</code></pre>
-      <div class="codebar error"><span class="label">错误示例：以为必须按 b1、b2 顺序生成</span><span class="kind">pseudo</span></div>
-      <pre><code><span class="cmt"># 错误理解：self-attention 必须像 RNN 一样一步一步算。</span>
+<p>P12 是从 <code>b₁</code> 开始讲：拿 <code>q₁</code> 去和所有 key 算分数，再加权所有 value 得到 <code>b₁</code>。P13 强调，同样操作可以对所有位置并行做。你不需要先得到 <code>b₁</code>，再得到 <code>b₂</code>，它们没有依赖顺序。</p>
+<p>接着，所有 query 与所有 key 的内积也能一次做完。课程投影片采用 column vector 的画法，所以会写成类似 <code>KᵀQ</code> 得到 attention matrix；很多代码会把序列放在 row 维度，于是写成 <code>QKᵀ</code>。不要被转置方向吓到，只要记住矩阵中的每个格子都是某个 <code>q_i</code> 与某个 <code>k_j</code> 的 dot product。</p>
+<p>小交互：矩阵尺寸检查</p>
+<p>sequence 长度 L<b>6</b></p>
+<p>向量维度 d<b>8</b></p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>给定序列长度和向量维度，写出 Q/K/V、attention matrix、输出 O 的形状。</p>
+        </div>
+      </section>
+      <section id="params">
+        <div class="head">
+          <h2>哪些是参数，哪些只是计算</h2>
+          <span class="tag">learned</span>
+        </div>
+<p>Self-attention 看起来步骤很多，但需要从训练资料学出来的，核心是 <code>WQ</code>、<code>WK</code>、<code>WV</code> 这些矩阵。它们决定了什么样的 query、key、value 表示更适合任务。</p>
+<p>这点很重要，因为很多初学者会误以为 attention score 是直接存起来的参数。不是。Attention score 是当前输入动态算出来的：换一个句子、换一段语音、换一张图片，score matrix 都会不同。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>读模型图时，指出 attention layer 中哪些矩阵会被训练更新。</p>
+        </div>
+      </section>
+      <section id="multihead">
+        <div class="head">
+          <h2>Multi-head：同一段序列的多种相关性</h2>
+          <span class="tag">multi-head</span>
+        </div>
+<p>单头 attention 只有一种 query/key/value 空间，它会学习一种“相关”的定义。但现实任务里，相关性可能有很多种：词性标注可能要看语法关系，也要看词义关系；语音可能要看局部发音，也要看较长的节奏；翻译可能同时需要对齐词、短语和句法结构。</p>
+<p>Head 数目是 hyperparameter。更多 head 不一定永远更好，因为它会影响参数量、计算量和过拟合风险；有些作业或小任务可能少一点 head 就够，有些翻译或语音任务则可能需要更多 head 才能捕捉多种关系。</p>
+<p>一个 head只学习一种匹配视角，结构简单。</p>
+<p>多个 head并行学习多种相关性，再合并。</p>
+<p>调参Head 数不是越多越好，要看任务、资料量和计算预算。</p>
+      </section>
+      <section id="position">
+        <div class="head">
+          <h2>位置编码：让模型知道谁在前、谁在后</h2>
+          <span class="tag">position</span>
+        </div>
+<p>到目前为止的 self-attention 本身没有顺序概念。投影片上写 <code>a₁</code>、<code>a₂</code>、<code>a₃</code> 是为了人类理解；对 attention 运算来说，每个位置执行的是同一套操作。位置 1 和位置 4 并不会天然更远，位置 2 和位置 3 也不会天然更近。</p>
+<p>Positional encoding 的做法是给每个位置一个专属向量 <code>e_i</code>，再把它加到输入 <code>a_i</code> 上。这样模型看到的不只是词或 frame 的内容，也包含“我在第几个位置”的信息。最早 Transformer 使用 sin/cos 规则产生位置向量；后来也有可学习的位置向量、用网络生成的位置向量等许多变形。</p>
+        <div class="box warn">
+<h3>别背死 sin/cos</h3>
+<p>课程强调 positional encoding 仍是研究问题。Sin/cos 是经典选择，不是唯一真理；你需要理解它解决“位置资讯缺失”，而不是只背公式长相。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>说明为什么纯 self-attention 对顺序不敏感，以及 positional encoding 如何补上顺序。</p>
+        </div>
+      </section>
+      <section id="complexity">
+        <div class="head">
+          <h2>长序列成本：L×L attention matrix</h2>
+          <span class="tag">complexity</span>
+        </div>
+<p>Self-attention 的强项是每个位置都能看全序列；代价是要计算所有位置对所有位置的相关性。如果序列长度是 <code>L</code>，attention matrix 就是 <code>L × L</code>。当 <code>L</code> 很大时，计算量和记忆体都会变得可观。</p>
+<p>这利用任务理解。如果判断某个音素主要依赖前后一定范围，没必要让每个 frame 都和全句所有 frame 计算 attention。更广泛地，efficient Transformer、Linformer、Performer、Reformer 等变形，都是在尝试减少 self-attention 的成本。</p>
+<p>绿色表示完整 attention 的全矩阵；蓝色表示只看局部 band 的 truncated attention。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>看到长序列任务时，主动检查 attention matrix 的尺寸和是否需要局部化或高效变形。</p>
+        </div>
+      </section>
+      <section id="relations">
+        <div class="head">
+          <h2>和 CNN、RNN、GNN 的关系</h2>
+          <span class="tag">architecture</span>
+        </div>
+<p>Self-attention 可以用于图像。把一张图片看成很多 pixel 或 patch，每个 pixel/patch 是一个向量，就能套用 attention。与 CNN 相比，CNN 的 receptive field 是人工设定的局部范围；self-attention 则让模型自己用 attention 找相关位置。可以说 CNN 是一种受限制的 attention，attention 是更 flexible 的 CNN。</p>
+<p>RNN 也处理 sequence，但它通常按时间一步步处理，当前 hidden state 依赖前一步 hidden state。即使双向 RNN 能看左右文，远距离信息也要被 memory 一路传递。Self-attention 则可以让远处位置直接通过 query/key 匹配，且所有输出并行产生。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>架构</th><th>核心限制/优势</th><th>与 self-attention 的关系</th></tr>
+<tr><td>CNN</td><td>人工设定局部 receptive field</td><td>可看成受限制的 attention；数据少时更稳。</td></tr><tr><td>RNN</td><td>按时间递推，较难并行</td><td>都处理 sequence，但 attention 可直接连远处并并行输出。</td></tr><tr><td>GNN</td><td>使用 graph edge 组织信息传播</td><td>只在相连节点算 attention 时，类似图上的 attention/GNN。</td></tr>
+        </table></div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>根据任务资料量、序列长度、结构先验，说明为什么可能选 CNN、self-attention、RNN 或 graph attention。</p>
+        </div>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：矩阵化、多头、mask</h2>
+          <span class="tag">minimal</span>
+        </div>
+<p>下面代码用 row-major 的常见写法：<code>X</code> 的 shape 是 <code>[L, d]</code>，每一行一个位置。它展示三个关键点：一是所有输出并行算出；二是 multi-head 只是把投影后的维度拆成多个 head；三是可以用 mask 把某些位置对禁止掉，例如 graph edge mask 或 truncated attention mask。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">def attention(X, Wq, Wk, Wv, mask=None):
+ Q = X @ Wq # [L, d_head]
+ K = X @ Wk # [L, d_head]
+ V = X @ Wv # [L, d_head]
+ scores = Q @ K.T # [L, L]
+ if mask is not None:
+ scores = scores + mask # 不允许看的格子加上很大的负数
+ weights = softmax(scores, axis=-1)
+ O = weights @ V # [L, d_head]，所有位置同时输出
+ return O, weights</code></pre>
+<p>错误示例：以为必须按 b1、b2 顺序生成pseudo</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误理解：self-attention 必须像 RNN 一样一步一步算。
 b1 = attention_for_position(1)
 b2 = attention_for_position(2, depends_on=b1)
 b3 = attention_for_position(3, depends_on=b2)
 
-<span class="cmt"># 修正：self-attention 中 b1、b2、b3 可以由同一个矩阵乘法并行得到。</span></code></pre>
-      <p>注意：如果是自回归生成文本，常会额外加 causal mask，让当前位置不能看未来位置。那是另一类任务设置；P13 这里讲的是一般 self-attention 的并行能力和可加 mask 的结构。</p>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>在代码里识别 attention matrix 的 shape，并说出 mask 可以如何实现 truncated attention 或 graph attention。</p></div>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区与修正</h2><span class="tag">pitfalls</span></div>
+# 修正：self-attention 中 b1、b2、b3 可以由同一个矩阵乘法并行得到。</code></pre>
+<p>注意：如果是自回归生成文本，常会额外加 causal mask，让当前位置不能看未来位置。那是另一类任务设置；P13 这里讲的是一般 self-attention 的并行能力和可加 mask 的结构。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>在代码里识别 attention matrix 的 shape，并说出 mask 可以如何实现 truncated attention 或 graph attention。</p>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与修正</h2>
+          <span class="tag">pitfalls</span>
+        </div>
       <div class="grid2">
-        <div class="box redsoft"><h3>误区 1：b1 到 bL 必须依序产生</h3><p>错因：把 attention 想成 RNN。后果：看不懂它的并行优势。修法：用矩阵乘法一次生成所有输出。</p></div>
-        <div class="box redsoft"><h3>误区 2：attention matrix 是学习参数</h3><p>错因：看到 A 就以为是权重表。后果：忽略它由当前输入动态生成。修法：WQ/WK/WV 是参数，A 是 QK 相乘结果。</p></div>
-        <div class="box redsoft"><h3>误区 3：multi-head 只是重复计算</h3><p>错因：没有理解多种相关性。后果：无法解释 head 的意义。修法：每个 head 学不同 Q/K/V 子空间。</p></div>
-        <div class="box redsoft"><h3>误区 4：self-attention 天然懂顺序</h3><p>错因：把投影片编号当成模型输入。后果：漏掉 positional encoding。修法：位置资讯需要额外加入。</p></div>
-        <div class="box redsoft"><h3>误区 5：越 flexible 永远越好</h3><p>错因：只看表达能力。后果：忽略资料量少时 CNN 等结构先验可能更稳。修法：结合资料量、任务先验和 overfitting 风险判断。</p></div>
-        <div class="box redsoft"><h3>误区 6：长序列只是慢一点</h3><p>错因：没看到 L² attention matrix。后果：低估显存和训练成本。修法：检查 full、truncated、efficient attention 的取舍。</p></div>
+        <div class="box redsoft">
+<h3>误区 1：b1 到 bL 必须依序产生</h3>
+<p>错因：把 attention 想成 RNN。后果：看不懂它的并行优势。修法：用矩阵乘法一次生成所有输出。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 2：attention matrix 是学习参数</h3>
+<p>错因：看到 A 就以为是权重表。后果：忽略它由当前输入动态生成。修法：WQ/WK/WV 是参数，A 是 QK 相乘结果。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 3：multi-head 只是重复计算</h3>
+<p>错因：没有理解多种相关性。后果：无法解释 head 的意义。修法：每个 head 学不同 Q/K/V 子空间。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 4：self-attention 天然懂顺序</h3>
+<p>错因：把投影片编号当成模型输入。后果：漏掉 positional encoding。修法：位置资讯需要额外加入。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 5：越 flexible 永远越好</h3>
+<p>错因：只看表达能力。后果：忽略资料量少时 CNN 等结构先验可能更稳。修法：结合资料量、任务先验和 overfitting 风险判断。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 6：长序列只是慢一点</h3>
+<p>错因：没看到 L² attention matrix。后果：低估显存和训练成本。修法：检查 full、truncated、efficient attention 的取舍。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>把 self-attention 的表达能力、并行能力、顺序缺口和计算成本分开讨论。</p>
+        </div>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把 self-attention 的表达能力、并行能力、顺序缺口和计算成本分开讨论。</p></div>
-    </section>
-
-    <section id="terms">
-      <div class="head"><h2>术语与检查：把 P13 讲成一张工程图</h2><span class="tag">terms / checklist</span></div>
-      <p>公开讲 self-attention 时，先给直觉：每个位置都拿自己的 query 去问全序列的 key，再按权重读取 value。矩阵化只是把这个动作对所有位置同时做；multi-head、位置编码和高效变体，是在“看什么、从哪里看、算不算得起”三个问题上做补强。</p>
-      <table class="metric-table">
-        <thead><tr><th>术语</th><th>一句话解释</th><th>最容易混的点</th></tr></thead>
-        <tbody>
-          <tr><td><code>Q/K/V</code></td><td>Query 发问，key 负责被匹配，value 提供被汇总的内容。</td><td><code>WQ/WK/WV</code> 是参数；<code>Q/K/V</code> 是当前输入算出的表示。</td></tr>
-          <tr><td>Attention matrix</td><td>所有位置两两相关性的表，尺寸是 <code>L×L</code>。</td><td>它不是固定参数，换一段输入就会重新计算。</td></tr>
-          <tr><td>Multi-head</td><td>让不同 head 在不同子空间学习不同关系。</td><td>不是把同一件事无意义地重复很多遍。</td></tr>
-          <tr><td>Positional encoding</td><td>给本来不懂顺序的 attention 补位置资讯。</td><td>投影片编号不是模型输入，位置必须显式加入。</td></tr>
-        </tbody>
-      </table>
-      <div class="grid2">
-        <div class="box soft"><h3>Worked example</h3><p>若 <code>L=4, d=8</code>，输入 <code>X</code> 可写成 <code>4×8</code>。投影后 <code>Q/K/V</code> 仍有 4 个位置；<code>QK^T</code> 得到 <code>4×4</code> attention matrix；softmax 后乘 <code>V</code>，输出仍是 4 个上下文化向量。</p></div>
-        <div class="box info"><h3>公开分享检查表</h3><ul><li>先讲“每个 token 查全局”这个直觉。</li><li>再讲 <code>L²</code> 成本，不把 attention 只说成万能架构。</li><li>最后用 CNN/RNN/GNN 对照，说明结构先验和并行性的取舍。</li></ul></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>不用公式推导，也能把 P13 的 self-attention 讲成“动态查表 + 并行矩阵乘法 + 工程取舍”。</p></div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 questions</span></div>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语与检查：把 P13 讲成一张工程图</h2>
+          <span class="tag">terms</span>
+        </div>
+<p>公开讲 self-attention 时，先给直觉：每个位置都拿自己的 query 去问全序列的 key，再按权重读取 value。矩阵化只是把这个动作对所有位置同时做；multi-head、位置编码和高效变体，是在“看什么、从哪里看、算不算得起”三个问题上做补强。</p>
+        <div class="box soft">
+<h3>Worked example</h3>
+<p>若 <code>L=4, d=8</code>，输入 <code>X</code> 可写成 <code>4×8</code>。投影后 <code>Q/K/V</code> 仍有 4 个位置；<code>QK^T</code> 得到 <code>4×4</code> attention matrix；softmax 后乘 <code>V</code>，输出仍是 4 个上下文化向量。</p>
+        </div>
+        <div class="box info">
+<h3>公开分享检查表</h3>
+<ul>
+<li>先讲“每个 token 查全局”这个直觉。</li>
+<li>再讲 <code>L²</code> 成本，不把 attention 只说成万能架构。</li>
+<li>最后用 CNN/RNN/GNN 对照，说明结构先验和并行性的取舍。</li>
+</ul>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>不用公式推导，也能把 P13 的 self-attention 讲成“动态查表 + 并行矩阵乘法 + 工程取舍”。</p>
+        </div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card">
-          <strong>做题前先抓住主线</strong>
-          <p>P13 的核心是：self-attention 可以矩阵化并行，但要补多头、位置，并处理长序列的 L² 成本。</p>
-        </div>
-        <div class="review-card">
-          <strong>自检重点</strong>
-          <p class="muted">1-6 题是低摩擦检查；11-18 题要求迁移到语音、图像、图和面试解释。</p>
-          <ul>
-            <li>能不能写出 Q/K/V 到 O 的矩阵流程？</li>
-            <li>能不能解释 multi-head 和 positional encoding？</li>
-            <li>能不能比较 CNN、RNN、GNN 与 attention？</li>
-          </ul>
-        </div>
-      </div>
 
+      </div>
       <div class="practice-group">
-        <div class="group-head"><div><h3>一、矩阵化与参数</h3><p>把 P12 手算流程打包成矩阵。</p></div><div class="quick-review"><b>公式</b><span>Q=XWQ, A=QK^T, O=A'V。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="选择" data-title="1. 哪些是 attention layer 的学习参数？"><div class="q-meta"><span class="pill">选择</span></div><h3>1. 在基础 self-attention 中，哪些通常是需要训练学习的参数？</h3><label><input type="radio" name="q1" value="A">A. WQ、WK、WV</label><label><input type="radio" name="q1" value="B">B. 每次输入的 attention score A</label><label><input type="radio" name="q1" value="C">C. softmax 函数本身</label><label><input type="radio" name="q1" value="D">D. 每个样本的输出 O</label></div>
-          <div class="q" data-role="homework" data-type="填空" data-title="2. L=10 时 attention matrix 尺寸。"><div class="q-meta"><span class="pill">填空</span></div><h3>2. 如果 sequence 长度 <code>L=10</code>，attention matrix 的尺寸是多少？</h3><input type="text" name="q2" placeholder="写出形状"></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="3. 为什么 b1 到 bL 可以并行产生？"><div class="q-meta"><span class="pill">短答</span></div><h3>3. 为什么 self-attention 的 <code>b1</code> 到 <code>bL</code> 可以并行产生？</h3><textarea name="q3" placeholder="从矩阵乘法和输出间无递推依赖回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="错误诊断" data-title="4. attention score 是固定参数表。"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>4. “Attention score 是模型学出来的一张固定参数表。”这句话哪里错？</h3><textarea name="q4" placeholder="按错因 / 后果 / 修法回答"></textarea></div>
+        <div class="group-head">
+          <div><h3>一、矩阵化与参数</h3></div>
+          <div class="quick-review">公式 Q=XWQ, A=QK^T, O=A'V。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. 在基础 self-attention 中，哪些通常是需要训练学习的参数？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="WQ、WK、WV">WQ、WK、WV</label>
+      <label><input type="radio" name="q?" value="每次输入的 attention score A">每次输入的 attention score A</label>
+      <label><input type="radio" name="q?" value="softmax 函数本身">softmax 函数本身</label>
+      <label><input type="radio" name="q?" value="每个样本的输出 O">每个样本的输出 O</label>
       </div>
 
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 2. 如果 sequence 长度 <code>L=10</code>，attention matrix 的尺寸是多少？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 3. 为什么 self-attention 的 <code>b1</code> 到 <code>bL</code> 可以并行产生？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 4. “Attention score 是模型学出来的一张固定参数表。”这句话哪里错？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、Multi-head 与位置编码</h3><p>补上多种相关性和顺序。</p></div><div class="quick-review"><b>重点</b><span>多头看关系，位置看顺序。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="简答" data-title="5. 为什么需要 multi-head？"><div class="q-meta"><span class="pill">短答</span></div><h3>5. 为什么可能需要 multi-head self-attention？</h3><textarea name="q5" placeholder="从多种相关性回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="判断" data-title="6. head 数越多一定越好。"><div class="q-meta"><span class="pill">判断</span></div><h3>6. Head 数越多一定越好。</h3><label><input type="radio" name="q6" value="对">对</label><label><input type="radio" name="q6" value="错">错</label></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="7. positional encoding 解决什么问题？"><div class="q-meta"><span class="pill">短答</span></div><h3>7. Positional encoding 解决 self-attention 的什么问题？</h3><textarea name="q7" placeholder="从模型本身不懂顺序回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="错误诊断" data-title="8. 投影片编号就是模型的位置资讯。"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>8. “投影片上有 a1、a2，所以模型天然知道顺序。”这句话哪里错？</h3><textarea name="q8" placeholder="按错因 / 后果 / 修法回答"></textarea></div>
+        <div class="group-head">
+          <div><h3>二、Multi-head 与位置编码</h3></div>
+          <div class="quick-review">重点 多头看关系，位置看顺序。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 5. 为什么可能需要 multi-head self-attention？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 6. Head 数越多一定越好。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
       </div>
 
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 7. Positional encoding 解决 self-attention 的什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 8. “投影片上有 a1、a2，所以模型天然知道顺序。”这句话哪里错？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
       <div class="practice-group">
-        <div class="group-head"><div><h3>三、长序列与变形</h3><p>判断什么时候要省计算。</p></div><div class="quick-review"><b>成本</b><span>full attention 是 L²。</span></div></div>
+        <div class="group-head">
+          <div><h3>三、长序列与变形</h3></div>
+          <div class="quick-review">成本 full attention 是 L²。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="计算" data-title="9. L=1000 时 full attention 位置对数量。"><div class="q-meta"><span class="pill">计算</span></div><h3>9. 若 <code>L=1000</code>，full attention matrix 有多少个位置对？</h3><input type="text" name="q9" placeholder="写出 L×L 的结果"></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="10. truncated self-attention 做什么？"><div class="q-meta"><span class="pill">短答</span></div><h3>10. Truncated self-attention 做了什么取舍？</h3><textarea name="q10" placeholder="从只看局部范围和牺牲远距离连接回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="场景判断" data-title="11. 为什么语音容易遇到 attention 成本问题？"><div class="q-meta"><span class="pill">场景判断</span></div><h3>11. 为什么语音任务特别容易遇到 attention matrix 太大的问题？</h3><textarea name="q11" placeholder="从 frame 数量和 L² 回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="12. efficient Transformer 的共同动机。"><div class="q-meta"><span class="pill">短答</span></div><h3>12. Linformer、Performer、Reformer 等变形的共同动机是什么？</h3><textarea name="q12" placeholder="从减少 self-attention 运算量回答"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">计算</span></div>
+        <h3><b>Q:</b> 9. 若 <code>L=1000</code>，full attention matrix 有多少个位置对？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 10. Truncated self-attention 做了什么取舍？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景判断</span></div>
+        <h3><b>Q:</b> 11. 为什么语音任务特别容易遇到 attention matrix 太大的问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 12. Linformer、Performer、Reformer 等变形的共同动机是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>四、架构关系</h3><p>把 self-attention 放回模型家族里。</p></div><div class="quick-review"><b>比较</b><span>CNN 局部，RNN 递推，GNN 用边。</span></div></div>
+        <div class="group-head">
+          <div><h3>四、架构关系</h3></div>
+          <div class="quick-review">比较 CNN 局部，RNN 递推，GNN 用边。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="简答" data-title="13. CNN 与 self-attention 如何比较？"><div class="q-meta"><span class="pill">短答</span></div><h3>13. 如何理解 CNN 与 self-attention 的关系？</h3><textarea name="q13" placeholder="从 receptive field 和自动学习相关位置回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="场景判断" data-title="14. 数据少时为什么 CNN 可能更好？"><div class="q-meta"><span class="pill">场景判断</span></div><h3>14. 为什么图像资料较少时，CNN 可能比 self-attention 更稳？</h3><textarea name="q14" placeholder="从模型限制、归纳偏置和 overfitting 回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="15. RNN 与 self-attention 的两个差异。"><div class="q-meta"><span class="pill">短答</span></div><h3>15. RNN 与 self-attention 至少有哪两个差异？</h3><textarea name="q15" placeholder="从远距离资讯和并行化回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="16. graph 上如何限制 attention？"><div class="q-meta"><span class="pill">短答</span></div><h3>16. 在 graph 上使用 self-attention 时，为什么可以只算有 edge 的节点对？</h3><textarea name="q16" placeholder="从 graph 的边已经提供关联性回答"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 13. 如何理解 CNN 与 self-attention 的关系？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景判断</span></div>
+        <h3><b>Q:</b> 14. 为什么图像资料较少时，CNN 可能比 self-attention 更稳？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 15. RNN 与 self-attention 至少有哪两个差异？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 16. 在 graph 上使用 self-attention 时，为什么可以只算有 edge 的节点对？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>五、表达输出</h3><p>把本节讲给别人听。</p></div><div class="quick-review"><b>主线</b><span>矩阵化、扩展、取舍。</span></div></div>
+        <div class="group-head">
+          <div><h3>五、表达输出</h3></div>
+          <div class="quick-review">主线 矩阵化、扩展、取舍。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="面试短答" data-title="17. 一句话说明 P13 相比 P12 新增了什么。"><div class="q-meta"><span class="pill">面试短答</span></div><h3>17. 用一句话说明 P13 相比 P12 新增了什么。</h3><textarea name="q17" placeholder="控制在 1-2 句话"></textarea></div>
-          <div class="q full" data-role="homework" data-type="费曼解释" data-title="18. 费曼解释：self-attention 的矩阵化与扩展。" data-keywords="matrix,Q,K,V,attention matrix,parallel,multi-head,positional encoding,truncated attention,CNN,RNN,GNN,complexity,Transformer"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 8-12 句话讲清楚：self-attention 如何矩阵化，并怎样扩展到 multi-head、position 和长序列处理？</h3><textarea name="q18" placeholder="必须串起：matrix、Q、K、V、attention matrix、parallel、multi-head、positional encoding、truncated attention、CNN、RNN、GNN、complexity、Transformer"></textarea><div class="solve-note">提示：先讲 I 到 Q/K/V，再讲 attention matrix 与并行输出，最后讲扩展和取舍。</div></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 17. 用一句话说明 P13 相比 P12 新增了什么。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 18. 用 8-12 句话讲清楚：self-attention 如何矩阵化，并怎样扩展到 multi-head、position 和长序列处理？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
-
+      </section>
     <section id="export">
-      <div class="head"><h2>生成练习记录</h2><span class="tag">review</span></div>
-      <p class="muted">完成练习后生成记录。未填写题目、错误诊断缺少“错因 / 后果 / 修法”、费曼解释过短，都会在下方提示。</p>
-      <div class="actions"><button onclick="generateRecord()">生成记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const s of sections){if(s.getBoundingClientRect().top<innerHeight*.36) current=s.id;}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`));}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";navigator.clipboard.writeText(code).then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});bar.appendChild(btn);});
+      </ul>
+    </section>
+  </article>
 
-function renderShapes(){
-  const L=Number(lenSlider.value), d=Number(dimSlider.value);
-  lenOut.textContent=String(L); dimOut.textContent=String(d);
-  shapeRows.innerHTML=[
-    ["Input X",`${L} × ${d}`,"每行一个位置向量"],
-    ["Q / K / V",`${L} × ${d}`,"这里假设投影后维度不变"],
-    ["Attention matrix",`${L} × ${L}`,`${L*L} 个 score`],
-    ["Output O",`${L} × ${d}`,"仍是一串同长度向量"]
-  ].map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join("");
-  shapeTitle.textContent=`L=${L}, d=${d}`;
-  shapeText.textContent=`如果采用 row-major 代码写法，scores=QK^T 的形状是 ${L}×${L}，输出 O 的形状回到 ${L}×${d}。`;
-}
-lenSlider.addEventListener("input",renderShapes);dimSlider.addEventListener("input",renderShapes);renderShapes();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-function renderCost(){
-  const L=Number(costSlider.value), window=64;
-  const full=L*L, trunc=L*Math.min(L,window);
-  costOut.textContent=String(L);
-  fullOut.textContent=full.toLocaleString();
-  truncOut.textContent=trunc.toLocaleString();
-  fullBar.style.width=`${Math.min(100,full/(2048*2048)*100)}%`;
-  truncBar.style.width=`${Math.min(100,trunc/(2048*2048)*100)}%`;
-  costTitle.textContent=`L=${L}`;
-  costText.textContent=`Full attention 约 ${full.toLocaleString()} 个位置对；window=64 时约 ${trunc.toLocaleString()} 个位置对。`;
-  const n=6;let html="";
-  for(let r=0;r<n;r++){for(let c=0;c<n;c++){const near=Math.abs(r-c)<=1;html+=`<span class="cell ${near?'band':'on'}"></span>`;}}
-  matrixViz.innerHTML=html;
-}
-costSlider.addEventListener("input",renderCost);renderCost();
-
-function valueOfQuestion(q){const checks=[...q.querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value);if(checks.length) return checks.join('、');const radio=q.querySelector('input[type=radio]:checked');if(radio) return radio.value;const text=q.querySelector('textarea,input[type=text],select');return text ? text.value.trim() : '';}
-function questionGroup(q){const group=q.closest('.practice-group');return group?.querySelector('.group-head h3')?.innerText.trim() || '综合练习';}
-function generateRecord(){
-  const qs=[...document.querySelectorAll('[data-role="homework"]')];const groups={};const warnings=[];
-  qs.forEach((q,i)=>{const title=q.dataset.title || q.querySelector('h3')?.innerText.trim() || `第 ${i+1} 题`;const hint=q.querySelector('.solve-note')?.innerText.trim() || '';const answer=valueOfQuestion(q);if(!answer) warnings.push(`第 ${i+1} 题未填写：${title}`);const typeText=`${q.dataset.type||''} ${title}`;if(/诊断|错误/.test(typeText) && answer && !(/错因|原因/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))){warnings.push(`第 ${i+1} 题建议按“错因 / 后果 / 修法”补全。`);}if(/费曼/.test(typeText)){const keys=(q.dataset.keywords || document.body.dataset.feynmanKeywords || '').split(/[、,，\s]+/).filter(Boolean);if(answer && answer.length<170) warnings.push(`第 ${i+1} 题解释偏短，建议至少写 170 个中文字符。`);if(answer && keys.length){const lack=keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase()));if(lack.length) warnings.push(`第 ${i+1} 题可能缺少关键词：${lack.join('、')}。`);}}const group=questionGroup(q);(groups[group] ||= []).push({title, hint, answer: answer || '（未填写）'});});
-  const pageTitle=(document.querySelector('.brand strong,h1')?.innerText || document.title).replace(/\s+/g,' ').trim();let out=`# P13｜${pageTitle}｜练习记录\n\n`;Object.keys(groups).forEach(group=>{out+=`## ${group}\n\n`;groups[group].forEach(item=>{out+=`### ${item.title}\n`;if(item.hint) out+=`提示摘要：${item.hint}\n\n`;out+=`${item.answer}\n\n`;});});document.getElementById('record').textContent=out;const quality=document.getElementById('quality');quality.style.display='block';quality.textContent=warnings.length ? warnings.join('\n') : '练习记录完整，可以直接用于公开分享。';
-}
-function copyRecord(){const text=document.getElementById('record').textContent;navigator.clipboard.writeText(text).catch(()=>alert('复制失败，请手动复制页面中的记录。'));}
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

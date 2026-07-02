@@ -4,130 +4,127 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>测量、Roofline 与瓶颈定位｜GPU 性能工程 04</title>
-  <meta name="description" content="GPU 性能工程第 04 单元：把计时、Roofline、profiler 和瓶颈定位连成一条可复测的诊断链。">
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
-  <link rel="stylesheet" href="learning-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="GPU 性能工程" data-unit="04｜测量Roofline与瓶颈定位">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>GPU 性能工程</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">GPU 性能工程</a>
+        <span class="sep">/</span>
         <span>04｜测量Roofline与瓶颈定位</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#overview"><span class="dot"></span>诊断主线</a>
-        <a href="#timing"><span class="dot"></span>可靠计时</a>
-        <a href="#roofline"><span class="dot"></span>Roofline 手算</a>
-        <a href="#profiler"><span class="dot"></span>Profiler 指标</a>
-        <a href="#workflow"><span class="dot"></span>排查流程</a>
-        <a href="#ledger"><span class="dot"></span>观测台账</a>
-        <a href="#lab"><span class="dot"></span>失败实验室</a>
-        <a href="#bridge"><span class="dot"></span>下一步</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">把同一次实验里的时间、FLOP、字节数和 profiler 读数放在一起看。口径对不齐，后面的优化判断就容易跑偏。</div>
-    </aside>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">GPU 性能工程｜第 04 单元</div>
-          <h1>测量、Roofline 与瓶颈定位</h1>
-          <p class="lead">这页把一个 kernel 的时间、工作量和搬运字节放到同一张账上，先判断它更像带宽受限还是计算受限，再把“慢”压成一个能复测的假设。它接着上一页的访存形状判断，往下一页的 Triton 块级优化走；这里先不展开更细的计数器解释或微架构细节。</p>
-
-          <div class="course-links">
-            <a href="../index.html">课程地图</a><a href="../03_内存层次访存合并与带宽/学习页.html">上一单元</a><a href="../05_Triton编程模型与块级思维/学习页.html">下一单元</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>看完先能做这三件事</h3>
-          <ul>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">GPU 性能工程｜第 04 单元</div>
+      <div class="hero-meta">
+        <span class="hero-badge">04｜测量Roofline与瓶颈定位</span>
+      </div>
+      <h1 class="hero-title">测量、Roofline 与瓶颈定位｜GPU 性能工程 04</h1>
+      <p class="hero-desc">这页把一个 kernel 的时间、工作量和搬运字节放到同一张账上，先判断它更像带宽受限还是计算受限，再把“慢”压成一个能复测的假设。它接着上一页的访存形状判断，往下一页的 Triton 块级优化走；这里先不展开更细的计数器解释或微架构细节。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../03_内存层次访存合并与带宽/学习页.html">上一单元</a>
+            <a href="../05_Triton编程模型与块级思维/学习页.html">下一单元</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
             <li>能写出一个最小但可信的 kernel 计时口径，知道为什么要同步、预热、重复运行和固定输入形状。</li>
             <li>能用 FLOP、字节数、时间和算术强度算出一个算子的上限，并判断它更接近带宽墙还是计算墙。</li>
             <li>能把 profiler 里看到的现象翻成下一步动作：先查数据是否搬得碎，再查复用是否足够，最后回到端到端复测。</li>
-          </ul>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">这页要练的三件事</a>
+      <a href="#overview">先把“慢”拆成几种可验证的情况</a>
+      <a href="#timing">先把计时测准</a>
+      <a href="#roofline">Roofline 怎么算</a>
+      <a href="#profiler">读 profiler</a>
+      <a href="#workflow">每轮只改一个变量</a>
+      <a href="#ledger">证据放一起</a>
+      <a href="#lab">三种常见慢法</a>
+      <a href="#bridge">下一步：把测量结果接到 Triton</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>这页要练的三件事</h2>
+          <span class="tag">measurement</span>
+        </div>
+      <div class="grid">
+<p><b>把时间测准</b></p>
+<p>能区分 CPU 侧 launch 时间、GPU kernel 时间和端到端时间，知道何时需要 CUDA event、同步、warmup 和重复运行。</p>
+<p><b>把指标变成动作</b></p>
+<p>能把 Nsight Systems 的时间线和 Nsight Compute 的单 kernel 指标，写成下一轮可验证的优化假设。</p>
+      </div>
+      </section>
+      <section id="overview">
+        <div class="head">
+          <h2>先把“慢”拆成几种可验证的情况</h2>
+          <span class="tag">overview</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>先拿一个固定例子</h3>
+<p>这页沿用上一节的两个例子：FP32 向量加法和一个 FP16 矩阵乘。向量加法每个元素读两个输入、写一个输出，FLOP 很少，适合观察带宽限制。矩阵乘会反复使用 tile，FLOP 很多，适合观察计算上限和实际实现差距。</p>
+<p>同一个计时结果，只有放进工作量和字节账本里才有意义。一个 kernel 跑 1 ms 可能很好，也可能很差；要看它应该搬多少字节、应该做多少计算，以及它离机器的可持续上限有多远。</p>
+        </div>
+        <div class="box info">
+<h3>一条顺手的排查顺序</h3>
+<p>推荐顺序是：先测端到端时间线，确认热点在哪；再给热点写 microbenchmark，测 kernel 自身；接着算 FLOP/byte 和 Roofline；最后回到 profiler 指标，判断下一轮实验应该改访存、并行度、计算路径还是 launch 粒度。</p>
+<p>步骤回答的问题常用工具或记录下一步输出</p>
+<p>端到端时间线时间主要花在哪个阶段Nsight Systems、应用日志、CUDA API 时间线热点 kernel 或同步/拷贝空洞</p>
+<p>microbenchmark热点本身是否稳定、可复现CUDA event、固定 shape、warmup、重复运行可信 kernel 时间分布</p>
+<p>工作量账本它理论上做了多少计算、搬了多少数据FLOP、读写字节、dtype、shape实际吞吐和算术强度</p>
+<p>Roofline 对照它更像带宽受限还是计算受限峰值计算、可持续带宽、AI理论上限和效率差距</p>
+<p>指标确认差距来自哪里Nsight Compute、stall、occupancy、memory throughput下一轮可验证假设</p>
         </div>
       </div>
-
-      <section id="goals">
-  <div class="head"><h2>这页要练的三件事</h2><span class="tag">measurement</span></div>
-        <div class="grid">
-          <div class="card">
-            <b>把时间测准</b>
-            <p>能区分 CPU 侧 launch 时间、GPU kernel 时间和端到端时间，知道何时需要 CUDA event、同步、warmup 和重复运行。</p>
-          </div>
-          <div class="card">
-            <b>把上限算清</b>
-            <p>能从 FLOP、字节数和时间算出实际吞吐、有效带宽、算术强度和 Roofline 上限，并保留单位。</p>
-          </div>
-          <div class="card">
-            <b>把指标变成动作</b>
-            <p>能把 Nsight Systems 的时间线和 Nsight Compute 的单 kernel 指标，写成下一轮可验证的优化假设。</p>
-          </div>
-        </div>
-        <div class="inline-note">
-    <b>先放一边的细节</b>
-          先不展开具体 GPU 的所有硬件 counter、tensor core 指令编码、cache slice、bank conflict 和厂商库内部实现。这里先把测量链路学稳，后面的 Triton 和注意力优化会继续使用这套判断语言。
-        </div>
       </section>
-
-      <section id="overview">
-  <div class="head"><h2>先把“慢”拆成几种可验证的情况</h2><span class="tag">overview</span></div>
-        <div class="grid2">
-          <div class="box soft">
-      <h3>先拿一个固定例子</h3>
-            <p>这页沿用上一节的两个例子：FP32 向量加法和一个 FP16 矩阵乘。向量加法每个元素读两个输入、写一个输出，FLOP 很少，适合观察带宽限制。矩阵乘会反复使用 tile，FLOP 很多，适合观察计算上限和实际实现差距。</p>
-            <p>同一个计时结果，只有放进工作量和字节账本里才有意义。一个 kernel 跑 1 ms 可能很好，也可能很差；要看它应该搬多少字节、应该做多少计算，以及它离机器的可持续上限有多远。</p>
-          </div>
-          <div class="box info">
-      <h3>一条顺手的排查顺序</h3>
-            <p>推荐顺序是：先测端到端时间线，确认热点在哪；再给热点写 microbenchmark，测 kernel 自身；接着算 FLOP/byte 和 Roofline；最后回到 profiler 指标，判断下一轮实验应该改访存、并行度、计算路径还是 launch 粒度。</p>
-          </div>
-        </div>
-        <div class="table-wrap">
-    <table data-export-context="排查顺序" data-export-lang="table">
-            <thead>
-              <tr><th>步骤</th><th>回答的问题</th><th>常用工具或记录</th><th>下一步输出</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>端到端时间线</td><td>时间主要花在哪个阶段</td><td>Nsight Systems、应用日志、CUDA API 时间线</td><td>热点 kernel 或同步/拷贝空洞</td></tr>
-              <tr><td>microbenchmark</td><td>热点本身是否稳定、可复现</td><td>CUDA event、固定 shape、warmup、重复运行</td><td>可信 kernel 时间分布</td></tr>
-              <tr><td>工作量账本</td><td>它理论上做了多少计算、搬了多少数据</td><td>FLOP、读写字节、dtype、shape</td><td>实际吞吐和算术强度</td></tr>
-              <tr><td>Roofline 对照</td><td>它更像带宽受限还是计算受限</td><td>峰值计算、可持续带宽、AI</td><td>理论上限和效率差距</td></tr>
-              <tr><td>指标确认</td><td>差距来自哪里</td><td>Nsight Compute、stall、occupancy、memory throughput</td><td>下一轮可验证假设</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
       <section id="timing">
-  <div class="head"><h2>先把计时测准</h2><span class="tag">timing</span></div>
-        <div class="grid2">
-          <div class="box">
-            <h3>CPU 计时为什么容易误判</h3>
-            <p>CUDA kernel launch 对 CPU 通常是异步的。CPU 侧用墙钟包住一次 launch，如果没有同步，测到的可能停在提交工作这一层，GPU 真正执行 kernel 的时间还没有纳入。端到端分析可以看墙钟，但 kernel microbenchmark 应该把异步边界写清楚。</p>
-            <p>一个可信计时至少要说明：输入 shape、dtype、warmup 次数、重复次数、同步位置、统计口径，以及是否包含 host-device copy。没有这些信息，优化前后的百分比很容易是噪声。</p>
-          </div>
-          <div class="box warn">
-      <h3>计时口径分开记</h3>
-            <p>端到端时间用于判断用户是否真的变快；kernel 时间用于判断局部实现是否变快；profiler 时间用于解释为什么快或慢。不要把三个口径混成一句“快了 30%”。</p>
-          </div>
+        <div class="head">
+          <h2>先把计时测准</h2>
+          <span class="tag">timing</span>
         </div>
-        <div class="codebar"><span>CUDA event 计时骨架</span><button class="copy" data-copy="cuda-event-timing">复制</button></div>
-        <pre id="cuda-event-timing" data-export-context="CUDA event 计时骨架" data-export-lang="python"><code class="language-python"># PyTorch sketch: measure GPU work, not only CPU launch overhead.
+      <div class="grid2">
+        <div class="box">
+<h3>CPU 计时为什么容易误判</h3>
+<p>CUDA kernel launch 对 CPU 通常是异步的。CPU 侧用墙钟包住一次 launch，如果没有同步，测到的可能停在提交工作这一层，GPU 真正执行 kernel 的时间还没有纳入。端到端分析可以看墙钟，但 kernel microbenchmark 应该把异步边界写清楚。</p>
+<p>一个可信计时至少要说明：输入 shape、dtype、warmup 次数、重复次数、同步位置、统计口径，以及是否包含 host-device copy。没有这些信息，优化前后的百分比很容易是噪声。</p>
+        </div>
+        <div class="box warn">
+<h3>计时口径分开记</h3>
+<p>端到端时间用于判断用户是否真的变快；kernel 时间用于判断局部实现是否变快；profiler 时间用于解释为什么快或慢。不要把三个口径混成一句“快了 30%”。</p>
+<p>CUDA event 计时骨架复制</p>
+<pre><code class="language-python"># PyTorch sketch: measure GPU work, not only CPU launch overhead.
 for _ in range(warmup):
-    kernel(x, y, out)
+ kernel(x, y, out)
 torch.cuda.synchronize()
 
 start = torch.cuda.Event(enable_timing=True)
@@ -135,555 +132,550 @@ end = torch.cuda.Event(enable_timing=True)
 times_ms = []
 
 for _ in range(iters):
-    start.record()
-    kernel(x, y, out)
-    end.record()
-    torch.cuda.synchronize()
-    times_ms.append(start.elapsed_time(end))
+ start.record()
+ kernel(x, y, out)
+ end.record()
+ torch.cuda.synchronize()
+ times_ms.append(start.elapsed_time(end))
 
 print({
-    "shape": tuple(x.shape),
-    "dtype": str(x.dtype),
-    "median_ms": median(times_ms),
-    "min_ms": min(times_ms),
-    "max_ms": max(times_ms),
+ "shape": tuple(x.shape),
+ "dtype": str(x.dtype),
+ "median_ms": median(times_ms),
+ "min_ms": min(times_ms),
+ "max_ms": max(times_ms),
 })</code></pre>
-        <div class="table-wrap">
-          <table data-export-context="计时状态账本" data-export-lang="table">
-            <thead>
-              <tr><th>对象</th><th>读什么</th><th>写什么</th><th>错了的症状</th><th>下一步检查</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>输入 shape</td><td>当前 batch、长度、矩阵规模</td><td>benchmark 记录</td><td>换 shape 后结论失效</td><td>固定一组代表性 shape，再看分布</td></tr>
-              <tr><td>warmup</td><td>缓存、编译、调度初始状态</td><td>稳定后的运行状态</td><td>第一次特别慢，均值被拉偏</td><td>单独丢弃 warmup 轮次</td></tr>
-              <tr><td>同步点</td><td>GPU 队列是否完成</td><td>可读的耗时记录</td><td>只测到 launch 提交时间</td><td>用 event 或 synchronize 明确边界</td></tr>
-              <tr><td>统计口径</td><td>每次运行耗时</td><td>median/min/max</td><td>只报单次结果，无法判断波动</td><td>至少看 median 和 min/max</td></tr>
-            </tbody>
-          </table>
+<p>对象读什么写什么错了的症状下一步检查</p>
+<p>输入 shape当前 batch、长度、矩阵规模benchmark 记录换 shape 后结论失效固定一组代表性 shape，再看分布</p>
+<p>warmup缓存、编译、调度初始状态稳定后的运行状态第一次特别慢，均值被拉偏单独丢弃 warmup 轮次</p>
+<p>同步点GPU 队列是否完成可读的耗时记录只测到 launch 提交时间用 event 或 synchronize 明确边界</p>
+<p>统计口径每次运行耗时median/min/max只报单次结果，无法判断波动至少看 median 和 min/max</p>
         </div>
+      </div>
       </section>
-
       <section id="roofline">
-  <div class="head"><h2>Roofline 怎么算</h2><span class="tag">roofline</span></div>
-        <div class="grid2">
-          <div class="box soft">
-      <h3>先把三个量写清</h3>
-            <p>Roofline 的横轴是算术强度，也就是每搬 1 byte 数据能做多少 FLOP。纵轴是性能，通常写成 FLOP/s。给定机器峰值计算性能和可持续内存带宽，某个算子的理论上限可以先用一个小公式估出来。</p>
-            <p>Roofline 模型用来给判断划边界，精度来自后续 profiler 复查。它的价值是把“我觉得慢”改写成“这个点在带宽墙下面、计算墙下面，还是远离两个屋顶”。远离屋顶时，下一步才去看 occupancy、stall、tensor core、访存布局、同步和 launch 粒度。</p>
-          </div>
-          <div class="box info">
-      <h3>ridge point 只负责分界</h3>
-            <p>ridge point = 峰值计算 / 可持续带宽。AI 低于它时，带宽更可能先成为上限；AI 高于它时，计算路径更值得检查。它只给方向，不替代 profiler 和真实实验。</p>
-          </div>
+        <div class="head">
+          <h2>Roofline 怎么算</h2>
+          <span class="tag">roofline</span>
         </div>
-        <div class="math-block" data-export-context="Roofline 核心公式" data-export-lang="math">
-$$
-AI = \frac{FLOPs}{Bytes},\quad
-P_{roof} = \min(P_{peak},\; BW_{sustained} \times AI),\quad
-P_{actual} = \frac{FLOPs}{Time}
-$$
-          <p><code>AI</code> 是算术强度；<code>P_peak</code> 是目标硬件的峰值计算性能；<code>BW_sustained</code> 是可持续带宽；<code>P_actual</code> 是实测吞吐。算完以后要保留单位，例如 FLOP/byte、TFLOP/s、TB/s。</p>
+      <div class="grid2">
+        <div class="box soft">
+<h3>先把三个量写清</h3>
+<p>Roofline 的横轴是算术强度，也就是每搬 1 byte 数据能做多少 FLOP。纵轴是性能，通常写成 FLOP/s。给定机器峰值计算性能和可持续内存带宽，某个算子的理论上限可以先用一个小公式估出来。</p>
+<p>Roofline 模型用来给判断划边界，精度来自后续 profiler 复查。它的价值是把“我觉得慢”改写成“这个点在带宽墙下面、计算墙下面，还是远离两个屋顶”。远离屋顶时，下一步才去看 occupancy、stall、tensor core、访存布局、同步和 launch 粒度。</p>
         </div>
-        <div class="shape-tracer" data-shape-tracer>
-          <div class="trace-lines">
-            <button class="trace-line active" data-trace-step="roof-step-1"><code>vector add</code><span>低 AI</span></button>
-            <button class="trace-line" data-trace-step="roof-step-2"><code>matmul tile</code><span>高 AI</span></button>
-            <button class="trace-line" data-trace-step="roof-step-3"><code>far below roof</code><span>实现差距</span></button>
-          </div>
-          <div class="trace-canvas">
-            <div class="tensor-card active" data-trace-target="roof-step-1">
-              <b>向量加法</b><span>读 A、读 B、写 C</span><p>每个 FP32 元素约 2 FLOP、12 byte，有效优化通常先看访存连续性、带宽和 launch 粒度。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="roof-step-2">
-              <b>矩阵乘</b><span>同一 tile 被多次复用</span><p>AI 可以很高，Roofline 往往指向计算墙；实际仍要确认 tensor core、tile 形状和数据布局。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="roof-step-3">
-              <b>远低于屋顶</b><span>AI 判断不够</span><p>如果实测点离理论上限很远，下一步看 profiler：stall、occupancy、寄存器压力、分支发散、访存事务是否异常。</p>
-            </div>
-          </div>
+        <div class="box info">
+<h3>ridge point 只负责分界</h3>
+<p>ridge point = 峰值计算 / 可持续带宽。AI 低于它时，带宽更可能先成为上限；AI 高于它时，计算路径更值得检查。它只给方向，不替代 profiler 和真实实验。</p>
+<p>$$</p>
+<p>AI = \frac{FLOPs}{Bytes},\quad</p>
+<p>P_{roof} = \min(P_{peak},\; BW_{sustained} \times AI),\quad</p>
+<p>P_{actual} = \frac{FLOPs}{Time}</p>
+<p>$$</p>
+<p><code>AI</code> 是算术强度；<code>P_peak</code> 是目标硬件的峰值计算性能；<code>BW_sustained</code> 是可持续带宽；<code>P_actual</code> 是实测吞吐。算完以后要保留单位，例如 FLOP/byte、TFLOP/s、TB/s。</p>
+<p>例子工作量账本AIRoofline 判断第一检查项</p>
+<p>FP32 vector add每元素 2 FLOP，约 12 byte约 0.17 FLOP/byte通常偏带宽受限连续访问、有效带宽、launch 是否过碎</p>
+<p>FP16 matmul大矩阵有大量乘加和 tile 复用可能数百 FLOP/byte更可能看计算路径tensor core、tile、数据布局、occupancy</p>
+<p>高 AI 低吞吐 kernel账本看起来接近计算密集高于 ridge point不应只怪 HBM指令路径、stall、寄存器 spill、同步</p>
         </div>
-        <div class="table-wrap">
-          <table data-export-context="Roofline 怎么算示例" data-export-lang="table">
-            <thead>
-              <tr><th>例子</th><th>工作量账本</th><th>AI</th><th>Roofline 判断</th><th>第一检查项</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>FP32 vector add</td><td>每元素 2 FLOP，约 12 byte</td><td>约 0.17 FLOP/byte</td><td>通常偏带宽受限</td><td>连续访问、有效带宽、launch 是否过碎</td></tr>
-              <tr><td>FP16 matmul</td><td>大矩阵有大量乘加和 tile 复用</td><td>可能数百 FLOP/byte</td><td>更可能看计算路径</td><td>tensor core、tile、数据布局、occupancy</td></tr>
-              <tr><td>高 AI 低吞吐 kernel</td><td>账本看起来接近计算密集</td><td>高于 ridge point</td><td>不应只怪 HBM</td><td>指令路径、stall、寄存器 spill、同步</td></tr>
-            </tbody>
-          </table>
-        </div>
+      </div>
       </section>
-
       <section id="profiler">
-  <div class="head"><h2>读 profiler</h2><span class="tag">profiler</span></div>
-        <div class="grid2">
-          <div class="box">
-      <h3>先看时间线，再看单 kernel</h3>
-            <p>端到端慢时，先看时间线。你要找的是 kernel 是否真的占主要时间，还是被 host 逻辑、同步、CPU 调度、memcpy、launch 空洞或小 kernel 串行化吃掉了。一个 kernel 局部快了 30%，如果它只占端到端 3%，整体收益会很小。</p>
-          </div>
-          <div class="box">
-            <h3>Nsight Compute 再回答“热点为什么慢”</h3>
-            <p>单 kernel 报告适合解释瓶颈：实际带宽、SM 利用率、warp stall、occupancy、寄存器压力、shared memory 使用、访存事务和计算管线使用。读这些指标时先带着 Roofline 假设进去，不要在一堆 counter 里漫游。</p>
-          </div>
+        <div class="head">
+          <h2>读 profiler</h2>
+          <span class="tag">profiler</span>
         </div>
-        <div class="table-wrap">
-    <table data-export-context="指标到动作" data-export-lang="table">
-            <thead>
-              <tr><th>现象</th><th>更可能的原因</th><th>先做的小实验</th><th>回看哪一节</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>memory throughput 接近可持续上限</td><td>算法本身带宽密集，或数据复用不够</td><td>减少读写字节、融合相邻操作、改变数据布局</td><td>03 的字节账本和本页 Roofline</td></tr>
-              <tr><td>AI 高但吞吐远低于 Roofline</td><td>计算路径没打满、tile 形状差、寄存器压力或 stall</td><td>检查 tensor core 使用、block size、寄存器 spill、occupancy</td><td>本页 profiler 和 05 Triton</td></tr>
-              <tr><td>小 kernel 很多，时间线有空洞</td><td>launch overhead 或同步过多</td><td>合并操作、减少同步、端到端重测</td><td>本页 timing 和 workflow</td></tr>
-              <tr><td>单 kernel 快，端到端几乎不变</td><td>热点占比小，或新瓶颈转移到别处</td><td>看 Systems 时间线，比较整体阶段占比</td><td>workflow 和下一步实验</td></tr>
-              <tr><td>访存请求拉散</td><td>线程映射和数据布局错位</td><td>沿 threadIdx.x 写地址表，改连续维度映射</td><td>03 访存合并</td></tr>
-            </tbody>
-          </table>
+      <div class="grid2">
+        <div class="box">
+<h3>先看时间线，再看单 kernel</h3>
+<p>端到端慢时，先看时间线。你要找的是 kernel 是否真的占主要时间，还是被 host 逻辑、同步、CPU 调度、memcpy、launch 空洞或小 kernel 串行化吃掉了。一个 kernel 局部快了 30%，如果它只占端到端 3%，整体收益会很小。</p>
         </div>
+        <div class="box">
+<h3>Nsight Compute 再回答“热点为什么慢”</h3>
+<p>单 kernel 报告适合解释瓶颈：实际带宽、SM 利用率、warp stall、occupancy、寄存器压力、shared memory 使用、访存事务和计算管线使用。读这些指标时先带着 Roofline 假设进去，不要在一堆 counter 里漫游。</p>
+<p>现象更可能的原因先做的小实验回看哪一节</p>
+<p>memory throughput 接近可持续上限算法本身带宽密集，或数据复用不够减少读写字节、融合相邻操作、改变数据布局03 的字节账本和本页 Roofline</p>
+<p>AI 高但吞吐远低于 Roofline计算路径没打满、tile 形状差、寄存器压力或 stall检查 tensor core 使用、block size、寄存器 spill、occupancy本页 profiler 和 05 Triton</p>
+<p>小 kernel 很多，时间线有空洞launch overhead 或同步过多合并操作、减少同步、端到端重测本页 timing 和 workflow</p>
+<p>单 kernel 快，端到端几乎不变热点占比小，或新瓶颈转移到别处看 Systems 时间线，比较整体阶段占比workflow 和下一步实验</p>
+<p>访存请求拉散线程映射和数据布局错位沿 threadIdx.x 写地址表，改连续维度映射03 访存合并</p>
+        </div>
+      </div>
       </section>
-
       <section id="workflow">
-        <div class="head"><h2>每轮只改一个变量</h2><span class="tag">workflow</span></div>
-        <div class="grid2">
-          <div class="box soft">
-            <h3>把实验写成一条记录</h3>
-            <p>性能排查最怕同时改 shape、block size、数据布局和测量口径。这样即使变快，也不知道是哪一步起作用。每一轮都应该写清：当前症状、证据、假设、最小改动、预期指标变化、回退条件。</p>
-            <p>例如“vector add 慢”太粗；“有效带宽只有目标 GPU 可持续带宽的 20%，且访存地址沿 threadIdx.x 跨步，先改线程映射让地址连续”更接近可执行假设。</p>
-          </div>
-          <div class="box warn">
-            <h3>端到端复测别省</h3>
-            <p>局部 kernel 变快只是中间结果。真正交付前，要回到实际输入分布、batch、并发和完整模型路径里复测。性能工程最终服务真实工作负载，单点最高分只提供线索。</p>
-          </div>
+        <div class="head">
+          <h2>每轮只改一个变量</h2>
+          <span class="tag">workflow</span>
         </div>
-        <div class="table-wrap">
-          <table data-export-context="性能排查记录" data-export-lang="table">
-            <thead>
-              <tr><th>字段</th><th>写什么</th><th>示例</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>症状</td><td>慢在哪里，来自哪个口径</td><td>Nsight Systems 显示 softmax kernel 占端到端 18%</td></tr>
-              <tr><td>证据</td><td>计时、FLOP、字节、profiler 指标</td><td>AI 低，实际带宽远低于可持续带宽</td></tr>
-              <tr><td>假设</td><td>最可能的瓶颈原因</td><td>线程映射导致跨步访问，transaction 被拉散</td></tr>
-              <tr><td>最小改动</td><td>只改一个因素</td><td>让 threadIdx.x 对齐连续维度，其他配置不动</td></tr>
-              <tr><td>预期变化</td><td>哪些指标应该变</td><td>有效带宽上升，global load 效率改善</td></tr>
-              <tr><td>复测</td><td>局部和端到端都要看</td><td>microbenchmark 变快后再看模型整体延迟</td></tr>
-            </tbody>
-          </table>
+      <div class="grid2">
+        <div class="box soft">
+<h3>把实验写成一条记录</h3>
+<p>性能排查最怕同时改 shape、block size、数据布局和测量口径。这样即使变快，也不知道是哪一步起作用。每一轮都应该写清：当前症状、证据、假设、最小改动、预期指标变化、回退条件。</p>
+<p>例如“vector add 慢”太粗；“有效带宽只有目标 GPU 可持续带宽的 20%，且访存地址沿 threadIdx.x 跨步，先改线程映射让地址连续”更接近可执行假设。</p>
         </div>
-        <div class="box soft" data-export-context="fused softmax 复测口径" data-export-lang="text">
-          <h3>完整案例：一个 fused softmax 为什么局部变快，端到端不动</h3>
-          <p>假设你在 attention 里替换了一个 fused softmax kernel。microbenchmark 里，单个 kernel 从 <code>42 us</code> 降到 <code>28 us</code>，看起来很漂亮；但真实推理请求的 p95 延迟只从 <code>31.2 ms</code> 到 <code>31.0 ms</code>。这时先暂停下结论，把读数放到同一张账本里：端到端里这个 kernel 占比是多少，前后是否多了 layout transform，是否因为 batch 和 sequence length 分布不同，导致 microbenchmark 的 shape 偏离主流 shape。</p>
-          <p>一个常见错误是只保留最快的 microbenchmark 结果。比如你用固定 <code>B=1, H=32, S=2048</code> 测了 1000 次，看到中位数下降，于是提交优化。但线上实际请求可能有大量 <code>S=256</code> 到 <code>S=768</code> 的短序列，softmax kernel 本身只占 4% 到 7%，真正的空洞在 launch、mask 构造和 host/device 同步之间。此时单 kernel 快 30%，端到端也只会动一点点。正确动作是回到 Nsight Systems：看时间线中 softmax 前后的 kernel、memcpy、同步点和 CPU 提交间隔，再看这个 kernel 在真实请求路径里到底占多少。</p>
-          <p>复测时可以按三层记录：第一层是单 kernel，用同一组输入、同一 stream、同一计时口径比较前后；第二层是局部子图，把 softmax 前后的 mask、scale、dropout 或 layout transform 一起纳入；第三层是端到端，把真实请求分桶后分别看 p50、p95 和 GPU 时间线。三层结果如果方向一致，优化判断就比较稳；如果第一层变快、第二层变慢，说明融合边界或布局转换吃掉收益；如果第二层变快、第三层没动，说明真实热点在别处，下一轮要重新排优先级。</p>
-          <p>记录里还要写清回退条件。比如“长序列收益超过 5%，短序列无退化，端到端 p95 至少下降 1%”可以作为继续推进的条件；如果短序列因为额外 mask 处理变慢，就要保留旧路径或按 shape 分派。这个条件让后续复测有明确裁判，也能避免只挑好看的图。下一次实验从这条记录继续，避免重新猜；同时留下命令、截图、驱动和库版本，方便别人复现。</p>
-          <div class="table-wrap">
-            <table data-export-context="fused softmax 复测口径" data-export-lang="table">
-              <thead>
-                <tr><th>检查项</th><th>可信读法</th><th>容易误判的读法</th><th>下一步</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>shape 分布</td><td>按真实 batch、head、sequence length 分桶统计</td><td>只选一个最大 shape 当代表</td><td>至少测主流 shape、长尾 shape 和最坏 shape</td></tr>
-                <tr><td>端到端占比</td><td>先算优化对象占总延迟比例</td><td>只看 kernel 自己的加速比</td><td>用 Amdahl 思路估算可见收益上限</td></tr>
-                <tr><td>时间线空洞</td><td>看 kernel 前后是否有 host 等待和同步</td><td>把所有空洞都归因于 GPU 算得慢</td><td>先减少 launch、同步或无用拷贝</td></tr>
-                <tr><td>数据布局</td><td>确认优化没有引入额外 transpose、contiguous 或 copy</td><td>只看新 kernel 内部更快</td><td>把 layout transform 单独计入账本</td></tr>
-              </tbody>
-            </table>
-          </div>
-          <p>如果这张表填完后发现 softmax 在真实路径只占 5%，那么单 kernel 加速 33% 的端到端上限大约也只有 1.7%。这个结果仍有价值，它说明下一轮要找更大的热点，或者把多个小操作融合成一次时间线更紧凑的路径。如果表里显示 layout transform 吃掉了收益，就要把数据布局设计和调用边界一起改；如果表里显示短序列 launch 空洞多，就优先考虑 batching、fusion 或减少 host 同步。你在练习区做 Q14 时，应该能用这条链条回答“为什么 microbenchmark 好看但端到端不动”。</p>
+        <div class="box warn">
+<h3>端到端复测别省</h3>
+<p>局部 kernel 变快只是中间结果。真正交付前，要回到实际输入分布、batch、并发和完整模型路径里复测。性能工程最终服务真实工作负载，单点最高分只提供线索。</p>
+<p>字段写什么示例</p>
+<p>症状慢在哪里，来自哪个口径Nsight Systems 显示 softmax kernel 占端到端 18%</p>
+<p>证据计时、FLOP、字节、profiler 指标AI 低，实际带宽远低于可持续带宽</p>
+<p>假设最可能的瓶颈原因线程映射导致跨步访问，transaction 被拉散</p>
+<p>最小改动只改一个因素让 threadIdx.x 对齐连续维度，其他配置不动</p>
+<p>预期变化哪些指标应该变有效带宽上升，global load 效率改善</p>
+<p>复测局部和端到端都要看microbenchmark 变快后再看模型整体延迟</p>
         </div>
+        <div class="box soft">
+<h3>完整案例：一个 fused softmax 为什么局部变快，端到端不动</h3>
+<p>假设你在 attention 里替换了一个 fused softmax kernel。microbenchmark 里，单个 kernel 从 <code>42 us</code> 降到 <code>28 us</code>，看起来很漂亮；但真实推理请求的 p95 延迟只从 <code>31.2 ms</code> 到 <code>31.0 ms</code>。这时先暂停下结论，把读数放到同一张账本里：端到端里这个 kernel 占比是多少，前后是否多了 layout transform，是否因为 batch 和 sequence length 分布不同，导致 microbenchmark 的 shape 偏离主流 shape。</p>
+<p>一个常见错误是只保留最快的 microbenchmark 结果。比如你用固定 <code>B=1, H=32, S=2048</code> 测了 1000 次，看到中位数下降，于是提交优化。但线上实际请求可能有大量 <code>S=256</code> 到 <code>S=768</code> 的短序列，softmax kernel 本身只占 4% 到 7%，真正的空洞在 launch、mask 构造和 host/device 同步之间。此时单 kernel 快 30%，端到端也只会动一点点。正确动作是回到 Nsight Systems：看时间线中 softmax 前后的 kernel、memcpy、同步点和 CPU 提交间隔，再看这个 kernel 在真实请求路径里到底占多少。</p>
+<p>复测时可以按三层记录：第一层是单 kernel，用同一组输入、同一 stream、同一计时口径比较前后；第二层是局部子图，把 softmax 前后的 mask、scale、dropout 或 layout transform 一起纳入；第三层是端到端，把真实请求分桶后分别看 p50、p95 和 GPU 时间线。三层结果如果方向一致，优化判断就比较稳；如果第一层变快、第二层变慢，说明融合边界或布局转换吃掉收益；如果第二层变快、第三层没动，说明真实热点在别处，下一轮要重新排优先级。</p>
+<p>记录里还要写清回退条件。比如“长序列收益超过 5%，短序列无退化，端到端 p95 至少下降 1%”可以作为继续推进的条件；如果短序列因为额外 mask 处理变慢，就要保留旧路径或按 shape 分派。这个条件让后续复测有明确裁判，也能避免只挑好看的图。下一次实验从这条记录继续，避免重新猜；同时留下命令、截图、驱动和库版本，方便别人复现。</p>
+<p>检查项可信读法容易误判的读法下一步</p>
+<p>shape 分布按真实 batch、head、sequence length 分桶统计只选一个最大 shape 当代表至少测主流 shape、长尾 shape 和最坏 shape</p>
+<p>端到端占比先算优化对象占总延迟比例只看 kernel 自己的加速比用 Amdahl 思路估算可见收益上限</p>
+<p>时间线空洞看 kernel 前后是否有 host 等待和同步把所有空洞都归因于 GPU 算得慢先减少 launch、同步或无用拷贝</p>
+<p>数据布局确认优化没有引入额外 transpose、contiguous 或 copy只看新 kernel 内部更快把 layout transform 单独计入账本</p>
+<p>如果这张表填完后发现 softmax 在真实路径只占 5%，那么单 kernel 加速 33% 的端到端上限大约也只有 1.7%。这个结果仍有价值，它说明下一轮要找更大的热点，或者把多个小操作融合成一次时间线更紧凑的路径。如果表里显示 layout transform 吃掉了收益，就要把数据布局设计和调用边界一起改；如果表里显示短序列 launch 空洞多，就优先考虑 batching、fusion 或减少 host 同步。你在练习区做 Q14 时，应该能用这条链条回答“为什么 microbenchmark 好看但端到端不动”。</p>
+        </div>
+      </div>
       </section>
-
       <section id="ledger">
-        <div class="head"><h2>证据放一起</h2><span class="tag">ledger</span></div>
-        <div class="grid2">
-          <div class="box soft">
-            <h3>为什么要放在一起</h3>
-            <p>计时回答“多久”，Roofline 回答“上限在哪”，profiler 回答“为什么慢”。如果三种证据不放在一张表里，常见结果是：时间看的是一个 shape，字节算的是另一个 shape，结论却拿去解释同一个 kernel。</p>
-            <p>这页的做法很直接：先把证据写成行，再把每行对应到下一步。这样后面换成 Triton 或注意力内核时，你会知道自己究竟是在改访问形状、改复用，还是只是改了测量口径。</p>
-          </div>
-          <div class="box info">
-            <h3>本页的锚点</h3>
-            <p>同一个低 AI 向量加法，贯穿计时、Roofline、profiler、排查和复测。它会先给你一个带宽型答案；同一个 fused softmax，会先给你一个 launch 型答案；同一个高 AI matmul tile，会把你带向计算路径。不要把这三个 case 混成一个“慢”。</p>
-          </div>
+        <div class="head">
+          <h2>证据放一起</h2>
+          <span class="tag">ledger</span>
         </div>
-        <div class="table-wrap">
-          <table data-export-context="证据台账" data-export-lang="table">
-            <thead>
-              <tr><th>证据对象</th><th>先读什么</th><th>先写什么</th><th>错了的症状</th><th>下一查</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>kernel 时间</td><td>warmup、同步、重复次数</td><td>median/min/max</td><td>只看 CPU launch，GPU 真正执行没算进去</td><td>回到同步点和计时口径</td></tr>
-              <tr><td>工作量账本</td><td>FLOP、读写字节、shape</td><td>AI、实际吞吐</td><td>字节没算准，Roofline 位置会跑偏</td><td>核对公式和单位</td></tr>
-              <tr><td>profiler 结论</td><td>时间线、stall、吞吐、occupancy</td><td>瓶颈假设</td><td>只记 counter，不记因果</td><td>把 counter 翻回代码和索引表达式</td></tr>
-              <tr><td>下一轮实验</td><td>当前症状和最小改动</td><td>只改一个因素</td><td>多个参数一起动，结果没法归因</td><td>保留对照版本，再测一次</td></tr>
-            </tbody>
-          </table>
+      <div class="grid2">
+        <div class="box soft">
+<h3>为什么要放在一起</h3>
+<p>计时回答“多久”，Roofline 回答“上限在哪”，profiler 回答“为什么慢”。如果三种证据不放在一张表里，常见结果是：时间看的是一个 shape，字节算的是另一个 shape，结论却拿去解释同一个 kernel。</p>
+<p>这页的做法很直接：先把证据写成行，再把每行对应到下一步。这样后面换成 Triton 或注意力内核时，你会知道自己究竟是在改访问形状、改复用，还是只是改了测量口径。</p>
         </div>
-        <div class="shape-tracer" data-shape-tracer>
-          <div class="trace-lines">
-            <button class="trace-line active" data-trace-step="ledger-1"><code>time</code><span>多久</span></button>
-            <button class="trace-line" data-trace-step="ledger-2"><code>roofline</code><span>上限</span></button>
-            <button class="trace-line" data-trace-step="ledger-3"><code>profiler</code><span>为什么</span></button>
-            <button class="trace-line" data-trace-step="ledger-4"><code>next experiment</code><span>下一步</span></button>
-          </div>
-          <div class="trace-canvas">
-            <div class="tensor-card active" data-trace-target="ledger-1"><b>时间证据</b><span>同步后的 GPU 耗时</span><p>先确认测到的是 GPU work，不是 CPU 提交。</p></div>
-            <div class="tensor-card" data-trace-target="ledger-2"><b>上限证据</b><span>FLOP / byte / AI</span><p>把算术强度和持续带宽放在一起，先判断更像带宽墙还是计算墙。</p></div>
-            <div class="tensor-card" data-trace-target="ledger-3"><b>原因证据</b><span>stall / occupancy / throughput</span><p>profiler 负责解释差距，但不替你决定改哪一个参数。</p></div>
-            <div class="tensor-card" data-trace-target="ledger-4"><b>行动证据</b><span>只改一个因素</span><p>下一轮实验只看一个变量，归因才不会散。</p></div>
-          </div>
+        <div class="box info">
+<h3>本页的锚点</h3>
+<p>同一个低 AI 向量加法，贯穿计时、Roofline、profiler、排查和复测。它会先给你一个带宽型答案；同一个 fused softmax，会先给你一个 launch 型答案；同一个高 AI matmul tile，会把你带向计算路径。不要把这三个 case 混成一个“慢”。</p>
+<p>证据对象先读什么先写什么错了的症状下一查</p>
+<p>kernel 时间warmup、同步、重复次数median/min/max只看 CPU launch，GPU 真正执行没算进去回到同步点和计时口径</p>
+<p>工作量账本FLOP、读写字节、shapeAI、实际吞吐字节没算准，Roofline 位置会跑偏核对公式和单位</p>
+<p>profiler 结论时间线、stall、吞吐、occupancy瓶颈假设只记 counter，不记因果把 counter 翻回代码和索引表达式</p>
+<p>下一轮实验当前症状和最小改动只改一个因素多个参数一起动，结果没法归因保留对照版本，再测一次</p>
         </div>
+      </div>
       </section>
-
       <section id="lab">
-        <div class="head"><h2>三种常见慢法</h2><span class="tag">failure lab</span></div>
-        <p>下面三个模拟输出不绑定某个固定 GPU 的真实 benchmark，作用是训练读法：先看症状，再决定下一步该查哪里。点开不同 case，注意输出里的证据怎样改变你的假设。</p>
-        <div class="terminal-lab" data-terminal-lab>
-          <div class="terminal-controls">
-            <button class="ghost active" data-terminal-case="case-bandwidth">低 AI，带宽墙</button>
-            <button class="ghost" data-terminal-case="case-launch">launch 太碎</button>
-            <button class="ghost" data-terminal-case="case-gap">离屋顶太远</button>
-          </div>
-          <pre class="terminal-output" aria-live="polite">case: vector_add_fp32
-time: 1.50 ms
-useful_bytes: 3.0 GB
-actual_bandwidth: 2.0 TB/s
-AI: 0.17 FLOP/byte
-note: low AI, bandwidth is already high. First try reducing bytes or fusing adjacent work.</pre>
-          <template data-terminal-output="case-bandwidth">case: vector_add_fp32
-time: 1.50 ms
-useful_bytes: 3.0 GB
-actual_bandwidth: 2.0 TB/s
-AI: 0.17 FLOP/byte
-note: low AI, bandwidth is already high. First try reducing bytes or fusing adjacent work.</template>
-          <template data-terminal-output="case-launch">case: many_small_kernels
-timeline: 180 kernels under 15 us each
-gap: visible CPU launch gaps between kernels
-single_kernel_speedup: 35%
-end_to_end_speedup: 1.2%
-note: local kernel tuning is not the main lever. First inspect fusion, batching, and synchronization.</template>
-          <template data-terminal-output="case-gap">case: fp16_matmul_like_kernel
-AI: 600 FLOP/byte
-roof: 300 TFLOP/s
-actual: 24 TFLOP/s
-note: high AI but far below roof. First inspect tensor core path, tile shape, occupancy, register spill, and warp stalls.</template>
+        <div class="head">
+          <h2>三种常见慢法</h2>
+          <span class="tag">failure</span>
         </div>
-        <div class="table-wrap">
-          <table data-export-context="三种常见慢法" data-export-lang="table">
-            <thead>
-              <tr><th>case</th><th>证据</th><th>不要急着做什么</th><th>先做什么</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>带宽墙</td><td>低 AI，带宽已经高</td><td>盲目加更多线程</td><td>减少字节、融合、提高复用</td></tr>
-              <tr><td>launch 太碎</td><td>小 kernel 多，端到端没变快</td><td>只继续优化单 kernel</td><td>看时间线，减少 launch 和同步</td></tr>
-              <tr><td>远低于 Roofline</td><td>高 AI，吞吐离屋顶很远</td><td>直接归因于 HBM</td><td>看计算路径、stall、occupancy、寄存器</td></tr>
-            </tbody>
-          </table>
-        </div>
+<p>下面三个模拟输出不绑定某个固定 GPU 的真实 benchmark，作用是训练读法：先看症状，再决定下一步该查哪里。点开不同 case，注意输出里的证据怎样改变你的假设。</p>
+<p>带宽墙低 AI，带宽已经高盲目加更多线程减少字节、融合、提高复用</p>
+<p>launch 太碎小 kernel 多，端到端没变快只继续优化单 kernel看时间线，减少 launch 和同步</p>
+<p>远低于 Roofline高 AI，吞吐离屋顶很远直接归因于 HBM看计算路径、stall、occupancy、寄存器</p>
       </section>
-
       <section id="bridge">
-  <div class="head"><h2>下一步：把测量结果接到 Triton</h2><span class="tag">bridge</span></div>
-        <div class="grid2">
-          <div class="box soft">
-            <h3>先准备这四样东西</h3>
-      <p>进入 Triton 前，至少准备四样东西：热点 kernel 的可靠时间、FLOP/byte 账本、profiler 读数，以及一个明确假设。这样你在调 block size、mask、program id、num_warps 或 tile 形状时，才知道自己是在追带宽、追计算路径，还是在减少 launch 和同步。</p>
-          </div>
-          <div class="box info">
-            <h3>还不稳就先别写 Triton</h3>
-            <p>如果你还不能区分低 AI、高 AI、远低于屋顶这三种情况，先别急着写 Triton。回到本页练习区，把向量加法、矩阵乘和端到端没有变快这三个 case 讲清楚，再往后走。这里先不追更底层的硬件计数器、block 细节和库内部实现；先把时间、字节、AI 和时间线对上，再进入下一轮实验。</p>
-          </div>
+        <div class="head">
+          <h2>下一步：把测量结果接到 Triton</h2>
+          <span class="tag">bridge</span>
         </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>先准备这四样东西</h3>
+<p>进入 Triton 前，至少准备四样东西：热点 kernel 的可靠时间、FLOP/byte 账本、profiler 读数，以及一个明确假设。这样你在调 block size、mask、program id、num_warps 或 tile 形状时，才知道自己是在追带宽、追计算路径，还是在减少 launch 和同步。</p>
+        </div>
+        <div class="box info">
+<h3>还不稳就先别写 Triton</h3>
+<p>如果你还不能区分低 AI、高 AI、远低于屋顶这三种情况，先别急着写 Triton。回到本页练习区，把向量加法、矩阵乘和端到端没有变快这三个 case 讲清楚，再往后走。这里先不追更底层的硬件计数器、block 细节和库内部实现；先把时间、字节、AI 和时间线对上，再进入下一轮实验。</p>
+        </div>
+      </div>
       </section>
-
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-intro">
-          <div class="box soft">
-            <h3>答题时先看什么</h3>
-            <p>这组题不考背诵。重点是把一次性能判断拆成四个动作：计时口径是否可信，FLOP 和字节数是否算清，Roofline 位置是否说得出，profiler 指标能不能落到下一步检查。</p>
-          </div>
-          <div class="box info">
-            <h3>先看什么</h3>
-            <p>每道题先想清楚你信哪一个读数，再说它把你带向哪类瓶颈。只写“优化访存”或“提高并行度”，还不够。</p>
-          </div>
+      <div class="practice-intro">
+      <div class="box soft">
+<h3>答题时先看什么</h3>
+<p>这组题不考背诵。重点是把一次性能判断拆成四个动作：计时口径是否可信，FLOP 和字节数是否算清，Roofline 位置是否说得出，profiler 指标能不能落到下一步检查。</p>
+      </div>
+      <div class="box info">
+<h3>先看什么</h3>
+<p>每道题先想清楚你信哪一个读数，再说它把你带向哪类瓶颈。只写“优化访存”或“提高并行度”，还不够。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、先把计时测准</h3></div>
+          <div class="quick-review">答题提示 异步执行是计时误差的主要来源，先处理同步和重复运行。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="B. CUDA event + synchronize">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q1. 选择：测单个 CUDA kernel 时间时，哪种口径更可信？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>一、先把计时测准</h3>
-              <p>先把时间测准，再讨论算得快不快。</p>
-            </div>
-            <div class="quick-review">
-              <b>答题提示</b>
-              <span>异步执行是计时误差的主要来源，先处理同步和重复运行。</span>
-            </div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q1" data-group="一、先把计时测准" data-title="Q1. 选择：测单个 CUDA kernel 时间时，哪种口径更可信？" data-answer="B. CUDA event + synchronize" data-explain="CUDA event 记录在 GPU 时间线上，再配合同步等待完成，比直接用 CPU 墙钟更稳。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">timing</span></div>
-              <h3>Q1. 选择：测单个 CUDA kernel 时间时，哪种口径更可信？</h3>
-              <label><input type="radio" name="q1" value="A. CPU time.time() 包住 launch">A. CPU time.time() 包住 launch</label>
-              <label><input type="radio" name="q1" value="B. CUDA event + synchronize">B. CUDA event + synchronize</label>
-              <label><input type="radio" name="q1" value="C. 只看第一次运行的耗时">C. 只看第一次运行的耗时</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q1" value="A. CPU time.time() 包住 launch">A. CPU time.time() 包住 launch</label>
+      <label><input type="radio" name="q1" value="B. CUDA event + synchronize">B. CUDA event + synchronize</label>
+      <label><input type="radio" name="q1" value="C. 只看第一次运行的耗时">C. 只看第一次运行的耗时</label>
+      </div>
 
-            <div class="q" data-question="q2" data-group="一、先把计时测准" data-title="Q2. 判断：GPU kernel launch 通常是同步执行，所以 CPU 计时不需要等待。" data-answer="false" data-explain="kernel launch 往往先入队，CPU 可能提前返回；不等待就可能只测到提交开销。">
-              <div class="q-meta"><span class="pill">true/false</span><span class="pill">async</span></div>
-              <h3>Q2. 判断：GPU kernel launch 通常是同步执行，所以 CPU 计时不需要等待。</h3>
-              <label><input type="radio" name="q2" value="true">对</label>
-              <label><input type="radio" name="q2" value="false">错</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">想一想 host 和 device 是否共用同一条时间线。</p>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. CUDA event + synchronize。CUDA event 记录在 GPU 时间线上，再配合同步等待完成，比直接用 CPU 墙钟更稳。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="false">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> Q2. 判断：GPU kernel launch 通常是同步执行，所以 CPU 计时不需要等待。</h3>
 
-            <div class="q" data-question="q3" data-group="一、先把计时测准" data-title="Q3. 填空：正式计时前先跑几轮，通常叫 ____。">
-              <div class="q-meta"><span class="pill">fill</span><span class="pill">warmup</span></div>
-              <h3>Q3. 填空：正式计时前先跑几轮，通常叫 <code>____</code>。</h3>
-              <input type="text" name="q3" data-answer="warmup,预热" data-explain="预热可以减少首次编译、缓存和上下文初始化带来的噪声。">
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      </div>
 
-            <div class="q full" data-question="q4" data-group="一、先把计时测准" data-title="Q4. 设计一个最小可信计时流程。">
-              <div class="q-meta"><span class="pill">explain</span><span class="pill">protocol</span></div>
-              <h3>Q4. 设计一个最小可信计时流程。</h3>
-              <textarea name="q4" placeholder="至少包含：固定输入、预热、重复运行、同步、记录中位数或分位数。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details><summary>参考答案 / 评分要点</summary><p>合格答案要包含固定 shape 和 dtype、预热、使用 CUDA event 或显式同步、重复运行多次、报告中位数或稳定区间。更好的答案会同时说明：如果是端到端流程，要把数据拷贝、同步和 launch 开销单独标出来。</p></details>
-            </div>
-          </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>false。kernel launch 往往先入队，CPU 可能提前返回；不等待就可能只测到提交开销。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> Q3. 填空：正式计时前先跑几轮，通常叫 <code>____</code>。</h3>
+
+
+      <textarea name="q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">explain</span></div>
+        <h3><b>Q:</b> Q4. 设计一个最小可信计时流程。</h3>
+
+
+      <textarea name="q4"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。合格答案要包含固定 shape 和 dtype、预热、使用 CUDA event 或显式同步、重复运行多次、报告中位数或稳定区间。更好的答案会同时说明：如果是端到端流程，要把数据拷贝、同步和 launch 开销单独标出来。</p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>二、Roofline 算账</h3>
-              <p>把 FLOP、字节、算术强度和上限连起来。</p>
-            </div>
-            <div class="quick-review">
-              <b>答题提示</b>
-              <span>先算算术强度，再拿它乘持续带宽，最后和峰值算力取较小值。</span>
-            </div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q5" data-group="二、Roofline 算账" data-title="Q5. 选择：算术强度很低时，Roofline 通常先碰到哪面墙？" data-answer="A. 带宽墙" data-explain="低算术强度表示每搬一个字节做的计算少，更容易被内存带宽限制。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">roofline</span></div>
-              <h3>Q5. 选择：算术强度很低时，Roofline 通常先碰到哪面墙？</h3>
-              <label><input type="radio" name="q5" value="A. 带宽墙">A. 带宽墙</label>
-              <label><input type="radio" name="q5" value="B. 计算墙">B. 计算墙</label>
-              <label><input type="radio" name="q5" value="C. PCIe 墙一定先出现">C. PCIe 墙一定先出现</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-
-            <div class="q" data-question="q6" data-group="二、Roofline 算账" data-title="Q6. 填空：Roofline 的斜线段通常等于算术强度乘以 ____。">
-              <div class="q-meta"><span class="pill">fill</span><span class="pill">formula</span></div>
-              <h3>Q6. 填空：Roofline 的斜线段通常等于算术强度乘以 <code>____</code>。</h3>
-              <input type="text" name="q6" data-answer="带宽,bandwidth,BW" data-explain="斜线段对应 BW_sustained * AI，横线段对应峰值算力。">
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-
-            <div class="q full" data-question="q7" data-group="二、Roofline 算账" data-title="Q7. 小算账：FLOP=2e9，Bytes=12e9，Time=2ms。">
-              <div class="q-meta"><span class="pill">calculation</span><span class="pill">rubric</span></div>
-              <h3>Q7. 小算账：FLOP=<code>2e9</code>，Bytes=<code>12e9</code>，Time=<code>2ms</code>。</h3>
-              <textarea name="q7" placeholder="写出算术强度、实际吞吐，并说明如果持续带宽是 2 TB/s，它更像带宽受限还是计算受限。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details><summary>参考答案 / 评分要点</summary><p>算术强度是 2e9 / 12e9，约 0.167 FLOP/Byte。实际吞吐是 2e9 / 0.002s，等于 1e12 FLOP/s，也就是 1000 GFLOP/s 或 1 TFLOP/s。如果持续带宽按 2 TB/s 估算，带宽屋顶约 0.167 * 2 TB/s = 0.333 TFLOP/s；实际点若高于这个粗算屋顶，就说明字节估计、带宽口径或单位需要复查。合格答案要同时写公式、单位和复查动作。</p></details>
-            </div>
-
-            <div class="q" data-question="q8" data-group="二、Roofline 算账" data-title="Q8. 选择：ridge point 主要用来判断什么？" data-answer="C. 从带宽受限转向计算受限的大致分界" data-explain="ridge point 是峰值算力除以持续带宽得到的强度阈值。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">ridge point</span></div>
-              <h3>Q8. 选择：ridge point 主要用来判断什么？</h3>
-              <label><input type="radio" name="q8" value="A. kernel 需要多少个 block">A. kernel 需要多少个 block</label>
-              <label><input type="radio" name="q8" value="B. L2 cache 的容量">B. L2 cache 的容量</label>
-              <label><input type="radio" name="q8" value="C. 从带宽受限转向计算受限的大致分界">C. 从带宽受限转向计算受限的大致分界</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、Roofline 算账</h3></div>
+          <div class="quick-review">答题提示 先算算术强度，再拿它乘持续带宽，最后和峰值算力取较小值。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="A. 带宽墙">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q5. 选择：算术强度很低时，Roofline 通常先碰到哪面墙？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>三、读 profiler</h3>
-              <p>把工具看到的现象翻译成下一步动作。</p>
-            </div>
-            <div class="quick-review">
-              <b>答题提示</b>
-              <span>Systems 看时间线，Compute 看单个 kernel 里的计数器。</span>
-            </div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q9" data-group="三、读 profiler" data-title="Q9. 选择：想先看端到端时间线和 launch 是否碎，优先用哪个工具？" data-answer="A. Nsight Systems" data-explain="Nsight Systems 更适合先看 CPU/GPU 时间线、launch 间隔和拷贝重叠。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">tooling</span></div>
-              <h3>Q9. 选择：想先看端到端时间线和 launch 是否碎，优先用哪个工具？</h3>
-              <label><input type="radio" name="q9" value="A. Nsight Systems">A. Nsight Systems</label>
-              <label><input type="radio" name="q9" value="B. Nsight Compute">B. Nsight Compute</label>
-              <label><input type="radio" name="q9" value="C. 只看 nvidia-smi">C. 只看 nvidia-smi</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q5" value="A. 带宽墙">A. 带宽墙</label>
+      <label><input type="radio" name="q5" value="B. 计算墙">B. 计算墙</label>
+      <label><input type="radio" name="q5" value="C. PCIe 墙一定先出现">C. PCIe 墙一定先出现</label>
+      </div>
 
-            <div class="q" data-question="q10" data-group="三、读 profiler" data-title="Q10. 选择：单个 kernel 想看访存效率、占用率和热点 source line，优先用哪个工具？" data-answer="B. Nsight Compute" data-explain="Nsight Compute 面向单个 kernel 的详细指标和 source 关联。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">tooling</span></div>
-              <h3>Q10. 选择：单个 kernel 想看访存效率、占用率和热点 source line，优先用哪个工具？</h3>
-              <label><input type="radio" name="q10" value="A. Nsight Systems">A. Nsight Systems</label>
-              <label><input type="radio" name="q10" value="B. Nsight Compute">B. Nsight Compute</label>
-              <label><input type="radio" name="q10" value="C. git diff">C. git diff</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>A. 带宽墙。低算术强度表示每搬一个字节做的计算少，更容易被内存带宽限制。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> Q6. 填空：Roofline 的斜线段通常等于算术强度乘以 <code>____</code>。</h3>
 
-            <div class="q" data-question="q11" data-group="三、读 profiler" data-title="Q11. 判断：一次 profile 看到低 occupancy，就一定应该先把线程数调到最大。" data-answer="false" data-explain="低 occupancy 只是信号；还要看寄存器、shared memory、访存等待和实际吞吐。">
-              <div class="q-meta"><span class="pill">true/false</span><span class="pill">occupancy</span></div>
-              <h3>Q11. 判断：一次 profile 看到低 occupancy，就一定应该先把线程数调到最大。</h3>
-              <label><input type="radio" name="q11" value="true">对</label>
-              <label><input type="radio" name="q11" value="false">错</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">高 occupancy 只是信号，真正要解释的是吞吐和等待原因。</p>
-            </div>
 
-            <div class="q full" data-question="q12" data-group="三、读 profiler" data-title="Q12. 多选：哪些现象支持“launch 太碎或同步太多”的假设？">
-              <div class="q-meta"><span class="pill">checkbox</span><span class="pill">timeline</span></div>
-              <h3>Q12. 多选：哪些现象支持“launch 太碎或同步太多”的假设？</h3>
-              <label><input type="checkbox" name="q12" value="GPU 时间线上出现大量很短 kernel">GPU 时间线上出现大量很短 kernel</label>
-              <label><input type="checkbox" name="q12" value="kernel 之间有明显空洞或 host 等待">kernel 之间有明显空洞或 host 等待</label>
-              <label><input type="checkbox" name="q12" value="单个长 kernel 已经贴近计算峰值">单个长 kernel 已经贴近计算峰值</label>
-              <input type="hidden" name="q12" data-answer="GPU 时间线上出现大量很短 kernel;kernel 之间有明显空洞或 host 等待" data-explain="前两项支持这个假设：大量短 kernel 会放大 launch 开销，kernel 之间的空洞或 host 等待说明时间线没有被连续利用。第三项更像单个 kernel 已经算得很满，不直接支持 launch 碎片。">
-              <button class="reveal" type="button">展开反馈</button>
-              <details><summary>参考答案 / 评分要点</summary><p>前两项支持这个假设：大量短 kernel 会放大 launch 开销，kernel 之间的空洞或 host 等待说明时间线没有被连续利用。第三项更像单个 kernel 已经算得很满，不直接支持 launch 碎片。</p></details>
-            </div>
-          </div>
+      <textarea name="q6"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">calculation</span></div>
+        <h3><b>Q:</b> Q7. 小算账：FLOP=<code>2e9</code>，Bytes=<code>12e9</code>，Time=<code>2ms</code>。</h3>
+
+
+      <textarea name="q7"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。算术强度是 2e9 / 12e9，约 0.167 FLOP/Byte。实际吞吐是 2e9 / 0.002s，等于 1e12 FLOP/s，也就是 1000 GFLOP/s 或 1 TFLOP/s。如果持续带宽按 2 TB/s 估算，带宽屋顶约 0.167 * 2 TB/s = 0.333 TFLOP/s；实际点若高于这个粗算屋顶，就说明字节估计、带宽口径或单位需要复查。合格答案要同时写公式、单位和复查动作。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="C. 从带宽受限转向计算受限的大致分界">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q8. 选择：ridge point 主要用来判断什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q8" value="A. kernel 需要多少个 block">A. kernel 需要多少个 block</label>
+      <label><input type="radio" name="q8" value="B. L2 cache 的容量">B. L2 cache 的容量</label>
+      <label><input type="radio" name="q8" value="C. 从带宽受限转向计算受限的大致分界">C. 从带宽受限转向计算受限的大致分界</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>C. 从带宽受限转向计算受限的大致分界。ridge point 是峰值算力除以持续带宽得到的强度阈值。</p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>四、闭环判断</h3>
-              <p>把测量结果写成可验证的下一步。</p>
-            </div>
-            <div class="quick-review">
-              <b>答题提示</b>
-              <span>每个结论后面都要跟一个能复测的动作。</span>
-            </div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q13" data-group="四、闭环判断" data-title="Q13. 选择：算术强度高，但实际点远低于计算屋顶，下一步更应该先查什么？" data-answer="B. 指令效率、数据复用、occupancy 和依赖等待" data-explain="高算术强度远低于屋顶，通常要回到 kernel 内部看执行效率，继续只算字节很难定位原因。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">diagnosis</span></div>
-              <h3>Q13. 选择：算术强度高，但实际点远低于计算屋顶，下一步更应该先查什么？</h3>
-              <label><input type="radio" name="q13" value="A. 只把 batch size 改大">A. 只把 batch size 改大</label>
-              <label><input type="radio" name="q13" value="B. 指令效率、数据复用、occupancy 和依赖等待">B. 指令效率、数据复用、occupancy 和依赖等待</label>
-              <label><input type="radio" name="q13" value="C. 立刻换显卡">C. 立刻换显卡</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-
-            <div class="q full" data-question="q14" data-group="四、闭环判断" data-title="Q14. 诊断：microbenchmark 变快了，端到端没变快。你会怎么排查？">
-              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">workflow</span></div>
-              <h3>Q14. 诊断：microbenchmark 变快了，端到端没变快。你会怎么排查？</h3>
-              <textarea name="q14" placeholder="至少写出：端到端占比、数据拷贝、同步/launch、是否优化了真正热点。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details><summary>参考答案 / 评分要点</summary><p>先确认这个 kernel 在端到端时间里占比是否足够大；再看优化是否引入额外数据拷贝、同步或布局转换；接着用 Nsight Systems 看时间线有没有新的空洞；最后复测真实输入，单个 microbenchmark 只能作为局部证据。答案要体现“回到端到端目标”的闭环。</p></details>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、读 profiler</h3></div>
+          <div class="quick-review">答题提示 Systems 看时间线，Compute 看单个 kernel 里的计数器。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="A. Nsight Systems">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q9. 选择：想先看端到端时间线和 launch 是否碎，优先用哪个工具？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>五、先后顺序</h3>
-              <p>先把时间线和单 kernel 分开看，再把记录写完整。</p>
-            </div>
-            <div class="quick-review">
-              <b>答题提示</b>
-              <span>先 Systems，后 Compute；先口径，后结论。</span>
-            </div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q15" data-group="五、先后顺序" data-title="Q15. 选择：要先看端到端时间线和 launch 空洞，优先跑哪个工具？" data-answer="A. Nsight Systems" data-explain="先用 Systems 找热点和空洞，再决定要不要深入到单个 kernel。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">workflow</span></div>
-              <h3>Q15. 选择：要先看端到端时间线和 launch 空洞，优先跑哪个工具？</h3>
-              <label><input type="radio" name="q15" value="A. Nsight Systems">A. Nsight Systems</label>
-              <label><input type="radio" name="q15" value="B. Nsight Compute">B. Nsight Compute</label>
-              <label><input type="radio" name="q15" value="C. 先看显卡型号">C. 先看显卡型号</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q9" value="A. Nsight Systems">A. Nsight Systems</label>
+      <label><input type="radio" name="q9" value="B. Nsight Compute">B. Nsight Compute</label>
+      <label><input type="radio" name="q9" value="C. 只看 nvidia-smi">C. 只看 nvidia-smi</label>
+      </div>
 
-            <div class="q" data-question="q16" data-group="五、先后顺序" data-title="Q16. 选择：单个 kernel 想看实际带宽、stall 和 source 关联，优先跑哪个工具？" data-answer="B. Nsight Compute" data-explain="Compute 面向单个 kernel 的细节，适合解释为什么离屋顶远。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">workflow</span></div>
-              <h3>Q16. 选择：单个 kernel 想看实际带宽、stall 和 source 关联，优先跑哪个工具？</h3>
-              <label><input type="radio" name="q16" value="A. Nsight Systems">A. Nsight Systems</label>
-              <label><input type="radio" name="q16" value="B. Nsight Compute">B. Nsight Compute</label>
-              <label><input type="radio" name="q16" value="C. 只看日志">C. 只看日志</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>A. Nsight Systems。Nsight Systems 更适合先看 CPU/GPU 时间线、launch 间隔和拷贝重叠。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="B. Nsight Compute">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q10. 选择：单个 kernel 想看访存效率、占用率和热点 source line，优先用哪个工具？</h3>
 
-            <div class="q full" data-question="q17" data-group="五、先后顺序" data-title="Q17. 填空：一次完整复测至少要留下命令、____、驱动或库版本和下一步。">
-              <div class="q-meta"><span class="pill">fill</span><span class="pill">record</span></div>
-              <h3>Q17. 填空：一次完整复测至少要留下命令、<code>____</code>、驱动或库版本和下一步。</h3>
-              <input type="text" name="q17" data-answer="shape,输入shape,输入 shape" data-explain="记录输入 shape 可以把后续复测和当前证据对齐。">
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-          </div>
+      <div class="choices">
+      <label><input type="radio" name="q10" value="A. Nsight Systems">A. Nsight Systems</label>
+      <label><input type="radio" name="q10" value="B. Nsight Compute">B. Nsight Compute</label>
+      <label><input type="radio" name="q10" value="C. git diff">C. git diff</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. Nsight Compute。Nsight Compute 面向单个 kernel 的详细指标和 source 关联。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="false">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> Q11. 判断：一次 profile 看到低 occupancy，就一定应该先把线程数调到最大。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q11" value="对">对</label>
+      <label><input type="radio" name="q11" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>false。低 occupancy 只是信号；还要看寄存器、shared memory、访存等待和实际吞吐。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">checkbox</span></div>
+        <h3><b>Q:</b> Q12. 多选：哪些现象支持“launch 太碎或同步太多”的假设？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q12" value="GPU 时间线上出现大量很短 kernel">GPU 时间线上出现大量很短 kernel</label>
+      <label><input type="radio" name="q12" value="kernel 之间有明显空洞或 host 等待">kernel 之间有明显空洞或 host 等待</label>
+      <label><input type="radio" name="q12" value="单个长 kernel 已经贴近计算峰值">单个长 kernel 已经贴近计算峰值</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。前两项支持这个假设：大量短 kernel 会放大 launch 开销，kernel 之间的空洞或 host 等待说明时间线没有被连续利用。第三项更像单个 kernel 已经算得很满，不直接支持 launch 碎片。</p>
+        </details>
+      </article>
         </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、闭环判断</h3></div>
+          <div class="quick-review">答题提示 每个结论后面都要跟一个能复测的动作。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q13" data-group="" data-title="" data-answer="B. 指令效率、数据复用、occupancy 和依赖等待">
+        <div class="q-meta"><span class="pill">13</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q13. 选择：算术强度高，但实际点远低于计算屋顶，下一步更应该先查什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q13" value="A. 只把 batch size 改大">A. 只把 batch size 改大</label>
+      <label><input type="radio" name="q13" value="B. 指令效率、数据复用、occupancy 和依赖等待">B. 指令效率、数据复用、occupancy 和依赖等待</label>
+      <label><input type="radio" name="q13" value="C. 立刻换显卡">C. 立刻换显卡</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. 指令效率、数据复用、occupancy 和依赖等待。高算术强度远低于屋顶，通常要回到 kernel 内部看执行效率，继续只算字节很难定位原因。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q14" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">14</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> Q14. 诊断：microbenchmark 变快了，端到端没变快。你会怎么排查？</h3>
+
+
+      <textarea name="q14"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先确认这个 kernel 在端到端时间里占比是否足够大；再看优化是否引入额外数据拷贝、同步或布局转换；接着用 Nsight Systems 看时间线有没有新的空洞；最后复测真实输入，单个 microbenchmark 只能作为局部证据。答案要体现“回到端到端目标”的闭环。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、先后顺序</h3></div>
+          <div class="quick-review">答题提示 先 Systems，后 Compute；先口径，后结论。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q15" data-group="" data-title="" data-answer="A. Nsight Systems">
+        <div class="q-meta"><span class="pill">15</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q15. 选择：要先看端到端时间线和 launch 空洞，优先跑哪个工具？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q15" value="A. Nsight Systems">A. Nsight Systems</label>
+      <label><input type="radio" name="q15" value="B. Nsight Compute">B. Nsight Compute</label>
+      <label><input type="radio" name="q15" value="C. 先看显卡型号">C. 先看显卡型号</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>A. Nsight Systems。先用 Systems 找热点和空洞，再决定要不要深入到单个 kernel。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q16" data-group="" data-title="" data-answer="B. Nsight Compute">
+        <div class="q-meta"><span class="pill">16</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q16. 选择：单个 kernel 想看实际带宽、stall 和 source 关联，优先跑哪个工具？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q16" value="A. Nsight Systems">A. Nsight Systems</label>
+      <label><input type="radio" name="q16" value="B. Nsight Compute">B. Nsight Compute</label>
+      <label><input type="radio" name="q16" value="C. 只看日志">C. 只看日志</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. Nsight Compute。Compute 面向单个 kernel 的细节，适合解释为什么离屋顶远。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q17" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">17</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> Q17. 填空：一次完整复测至少要留下命令、<code>____</code>、驱动或库版本和下一步。</h3>
+
+
+      <textarea name="q17"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
       </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出复盘记录</h2>
-          <span class="tag">markdown</span>
-        </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
-
-      <section id="sources">
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-          <li><strong>NVIDIA CUDA C++ Programming Guide</strong><br><a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/">https://docs.nvidia.com/cuda/cuda-c-programming-guide/</a><br>用于核对 CUDA 执行、同步、event、memory hierarchy 和 kernel launch 相关术语。访问日期：2026-06-21。</li>
-          <li><strong>NVIDIA CUDA C++ Best Practices Guide</strong><br><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/">https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/</a><br>用于核对计时、带宽、有效吞吐和性能测量的公开表述。访问日期：2026-06-21。</li>
-          <li><strong>NVIDIA Nsight Systems Documentation</strong><br><a href="https://docs.nvidia.com/nsight-systems/">https://docs.nvidia.com/nsight-systems/</a><br>用于核对端到端时间线、CPU/GPU 活动、kernel launch 和数据拷贝分析的工具边界。访问日期：2026-06-21。</li>
-          <li><strong>NVIDIA Nsight Compute Profiling Guide</strong><br><a href="https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html">https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html</a><br>用于核对单个 kernel 指标、section、source 关联和 profiler 读法。访问日期：2026-06-21。</li>
-          <li><strong>Roofline: An Insightful Visual Performance Model for Multicore Architectures</strong><br><a href="https://crd.lbl.gov/assets/pubs_presos/roofline-sc09.pdf">https://crd.lbl.gov/assets/pubs_presos/roofline-sc09.pdf</a><br>用于核对 Roofline 模型中的算术强度、带宽斜线、计算屋顶和 ridge point 概念。访问日期：2026-06-21。</li>
-          <li><strong>GPU 性能工程｜内存层次、访存合并与带宽</strong><br><a href="../03_内存层次访存合并与带宽/学习页.html">../03_内存层次访存合并与带宽/学习页.html</a><br>用于承接上一单元的字节账本、访存形状和有效带宽判断。</li>
-          <li><strong>GPU 性能工程｜Triton 编程模型与块级思维</strong><br><a href="../05_Triton编程模型与块级思维/学习页.html">../05_Triton编程模型与块级思维/学习页.html</a><br>用于说明本页诊断结论如何进入下一单元的块大小、tile 和程序实例设计。</li>
-        </ul>
+<ul>
+<li><b>NVIDIA CUDA C++ Programming Guide</b></li>
+</ul>
+<p><a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/">https://docs.nvidia.com/cuda/cuda-c-programming-guide/</a></p>
+<p>用于核对 CUDA 执行、同步、event、memory hierarchy 和 kernel launch 相关术语。访问日期：2026-06-21。</p>
+<ul>
+<li><b>NVIDIA CUDA C++ Best Practices Guide</b></li>
+</ul>
+<p><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/">https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/</a></p>
+<p>用于核对计时、带宽、有效吞吐和性能测量的公开表述。访问日期：2026-06-21。</p>
+<ul>
+<li><b>NVIDIA Nsight Systems Documentation</b></li>
+</ul>
+<p><a href="https://docs.nvidia.com/nsight-systems/">https://docs.nvidia.com/nsight-systems/</a></p>
+<p>用于核对端到端时间线、CPU/GPU 活动、kernel launch 和数据拷贝分析的工具边界。访问日期：2026-06-21。</p>
+<ul>
+<li><b>NVIDIA Nsight Compute Profiling Guide</b></li>
+</ul>
+<p><a href="https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html">https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html</a></p>
+<p>用于核对单个 kernel 指标、section、source 关联和 profiler 读法。访问日期：2026-06-21。</p>
+<ul>
+<li><b>Roofline: An Insightful Visual Performance Model for Multicore Architectures</b></li>
+</ul>
+<p><a href="https://crd.lbl.gov/assets/pubs_presos/roofline-sc09.pdf">https://crd.lbl.gov/assets/pubs_presos/roofline-sc09.pdf</a></p>
+<p>用于核对 Roofline 模型中的算术强度、带宽斜线、计算屋顶和 ridge point 概念。访问日期：2026-06-21。</p>
+<ul>
+<li><b>GPU 性能工程｜内存层次、访存合并与带宽</b></li>
+</ul>
+<p><a href="../03_内存层次访存合并与带宽/学习页.html">../03_内存层次访存合并与带宽/学习页.html</a></p>
+<p>用于承接上一单元的字节账本、访存形状和有效带宽判断。</p>
+<ul>
+<li><b>GPU 性能工程｜Triton 编程模型与块级思维</b></li>
+</ul>
+<p><a href="../05_Triton编程模型与块级思维/学习页.html">../05_Triton编程模型与块级思维/学习页.html</a></p>
+<p>用于说明本页诊断结论如何进入下一单元的块大小、tile 和程序实例设计。</p>
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="./learning-page.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

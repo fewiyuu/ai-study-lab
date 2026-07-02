@@ -4,939 +4,614 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>推理算子、FlashAttention 与量化</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="现代 LLM 推理引擎内核" data-unit="05｜推理算子、FlashAttention 与量化">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>现代 LLM 推理引擎内核</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">现代 LLM 推理引擎内核</a>
+        <span class="sep">/</span>
         <span>05｜推理算子、FlashAttention 与量化</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#overview"><span class="dot"></span>先抓主线</a>
-        <a href="#kernel"><span class="dot"></span>算子路径</a>
-        <a href="#flash"><span class="dot"></span>FlashAttention</a>
-        <a href="#phases"><span class="dot"></span>阶段差异</a>
-        <a href="#backend"><span class="dot"></span>后端选择</a>
-        <a href="#example"><span class="dot"></span>具体案例</a>
-        <a href="#quantization"><span class="dot"></span>量化账本</a>
-        <a href="#diagnosis"><span class="dot"></span>排查路线</a>
-        <a href="#bridge"><span class="dot"></span>资料路线</a>
-        <a href="#boundary"><span class="dot"></span>边界</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">先分清问题落在 prefill、decode、backend 还是量化层，再决定看 kernel、cache 还是表示格式。</div>
-    </aside>
-
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">第 05 单元</div>
-          <h1>推理算子、FlashAttention 与量化</h1>
-          <p>前四个单元已经把请求生命周期、KV cache、块管理和 continuous batching 串起来了。本页把视角下钻到算子和表示层：调度器每一轮挑出的 token，最终要经过 attention backend、GPU kernel、数据类型和量化策略。你先抓住这条线：FlashAttention 主要减少 attention 中间结果的 HBM 往返；量化主要改变权重、KV cache 或激活值的表示；这页只讲算子层、缓存层和表示层，不展开路由、MoE 或 speculative decoding。</p>
-
-          <div class="course-links">
-            <a href="../index.html">课程地图</a><a href="../04_Continuous_batching与调度循环/学习页.html">上一单元</a><a href="../06_结构化生成与约束解码/学习页.html">下一单元</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>读完本页应该能做什么</h3>
-          <ul>
-  <li>你能解释 FlashAttention 省的是 attention 中间矩阵的 HBM 往返，而不是把 attention 变成近似算法。</li>
-  <li>你能区分 prefill / decode、backend、KV cache 量化和权重量化各自落在哪一层。</li>
-  <li>你能拿到一条 TTFT、TPOT、OOM 或回退日志，先判断该看哪一层，再决定查什么。</li>
-</ul>
-
-        </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
+    </div>
+  </nav>
 
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">第 05 单元</div>
+      <div class="hero-meta">
+        <span class="hero-badge">05｜推理算子、FlashAttention 与量化</span>
+      </div>
+      <h1 class="hero-title">推理算子、FlashAttention 与量化</h1>
+      <p class="hero-desc">前四个单元已经把请求生命周期、KV cache、块管理和 continuous batching 串起来了。本页把视角下钻到算子和表示层：调度器每一轮挑出的 token，最终要经过 attention backend、GPU kernel、数据类型和量化策略。你先抓住这条线：FlashAttention 主要减少 attention 中间结果的 HBM 往返；量化主要改变权重、KV cache 或激活值的表示；这页只讲算子层、缓存层和表示层，不展开路由、MoE 或 speculative decoding。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../04_Continuous_batching与调度循环/学习页.html">上一单元</a>
+            <a href="../06_结构化生成与约束解码/学习页.html">下一单元</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>你能解释 FlashAttention 省的是 attention 中间矩阵的 HBM 往返，而不是把 attention 变成近似算法。</li>
+            <li>你能区分 prefill / decode、backend、KV cache 量化和权重量化各自落在哪一层。</li>
+            <li>你能拿到一条 TTFT、TPOT、OOM 或回退日志，先判断该看哪一层，再决定查什么。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">目标与课程位置</a>
+      <a href="#overview">先把对象排清</a>
+      <a href="#kernel">算子路径</a>
+      <a href="#flash">FlashAttention 的核心</a>
+      <a href="#phases">阶段差异</a>
+      <a href="#backend">后端选择</a>
+      <a href="#example">具体案例</a>
+      <a href="#quantization">量化账本</a>
+      <a href="#diagnosis">排查路线</a>
+      <a href="#bridge">资料路线</a>
+      <a href="#boundary">边界</a>
+      <a href="#wrapup">收尾判断</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
-  <div class="head">
-    <h2>目标与课程位置</h2>
-    <span class="tag">goals</span>
-  </div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>从哪里来</h3>
-      <p>第 01-04 单元回答“请求怎么被组织”：prefill/decode、KV cache、PagedAttention、continuous batching。你已经知道引擎每轮要为哪些 token 做计算。</p>
-    </div>
-    <div class="box info">
-      <h3>本单元解决什么</h3>
-      <p>回答“这些计算怎么更省”：attention 如何减少 HBM 读写，量化如何压缩权重和 KV cache，后端如何在不同硬件和模型特性间取舍。</p>
-    </div>
-  </div>
-  <div class="box warn">
-    <h3>先抓的判断</h3>
-    <p>kernel 变快不等于线上变快。量化省显存也不保证延迟下降。判断时先看阶段、对象和端到端指标。</p>
-  </div>
-</section>
-
-<section id="overview">
-  <div class="head">
-    <h2>先把对象排清</h2>
-    <span class="tag">overview</span>
-  </div>
-  <p>本页只围绕三类对象展开：FlashAttention 这种 attention kernel，vLLM/SGLang 里的 attention backend，以及权重、KV cache、激活值三种量化对象。你读每一节时都要问同一个问题：这个动作是在改变计算路径、缓存路径，还是表示路径。</p>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button type="button" class="trace-line" data-trace-step="request">
-        <span>请求层</span>
-        <em>prefill / decode / 并发 / 上下文长度</em>
-      </button>
-      <button type="button" class="trace-line" data-trace-step="backend">
-        <span>后端层</span>
-        <em>FlashAttention、FlashInfer、Triton、回退路径</em>
-      </button>
-      <button type="button" class="trace-line" data-trace-step="cache">
-        <span>缓存层</span>
-        <em>KV block、FP8 KV cache、prefix cache</em>
-      </button>
-      <button type="button" class="trace-line" data-trace-step="quant">
-        <span>表示层</span>
-        <em>权重量化、KV 量化、激活量化</em>
-      </button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card" data-trace-target="request">
-        <b>请求层</b>
-        <span>先分清现象发生在 prefill 还是 decode，再决定看哪个对象。</span>
-        <p>这是排查时最先归类的一层。</p>
+        <div class="head">
+          <h2>目标与课程位置</h2>
+          <span class="tag">goals</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>从哪里来</h3>
+<p>第 01-04 单元回答“请求怎么被组织”：prefill/decode、KV cache、PagedAttention、continuous batching。你已经知道引擎每轮要为哪些 token 做计算。</p>
+        </div>
+        <div class="box info">
+<h3>本单元解决什么</h3>
+<p>回答“这些计算怎么更省”：attention 如何减少 HBM 读写，量化如何压缩权重和 KV cache，后端如何在不同硬件和模型特性间取舍。</p>
+        </div>
+        <div class="box warn">
+<h3>先抓的判断</h3>
+<p>kernel 变快不等于线上变快。量化省显存也不保证延迟下降。判断时先看阶段、对象和端到端指标。</p>
+        </div>
       </div>
-      <div class="tensor-card" data-trace-target="backend">
-        <b>后端层</b>
-        <span>backend 决定用哪条 attention 实现路径。</span>
-        <p>这里既有性能，也有兼容矩阵。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="cache">
-        <b>缓存层</b>
-        <span>KV cache 的布局和 dtype 影响并发显存。</span>
-        <p>这是 decode 侧最常见的压力来源。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="quant">
-        <b>表示层</b>
-        <span>量化改的是数值表示，调度路径不变。</span>
-        <p>收益要回到质量和吞吐一起验证。</p>
-      </div>
-    </div>
-  </div>
-</section>
+      </section>
+      <section id="overview">
+        <div class="head">
+          <h2>先把对象排清</h2>
+          <span class="tag">overview</span>
+        </div>
+<p>本页只围绕三类对象展开：FlashAttention 这种 attention kernel，vLLM/SGLang 里的 attention backend，以及权重、KV cache、激活值三种量化对象。你读每一节时都要问同一个问题：这个动作是在改变计算路径、缓存路径，还是表示路径。</p>
+      </section>
+      <section id="kernel">
+        <div class="head">
+          <h2>算子路径</h2>
+          <span class="tag">kernel</span>
+        </div>
+<p>一次在线推理不是把 <code>model.forward</code> 跑一遍就结束。引擎会先对 prompt 做 prefill，把每层的 KV cache 写出来；之后每轮 decode 只推进一个或少量 token，再更新 KV cache、计算 logits、采样下一个 token。算子层关心的是 attention、矩阵乘、归一化、采样，以及框架为了拼 batch、重排 KV block、拷贝数据而产生的辅助 kernel。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-kernel-1">复制</button></div>
+        <pre id="code-kernel-1" data-export-context="代码" data-export-lang="python"><code class="language-python">while engine_has_work:
+ batch = scheduler.pick_prefill_and_decode_requests()
+ token_metadata = kv_manager.map_tokens_to_cache_blocks(batch)
 
-<section id="kernel">
-  <div class="head">
-    <h2>算子路径</h2>
-    <span class="tag">kernel</span>
-  </div>
-  <p>一次在线推理不是把 <code>model.forward</code> 跑一遍就结束。引擎会先对 prompt 做 prefill，把每层的 KV cache 写出来；之后每轮 decode 只推进一个或少量 token，再更新 KV cache、计算 logits、采样下一个 token。算子层关心的是 attention、矩阵乘、归一化、采样，以及框架为了拼 batch、重排 KV block、拷贝数据而产生的辅助 kernel。</p>
-  <div class="codebar"><span>伪代码：调度循环看到的 kernel 边界</span><button class="copy" data-copy="kernel-path-code">复制</button></div>
-  <pre id="kernel-path-code" data-export-context="伪代码：调度循环看到的 kernel 边界" data-export-lang="python"><code class="language-python">while engine_has_work:
-    batch = scheduler.pick_prefill_and_decode_requests()
-    token_metadata = kv_manager.map_tokens_to_cache_blocks(batch)
+ hidden = embedding_and_position(batch.input_tokens)
+ for layer in model.layers:
+ q, k, v = layer.project_qkv(hidden)
+ hidden = attention_backend.run(q, k, v, token_metadata)
+ hidden = layer.mlp(layer.norm(hidden))
 
-    hidden = embedding_and_position(batch.input_tokens)
-    for layer in model.layers:
-        q, k, v = layer.project_qkv(hidden)
-        hidden = attention_backend.run(q, k, v, token_metadata)
-        hidden = layer.mlp(layer.norm(hidden))
-
-    next_tokens = sampler(logits(hidden), sampling_params)
-    kv_manager.commit_new_blocks(batch, next_tokens)</code></pre>
-  <div class="math-block" data-export-context="attention 公式与直觉" data-export-lang="text">
-    <p>Attention(Q, K, V) = softmax(QK<sup>T</sup> / sqrt(d)) V</p>
-    <p>直觉上，真正重的是把完整 score 矩阵写回 HBM 再读回来，显存往返会把时间吃掉。</p>
-  </div>
-</section>
-
-<section id="flash">
-  <div class="head">
-    <h2>FlashAttention 的核心</h2>
-    <span class="tag">flash</span>
-  </div>
-  <p>FlashAttention 的要点是 IO-aware：把 Q/K/V 切成块，在 GPU 片上 SRAM 中做局部计算，同时维护 online softmax 所需的统计量，避免把完整 attention 矩阵落到 HBM。它保留精确 attention，省下来的是中间结果的搬运。</p>
-  <div class="grid3">
-    <div class="box">
-      <h3>普通路径</h3>
-      <p>算 score -> 写入 HBM -> 读回 score -> softmax -> 再乘 V。中间矩阵越大，显存压力越高。</p>
-    </div>
-    <div class="box soft">
-      <h3>FlashAttention 路径</h3>
-      <p>分块读 Q/K/V -> 在片上完成局部 softmax 统计 -> 合并输出。减少中间结果往 HBM 的往返。</p>
-    </div>
-    <div class="box info">
-      <h3>为什么适合长序列</h3>
-      <p>长上下文让 attention score 矩阵迅速变大。少写中间矩阵，就能把瓶颈从 HBM 访问拉回更多有效计算。</p>
-    </div>
-  </div>
-  <div class="box warn">
-    <h3>读法提醒</h3>
-    <p>讲 FlashAttention 时，先说“减少 HBM 中间读写”，再说 tiling、online softmax 和重计算。顺序反过来，容易先陷进实现细节。</p>
-  </div>
-</section>
-
-<section id="phases">
-  <div class="head">
-    <h2>阶段差异</h2>
-    <span class="tag">phases</span>
-  </div>
-  <p>prefill 阶段要处理 prompt 中的多个 token。它更接近一个大矩阵问题，长 prompt 会带来明显的 attention 计算和中间状态压力。decode 阶段每轮通常只有新生成 token 参与查询，但它要访问越来越长的历史 KV cache，因此瓶颈常常变成“从 KV cache 读大量历史 K/V，再为少量 query 算结果”。</p>
-  <table data-export-context="Prefill 与 Decode 的压力差异" data-export-lang="table">
-    <thead>
-      <tr>
-        <th>维度</th>
-        <th>Prefill</th>
-        <th>Decode</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>输入形状</td>
-        <td>一次处理 prompt 的许多 token。</td>
-        <td>每步处理新 token，读取历史 KV。</td>
-      </tr>
-      <tr>
-        <td>主要压力</td>
-        <td>长序列 attention、矩阵乘、写 KV cache。</td>
-        <td>KV cache 读取、batch 拼接、短 query attention。</td>
-      </tr>
-      <tr>
-        <td>FlashAttention 直觉</td>
-        <td>减少长序列 attention 的中间矩阵读写。</td>
-        <td>需要结合 paged / radix / prefix cache 的布局和后端支持看收益。</td>
-      </tr>
-      <tr>
-        <td>调优入口</td>
-        <td>max batch token、chunked prefill、attention backend。</td>
-        <td>并发度、KV cache dtype、block size、prefix cache、decode backend。</td>
-      </tr>
-    </tbody>
-  </table>
-  <div class="terminal-lab" data-terminal-lab>
-    <div class="terminal-controls">
-      <button type="button" class="ghost" data-terminal-case="prefill">Prefill 日志</button>
-      <button type="button" class="ghost" data-terminal-case="decode">Decode 日志</button>
-      <button type="button" class="ghost" data-terminal-case="oom">OOM 排查</button>
-    </div>
-    <div class="terminal-output"></div>
-    <template data-terminal-output="prefill">
-      <pre>TTFT 高，但后续 token 正常。优先检查 prefill 的长 prompt、chunked prefill、attention backend 和 prefix cache 命中。</pre>
-    </template>
-    <template data-terminal-output="decode">
-      <pre>ITL / TPOT 慢，同时 KV cache 占用持续升高。优先检查 KV cache 布局、并发 token 和 block 回收。</pre>
-    </template>
-    <template data-terminal-output="oom">
-      <pre class="err">权重量化后仍然 OOM。说明主瓶颈很可能不在模型权重，而在 KV cache 或并发上下文。</pre>
-    </template>
-  </div>
-</section>
-
-<section id="backend">
-  <div class="head">
-    <h2>后端选择</h2>
-    <span class="tag">backend</span>
-  </div>
-  <p>vLLM 和 SGLang 都会根据硬件、dtype、head size、序列长度、量化配置和缓存布局选择或回退 attention backend。后端受兼容矩阵约束，性能只是其中一项；不满足时会回退或报错。你要先确认它在用哪条路径，再谈快不快。</p>
-  <table data-export-context="attention backend 选择维度" data-export-lang="table">
-    <thead>
-      <tr>
-        <th>检查项</th>
-        <th>为什么要看</th>
-        <th>常见误判</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>GPU 架构</td>
-        <td>不同 backend 的支持范围不同。</td>
-        <td>以为“能跑就一定是最快实现”。</td>
-      </tr>
-      <tr>
-        <td>dtype</td>
-        <td>FP16、BF16、FP8、INT8 等会影响支持路径。</td>
-        <td>把量化收益和 backend 收益混成一件事。</td>
-      </tr>
-      <tr>
-        <td>head size / shape</td>
-        <td>某些实现对 head dim 有硬约束。</td>
-        <td>忽略 batch 中长短混排导致的回退。</td>
-      </tr>
-      <tr>
-        <td>KV cache dtype</td>
-        <td>会影响 decode 侧的读写模式和兼容性。</td>
-        <td>只盯模型参数，忘了缓存对象是另一笔账。</td>
-      </tr>
-    </tbody>
-  </table>
-  <div class="box warn">
-    <h3>判断口诀</h3>
-    <p>先看兼容，再看性能；先看阶段，再看 kernel。顺序倒过来，排障会绕远。</p>
-  </div>
-</section>
-
-<section id="example">
-  <div class="head">
-    <h2>具体案例</h2>
-    <span class="tag">example</span>
-  </div>
-  <p>假设线上出现这样一组组合信号：32k 长 prompt 的首 token 时间明显变长，decode 侧 TPOT 也上升，显存峰值接近上限，日志里还偶尔出现 attention backend 回退，而业务团队最近刚把权重量化从 BF16 改到 INT4。这个案例最容易把人带偏，因为每个信号都像“主因”，但它们实际上可能来自不同层。</p>
-  <p>正确的切法是先把它拆开：prefill 侧先看长 prompt 和 FlashAttention 的 HBM 往返；decode 侧先看 KV cache 的读写和 block 回收；后端侧再看兼容矩阵和回退路径；量化侧最后再看是权重省下来了，还是 decode 侧的 cache 仍然在撑爆显存。每一层各看一遍，才不会把四个信号拎成一个结论。</p>
-  <table data-export-context="组合案例的拆解表" data-export-lang="table">
-    <thead>
-      <tr>
-        <th>信号</th>
-        <th>更像哪一层</th>
-        <th>优先看什么</th>
-        <th>常见误判</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>首 token 很慢</td>
-        <td>prefill</td>
-        <td>长 prompt、chunked prefill、backend、prefix cache</td>
-        <td>先怪 sampler 或 HTTP 层</td>
-      </tr>
-      <tr>
-        <td>TPOT 变慢</td>
-        <td>decode</td>
-        <td>KV cache 读写、batch 形状、抢占和回收</td>
-        <td>只看单个 kernel benchmark</td>
-      </tr>
-      <tr>
-        <td>显存接近上限</td>
-        <td>KV cache / 权重</td>
-        <td>cache 账本、dtype、并发 token</td>
-        <td>把权重量化当成全部答案</td>
-      </tr>
-      <tr>
-        <td>backend 回退</td>
-        <td>兼容矩阵</td>
-        <td>GPU 架构、head size、dtype、框架版本</td>
-        <td>把“能跑”误解成“走了目标实现”</td>
-      </tr>
-    </tbody>
-  </table>
-  <div class="codebar"><span>最小判定流程</span><button class="copy" data-copy="case-flow">复制</button></div>
-  <pre id="case-flow" data-export-context="最小判定流程" data-export-lang="text"><code>1. 先分阶段：prefill 还是 decode。
-2. 再分对象：backend、KV cache、权重还是激活。
-3. 然后查日志：是否回退、是否抢占、是否重算。
-4. 最后比指标：TTFT、TPOT、ITL、吞吐和显存峰值。
-5. 如果一个动作只改了局部，别急着把它叫做全局优化。</code></pre>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>失败后果</h3>
-      <p>如果你先看错层，就可能把一个调度问题当成 kernel 问题，把一个 cache 问题当成量化问题，最后做了很多动作，却只是在不同层之间搬移瓶颈。</p>
-    </div>
-    <div class="box info">
-      <h3>练习钩子</h3>
-      <p>这就是前面练习题 5、6、8 和 12 的共同背景。它们不是孤立题，而是在逼你把同一条链讲顺：现象 -> 阶段 -> 对象 -> 指标 -> 修正。</p>
-    </div>
-  </div>
-</section>
-
-<section id="quantization">
-  <div class="head">
-    <h2>量化账本</h2>
-    <span class="tag">quantization</span>
-  </div>
-  <p>量化改的是数值表示，调度路径不变。常见路径包括权重量化、KV cache 量化和激活量化。前者省的是模型常驻权重显存，后者省的是并发上下文保存 K/V 的显存。两者作用对象不同，所以收益曲线也不同。</p>
-  <table data-export-context="量化对象账本" data-export-lang="table">
-    <thead>
-      <tr>
-        <th>对象</th>
-        <th>省什么</th>
-        <th>更常见的副作用</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>权重</td>
-        <td>模型常驻显存。</td>
-        <td>反量化开销、kernel 支持差异、质量波动。</td>
-      </tr>
-      <tr>
-        <td>KV cache</td>
-        <td>长上下文和高并发下的 cache 显存。</td>
-        <td>需要 scale 或额外 metadata，decode 侧更敏感。</td>
-      </tr>
-      <tr>
-        <td>激活</td>
-        <td>中间状态峰值。</td>
-        <td>实现复杂，端到端收益不一定稳定。</td>
-      </tr>
-    </tbody>
-  </table>
-  <div class="math-block" data-export-context="KV cache 简化估算公式" data-export-lang="text">
-    <p>KV cache 显存 ≈ layers × tokens × 2 × kv_heads × head_dim × bytes_per_element</p>
-    <p>这只是简化账本。实际还要加 scale、对齐和 block 管理等开销。</p>
-  </div>
-  <div class="box info">
-    <h3>结论先行</h3>
-    <p>权重量化不必然让 KV cache 也同比下降。若高并发长上下文仍然 OOM，问题通常还在 KV cache 账本上，而不在模型参数。</p>
-  </div>
-</section>
-
-<section id="diagnosis">
-  <div class="head">
-    <h2>排查路线</h2>
-    <span class="tag">diagnosis</span>
-  </div>
-  <p>当你遇到 TTFT 变慢、TPOT 变慢、显存不足、backend 回退或输出质量波动时，先别急着调参。先把现象归类，再沿着阶段、对象、兼容性和端到端指标逐层缩小范围。</p>
-  <div class="grid2">
-    <div class="box">
-      <h3>案例 A：长 prompt 首 token 很慢</h3>
-      <p>先看 prefill，重点确认 chunked prefill、attention backend、prefix cache 和长 prompt 是否被分到过多轮次。</p>
-    </div>
-    <div class="box">
-      <h3>案例 B：高并发长上下文 OOM</h3>
-      <p>先看 KV cache。权重量化如果已经做过，下一步通常是 KV cache dtype、并发 token、block 管理和回收策略。</p>
-    </div>
-    <div class="box">
-      <h3>案例 C：切换 backend 后回退</h3>
-      <p>检查 GPU 架构、dtype、head size、KV cache dtype 和框架版本，不要把“跑起来了”误判成“走了目标实现”。</p>
-    </div>
-    <div class="box">
-      <h3>案例 D：显存降了但速度没提上去</h3>
-      <p>量化把存储省下来了，但反量化和带宽瓶颈可能把收益吃回去。先分别测 prefill 和 decode，再看 profiler。</p>
-    </div>
-  </div>
-  <div class="box warn">
-    <h3>最短路径</h3>
-    <p>现象分类 -> 确认阶段 -> 查对象账本 -> 查兼容矩阵 -> 做端到端指标对比。这个顺序通常比“先改配置再看结果”稳得多。</p>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="推理算子排查的状态账本" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>对象</th>
-          <th>进入前</th>
-          <th>进入后</th>
-          <th>读什么</th>
-          <th>写什么</th>
-          <th>典型症状</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>attention backend</td>
-          <td>默认实现或未确认实现</td>
-          <td>FlashAttention、FlashInfer、Triton，或者回退路径</td>
-          <td>GPU 架构、dtype、head size、序列长度</td>
-          <td>kernel 选择、workspace 组织、回退日志</td>
-          <td>TTFT 变长、日志里出现 fallback</td>
-        </tr>
-        <tr>
-          <td>KV cache</td>
-          <td>按当前并发和上下文长度占位</td>
-          <td>block 增加、回收、量化或溢出</td>
-          <td>token 数、并发度、block size、cache dtype</td>
-          <td>显存占用、block table、回收结果</td>
-          <td>TPOT 变慢、OOM、block 紧张</td>
-        </tr>
-        <tr>
-          <td>quantization</td>
-          <td>BF16 / FP16 的原始表示</td>
-          <td>INT8、INT4、FP8 或混合格式</td>
-          <td>精度预算、硬件支持、后端限制</td>
-          <td>内存 footprint、反量化开销、质量波动</td>
-          <td>显存降了，但速度没明显变化</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="bridge">
-  <div class="head">
-    <h2>资料路线</h2>
-    <span class="tag">bridge</span>
-  </div>
-  <p>这页不要求你把 FlashAttention、量化和 backend 的源码全读完。它只要求你能沿着公开资料把问题定位到正确一层。先把文档分成三条线：优化文档回答“默认会怎么调”；引擎参数文档回答“你能不能把它调成你想要的样子”；profiling 文档回答“线上到底是不是你以为的瓶颈”。</p>
-  <p>例如，当你怀疑某个模型在 decode 侧变慢时，先看 vLLM 的 engine args 里是否启用了 chunked prefill、preemption、max-num-seqs 之类的约束，再看 scheduler API 里是否存在抢占或重算路径，最后回到 SGLang 的 benchmark / profiling 读 TTFT、TPOT、ITL 和吞吐。这样排查，顺序和资料顺序是一致的，不会把调度问题误读成 kernel 问题。</p>
-  <p>再往下一层看源码时，也不用一口气把仓库打开。先找入口，再找边界，再看对象流向。你真正需要跟踪的通常只有三件事：调度器把什么请求推进了 batch，backend 选了哪条实现，量化对象落到了哪里。三件事都确认完，源码阅读就从“漫游”变成“对照表”。</p>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>阅读顺序</h3>
-      <ol>
-        <li>先读优化和 tuning 文档，确定 backend、chunked prefill、cache 和量化策略的大方向。</li>
-        <li>再读 engine args，核对你能设置的边界参数和它们的副作用。</li>
-        <li>然后看 scheduler API，确认抢占、重算和 token budget 的行为。</li>
-        <li>最后回到 profiling，确认线上数据和你的推理是不是一致。</li>
-      </ol>
-    </div>
-    <div class="box info">
-      <h3>源码触发条件</h3>
-      <p>只有当文档已经把边界说明清楚、但现象仍然解释不通时，才去看源码。这样读代码的目的就很明确：不是“理解全部”，而是“确认分支、对象和回退点”。</p>
-      <p>如果文档和日志已经能说明问题所在，就没有必要把学习预算花在不相关的实现细节上。</p>
-    </div>
-  </div>
-  <table data-export-context="资料路线与验证顺序" data-export-lang="table">
-    <thead>
-      <tr>
-        <th>资料</th>
-        <th>主要问题</th>
-        <th>你拿它做什么</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>vLLM Optimization and Tuning</td>
-        <td>默认优化策略是什么。</td>
-        <td>确认 chunked prefill、backend、cache 和量化的初始假设。</td>
-      </tr>
-      <tr>
-        <td>vLLM Engine Arguments</td>
-        <td>你能调哪些边界。</td>
-        <td>核对并发、抢占、分块 prefill 与长 prompt 的控制参数。</td>
-      </tr>
-      <tr>
-        <td>vLLM Scheduler API</td>
-        <td>调度器在什么条件下会抢占或重算。</td>
-        <td>把“服务突然变慢”拆成 token budget 或抢占路径问题。</td>
-      </tr>
-      <tr>
-        <td>SGLang Benchmark and Profiling</td>
-        <td>线上指标如何读。</td>
-        <td>对照 TTFT、TPOT、ITL、吞吐和显存峰值。</td>
-      </tr>
-    </tbody>
-  </table>
-  <div class="codebar"><span>公开资料检查清单</span><button class="copy" data-copy="bridge-checklist">复制</button></div>
-  <pre id="bridge-checklist" data-export-context="公开资料检查清单" data-export-lang="text"><code>1. 先确认问题属于 prefill、decode 还是 KV cache 压力。
+ next_tokens = sampler(logits(hidden), sampling_params)
+ kv_manager.commit_new_blocks(batch, next_tokens)</code></pre>
+<p>Attention(Q, K, V) = softmax(QKT / sqrt(d)) V</p>
+<p>直觉上，真正重的是把完整 score 矩阵写回 HBM 再读回来，显存往返会把时间吃掉。</p>
+        </div>
+      </section>
+      <section id="flash">
+        <div class="head">
+          <h2>FlashAttention 的核心</h2>
+          <span class="tag">flash</span>
+        </div>
+<p>FlashAttention 的要点是 IO-aware：把 Q/K/V 切成块，在 GPU 片上 SRAM 中做局部计算，同时维护 online softmax 所需的统计量，避免把完整 attention 矩阵落到 HBM。它保留精确 attention，省下来的是中间结果的搬运。</p>
+<p>FlashAttention 路径</p>
+<p>分块读 Q/K/V -> 在片上完成局部 softmax 统计 -> 合并输出。减少中间结果往 HBM 的往返。</p>
+        <div class="box warn">
+<h3>读法提醒</h3>
+<p>讲 FlashAttention 时，先说“减少 HBM 中间读写”，再说 tiling、online softmax 和重计算。顺序反过来，容易先陷进实现细节。</p>
+        </div>
+      </section>
+      <section id="phases">
+        <div class="head">
+          <h2>阶段差异</h2>
+          <span class="tag">phases</span>
+        </div>
+<p>prefill 阶段要处理 prompt 中的多个 token。它更接近一个大矩阵问题，长 prompt 会带来明显的 attention 计算和中间状态压力。decode 阶段每轮通常只有新生成 token 参与查询，但它要访问越来越长的历史 KV cache，因此瓶颈常常变成“从 KV cache 读大量历史 K/V，再为少量 query 算结果”。</p>
+      </section>
+      <section id="backend">
+        <div class="head">
+          <h2>后端选择</h2>
+          <span class="tag">backend</span>
+        </div>
+<p>vLLM 和 SGLang 都会根据硬件、dtype、head size、序列长度、量化配置和缓存布局选择或回退 attention backend。后端受兼容矩阵约束，性能只是其中一项；不满足时会回退或报错。你要先确认它在用哪条路径，再谈快不快。</p>
+        <div class="box warn">
+<h3>判断口诀</h3>
+<p>先看兼容，再看性能；先看阶段，再看 kernel。顺序倒过来，排障会绕远。</p>
+        </div>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>具体案例</h2>
+          <span class="tag">example</span>
+        </div>
+<p>假设线上出现这样一组组合信号：32k 长 prompt 的首 token 时间明显变长，decode 侧 TPOT 也上升，显存峰值接近上限，日志里还偶尔出现 attention backend 回退，而业务团队最近刚把权重量化从 BF16 改到 INT4。这个案例最容易把人带偏，因为每个信号都像“主因”，但它们实际上可能来自不同层。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>信号</th><th>更像哪一层</th><th>优先看什么</th><th>常见误判</th></tr>
+<tr><td>首 token 很慢</td><td>prefill</td><td>长 prompt、chunked prefill、backend、prefix cache</td><td>先怪 sampler 或 HTTP 层</td></tr><tr><td>TPOT 变慢</td><td>decode</td><td>KV cache 读写、batch 形状、抢占和回收</td><td>只看单个 kernel benchmark</td></tr><tr><td>显存接近上限</td><td>KV cache / 权重</td><td>cache 账本、dtype、并发 token</td><td>把权重量化当成全部答案</td></tr><tr><td>backend 回退</td><td>兼容矩阵</td><td>GPU 架构、head size、dtype、框架版本</td><td>把“能跑”误解成“走了目标实现”</td></tr>
+        </table></div>
+<p>最小判定流程复制</p>
+        <div class="box soft">
+<h3>失败后果</h3>
+<p>如果你先看错层，就可能把一个调度问题当成 kernel 问题，把一个 cache 问题当成量化问题，最后做了很多动作，却只是在不同层之间搬移瓶颈。</p>
+        </div>
+        <div class="box info">
+<h3>练习钩子</h3>
+<p>这就是前面练习题 5、6、8 和 12 的共同背景。它们在逼你把同一条链讲顺：现象 -> 阶段 -> 对象 -> 指标 -> 修正。</p>
+        </div>
+      </section>
+      <section id="quantization">
+        <div class="head">
+          <h2>量化账本</h2>
+          <span class="tag">quantization</span>
+        </div>
+<p>量化改的是数值表示，调度路径不变。常见路径包括权重量化、KV cache 量化和激活量化。前者省的是模型常驻权重显存，后者省的是并发上下文保存 K/V 的显存。两者作用对象不同，所以收益曲线也不同。</p>
+<p>KV cache 显存 ≈ layers × tokens × 2 × kv_heads × head_dim × bytes_per_element</p>
+<p>这只是简化账本。实际还要加 scale、对齐和 block 管理等开销。</p>
+      </section>
+      <section id="diagnosis">
+        <div class="head">
+          <h2>排查路线</h2>
+          <span class="tag">diagnosis</span>
+        </div>
+<p>当你遇到 TTFT 变慢、TPOT 变慢、显存不足、backend 回退或输出质量波动时，先别急着调参。先把现象归类，再沿着阶段、对象、兼容性和端到端指标逐层缩小范围。</p>
+        <div class="box">
+<h3>案例 B：高并发长上下文 OOM</h3>
+<p>先看 KV cache。权重量化如果已经做过，下一步通常是 KV cache dtype、并发 token、block 管理和回收策略。</p>
+        </div>
+        <div class="box">
+<h3>案例 C：切换 backend 后回退</h3>
+<p>检查 GPU 架构、dtype、head size、KV cache dtype 和框架版本，不要把“跑起来了”误判成“走了目标实现”。</p>
+        </div>
+        <div class="box">
+<h3>案例 D：显存降了但速度没提上去</h3>
+<p>量化把存储省下来了，但反量化和带宽瓶颈可能把收益吃回去。先分别测 prefill 和 decode，再看 profiler。</p>
+        </div>
+        <div class="box warn">
+<h3>最短路径</h3>
+<p>现象分类 -> 确认阶段 -> 查对象账本 -> 查兼容矩阵 -> 做端到端指标对比。这个顺序通常比“先改配置再看结果”稳得多。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>对象</th><th>进入前</th><th>进入后</th><th>读什么</th><th>写什么</th><th>典型症状</th></tr>
+<tr><td>attention backend</td><td>默认实现或未确认实现</td><td>FlashAttention、FlashInfer、Triton，或者回退路径</td><td>GPU 架构、dtype、head size、序列长度</td><td>kernel 选择、workspace 组织、回退日志</td><td>TTFT 变长、日志里出现 fallback</td></tr>
+<tr><td>KV cache</td><td>按当前并发和上下文长度占位</td><td>block 增加、回收、量化或溢出</td><td>token 数、并发度、block size、cache dtype</td><td>显存占用、block table、回收结果</td><td>TPOT 变慢、OOM、block 紧张</td></tr>
+<tr><td>quantization</td><td>BF16 / FP16 的原始表示</td><td>INT8、INT4、FP8 或混合格式</td><td>精度预算、硬件支持、后端限制</td><td>内存 footprint、反量化开销、质量波动</td><td>显存降了，但速度没明显变化</td></tr>
+</table></div>
+        </div>
+      </section>
+      <section id="bridge">
+        <div class="head">
+          <h2>资料路线</h2>
+          <span class="tag">bridge</span>
+        </div>
+<p>这页不要求你把 FlashAttention、量化和 backend 的源码全读完。它只要求你能沿着公开资料把问题定位到正确一层。先把文档分成三条线：优化文档回答“默认会怎么调”；引擎参数文档回答“你能不能把它调成你想要的样子”；profiling 文档回答“线上到底是不是你以为的瓶颈”。</p>
+<p>再往下一层看源码时，也不用一口气把仓库打开。先找入口，再找边界，再看对象流向。你真正需要跟踪的通常只有三件事：调度器把什么请求推进了 batch，backend 选了哪条实现，量化对象落到了哪里。三件事都确认完，源码阅读就从“漫游”变成“对照表”。</p>
+        <div class="box info">
+<h3>源码触发条件</h3>
+<p>只有当文档已经把边界说明清楚、但现象仍然解释不通时，才去看源码。这样读代码的目的就很明确：“确认分支、对象和回退点”。</p>
+<p>如果文档和日志已经能说明问题所在，就没有必要把学习预算花在不相关的实现细节上。</p>
+<table class="metric-table">
+<tr><th>资料</th><th>主要问题</th><th>你拿它做什么</th></tr>
+<tr><td>vLLM Optimization and Tuning</td><td>默认优化策略是什么。</td><td>确认 chunked prefill、backend、cache 和量化的初始假设。</td></tr>
+<tr><td>vLLM Engine Arguments</td><td>你能调哪些边界。</td><td>核对并发、抢占、分块 prefill 与长 prompt 的控制参数。</td></tr>
+<tr><td>vLLM Scheduler API</td><td>调度器在什么条件下会抢占或重算。</td><td>把“服务突然变慢”拆成 token budget 或抢占路径问题。</td></tr>
+<tr><td>SGLang Benchmark and Profiling</td><td>线上指标如何读。</td><td>对照 TTFT、TPOT、ITL、吞吐和显存峰值。</td></tr>
+</table>
+<p>公开资料检查清单复制</p>
+<pre><code class="language-text">1. 先确认问题属于 prefill、decode 还是 KV cache 压力。
 2. 再确认 backend 是否满足 dtype、head size、GPU 架构和框架版本。
 3. 然后看量化对象是权重、KV cache 还是激活值。
 4. 最后把 kernel benchmark 和端到端指标放在同一张表里对照。
 5. 如果文档已经能解释现象，就先别跳到源码。
 6. 如果文档解释不了，再用源码确认分支和回退点。</code></pre>
-  <div class="box warn">
-    <h3>你现在应该能做什么</h3>
-    <p>拿到一份公开文档时，不再只是“读过”，而是能说出它回答的是哪一层问题，以及它和线上排障之间隔着哪一步。</p>
-  </div>
-  <div class="box soft">
-    <h3>实现对照</h3>
-    <p>把文档和实现对照时，最有用的不是通读所有代码，而是盯住几个稳定的分支点：请求是走 prefill 还是 decode、backend 是否满足兼容矩阵、量化对象是否进入了正确的缓存层、以及抢占或重算有没有把预期收益抵消掉。</p>
-    <p>如果你看到日志里 backend 被回退，或者量化后延迟没变快，最稳妥的做法是先回到参数文档确认边界，再去看实现里的分支。这样你会更容易发现，是 dtype 不对、head size 不合、cache 布局不匹配，还是某个路径在 decode 侧偷偷触发了额外的反量化。</p>
-  </div>
-  <div class="grid2">
-    <div class="box">
-      <h3>实现检查表</h3>
-      <ul>
-        <li>调度器是否真的把高并发请求送进了同一个 batch。</li>
-        <li>attention backend 是否按预期选中，而不是在日志里悄悄回退。</li>
-        <li>量化对象是否正好落在你想优化的层级上。</li>
-        <li>profiling 是否同时记录了 TTFT、TPOT、ITL、显存峰值和输出质量。</li>
-      </ul>
-    </div>
-    <div class="box info">
-      <h3>失败后果</h3>
-      <p>如果这四项里有一项没对齐，你可能会得到一种很糟糕的结果：单点 benchmark 看起来更快，端到端服务却更慢；显存看起来更省，真正的瓶颈却只是从权重挪到了 KV cache；文档看起来都支持，实际部署却一直在走回退路径。</p>
-      <p>这也是为什么这页把“资料路线”放在中间，而不是放在最后。</p>
-    </div>
-  </div>
-  <div class="codebar"><span>从文档到实现的最短闭环</span><button class="copy" data-copy="bridge-loop">复制</button></div>
-  <pre id="bridge-loop" data-export-context="从文档到实现的最短闭环" data-export-lang="text"><code>文档确认边界
-  -> 参数核对兼容矩阵
-  -> 观察日志是否回退
-  -> 读取 profiler 指标
-  -> 再决定是否看源码
-  -> 最后回到练习区写下诊断结论</code></pre>
-  <p>把这条链跑顺以后，你会更容易把“我看懂了”变成“我知道下一步该验证什么”。这也是这页最重要的迁移目标。</p>
-</section>
-
-<section id="boundary">
-  <div class="head">
-    <h2>边界</h2>
-    <span class="tag">boundary</span>
-  </div>
-  <p>本页只把 attention backend、FlashAttention、KV cache 和量化之间的关系讲清楚。路由、SLO、租户隔离、MoE、speculative decoding 和分布式通信先放到后面；这些概念会在后面的引擎对比和系统阅读单元重新出现。</p>
-  <table data-export-context="本页先放一边的相关概念" data-export-lang="table">
-    <thead>
-      <tr>
-        <th>概念</th>
-        <th>这页先不追</th>
-        <th>后面在哪里再看</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>路由 / SLO</td>
-        <td>先不展开流量分配、告警和服务目标。</td>
-        <td>后面的引擎对比和系统落地单元。</td>
-      </tr>
-      <tr>
-        <td>MoE / speculative decoding</td>
-        <td>先不追专家并行和提前生成。</td>
-        <td>更完整的推理系统和后续优化单元。</td>
-      </tr>
-      <tr>
-        <td>租户隔离 / 成本控制</td>
-        <td>先不展开配额、资源隔离和计费。</td>
-        <td>系统设计和上线运维阶段。</td>
-      </tr>
-      <tr>
-        <td>分布式通信</td>
-        <td>先不追 NCCL、RPC 和跨机拓扑。</td>
-        <td>引擎对比与源码阅读路线。</td>
-      </tr>
-    </tbody>
-  </table>
-  <div class="box warn">
-    <h3>本页边界</h3>
-    <p>把这四类问题先放下，不是因为它们不重要，而是因为它们会把学习目标从“看懂算子和表示层”拖回“整套系统设计”。这一页先把最常见的瓶颈链路看顺，后面再把边界外的东西一项项接回来。</p>
-  </div>
-</section>
-
-<section id="wrapup">
-  <div class="head">
-    <h2>收尾判断</h2>
-    <span class="tag">wrapup</span>
-  </div>
-  <p>这一页只有一条判断顺序：先分阶段，再分对象，再看兼容，再看端到端指标。FlashAttention、backend 选择和量化都只是这条链上的不同位置，不要把它们混成一个动作。</p>
-  <p>如果某次改动让显存下降，也让单项 benchmark 变快，先别急着下结论。先看瓶颈是不是从权重挪到 KV cache，从 prefill 挪到 decode，或者从计算挪到回退路径。只要位置变了，结论就会变。</p>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>这时该看什么</h3>
-      <ul>
-        <li>TTFT 是否主要由 prefill 拉长。</li>
-        <li>TPOT / ITL 是否主要由 decode 侧的 cache 读写拉长。</li>
-        <li>backend 是否悄悄回退到更慢的实现。</li>
-        <li>量化是否引入了额外的反量化开销。</li>
-      </ul>
-    </div>
-    <div class="box info">
-      <h3>下一步动作</h3>
-      <p>如果这四项都看过了，下一步就是把结论写进练习记录里：你要能用一两句话说清楚现象、阶段、对象和修正动作。这样做出来的记录，才算是能拿去复盘的记录。</p>
-    </div>
-  </div>
-  <div class="codebar"><span>收尾检查单</span><button class="copy" data-copy="wrapup-checklist">复制</button></div>
-  <pre id="wrapup-checklist" data-export-context="收尾检查单" data-export-lang="text"><code>1. 先说清楚问题属于哪一层：请求、缓存、backend 还是量化。
+        </div>
+        <div class="box warn">
+<h3>你现在应该能做什么</h3>
+<p>拿到一份公开文档时，不再只是“读过”，而是能说出它回答的是哪一层问题，以及它和线上排障之间隔着哪一步。</p>
+        </div>
+        <div class="box soft">
+<h3>实现对照</h3>
+<p>把文档和实现对照时，最有用的盯住几个稳定的分支点：请求是走 prefill 还是 decode、backend 是否满足兼容矩阵、量化对象是否进入了正确的缓存层、以及抢占或重算有没有把预期收益抵消掉。</p>
+<p>如果你看到日志里 backend 被回退，或者量化后延迟没变快，最稳妥的做法是先回到参数文档确认边界，再去看实现里的分支。这样你会更容易发现，是 dtype 不对、head size 不合、cache 布局不匹配，还是某个路径在 decode 侧偷偷触发了额外的反量化。</p>
+        </div>
+        <div class="box">
+<h3>实现检查表</h3>
+<ul>
+<li>调度器是否真的把高并发请求送进了同一个 batch。</li>
+<li>attention backend 是否按预期选中，而不是在日志里悄悄回退。</li>
+<li>量化对象是否正好落在你想优化的层级上。</li>
+<li>profiling 是否同时记录了 TTFT、TPOT、ITL、显存峰值和输出质量。</li>
+</ul>
+        </div>
+        <div class="box info">
+<h3>失败后果</h3>
+<p>如果这四项里有一项没对齐，你可能会得到一种很糟糕的结果：单点 benchmark 看起来更快，端到端服务却更慢；显存看起来更省，真正的瓶颈却只是从权重挪到了 KV cache；文档看起来都支持，实际部署却一直在走回退路径。</p>
+<p>这也是为什么这页把“资料路线”放在中间，而不是放在最后。</p>
+<p>从文档到实现的最短闭环复制</p>
+<pre><code class="language-text">文档确认边界
+ -&gt; 参数核对兼容矩阵
+ -&gt; 观察日志是否回退
+ -&gt; 读取 profiler 指标
+ -&gt; 再决定是否看源码
+ -&gt; 最后回到练习区写下诊断结论</code></pre>
+<p>把这条链跑顺以后，你会更容易把“我看懂了”变成“我知道下一步该验证什么”。这也是这页最重要的迁移目标。</p>
+        </div>
+      </section>
+      <section id="boundary">
+        <div class="head">
+          <h2>边界</h2>
+          <span class="tag">boundary</span>
+        </div>
+<p>本页只把 attention backend、FlashAttention、KV cache 和量化之间的关系讲清楚。路由、SLO、租户隔离、MoE、speculative decoding 和分布式通信先放到后面；这些概念会在后面的引擎对比和系统阅读单元重新出现。</p>
+        <div class="box warn">
+<h3>本页边界</h3>
+<p>把这四类问题先放下，因为它们会把学习目标从“看懂算子和表示层”拖回“整套系统设计”。这一页先把最常见的瓶颈链路看顺，后面再把边界外的东西一项项接回来。</p>
+        </div>
+      </section>
+      <section id="wrapup">
+        <div class="head">
+          <h2>收尾判断</h2>
+          <span class="tag">wrapup</span>
+        </div>
+<p>这一页只有一条判断顺序：先分阶段，再分对象，再看兼容，再看端到端指标。FlashAttention、backend 选择和量化都只是这条链上的不同位置，不要把它们混成一个动作。</p>
+        <div class="box soft">
+<h3>这时该看什么</h3>
+<ul>
+<li>TTFT 是否主要由 prefill 拉长。</li>
+<li>TPOT / ITL 是否主要由 decode 侧的 cache 读写拉长。</li>
+<li>backend 是否悄悄回退到更慢的实现。</li>
+<li>量化是否引入了额外的反量化开销。</li>
+</ul>
+        </div>
+        <div class="box info">
+<h3>下一步动作</h3>
+<p>如果这四项都看过了，下一步就是把结论写进练习记录里：你要能用一两句话说清楚现象、阶段、对象和修正动作。这样做出来的记录，才算是能拿去复盘的记录。</p>
+<p>收尾检查单复制</p>
+<pre><code class="language-text">1. 先说清楚问题属于哪一层：请求、缓存、backend 还是量化。
 2. 再说清楚你看到的指标：TTFT、TPOT、ITL、吞吐或显存峰值。
 3. 然后说清楚你验证过什么：兼容矩阵、日志回退、profiler 或 cache 账本。
 4. 最后说清楚修正动作，以及它为什么只影响局部而不是全局。</code></pre>
-  <div class="box warn">
-    <h3>你现在应该能做什么</h3>
-    <p>拿到一条线上信号时，先按阶段和对象把它拆开，再决定是继续看文档、看源码，还是直接回到实验设计。</p>
-  </div>
-</section>
-
-
-<section id="practice">
+        </div>
+        <div class="box warn">
+<h3>你现在应该能做什么</h3>
+<p>拿到一条线上信号时，先按阶段和对象把它拆开，再决定是继续看文档、看源码，还是直接回到实验设计。</p>
+        </div>
+      </section>
+      <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>一组：核心判断</h3>
-      <p class="muted">先把对象分清，再把阶段和路径对上。</p>
-    </div>
-    <div class="quick-review">快速复盘：阶段 -> 对象 -> 兼容 -> 指标。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="flashattention-core" data-title="FlashAttention 最核心的优化方向是什么？" data-group="核心判断" data-answer="B">
-      <div class="q-meta"><span class="pill" data-type="single-choice">choice</span><span class="pill">概念</span></div>
-      <p><b>1. FlashAttention 最核心的优化方向是什么？</b></p>
-      <label><input type="radio" name="flashattention-core" value="A">A. 少算一部分 token，得到近似 attention</label><br>
-      <label><input type="radio" name="flashattention-core" value="B">B. 减少 attention 中间结果在 HBM 中的读写</label><br>
-      <label><input type="radio" name="flashattention-core" value="C">C. 只优化采样阶段</label><br>
-      <label><input type="radio" name="flashattention-core" value="D">D. 只对权重做 INT4 压缩</label>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>展开反馈</summary>
-        <p>FlashAttention 的重点是 IO-aware。它保留精确 attention，真正省下的是中间 score 的显存往返。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-    <div class="q" data-question="kv-cache-account" data-title="KV cache 量化主要省哪一笔账？" data-group="核心判断" data-answer="C">
-      <div class="q-meta"><span class="pill" data-type="single-choice">choice</span><span class="pill">量化</span></div>
-      <p><b>2. KV cache 量化主要省哪一笔账？</b></p>
-      <label><input type="radio" name="kv-cache-account" value="A">A. tokenizer 词表大小</label><br>
-      <label><input type="radio" name="kv-cache-account" value="B">B. 模型权重文件大小</label><br>
-      <label><input type="radio" name="kv-cache-account" value="C">C. 并发上下文保存 K/V 的显存</label><br>
-      <label><input type="radio" name="kv-cache-account" value="D">D. HTTP 请求头大小</label>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>展开反馈</summary>
-        <p>KV cache 量化和权重量化不是一笔账。前者主要影响 decode 侧的上下文存储，后者影响模型常驻权重。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-    <div class="q full" data-question="backend-key-checks" data-title="attention backend 要先核对哪三类条件？" data-group="核心判断">
-      <div class="q-meta"><span class="pill" data-type="mini-fields">mini-fields</span><span class="pill">backend</span></div>
-      <p><b>3. attention backend 要先核对哪三类条件？</b></p>
-      <div class="mini-fields">
-        <label>条件 1
-          <input type="text" data-answer="gpu架构,gpu 架构,架构" placeholder="GPU 架构">
-        </label>
-        <label>条件 2
-          <input type="text" data-answer="dtype,数据类型,精度" placeholder="dtype">
-        </label>
-        <label>条件 3
-          <input type="text" data-answer="head size,head dim,shape,形状" placeholder="head size / shape">
-        </label>
-      </div>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>先看 GPU 架构、dtype 和 head size / shape。backend 不是纯性能开关，它同时决定兼容矩阵和回退路径。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-    <div class="q" data-question="weight-kv-boundary" data-title="判断正误：权重量化后，KV cache 显存也会按同样比例下降。" data-group="核心判断" data-answer="错">
-      <div class="q-meta"><span class="pill" data-type="true/false">true/false</span><span class="pill">边界</span></div>
-      <p><b>4. 判断正误：权重量化后，KV cache 显存也会按同样比例下降。</b></p>
-      <label><input type="radio" name="weight-kv-boundary" value="对">对</label><br>
-      <label><input type="radio" name="weight-kv-boundary" value="错">错</label>
-      <p class="hint">提示：权重和 KV cache 是不同对象。</p>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>展开反馈</summary>
-        <p>权重量化主要省的是模型本体。长上下文并发时，KV cache 仍可能是主瓶颈。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>二组：案例诊断</h3>
-      <p class="muted">把现象放回 prefill / decode、KV cache、backend 和量化对象里。</p>
-    </div>
-    <div class="quick-review">建议格式：现象 -> 阶段 -> 对象 -> 证据 -> 修正动作。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q full" data-question="prompt-slow" data-title="案例：长 prompt 首 token 很慢，后续 token 正常。你会怎样排查？" data-group="案例诊断">
-      <div class="q-meta"><span class="pill" data-type="case">案例</span><span class="pill">TTFT</span></div>
-      <p><b>5. 长 prompt 首 token 很慢，后续 token 正常。你会怎样排查？</b></p>
-      <textarea placeholder="至少提到 prefill、chunked prefill、attention backend 或 prefix cache。"></textarea>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>优先看 prefill。长 prompt 会把 attention 的中间矩阵和写 cache 压大，chunked prefill、backend 兼容和 prefix cache 命中都值得检查。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-    <div class="q full" data-question="high-concurrency-oom" data-title="案例：单请求可跑，高并发长上下文 OOM。权重量化后仍 OOM。解释原因和处理方向。" data-group="案例诊断">
-      <div class="q-meta"><span class="pill" data-type="case">案例</span><span class="pill">显存</span></div>
-      <p><b>6. 单请求可跑，高并发长上下文 OOM。权重量化后仍 OOM。解释原因和处理方向。</b></p>
-      <textarea placeholder="从 KV cache 账本、并发 token、FP8 KV cache、上下文限制回答。"></textarea>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>这类问题通常不在权重，而在 KV cache。先估算并发 token 的 cache 账本，再考虑 KV cache 量化、block 管理和并发上限。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-    <div class="q full" data-question="backend-fallback" data-title="案例：切换某个 attention backend 后日志显示回退。列出你会检查的三项条件。" data-group="案例诊断">
-      <div class="q-meta"><span class="pill" data-type="mini-fields">mini-fields</span><span class="pill">backend</span></div>
-      <p><b>7. 切换某个 attention backend 后日志显示回退。列出你会检查的三项条件。</b></p>
-      <div class="mini-fields">
-        <label>条件 1
-          <input type="text" data-answer="gpu 架构,gpu架构,架构" placeholder="GPU 架构">
-        </label>
-        <label>条件 2
-          <input type="text" data-answer="dtype,数据类型,精度" placeholder="dtype">
-        </label>
-        <label>条件 3
-          <input type="text" data-answer="head dim,head size,shape,形状" placeholder="head dim / shape">
-        </label>
-      </div>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>先看 GPU 架构、dtype 和 head dim / shape。实际排查时再往下补 KV cache dtype 和框架版本。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-    <div class="q full" data-question="quantize-no-speedup" data-title="如果 TPOT 变慢但显存下降，下面哪种解释最完整？" data-group="案例诊断" data-answer="B">
-      <div class="q-meta"><span class="pill" data-type="choice">choice</span><span class="pill">量化</span></div>
-      <p><b>8. 如果 TPOT 变慢但显存下降，下面哪种解释最完整？</b></p>
-      <div class="choices">
-        <label><input type="radio" name="quantize-no-speedup" value="A">A. 只要显存下降，速度一定会同步变快。</label>
-        <label><input type="radio" name="quantize-no-speedup" value="B">B. 可能有反量化开销、backend 支持差异或带宽瓶颈；要把 prefill 和 decode 分开测。</label>
-        <label><input type="radio" name="quantize-no-speedup" value="C">C. 只要把 batch 再加大一点，问题就会自动消失。</label>
-      </div>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>存储省下来了，不代表执行链路更短。常见原因是反量化开销、backend 支持差异和带宽瓶颈。下一步要把 prefill 和 decode 分开测，避免把不同阶段的影响混在一起。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>三组：迁移与表达</h3>
-      <p class="muted">把概念讲成工程判断，顺手把边界说清。</p>
-    </div>
-    <div class="quick-review">目标不是背术语，而是能说出为什么、何时、如何验证。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="io-aware-attention" data-title="下面哪种描述最接近 IO-aware attention？" data-group="迁移与表达" data-answer="B">
-      <div class="q-meta"><span class="pill" data-type="choice">choice</span><span class="pill">FlashAttention</span></div>
-      <p><b>9. 下面哪种描述最接近 IO-aware attention？</b></p>
-      <div class="choices">
-        <label><input type="radio" name="io-aware-attention" value="A">A. 先把 attention 改成近似算法，再靠采样补回质量。</label>
-        <label><input type="radio" name="io-aware-attention" value="B">B. 把 Q/K/V 分块，在片上做局部 softmax，减少中间矩阵的 HBM 往返。</label>
-        <label><input type="radio" name="io-aware-attention" value="C">C. 只要把 batch 变大，attention 就自然变快。</label>
-      </div>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>它优先减少 attention 中间矩阵在 HBM 里的往返，而不是单纯减少乘法次数；做法是把 Q/K/V 分块，在片上完成局部 softmax 统计。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-    <div class="q" data-question="kv-formula" data-title="KV cache 显存估算式最接近哪一项？" data-group="迁移与表达" data-answer="A">
-      <div class="q-meta"><span class="pill" data-type="choice">choice</span><span class="pill">KV cache</span></div>
-      <p><b>10. KV cache 显存估算式最接近哪一项？</b></p>
-      <div class="choices">
-        <label><input type="radio" name="kv-formula" value="A">A. layers × tokens × 2 × kv_heads × head_dim × bytes_per_element</label>
-        <label><input type="radio" name="kv-formula" value="B">B. batch × vocab × hidden × dropout</label>
-        <label><input type="radio" name="kv-formula" value="C">C. params × optimizer_state × learning_rate</label>
-      </div>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>公式只是一张简化账本。变量要能说清：layers、tokens、2、kv_heads、head_dim 和 bytes_per_element。真实系统里还要记上 scale、对齐和 block 管理的额外开销。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-    <div class="q full" data-question="prefill-decode-explain" data-title="你会怎样向同事解释：为什么要分别测 prefill 和 decode？" data-group="迁移与表达">
-      <div class="q-meta"><span class="pill" data-type="mini-fields">mini-fields</span><span class="pill">阶段</span></div>
-      <p><b>11. 你会怎样向同事解释：为什么要分别测 prefill 和 decode？</b></p>
-      <div class="mini-fields">
-        <label>prefill 像什么
-          <input type="text" data-answer="整段 prompt,处理整段 prompt,一次处理 prompt" placeholder="整段 prompt">
-        </label>
-        <label>decode 像什么
-          <input type="text" data-answer="读取历史 KV cache,读取历史kv cache,逐步读取历史 KV cache" placeholder="读取历史 KV cache">
-        </label>
-        <label>为什么分开
-          <input type="text" data-answer="形状不同，瓶颈不同,瓶颈不同,优化手段不同" placeholder="瓶颈不同">
-        </label>
-      </div>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>prefill 更像一次处理整段 prompt，decode 更像每步读取历史 KV cache。形状不同，瓶颈和优化手段也不同，所以要分开测。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-    <div class="q full" data-question="experiment-design" data-title="给一个生产推理服务设计量化实验，你会设置哪些对照组？" data-group="迁移与表达">
-      <div class="q-meta"><span class="pill" data-type="design">design</span><span class="pill">实验</span></div>
-      <p><b>12. 给一个生产推理服务设计量化实验，你会设置哪些对照组？</b></p>
-      <textarea placeholder="例如 baseline、权重量化、KV cache 量化、组合量化；指标包括质量和性能。"></textarea>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>建议至少分 baseline、权重量化、KV cache 量化和组合量化四组，同时记录质量、TTFT、TPOT、ITL 和显存峰值。这样才能看出收益落在哪一层。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-    <div class="q full" data-question="open-boundary" data-title="哪一项最适合留到后面的系统语境再看？" data-group="迁移与表达" data-answer="A">
-      <div class="q-meta"><span class="pill" data-type="choice">choice</span><span class="pill">边界</span></div>
-      <p><b>13. 哪一项最适合留到后面的系统语境再看？</b></p>
-      <div class="choices">
-        <label><input type="radio" name="open-boundary" value="A">A. 路由、SLO、租户隔离和成本管理</label>
-        <label><input type="radio" name="open-boundary" value="B">B. FlashAttention 为什么少搬中间矩阵</label>
-        <label><input type="radio" name="open-boundary" value="C">C. KV cache 为什么会先把显存顶满</label>
-      </div>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>这页故意不展开路由、SLO、租户隔离和成本管理。把它们留到更完整的系统语境里更合适。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-    <div class="q full" data-question="story-of-unit" data-title="综合解释：把第 05 单元讲成一个完整故事。" data-group="迁移与表达">
-      <div class="q-meta"><span class="pill" data-type="synthesis">synthesis</span><span class="pill">Feynman</span></div>
-      <p><b>14. 综合解释：把第 05 单元讲成一个完整故事。</b></p>
-      <p class="hint">要求：从请求进入推理引擎开始，依次讲到 prefill / decode、attention backend、FlashAttention、KV cache 量化、权重量化、端到端验证。</p>
-      <textarea placeholder="用 250-500 字写给一个懂 Transformer 但没读过推理引擎的人。"></textarea>
-      <button type="button" class="check">检查</button>
-      <div class="feedback"></div>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>完整故事应该包含对象、阶段、路径和验证方式。先讲 prefill / decode，再讲 backend 和 FlashAttention，最后把量化和验证连起来，而不是只堆名词。</p>
-        <button type="button" class="reveal">收起反馈</button>
-      </details>
-    </div>
-  </div>
-</div>
-
-      </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一组：核心判断</h3></div>
+          <div class="quick-review">快速复盘：阶段 -> 对象 -> 兼容 -> 指标。 --></div>
         </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
+        <div class="drill-grid">
+      <article class="q" data-question="qflashattentioncore" data-group="" data-title="" data-answer="减少 attention 中间结果在 HBM 中的读写">
+        <div class="q-meta"><span class="pill">flashattention-core</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b></h3>
 
-      <section id="sources">
+      <div class="choices">
+      <label><input type="radio" name="qflashattention-core" value="少算一部分 token，得到近似 attention">少算一部分 token，得到近似 attention</label>
+      <label><input type="radio" name="qflashattention-core" value="减少 attention 中间结果在 HBM 中的读写">减少 attention 中间结果在 HBM 中的读写</label>
+      <label><input type="radio" name="qflashattention-core" value="只优化采样阶段">只优化采样阶段</label>
+      <label><input type="radio" name="qflashattention-core" value="只对权重做 INT4 压缩">只对权重做 INT4 压缩</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>减少 attention 中间结果在 HBM 中的读写。FlashAttention 的重点是 IO-aware。它保留精确 attention，真正省下的是中间 score 的显存往返。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qkvcacheaccount" data-group="" data-title="" data-answer="并发上下文保存 K/V 的显存">
+        <div class="q-meta"><span class="pill">kv-cache-account</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b></h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qkv-cache-account" value="tokenizer 词表大小">tokenizer 词表大小</label>
+      <label><input type="radio" name="qkv-cache-account" value="模型权重文件大小">模型权重文件大小</label>
+      <label><input type="radio" name="qkv-cache-account" value="并发上下文保存 K/V 的显存">并发上下文保存 K/V 的显存</label>
+      <label><input type="radio" name="qkv-cache-account" value="HTTP 请求头大小">HTTP 请求头大小</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>并发上下文保存 K/V 的显存。KV cache 量化和权重量化不是一笔账。前者主要影响 decode 侧的上下文存储，后者影响模型常驻权重。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qbackendkeychecks" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">backend-key-checks</span><span class="pill">mini-fields</span></div>
+        <h3><b>Q:</b></h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qbackend-key-checks" value="条件 1">条件 1</label>
+      <label><input type="radio" name="qbackend-key-checks" value="条件 2">条件 2</label>
+      <label><input type="radio" name="qbackend-key-checks" value="条件 3">条件 3</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先看 GPU 架构、dtype 和 head size / shape。backend 不是纯性能开关，它同时决定兼容矩阵和回退路径。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qweightkvboundary" data-group="" data-title="" data-answer="错">
+        <div class="q-meta"><span class="pill">weight-kv-boundary</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b></h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qweight-kv-boundary" value="对">对</label>
+      <label><input type="radio" name="qweight-kv-boundary" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>错。权重量化主要省的是模型本体。长上下文并发时，KV cache 仍可能是主瓶颈。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二组：案例诊断</h3></div>
+          <div class="quick-review">建议格式：现象 -> 阶段 -> 对象 -> 证据 -> 修正动作。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="qpromptslow" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">prompt-slow</span><span class="pill">案例</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qprompt-slow"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。优先看 prefill。长 prompt 会把 attention 的中间矩阵和写 cache 压大，chunked prefill、backend 兼容和 prefix cache 命中都值得检查。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qhighconcurrencyoom" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">high-concurrency-oom</span><span class="pill">案例</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qhigh-concurrency-oom"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。这类问题通常不在权重，而在 KV cache。先估算并发 token 的 cache 账本，再考虑 KV cache 量化、block 管理和并发上限。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qbackendfallback" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">backend-fallback</span><span class="pill">mini-fields</span></div>
+        <h3><b>Q:</b></h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qbackend-fallback" value="条件 1">条件 1</label>
+      <label><input type="radio" name="qbackend-fallback" value="条件 2">条件 2</label>
+      <label><input type="radio" name="qbackend-fallback" value="条件 3">条件 3</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先看 GPU 架构、dtype 和 head dim / shape。实际排查时再往下补 KV cache dtype 和框架版本。</p>
+        </details>
+      </article>
+      <article class="q" data-question="quantizenospeedup" data-group="" data-title="" data-answer="可能有反量化开销、backend 支持差异或带宽瓶颈；要把 prefill 和 decode 分开测。">
+        <div class="q-meta"><span class="pill">uantize-no-speedup</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b></h3>
+
+      <div class="choices">
+      <label><input type="radio" name="quantize-no-speedup" value="只要显存下降，速度一定会同步变快。">只要显存下降，速度一定会同步变快。</label>
+      <label><input type="radio" name="quantize-no-speedup" value="可能有反量化开销、backend 支持差异或带宽瓶颈；要把 prefill 和 decode 分开测。">可能有反量化开销、backend 支持差异或带宽瓶颈；要把 prefill 和 decode 分开测。</label>
+      <label><input type="radio" name="quantize-no-speedup" value="只要把 batch 再加大一点，问题就会自动消失。">只要把 batch 再加大一点，问题就会自动消失。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>可能有反量化开销、backend 支持差异或带宽瓶颈；要把 prefill 和 decode 分开测。。存储省下来了，不代表执行链路更短。常见原因是反量化开销、backend 支持差异和带宽瓶颈。下一步要把 prefill 和 decode 分开测，避免把不同阶段的影响混在一起。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三组：迁移与表达</h3></div>
+          <div class="quick-review">目标不是背术语，而是能说出为什么、何时、如何验证。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="qioawareattention" data-group="" data-title="" data-answer="把 Q/K/V 分块，在片上做局部 softmax，减少中间矩阵的 HBM 往返。">
+        <div class="q-meta"><span class="pill">io-aware-attention</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b></h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qio-aware-attention" value="先把 attention 改成近似算法，再靠采样补回质量。">先把 attention 改成近似算法，再靠采样补回质量。</label>
+      <label><input type="radio" name="qio-aware-attention" value="把 Q/K/V 分块，在片上做局部 softmax，减少中间矩阵的 HBM 往返。">把 Q/K/V 分块，在片上做局部 softmax，减少中间矩阵的 HBM 往返。</label>
+      <label><input type="radio" name="qio-aware-attention" value="只要把 batch 变大，attention 就自然变快。">只要把 batch 变大，attention 就自然变快。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>把 Q/K/V 分块，在片上做局部 softmax，减少中间矩阵的 HBM 往返。。它优先减少 attention 中间矩阵在 HBM 里的往返，而不是单纯减少乘法次数；做法是把 Q/K/V 分块，在片上完成局部 softmax 统计。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qkvformula" data-group="" data-title="" data-answer="layers × tokens × 2 × kv_heads × head_dim × bytes_per_element">
+        <div class="q-meta"><span class="pill">kv-formula</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b></h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qkv-formula" value="layers × tokens × 2 × kv_heads × head_dim × bytes_per_element">layers × tokens × 2 × kv_heads × head_dim × bytes_per_element</label>
+      <label><input type="radio" name="qkv-formula" value="batch × vocab × hidden × dropout">batch × vocab × hidden × dropout</label>
+      <label><input type="radio" name="qkv-formula" value="params × optimizer_state × learning_rate">params × optimizer_state × learning_rate</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>layers × tokens × 2 × kv_heads × head_dim × bytes_per_element。公式只是一张简化账本。变量要能说清：layers、tokens、2、kv_heads、head_dim 和 bytes_per_element。真实系统里还要记上 scale、对齐和 block 管理的额外开销。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qprefilldecodeexplain" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">prefill-decode-explain</span><span class="pill">mini-fields</span></div>
+        <h3><b>Q:</b></h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qprefill-decode-explain" value="prefill 像什么">prefill 像什么</label>
+      <label><input type="radio" name="qprefill-decode-explain" value="decode 像什么">decode 像什么</label>
+      <label><input type="radio" name="qprefill-decode-explain" value="为什么分开">为什么分开</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。prefill 更像一次处理整段 prompt，decode 更像每步读取历史 KV cache。形状不同，瓶颈和优化手段也不同，所以要分开测。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qexperimentdesign" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">experiment-design</span><span class="pill">design</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qexperiment-design"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。建议至少分 baseline、权重量化、KV cache 量化和组合量化四组，同时记录质量、TTFT、TPOT、ITL 和显存峰值。这样才能看出收益落在哪一层。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qopenboundary" data-group="" data-title="" data-answer="路由、SLO、租户隔离和成本管理">
+        <div class="q-meta"><span class="pill">open-boundary</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b></h3>
+
+      <div class="choices">
+      <label><input type="radio" name="qopen-boundary" value="路由、SLO、租户隔离和成本管理">路由、SLO、租户隔离和成本管理</label>
+      <label><input type="radio" name="qopen-boundary" value="FlashAttention 为什么少搬中间矩阵">FlashAttention 为什么少搬中间矩阵</label>
+      <label><input type="radio" name="qopen-boundary" value="KV cache 为什么会先把显存顶满">KV cache 为什么会先把显存顶满</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>路由、SLO、租户隔离和成本管理。这页故意不展开路由、SLO、租户隔离和成本管理。把它们留到更完整的系统语境里更合适。</p>
+        </details>
+      </article>
+      <article class="q" data-question="qstoryofunit" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">story-of-unit</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b></h3>
+
+
+      <textarea name="qstory-of-unit"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。完整故事应该包含对象、阶段、路径和验证方式。先讲 prefill / decode，再讲 backend 和 FlashAttention，最后把量化和验证连起来，而不是只堆名词。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-  <li><a href="https://arxiv.org/abs/2205.14135">FlashAttention 论文</a>：支撑 IO-aware exact attention、分块、online softmax 和精确 attention 的说法。</li>
-  <li><a href="https://github.com/Dao-AILab/flash-attention">FlashAttention GitHub</a>：支撑实现范围、kernel 组织和工程落点。</li>
-  <li><a href="https://docs.vllm.ai/en/stable/configuration/optimization/">vLLM - Optimization and Tuning</a>：支撑 attention 相关优化、chunked prefill、性能与显存取舍的解释。</li>
-  <li><a href="https://docs.vllm.ai/en/stable/features/quantization/">vLLM - Quantization</a>：支撑量化目标、常见格式、内存 footprint 和硬件支持的基础说法。</li>
-  <li><a href="https://docs.vllm.ai/en/latest/features/quantization/quantized_kvcache/">vLLM - Quantized KV Cache</a>：支撑 FP8 KV cache、压缩缓存和上下文显存的说法。</li>
-  <li><a href="https://docs.vllm.ai/en/stable/configuration/engine_args/">vLLM - Engine Arguments</a>：支撑 `--max-num-seqs`、`--enable-chunked-prefill`、`--preemption-mode`、`--scheduler-reserve-full-isl`、`--max-num-partial-prefills`、`--max-long-partial-prefills`、`--long-prefill-token-threshold` 的语义。</li>
-  <li><a href="https://docs.vllm.ai/en/stable/api/vllm/v1/core/sched/scheduler/">vLLM - Scheduler API</a>：支撑 `PREEMPTED_FOR_RECOMPUTE`、token budget、抢占和重算这类调度细节。</li>
-  <li><a href="https://docs.sglang.ai/developer_guide/benchmark_and_profiling.html">SGLang - Benchmark and Profiling</a>：支撑 `bench_serving`、TTFT、TPOT、ITL、吞吐等在线 / 离线观测语义。</li>
-  <li><a href="https://docs.sglang.ai/">SGLang - Welcome</a>：支撑 SGLang 作为 serving framework 的定位，以及 attention backend、KV cache、量化相关的公开叙述。</li>
+<ul>
+<li><a href="https://arxiv.org/abs/2205.14135">FlashAttention 论文</a>：支撑 IO-aware exact attention、分块、online softmax 和精确 attention 的说法。</li>
+<li><a href="https://github.com/Dao-AILab/flash-attention">FlashAttention GitHub</a>：支撑实现范围、kernel 组织和工程落点。</li>
+<li><a href="https://docs.vllm.ai/en/stable/configuration/optimization/">vLLM - Optimization and Tuning</a>：支撑 attention 相关优化、chunked prefill、性能与显存取舍的解释。</li>
+<li><a href="https://docs.vllm.ai/en/stable/features/quantization/">vLLM - Quantization</a>：支撑量化目标、常见格式、内存 footprint 和硬件支持的基础说法。</li>
+<li><a href="https://docs.vllm.ai/en/latest/features/quantization/quantized_kvcache/">vLLM - Quantized KV Cache</a>：支撑 FP8 KV cache、压缩缓存和上下文显存的说法。</li>
+<li><a href="https://docs.vllm.ai/en/stable/configuration/engine_args/">vLLM - Engine Arguments</a>：支撑 <code>--max-num-seqs</code>、<code>--enable-chunked-prefill</code>、<code>--preemption-mode</code>、<code>--scheduler-reserve-full-isl</code>、<code>--max-num-partial-prefills</code>、<code>--max-long-partial-prefills</code>、<code>--long-prefill-token-threshold</code> 的语义。</li>
+<li><a href="https://docs.vllm.ai/en/stable/api/vllm/v1/core/sched/scheduler/">vLLM - Scheduler API</a>：支撑 <code>PREEMPTED_FOR_RECOMPUTE</code>、token budget、抢占和重算这类调度细节。</li>
+<li><a href="https://docs.sglang.ai/developer_guide/benchmark_and_profiling.html">SGLang - Benchmark and Profiling</a>：支撑 <code>bench_serving</code>、TTFT、TPOT、ITL、吞吐等在线 / 离线观测语义。</li>
+<li><a href="https://docs.sglang.ai/">SGLang - Welcome</a>：支撑 SGLang 作为 serving framework 的定位，以及 attention backend、KV cache、量化相关的公开叙述。</li>
 </ul>
-
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

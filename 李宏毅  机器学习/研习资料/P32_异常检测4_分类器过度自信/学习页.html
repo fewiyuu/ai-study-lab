@@ -4,414 +4,657 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P32｜异常检测 4：分类器过度自信</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="classifier confidence,open set recognition,overconfidence,unknown,feature extrapolation,outlier exposure,synthetic anomaly,generative model,entropy">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>分类器过度自信</strong><span>P32。为什么 unknown 可能触发很高 confidence，以及如何用异常样本训练低信心。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#recap"><span class="dot"></span>P30 回顾</a>
-      <a href="#failure"><span class="dot"></span>失败模式</a>
-      <a href="#feature"><span class="dot"></span>特征外推</a>
-      <a href="#yellow"><span class="dot"></span>黄脸例子</a>
-      <a href="#realoutlier"><span class="dot"></span>真实异常资料</a>
-      <a href="#synthetic"><span class="dot"></span>生成异常资料</a>
-      <a href="#share"><span class="dot"></span>速查例题</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：unknown 不一定低信心；如果它强烈触发某个已知类特征，分类器反而可能非常自信。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P32</div>
-        <h1>为什么未知样本会骗过分类器</h1>
-        <p>P30 的方法是用分类器信心分数做异常检测：信心高就接受为已知类，信心低就判为 unknown。P32 讲这个方法的关键失败模式：有些 unknown 并不会让分类器犹豫，反而会让它更自信。因为分类器只学会区分训练中的类别特征，不一定学会“训练世界之外”的边界。</p>
-        <p>猫狗分类器可能对草泥马低信心，因为它既不像猫也不像狗。但老虎可能有很强的“猫特征”，狼可能有很强的“狗特征”。辛普森分类器可能把黄脸当成重要线索，于是任何被涂黄的人脸都能触发高信心。解决方向之一是让模型见过一些异常样本，训练它对这些样本输出低信心；若真实异常难收集，也可以尝试生成“像但不太像”的异常样本。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释 max-score baseline 为什么会被 unknown 骗过。</li>
-          <li>说明“比猫更像猫”的特征外推问题。</li>
-          <li>用黄脸例子解释 spurious feature 的风险。</li>
-          <li>说明用真实异常资料训练低信心的思路。</li>
-          <li>解释生成异常资料为什么要“有点像但不太像”。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
-      <p>P30 的信心分数方法隐含一个假设：未知样本会让分类器分布变平均，最高 softmax 分数变低。这个假设在很多时候有效，但不是定律。分类器训练时只见过已知类，它学到的是区分已知类的特征，而不是完整的“正常世界边界”。</p>
-      <p>当未知样本在某些特征上更强烈地触发已知类别时，分类器可能给出更高 confidence。它不是“知道这个样本属于训练类”，只是某个方向上的 logit 被推得很高。解决这件事，不能只依赖 softmax 最大值。可以收集异常样本进行 outlier exposure，也可以用生成模型合成边界附近的异常样本，再教模型对这些样本降低信心或提高 entropy。</p>
-      <div class="map">
-        <span class="node">已知类分类器</span>
-        <span class="node">信心分数 baseline</span>
-        <span class="node">unknown 过度自信</span>
-        <span class="node">异常资料训练</span>
-        <span class="node">生成边界样本</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P32</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说出信心分数法的适用直觉和主要失败条件。</p></div>
-    </section>
-
-    <section id="recap">
-      <div class="head"><h2>P30 回顾：信心低就拒绝</h2><span class="tag">RECAP</span></div>
-      <p>上一节的流程很简单。先训练一个已知类分类器，例如辛普森人物分类器。测试时，拿 softmax 最大值或 entropy 当作 confidence score。若最高分高于阈值，就输出某个已知类；若低于阈值，就输出 unknown。</p>
-      <p>这个方法不是没用。若输入明显不像任何已知类，分类器通常会犹豫，softmax 分布更平均，最高分下降。比如猫狗分类器看到一个完全不像猫狗的物体，可能会落在决策边界附近。但问题是，并不是所有 unknown 都“远离已知特征”。有些 unknown 正好沿着已知类别特征方向走得更远。</p>
-      <div class="formula">
-        baseline assumption:<br>
-        unknown input → uncertain softmax → low confidence → reject
+      <h1 class="hero-title">P32｜异常检测 4：分类器过度自信</h1>
+      <p class="hero-desc">P30 的方法是用分类器信心分数做异常检测：信心高就接受为已知类，信心低就判为 unknown。P32 讲这个方法的关键失败模式：有些 unknown 并不会让分类器犹豫，反而会让它更自信。因为分类器只学会区分训练中的类别特征，不一定学会“训练世界之外”的边界。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P31_异常检测3_评估指标/学习页.html">上一节</a>
+            <a href="../P33_异常检测5_无标签概率模型/学习页.html">下一节</a>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释 P30 方法成立时依赖的“未知样本低信心”假设。</p></div>
-    </section>
-
-    <section id="failure">
-      <div class="head"><h2>失败模式：unknown 可能比 known 更像某个类</h2><span class="tag">FAILURE</span></div>
-      <p>想象一个猫狗分类器。它可能学到“尖耳朵、胡须、某种脸型”是猫特征，“长嘴、某种耳朵、某种毛发纹理”是狗特征。草泥马既不像猫也不像狗，可能低信心。但老虎有很多猫科特征，而且更大、更强烈；狼有很多犬科特征，也可能强烈触发狗类 logit。</p>
-      <p>这就是特征外推：分类器在训练中只需要把猫和狗分开，不需要知道“老虎不是猫类训练标签里的猫”。如果老虎沿着“猫特征”方向超过训练猫，softmax 可能更尖。于是 max score baseline 会把老虎高信心判为猫，完全错过 unknown。</p>
-      <div class="grid3">
-        <div class="box info"><h3>远离已知特征</h3><p>模型可能低信心，baseline 有机会拒绝。</p></div>
-        <div class="box warn"><h3>强化已知特征</h3><p>unknown 触发某个已知类 logit，模型高信心误收。</p></div>
-        <div class="box redsoft"><h3>训练目标缺口</h3><p>分类器没被教过“强猫特征但不是训练猫”的样本。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>用“老虎比猫更像猫”解释 open set 中的过度自信。</p></div>
-    </section>
-
-    <section id="feature">
-      <div class="head"><h2>小交互：特征越强，信心可能越高</h2><span class="tag">INTERACTION</span></div>
-      <p>下面的简化模型只看两个 logit：猫分数和狗分数。真实分类器当然复杂得多，但这个交互能展示一种直觉：当某个输入强烈触发猫特征时，softmax 最高分会上升，即使这个输入根本不是训练中的猫。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>调节特征强度</h3>
-            <div class="slider-row"><label for="catFeature">猫特征</label><input id="catFeature" type="range" min="0" max="100" value="72"><strong id="catOut">72</strong></div>
-            <div class="slider-row"><label for="dogFeature">狗特征</label><input id="dogFeature" type="range" min="0" max="100" value="18"><strong id="dogOut">18</strong></div>
-            <div class="barrow"><span>猫概率</span><div class="bar"><div class="fill" id="catProbBar"></div></div><strong id="catProbOut">0.94</strong></div>
-            <div class="barrow"><span>狗概率</span><div class="bar"><div class="fill green" id="dogProbBar"></div></div><strong id="dogProbOut">0.06</strong></div>
-          </div>
-          <div class="viz-note">
-            <h3 id="featureTitle">高信心判为猫</h3>
-            <p id="featureText">如果 unknown 强烈触发猫特征，分类器会自信地输出猫。这不是它真的认识 unknown，而是训练目标只学过猫狗边界。</p>
-          </div>
-        </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把“高 confidence”解释成 logit 方向被强烈触发，而不是必然代表样本属于训练分布。</p></div>
-    </section>
-
-    <section id="yellow">
-      <div class="head"><h2>黄脸例子：模型可能抓到很脆的线索</h2><span class="tag">SPURIOUS FEATURE</span></div>
-      <p>课程里用辛普森家庭分类器做了一个很直观的实验。辛普森人物常见特征是黄脸、嘴型特殊。若把非辛普森人物的脸涂黄，分类器的 confidence 会明显上升；把头发也涂黄，甚至可能高信心判成某个辛普森角色。</p>
-      <p>这个例子说明分类器可能抓到 spurious feature，也就是对训练分类有用但不等于真实语义边界的线索。黄脸确实有助于区分辛普森人物和其他训练角色，但“黄脸”并不充分代表“来自辛普森家庭”。在 open set 场景里，这种线索会被未知样本利用或误触发。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>黄脸强度</h3>
-            <div class="face" id="faceDemo"><span class="mouth"></span></div>
-            <div class="slider-row"><label for="yellowLevel">黄色程度</label><input id="yellowLevel" type="range" min="0" max="100" value="80"><strong id="yellowOut">80</strong></div>
-            <div class="barrow"><span>辛普森信心</span><div class="bar"><div class="fill" id="simpsonBar"></div></div><strong id="simpsonOut">0.82</strong></div>
-          </div>
-          <div class="viz-note">
-            <h3>观察重点</h3>
-            <p id="yellowText">黄色越强，简化分类器越容易把它当作辛普森线索。真实模型还会看更多特征，但脆弱线索仍可能造成过度自信。</p>
-          </div>
-        </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么“训练时有用的特征”不一定等于“open set 的可靠边界”。</p></div>
-    </section>
-
-    <section id="realoutlier">
-      <div class="head"><h2>方向一：拿真实异常资料训练低信心</h2><span class="tag">OUTLIER EXPOSURE</span></div>
-      <p>一个直接解法是：如果能收集到一些异常资料，就把它们放进训练流程。已知类样本仍然训练分类正确；异常样本则训练模型输出低 confidence，或训练它的 softmax entropy 变高。这样模型不只学会“已知类之间怎么分”，还学会“看到某些训练分布外样本时不要太自信”。</p>
-      <p>这类想法常被称作 outlier exposure。它的难点也很明显：真实异常资料不一定容易收集，而且你收集到的异常只覆盖一部分未知世界。如果异常样本太窄，模型可能只学会拒绝那几种异常，而对新型 unknown 仍然过度自信。</p>
-      <div class="grid2">
-        <div class="box info"><h3>训练目标</h3><p>known：正确分类且高信心；outlier：低 max score 或高 entropy。</p></div>
-        <div class="box warn"><h3>限制</h3><p>异常资料难收集、覆盖不完整，还可能和真实测试 unknown 不一致。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说明为什么给模型看异常样本可以降低过度自信，也说明这不是万能的。</p></div>
-    </section>
-
-    <section id="synthetic">
-      <div class="head"><h2>方向二：用生成模型造“像但不太像”的异常</h2><span class="tag">SYNTHETIC OUTLIER</span></div>
-      <p>如果真实异常资料很难收集，可以尝试用 generative model 生成异常资料。直觉是：让生成模型产生一些有点像正常资料、但又不属于正常资料的样本，再用这些样本训练分类器低信心。这样模型可以在正常边界附近见到更多“不要太自信”的例子。</p>
-      <p>难点是控制生成质量。生成得太像正常资料，就会把正常样本当异常，伤害分类器；生成得太不像，模型只学会拒绝很容易的 outlier，对边界附近 unknown 没帮助。课程里强调要让生成样本“有点像真的，但又没有很像”，这正是 synthetic outlier 的核心困难。</p>
-      <table class="metric-table">
-        <tr><th>生成样本状态</th><th>问题</th><th>训练效果</th></tr>
-        <tr><td>太像正常</td><td>可能混淆 known 类</td><td>伤害分类或误教模型</td></tr>
-        <tr><td>太不像正常</td><td>太容易拒绝</td><td>对困难 unknown 帮助有限</td></tr>
-        <tr><td>有点像但不太像</td><td>边界附近更有训练价值</td><td>可教模型降低过度自信</td></tr>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么 synthetic anomaly 的关键不是随便生成，而是控制它和 normal 的相似度。</p></div>
-    </section>
-
-    <section id="share">
-      <div class="head"><h2>公开分享速查：Unknown 也可能高信心</h2><span class="tag">quick reference</span></div>
-      <div class="grid2">
-        <div class="box soft">
-          <h3>核心直觉</h3>
-          <p>分类器学到的是区分已知类的线索，不是完整的世界边界。Unknown 如果强烈触发某个已知类线索，max softmax 可能非常高。</p>
-          <p>因此 P32 不是说 P30 baseline 没用，而是指出：只看信心分数，会在边界附近和特征外推时失败。</p>
-        </div>
-        <div class="box warn">
-          <h3>Worked example</h3>
-          <p>猫狗分类器见到老虎，可能因为“胡须、耳朵、脸型”强烈像猫而高信心输出 cat。它没有学过“老虎不是宠物猫”这个边界。</p>
-          <p>改进思路是让模型在训练时见到 outlier，并被要求对这些样本输出低 max score 或高 entropy。</p>
-        </div>
-      </div>
-      <table class="metric-table">
-        <tr><th>术语</th><th>精确定义</th><th>易混点</th></tr>
-        <tr><td>Overconfidence</td><td>模型对未知或错误样本给出很高信心。</td><td>高 softmax 是模型状态，不等于客观正确。</td></tr>
-        <tr><td>Feature shortcut</td><td>模型依赖少数强特征做判断。</td><td>训练集上有效的线索，在 open set 中可能误导。</td></tr>
-        <tr><td>Outlier exposure</td><td>用额外异常样本训练模型低信心。</td><td>效果受异常样本覆盖范围限制。</td></tr>
-        <tr><td>Synthetic outlier</td><td>用生成模型造边界附近异常。</td><td>太像 normal 或太不像 normal 都会降低价值。</td></tr>
-      </table>
-      <div class="box info">
-        <h3>诊断检查表</h3>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
         <ul>
-          <li>先找 unknown 为什么触发了已知类特征。</li>
-          <li>再检查训练集中是否有类似 outlier 教模型降低信心。</li>
-          <li>生成 outlier 时，要控制“像但不属于”的程度。</li>
+
         </ul>
       </div>
-    </section>
+    </div>
+  </header>
 
-    <section id="code">
-      <div class="head"><h2>最小代码：让 outlier 高 entropy</h2><span class="tag">MINIMAL CODE</span></div>
-      <p>下面伪代码表达训练目标。known 样本用普通 cross entropy；outlier 样本不要求分到某个已知类，而是希望输出分布更平均，或 max score 更低。</p>
-      <div class="codebar"><span class="label">正确示例：known 分类 + outlier 低信心</span><span class="kind">pseudo python</span></div>
-      <pre><code>logits_known = classifier(x_known)
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#recap">P30 回顾：信心低就拒绝</a>
+      <a href="#failure">失败模式：unknown 可能比 known 更像某个类</a>
+      <a href="#feature">小交互：特征越强，信心可能越高</a>
+      <a href="#yellow">黄脸例子：模型可能抓到很脆的线索</a>
+      <a href="#realoutlier">方向一：拿真实异常资料训练低信心</a>
+      <a href="#synthetic">方向二：用生成模型造“像但不太像”的异常</a>
+      <a href="#share">公开分享速查：Unknown 也可能高信心</a>
+      <a href="#code">最小代码：让 outlier 高 entropy</a>
+      <a href="#mistakes">常见误区与修正</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">MAP</span>
+        </div>
+<p>P30 的信心分数方法隐含一个假设：未知样本会让分类器分布变平均，最高 softmax 分数变低。这个假设在很多时候有效，但不是定律。分类器训练时只见过已知类，它学到的是区分已知类的特征，而不是完整的“正常世界边界”。</p>
+<p>已知类分类器</p>
+<p>信心分数 baseline</p>
+<p>unknown 过度自信</p>
+<p>异常资料训练</p>
+<p>生成边界样本</p>
+      </section>
+      <section id="recap">
+        <div class="head">
+          <h2>P30 回顾：信心低就拒绝</h2>
+          <span class="tag">RECAP</span>
+        </div>
+<p>上一节的流程很简单。先训练一个已知类分类器，例如辛普森人物分类器。测试时，拿 softmax 最大值或 entropy 当作 confidence score。若最高分高于阈值，就输出某个已知类；若低于阈值，就输出 unknown。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+baseline assumption:
+ unknown input → uncertain softmax → low confidence → reject
+$$
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释 P30 方法成立时依赖的“未知样本低信心”假设。</p>
+        </div>
+      </section>
+      <section id="failure">
+        <div class="head">
+          <h2>失败模式：unknown 可能比 known 更像某个类</h2>
+          <span class="tag">FAILURE</span>
+        </div>
+<p>想象一个猫狗分类器。它可能学到“尖耳朵、胡须、某种脸型”是猫特征，“长嘴、某种耳朵、某种毛发纹理”是狗特征。草泥马既不像猫也不像狗，可能低信心。但老虎有很多猫科特征，而且更大、更强烈；狼有很多犬科特征，也可能强烈触发狗类 logit。</p>
+<p>远离已知特征模型可能低信心，baseline 有机会拒绝。</p>
+<p>强化已知特征unknown 触发某个已知类 logit，模型高信心误收。</p>
+<p>训练目标缺口分类器没被教过“强猫特征但不是训练猫”的样本。</p>
+      </section>
+      <section id="feature">
+        <div class="head">
+          <h2>小交互：特征越强，信心可能越高</h2>
+          <span class="tag">INTERACTION</span>
+        </div>
+<p>下面的简化模型只看两个 logit：猫分数和狗分数。真实分类器当然复杂得多，但这个交互能展示一种直觉：当某个输入强烈触发猫特征时，softmax 最高分会上升，即使这个输入根本不是训练中的猫。</p>
+<p>高信心判为猫</p>
+<p>如果 unknown 强烈触发猫特征，分类器会自信地输出猫。这训练目标只学过猫狗边界。</p>
+      </section>
+      <section id="yellow">
+        <div class="head">
+          <h2>黄脸例子：模型可能抓到很脆的线索</h2>
+          <span class="tag">SPURIOUS</span>
+        </div>
+<p>课程里用辛普森家庭分类器做了一个很直观的实验。辛普森人物常见特征是黄脸、嘴型特殊。若把非辛普森人物的脸涂黄，分类器的 confidence 会明显上升；把头发也涂黄，甚至可能高信心判成某个辛普森角色。</p>
+<p>黄脸强度</p>
+<p>观察重点</p>
+<p>黄色越强，简化分类器越容易把它当作辛普森线索。真实模型还会看更多特征，但脆弱线索仍可能造成过度自信。</p>
+      </section>
+      <section id="realoutlier">
+        <div class="head">
+          <h2>方向一：拿真实异常资料训练低信心</h2>
+          <span class="tag">OUTLIER</span>
+        </div>
+<p>一个直接解法是：如果能收集到一些异常资料，就把它们放进训练流程。已知类样本仍然训练分类正确；异常样本则训练模型输出低 confidence，或训练它的 softmax entropy 变高。这样模型不只学会“已知类之间怎么分”，还学会“看到某些训练分布外样本时不要太自信”。</p>
+        <div class="box info">
+<h3>训练目标</h3>
+<p>known：正确分类且高信心；outlier：低 max score 或高 entropy。</p>
+        </div>
+        <div class="box warn">
+<h3>限制</h3>
+<p>异常资料难收集、覆盖不完整，还可能和真实测试 unknown 不一致。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>说明为什么给模型看异常样本可以降低过度自信，也说明这不是万能的。</p>
+        </div>
+      </section>
+      <section id="synthetic">
+        <div class="head">
+          <h2>方向二：用生成模型造“像但不太像”的异常</h2>
+          <span class="tag">SYNTHETIC</span>
+        </div>
+<p>如果真实异常资料很难收集，可以尝试用 generative model 生成异常资料。直觉是：让生成模型产生一些有点像正常资料、但又不属于正常资料的样本，再用这些样本训练分类器低信心。这样模型可以在正常边界附近见到更多“不要太自信”的例子。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>生成样本状态</th><th>问题</th><th>训练效果</th></tr>
+<tr><td>太像正常</td><td>可能混淆 known 类</td><td>伤害分类或误教模型</td></tr><tr><td>太不像正常</td><td>太容易拒绝</td><td>对困难 unknown 帮助有限</td></tr><tr><td>有点像但不太像</td><td>边界附近更有训练价值</td><td>可教模型降低过度自信</td></tr>
+        </table></div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释为什么 synthetic anomaly 的关键控制它和 normal 的相似度。</p>
+        </div>
+      </section>
+      <section id="share">
+        <div class="head">
+          <h2>公开分享速查：Unknown 也可能高信心</h2>
+          <span class="tag">quick</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>核心直觉</h3>
+<p>分类器学到的是区分已知类的线索，不是完整的世界边界。Unknown 如果强烈触发某个已知类线索，max softmax 可能非常高。</p>
+<p>因此 P32 指出：只看信心分数，会在边界附近和特征外推时失败。</p>
+        </div>
+        <div class="box warn">
+<h3>Worked example</h3>
+<p>猫狗分类器见到老虎，可能因为“胡须、耳朵、脸型”强烈像猫而高信心输出 cat。它没有学过“老虎不是宠物猫”这个边界。</p>
+<p>改进思路是让模型在训练时见到 outlier，并被要求对这些样本输出低 max score 或高 entropy。</p>
+<table class="metric-table">
+<tr><th>术语</th><th>精确定义</th><th>易混点</th></tr>
+<tr><td>Overconfidence</td><td>模型对未知或错误样本给出很高信心。</td><td>高 softmax 是模型状态，不等于客观正确。</td></tr>
+<tr><td>Feature shortcut</td><td>模型依赖少数强特征做判断。</td><td>训练集上有效的线索，在 open set 中可能误导。</td></tr>
+<tr><td>Outlier exposure</td><td>用额外异常样本训练模型低信心。</td><td>效果受异常样本覆盖范围限制。</td></tr>
+<tr><td>Synthetic outlier</td><td>用生成模型造边界附近异常。</td><td>太像 normal 或太不像 normal 都会降低价值。</td></tr>
+</table>
+        </div>
+        <div class="box info">
+<h3>诊断检查表</h3>
+<ul>
+<li>先找 unknown 为什么触发了已知类特征。</li>
+<li>再检查训练集中是否有类似 outlier 教模型降低信心。</li>
+<li>生成 outlier 时，要控制“像但不属于”的程度。</li>
+</ul>
+        </div>
+      </div>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：让 outlier 高 entropy</h2>
+          <span class="tag">MINIMAL</span>
+        </div>
+<p>下面伪代码表达训练目标。known 样本用普通 cross entropy；outlier 样本不要求分到某个已知类，而是希望输出分布更平均，或 max score 更低。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">logits_known = classifier(x_known)
 loss_cls = cross_entropy(logits_known, y_known)
 
 logits_out = classifier(x_outlier)
 probs_out = softmax(logits_out)
-loss_out = -entropy(probs_out)      <span class="cmt"># maximize entropy</span>
+loss_out = -entropy(probs_out) # maximize entropy
 
 loss = loss_cls + alpha * loss_out</code></pre>
-      <div class="codebar"><span class="label">正确示例：生成边界附近异常样本</span><span class="kind">pseudo python</span></div>
-      <pre><code>z = sample_noise()
+<p>正确示例：生成边界附近异常样本pseudo python</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text">z = sample_noise()
 x_fake = generator(z)
 if looks_somewhat_like_normal(x_fake) and not_too_close_to_normal(x_fake):
-    train_as_outlier(x_fake)</code></pre>
-      <div class="codebar error"><span class="label">错误示例：把生成样本都当异常</span><span class="kind">pseudo</span></div>
-      <pre><code><span class="cmt"># 错误：不管生成样本像不像正常，都拿来教低信心。</span>
+ train_as_outlier(x_fake)</code></pre>
+<p>错误示例：把生成样本都当异常pseudo</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-3">复制</button></div>
+        <pre id="code-code-3" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误：不管生成样本像不像正常，都拿来教低信心。
 x_fake = generator(z)
 loss_out = low_confidence_loss(classifier(x_fake))
 
-<span class="cmt"># 修正：需要控制生成样本与正常资料的距离，否则可能伤害已知类边界。</span></code></pre>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>看懂“让异常样本高 entropy”的训练目标，并指出生成异常资料的控制点。</p></div>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区与修正</h2><span class="tag">PITFALLS</span></div>
+# 修正：需要控制生成样本与正常资料的距离，否则可能伤害已知类边界。</code></pre>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与修正</h2>
+          <span class="tag">PITFALLS</span>
+        </div>
       <div class="grid2">
-        <div class="box redsoft"><h3>误区 1：unknown 一定低 confidence</h3><p>错因：只看 P30 baseline 的理想情况。后果：忽略老虎/狼/黄脸这类触发特征。修法：考虑未知样本可能强化已知特征。</p></div>
-        <div class="box redsoft"><h3>误区 2：高 softmax 代表样本来自训练分布</h3><p>错因：把分类边界信心当分布内证明。后果：open set 误收。修法：softmax 高只说明某个已知类 logit 高。</p></div>
-        <div class="box redsoft"><h3>误区 3：黄脸特征可靠代表辛普森</h3><p>错因：把训练集相关线索当语义边界。后果：被涂黄 unknown 骗过。修法：检查 spurious feature。</p></div>
-        <div class="box redsoft"><h3>误区 4：收集一点异常样本就覆盖 unknown</h3><p>错因：把未知世界当固定小集合。后果：新型异常仍可能漏掉。修法：把 outlier exposure 当改进，不当完美解。</p></div>
-        <div class="box redsoft"><h3>误区 5：生成异常越离谱越好</h3><p>错因：只想让模型看到不同东西。后果：训练信号太容易，对边界无帮助。修法：生成有点像但不太像的困难样本。</p></div>
-        <div class="box redsoft"><h3>误区 6：直接丢掉 confidence baseline</h3><p>错因：看到失败例就否定简单方法。后果：失去参照。修法：保留 baseline，再用异常训练改进它。</p></div>
+        <div class="box redsoft">
+<h3>误区 1：unknown 一定低 confidence</h3>
+<p>错因：只看 P30 baseline 的理想情况。后果：忽略老虎/狼/黄脸这类触发特征。修法：考虑未知样本可能强化已知特征。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 2：高 softmax 代表样本来自训练分布</h3>
+<p>错因：把分类边界信心当分布内证明。后果：open set 误收。修法：softmax 高只说明某个已知类 logit 高。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 3：黄脸特征可靠代表辛普森</h3>
+<p>错因：把训练集相关线索当语义边界。后果：被涂黄 unknown 骗过。修法：检查 spurious feature。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 4：收集一点异常样本就覆盖 unknown</h3>
+<p>错因：把未知世界当固定小集合。后果：新型异常仍可能漏掉。修法：把 outlier exposure 当改进，不当完美解。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 5：生成异常越离谱越好</h3>
+<p>错因：只想让模型看到不同东西。后果：训练信号太容易，对边界无帮助。修法：生成有点像但不太像的困难样本。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 6：直接丢掉 confidence baseline</h3>
+<p>错因：看到失败例就否定简单方法。后果：失去参照。修法：保留 baseline，再用异常训练改进它。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>诊断一个 open set 系统是否只是依赖脆弱特征，是否需要 outlier exposure。</p>
+        </div>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>诊断一个 open set 系统是否只是依赖脆弱特征，是否需要 outlier exposure。</p></div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>做题前先抓主线</strong><p>P32 的核心是：分类器信心分数会被未知样本的强特征骗过，因此要考虑异常资料或生成边界样本来训练低信心。</p></div>
-        <div class="review-card"><strong>自检重点</strong><ul><li>能不能解释“比猫更像猫”？</li><li>能不能说清黄脸 spurious feature？</li><li>能不能说明真实/生成异常资料的作用和限制？</li></ul></div>
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、失败模式</h3></div>
+          <div class="quick-review">作答提示 回答时说清 softmax 高分来自哪里。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. 为什么老虎可能骗过猫狗分类器的 open set 检测？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="老虎完全没有猫特征">老虎完全没有猫特征</label>
+      <label><input type="radio" name="q?" value="老虎可能强烈触发猫类特征，让分类器高信心">老虎可能强烈触发猫类特征，让分类器高信心</label>
+      <label><input type="radio" name="q?" value="softmax 不会输出概率分布">softmax 不会输出概率分布</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、失败模式</h3><p>先检查你是否理解 P30 baseline 的边界。</p></div><div class="quick-review"><b>作答提示</b><span>回答时说清 softmax 高分来自哪里。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q01" data-role="homework"><div class="q-meta"><span class="pill">选择</span></div><h3>1. 为什么老虎可能骗过猫狗分类器的 open set 检测？</h3><div class="choices"><label><input type="radio" name="q01" value="老虎完全没有猫特征">老虎完全没有猫特征</label><label><input type="radio" name="q01" value="老虎可能强烈触发猫类特征，让分类器高信心">老虎可能强烈触发猫类特征，让分类器高信心</label><label><input type="radio" name="q01" value="softmax 不会输出概率分布">softmax 不会输出概率分布</label></div></div>
-          <div class="q" id="q02" data-role="homework"><div class="q-meta"><span class="pill">判断</span></div><h3>2. unknown 样本只要不在训练集里，softmax 最大值就一定很低。</h3><div class="choices"><label><input type="radio" name="q02" value="对">对</label><label><input type="radio" name="q02" value="错">错</label></div></div>
-          <div class="q" id="q03" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>3. 用一句话解释“比猫更像猫”的意思。</h3><textarea id="ans03" placeholder="从未知样本强化已知类特征回答。"></textarea></div>
-          <div class="q" id="q04" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>4. 为什么高 confidence 不等于输入来自训练分布？</h3><textarea id="ans04" placeholder="从 logit 被触发和分布外样本回答。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 2. unknown 样本只要不在训练集里，softmax 最大值就一定很低。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 3. 用一句话解释“比猫更像猫”的意思。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 4. 为什么高 confidence 不等于输入来自训练分布？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、脆弱特征</h3><p>这组题检查你能否识别训练相关但语义不可靠的线索。</p></div><div class="quick-review"><b>作答提示</b><span>黄脸是线索，不是充分条件。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q05" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>5. 辛普森分类器为什么可能对黄脸 unknown 高信心？</h3><textarea id="ans05" placeholder="从训练集中黄脸与辛普森角色高度相关回答。"></textarea></div>
-          <div class="q" id="q06" data-role="homework"><div class="q-meta"><span class="pill">选择</span></div><h3>6. spurious feature 在本节中最接近哪种含义？</h3><div class="choices"><label><input type="radio" name="q06" value="训练中有用但不等于真实语义边界的线索">训练中有用但不等于真实语义边界的线索</label><label><input type="radio" name="q06" value="永远没用的随机噪声">永远没用的随机噪声</label><label><input type="radio" name="q06" value="模型一定不会学习的特征">模型一定不会学习的特征</label></div></div>
-          <div class="q" id="q07" data-role="homework"><div class="q-meta"><span class="pill">场景</span></div><h3>7. 一个安全帽检测器把“黄色物体”当安全帽线索。请类比 P32 说明风险。</h3><textarea id="ans07" placeholder="说明 unknown 黄色物体可能被高信心接收。"></textarea></div>
-          <div class="q" id="q08" data-role="homework"><div class="q-meta"><span class="pill">对照</span></div><h3>8. 区分“对 closed set 分类有帮助”和“对 open set 边界可靠”。</h3><textarea id="ans08" placeholder="用两句话回答。"></textarea></div>
+        <div class="group-head">
+          <div><h3>二、脆弱特征</h3></div>
+          <div class="quick-review">作答提示 黄脸是线索，不是充分条件。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 5. 辛普森分类器为什么可能对黄脸 unknown 高信心？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 6. spurious feature 在本节中最接近哪种含义？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="训练中有用但不等于真实语义边界的线索">训练中有用但不等于真实语义边界的线索</label>
+      <label><input type="radio" name="q?" value="永远没用的随机噪声">永远没用的随机噪声</label>
+      <label><input type="radio" name="q?" value="模型一定不会学习的特征">模型一定不会学习的特征</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、解决方向</h3><p>这组题检查你是否理解真实异常资料和生成异常资料。</p></div><div class="quick-review"><b>作答提示</b><span>已知类高信心，异常类低信心或高 entropy。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q09" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>9. 如果能收集到一些异常资料，应该怎样用它们训练 classifier？</h3><textarea id="ans09" placeholder="说明 known 做分类，outlier 训练低 confidence 或高 entropy。"></textarea></div>
-          <div class="q" id="q10" data-role="homework"><div class="q-meta"><span class="pill">判断</span></div><h3>10. outlier exposure 的异常资料越少越窄，越可能无法覆盖新型 unknown。</h3><div class="choices"><label><input type="radio" name="q10" value="对">对</label><label><input type="radio" name="q10" value="错">错</label></div></div>
-          <div class="q" id="q11" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>11. 为什么生成异常资料不能太像正常资料，也不能太不像正常资料？</h3><textarea id="ans11" placeholder="分别说两种极端的问题。"></textarea></div>
-          <div class="q" id="q12" data-role="homework"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>12. 伪代码 loss = CE(known) - entropy(outlier)。这个目标想让 outlier 输出变成什么样？</h3><textarea id="ans12" placeholder="说明最大化 entropy，让分布更平均、信心更低。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景</span></div>
+        <h3><b>Q:</b> 7. 一个安全帽检测器把“黄色物体”当安全帽线索。请类比 P32 说明风险。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 8. 区分“对 closed set 分类有帮助”和“对 open set 边界可靠”。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>四、错误诊断与迁移</h3><p>这组题要求定位错因、后果和修法。</p></div><div class="quick-review"><b>作答提示</b><span>错误示例题按“错在哪 / 后果 / 修法”写。</span></div></div>
-        <div class="drill-grid">
-          <div class="q full" id="q13" data-role="homework"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>13. 错误示例：有人说“只要 unknown 和训练资料不同，分类器自然会低信心”。请诊断。</h3><textarea id="ans13" placeholder="从特征外推、过度自信、训练目标缺口回答。"></textarea></div>
-          <div class="q" id="q14" data-role="homework"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>14. 错误示例：有人把所有 GAN 生成图都当 outlier 训练低信心，不管质量和相似度。请诊断。</h3><textarea id="ans14" placeholder="从太像/太不像都可能有问题回答。"></textarea></div>
-          <div class="q" id="q15" data-role="homework"><div class="q-meta"><span class="pill">场景应用</span></div><h3>15. 人脸门禁只认识员工，陌生人戴了和员工相似的工牌与制服。请用 P32 解释为什么 max score 可能失败。</h3><textarea id="ans15" placeholder="从强触发员工特征、未知样本高信心回答。"></textarea></div>
-          <div class="q" id="q16" data-role="homework"><div class="q-meta"><span class="pill">面试短答</span></div><h3>16. 用 2-3 句话回答：outlier exposure 解决什么问题，又有什么限制？</h3><textarea id="ans16" placeholder="提到训练低信心、异常难收集、覆盖有限。"></textarea></div>
+        <div class="group-head">
+          <div><h3>三、解决方向</h3></div>
+          <div class="quick-review">作答提示 已知类高信心，异常类低信心或高 entropy。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 9. 如果能收集到一些异常资料，应该怎样用它们训练 classifier？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 10. outlier exposure 的异常资料越少越窄，越可能无法覆盖新型 unknown。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>五、表达输出</h3><p>最后两题检查你能否把 P30 和 P32 串起来。</p></div><div class="quick-review"><b>作答提示</b><span>关键词：confidence baseline、unknown、overconfidence、feature、outlier exposure、synthetic anomaly。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q17" data-role="homework"><div class="q-meta"><span class="pill">综合短答</span></div><h3>17. 请说明为什么 P32 不是否定 P30 baseline，而是在指出它的失败边界。</h3><textarea id="ans17" placeholder="说明 baseline 仍可用，但需要知道何时会过度自信。"></textarea></div>
-          <div class="q full" id="q18" data-role="homework"><div class="q-meta"><span class="pill">费曼题</span></div><h3>18. 费曼题：请用 5-7 句话向会用 max softmax score 的同学解释，为什么 classifier 会对 unknown 过度自信，以及可以怎样改进。</h3><textarea id="ans18" placeholder="必须串联：已知类特征、比猫更像猫、黄脸例子、低信心训练、生成异常资料、限制。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 11. 为什么生成异常资料不能太像正常资料，也不能太不像正常资料？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">代码阅读</span></div>
+        <h3><b>Q:</b> 12. 伪代码 loss = CE(known) - entropy(outlier)。这个目标想让 outlier 输出变成什么样？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>六、低摩擦核对与迁移</h3><p>快速识别过度自信来源，并设计低信心训练。</p></div><div class="quick-review"><b>作答提示</b><span>关注“强触发已知类特征”的 unknown。</span></div></div>
+        <div class="group-head">
+          <div><h3>四、错误诊断与迁移</h3></div>
+          <div class="quick-review">作答提示 错误示例题按“错在哪 / 后果 / 修法”写。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" id="q19" data-role="homework"><div class="q-meta"><span class="pill">判断</span><span class="pill">低摩擦</span></div><h3>19. Unknown 样本一定会让 softmax 分布变平均吗？</h3><div class="choices"><label><input type="radio" name="q19" value="不一定，它可能强烈触发某个已知类。">不一定，它可能强烈触发某个已知类。</label><label><input type="radio" name="q19" value="一定，因为模型没见过 unknown。">一定，因为模型没见过 unknown。</label></div></div>
-          <div class="q" id="q20" data-role="homework"><div class="q-meta"><span class="pill">填空</span><span class="pill">低摩擦</span></div><h3>20. 用 outlier 训练低信心时，常希望 outlier 的输出分布 entropy 变高还是变低？</h3><input type="text" placeholder="写出高/低，并用一句话解释。"></div>
-          <div class="q" id="q21" data-role="homework"><div class="q-meta"><span class="pill">迁移</span><span class="pill">视觉质检</span></div><h3>21. 工厂分类器只识别三种合格外观。新缺陷和合格品非常像。请解释 max score 为什么可能失败。</h3><textarea placeholder="从已知类纹理/形状线索、边界附近 unknown、高信心误收回答。"></textarea></div>
-          <div class="q" id="q22" data-role="homework"><div class="q-meta"><span class="pill">迁移</span><span class="pill">异常资料</span></div><h3>22. 为这个质检系统设计一批 outlier exposure 数据。如何避免样本太容易或太像正常？</h3><textarea placeholder="说明真实缺陷、合成缺陷、边界样本、人工复核和不伤害 known 分类。"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 13. 错误示例：有人说“只要 unknown 和训练资料不同，分类器自然会低信心”。请诊断。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 14. 错误示例：有人把所有 GAN 生成图都当 outlier 训练低信心，不管质量和相似度。请诊断。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景应用</span></div>
+        <h3><b>Q:</b> 15. 人脸门禁只认识员工，陌生人戴了和员工相似的工牌与制服。请用 P32 解释为什么 max score 可能失败。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 16. 用 2-3 句话回答：outlier exposure 解决什么问题，又有什么限制？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、表达输出</h3></div>
+          <div class="quick-review">作答提示 关键词：confidence baseline、unknown、overconfidence、feature、outlier exposure、synthetic anomaly。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">综合短答</span></div>
+        <h3><b>Q:</b> 17. 请说明为什么 P32 在指出它的失败边界。</h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼题</span></div>
+        <h3><b>Q:</b> 18. 费曼题：请用 5-7 句话向会用 max softmax score 的同学解释，为什么 classifier 会对 unknown 过度自信，以及可以怎样改进。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>六、低摩擦核对与迁移</h3></div>
+          <div class="quick-review">作答提示 关注“强触发已知类特征”的 unknown。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 19. Unknown 样本一定会让 softmax 分布变平均吗？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="不一定，它可能强烈触发某个已知类。">不一定，它可能强烈触发某个已知类。</label>
+      <label><input type="radio" name="q?" value="一定，因为模型没见过 unknown。">一定，因为模型没见过 unknown。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 20. 用 outlier 训练低信心时，常希望 outlier 的输出分布 entropy 变高还是变低？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 21. 工厂分类器只识别三种合格外观。新缺陷和合格品非常像。请解释 max score 为什么可能失败。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 22. 为这个质检系统设计一批 outlier exposure 数据。如何避免样本太容易或太像正常？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
-      <p>完成练习后生成记录，方便你回看自己的判断链路。若有遗漏，页面会先提示哪些题还没写。</p>
-      <div class="quality" id="qualityBox"></div>
-      <div class="answer" id="answerBox">还没有生成记录。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" class="ghost" onclick="generateRecord()">生成记录</button>
-        <button type="button" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-const progress = document.getElementById('readProgress');
-window.addEventListener('scroll', () => {
-  const h = document.documentElement;
-  const max = h.scrollHeight - h.clientHeight;
-  progress.style.width = max > 0 ? (h.scrollTop / max * 100) + '%' : '0%';
-});
+      </ul>
+    </section>
+  </article>
 
-function softmax2(a,b){
-  const ea = Math.exp(a / 16);
-  const eb = Math.exp(b / 16);
-  return [ea/(ea+eb), eb/(ea+eb)];
-}
-function updateFeature(){
-  const cat = Number(document.getElementById('catFeature').value);
-  const dog = Number(document.getElementById('dogFeature').value);
-  document.getElementById('catOut').textContent = cat;
-  document.getElementById('dogOut').textContent = dog;
-  const p = softmax2(cat, dog);
-  document.getElementById('catProbBar').style.width = Math.round(p[0]*100) + '%';
-  document.getElementById('dogProbBar').style.width = Math.round(p[1]*100) + '%';
-  document.getElementById('catProbOut').textContent = p[0].toFixed(2);
-  document.getElementById('dogProbOut').textContent = p[1].toFixed(2);
-  const title = document.getElementById('featureTitle');
-  const text = document.getElementById('featureText');
-  if(Math.max(...p) < 0.65){
-    title.textContent = '低信心，可能拒绝';
-    text.textContent = '两个特征都不强或相互接近时，softmax 不尖，baseline 较容易输出 unknown。';
-  }else if(p[0] > p[1]){
-    title.textContent = '高信心判为猫';
-    text.textContent = '如果 unknown 强烈触发猫特征，分类器会自信地输出猫。这不是它真的认识 unknown，而是训练目标只学过猫狗边界。';
-  }else{
-    title.textContent = '高信心判为狗';
-    text.textContent = '如果 unknown 强烈触发狗特征，分类器也会自信地输出狗。狼这类样本就可能出现这种现象。';
-  }
-}
-document.getElementById('catFeature').addEventListener('input', updateFeature);
-document.getElementById('dogFeature').addEventListener('input', updateFeature);
-updateFeature();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-function updateYellow(){
-  const y = Number(document.getElementById('yellowLevel').value);
-  document.getElementById('yellowOut').textContent = y;
-  const r = Math.round(245 - y * 0.18);
-  const g = Math.round(205 + y * 0.25);
-  const b = Math.round(150 - y * 1.1);
-  document.getElementById('faceDemo').style.background = 'rgb(' + r + ',' + Math.min(230,g) + ',' + Math.max(40,b) + ')';
-  const conf = Math.min(0.99, 0.18 + y / 100 * 0.82);
-  document.getElementById('simpsonBar').style.width = Math.round(conf*100) + '%';
-  document.getElementById('simpsonOut').textContent = conf.toFixed(2);
-}
-document.getElementById('yellowLevel').addEventListener('input', updateYellow);
-updateYellow();
-
-function readQuestion(q){
-  const title = q.querySelector('h3')?.innerText.trim() || q.id;
-  const checked = Array.from(q.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(x => x.value);
-  const fields = Array.from(q.querySelectorAll('textarea,input[type="text"],select')).map(x => x.value.trim()).filter(Boolean);
-  const answer = checked.concat(fields).join('；');
-  return {title, answer};
-}
-function generateRecord(){
-  const qs = Array.from(document.querySelectorAll(".q[data-role='homework']"));
-  const rows = qs.map(readQuestion);
-  const missing = rows.filter(x => !x.answer);
-  const now = new Date();
-  const lines = [];
-  lines.push('# P32 异常检测 4：分类器过度自信｜练习记录');
-  lines.push('');
-  lines.push('- 生成时间：' + now.toLocaleString());
-  lines.push('- 题目数量：' + qs.length);
-  lines.push('');
-  rows.forEach((row, i) => {
-    lines.push('## ' + String(i + 1).padStart(2, '0') + ' ' + row.title);
-    lines.push(row.answer ? row.answer : '（未填写）');
-    lines.push('');
-  });
-  document.getElementById('answerBox').textContent = lines.join('\n');
-  const quality = document.getElementById('qualityBox');
-  quality.style.display = 'block';
-  if(missing.length){
-    quality.textContent = '还有 ' + missing.length + ' 题没有填写：' + missing.map(x => x.title.replace(/^\d+\.\s*/, '')).join('；');
-  }else{
-    quality.textContent = '已生成完整记录。复盘时重点看：是否说清 unknown 也可能高信心，是否能解释特征外推和黄脸例子，是否理解真实/生成异常资料的限制。';
-  }
-}
-function copyRecord(){
-  const text = document.getElementById('answerBox').textContent;
-  if(!text || text.includes('还没有生成')) generateRecord();
-  const finalText = document.getElementById('answerBox').textContent;
-  if(navigator.clipboard){
-    navigator.clipboard.writeText(finalText).then(() => {
-      document.getElementById('qualityBox').style.display = 'block';
-      document.getElementById('qualityBox').textContent = '记录已复制。';
-    }).catch(() => fallbackCopy(finalText));
-  }else{
-    fallbackCopy(finalText);
-  }
-}
-function fallbackCopy(text){
-  const area = document.createElement('textarea');
-  area.value = text;
-  document.body.appendChild(area);
-  area.select();
-  document.execCommand('copy');
-  area.remove();
-  document.getElementById('qualityBox').style.display = 'block';
-  document.getElementById('qualityBox').textContent = '记录已复制。';
-}
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

@@ -4,405 +4,579 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>17_P18｜作业7：SFT 与 DPO 偏好对齐</title>
-  <link rel="stylesheet" href="../../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body data-study-kind="homework" data-feynman-keywords="SFT,LoRA,chat template,DPO,preference data,support ratio,Judge Boy,NTU COOL,evaluation,win rate">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand">
-      <strong>17_P18</strong>
-      <span>作业7：SFT 与 DPO<br>Gemma · LoRA · 偏好对齐</span>
+<body data-course="李宏毅 LLM 课程" data-unit="17">
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅 LLM 课程</a>
+        <span class="sep">/</span>
+        <span>17</span>
+      </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
     </div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>学习目标</a>
-      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
-      <a href="#terms"><span class="dot"></span>术语表</a>
-      <a href="#lecture"><span class="dot"></span>讲义主线</a>
-      <a href="#source"><span class="dot"></span>作业线索</a>
-      <a href="#example"><span class="dot"></span>最小例子</a>
-      <a href="#viz"><span class="dot"></span>交互观察</a>
-      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">这一节要把“训练模型”拆成两种任务：SFT 学会对话格式和基本回答，DPO 学会偏好取舍。读的时候一直问：训练资料是什么，参数改哪里，结果交到哪里。</div>
-  </aside>
-  <main>
-    <section class="hero in-view" id="goal">
-      <div>
-        <div class="kicker">LEE HUNG-YI LLM 2026 · P18</div>
-        <h1>作业7：用 SFT 与 DPO 对齐语言模型</h1>
-        <p>这次作业围绕一个很实际的问题：如果我们想让语言模型会聊天、会遵守 chat template，并进一步对齐某个人对“香菜”的偏好，应该怎么训练？视频把大模型训练拆成三个阶段：Phase 0 是预训练，作业里不从头做；Phase 1 是 SFT，也就是监督微调；Phase 2 是 RL / preference alignment，本作业用 DPO 做观察。</p>
-        <p>SFT 部分要把结果上传到 Judge Boy，占 6 分；RL 观察结果填到 NTU COOL 表单，占 4 分。学习重点不是把 Colab 每一格背下来，而是看懂：基础模型为什么还不能聊天、chat template 为什么重要、LoRA 怎样节省训练参数、DPO 为什么需要 accepted / rejected 回答，以及训练结果该怎样评估。</p>
-        <div class="map"><span class="node">Phase 0: Pretrain</span><span class="arrow">→</span><span class="node">Phase 1: SFT</span><span class="arrow">→</span><span class="node">LoRA PEFT</span><span class="arrow">→</span><span class="node">Phase 2: DPO</span><span class="arrow">→</span><span class="node">提交与观察</span></div>
-        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=18">https://www.bilibili.com/video/BV1JKoeBiEt4?p=18</a></p>
-      </div>
-      <div class="route">
-        <h3>学完后要能做四件事</h3>
-        <ol>
-          <li>解释 SFT 和 DPO 分别在作业里解决什么问题。</li>
-          <li>读懂 chat template、LoRA rank / alpha / target modules、steps、decoding parameters。</li>
-          <li>判断一个训练设置是欠拟合、过慢、容易爆显存，还是提交格式有风险。</li>
-          <li>把 SFT 的 Judge Boy 评分和 RL 的 NTU COOL 观察报告分清楚。</li>
-        </ol>
-      </div>
-    </section>
+  </nav>
 
-    <section id="skeleton">
-      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
-      <div class="grid3">
-        <div class="box soft"><h3>Phase 0：预训练只提供底座</h3><p>预训练模型最基本的能力是文字接龙。它见过大量文本，但不一定知道“现在是 user 问、model 答”，也不一定会按课程要求输出完整回合。</p><p>作业不要求从零预训练，而是使用 Gemma-3-4B 系列作为基础模型，再进入后续微调。</p></div>
-        <div class="box"><h3>Phase 1：SFT 学会格式和对话</h3><p>SFT 用 question / answer 形式的 small talk 数据训练模型，让它读懂 chat template 的 special token，并输出像对话模型的回答。</p><p>可调的核心是 LoRA 设置、训练资料数量、epoch、batch size、learning rate 和生成参数。</p></div>
-        <div class="box warn"><h3>Phase 2：DPO 学会偏好取舍</h3><p>现实中很多问题没有唯一标准答案，例如“某种食物要不要加香菜”。DPO 给模型一个 preferred 回答和一个 rejected 回答，让模型靠近喜欢的、远离不喜欢的。</p><p>作业不是追求线上分数，而是观察训练前后偏好变化并填写表单。</p></div>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">LEE HUNG-YI LLM 2026 · P18</div>
+      <div class="hero-meta">
+        <span class="hero-badge">17</span>
       </div>
-      <table class="metric-table" style="margin-top:14px">
-        <tr><th>部分</th><th>训练资料</th><th>主要输出</th><th>交付</th><th>分数</th></tr>
-        <tr><td>SFT</td><td>助教过滤后的 small talk，最多约 4772 笔可用训练资料</td><td>evaluation set 上的生成结果 CSV</td><td>上传 Judge Boy，每人每天最多 3 次</td><td>6 分</td></tr>
-        <tr><td>RL / DPO</td><td>香菜偏好相关 preference data，含 question / accept / reject</td><td>训练前后回答差异和观察</td><td>填写 NTU COOL 表单</td><td>4 分</td></tr>
-      </table>
-    </section>
+      <h1 class="hero-title">17_P18｜作业7：SFT 与 DPO 偏好对齐</h1>
+      <p class="hero-desc">这次作业围绕一个很实际的问题：如果我们想让语言模型会聊天、会遵守 chat template，并进一步对齐某个人对“香菜”的偏好，应该怎么训练？视频把大模型训练拆成三个阶段：Phase 0 是预训练，作业里不从头做；Phase 1 是 SFT，也就是监督微调；Phase 2 是 RL / preference alignment，本作业用 DPO 做观察。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../16_P17_作业6/学习页.html">上一节</a>
+            <a href="../18_P19_作业8/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="terms">
-      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
-      <table class="metric-table">
-        <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
-        <tr><td>Pretrain</td><td>先让模型从大量文本学通用模式。</td><td>常见目标是预测下一个 token，本作业把它当 Phase 0，不实际从头训练。</td><td>以为预训练模型天然会聊天和遵守模板。</td></tr>
-        <tr><td>SFT</td><td>用示范答案教模型怎样回答。</td><td>Supervised Fine-Tuning，用成对输入输出继续训练基础模型。</td><td>把 SFT 当成只是在模型里塞知识，忽略格式和输出边界。</td></tr>
-        <tr><td>chat template</td><td>告诉模型谁在说话、轮到谁回答。</td><td>用 BOS、start/end turn、user/model 等 special token 组织对话。</td><td>以为只要 prompt 文本对，special token 少一个也没关系。</td></tr>
-        <tr><td>PEFT / LoRA</td><td>不动整颗大模型，只训练少量附加参数。</td><td>LoRA 冻结原权重 W，训练两个低秩矩阵 A、B，并把增量加回输出。</td><td>以为 LoRA 参数越大一定越好，忽略资料量和显存限制。</td></tr>
-        <tr><td>rank r</td><td>LoRA 给模型开的“学习通道”宽度。</td><td>A 和 B 的中间维度，r 越大，可训练参数和表达能力越高。</td><td>rank 太小学不动，rank 太大可能过拟合或拖慢训练。</td></tr>
-        <tr><td>alpha</td><td>LoRA 增量对原模型影响多强。</td><td>控制 LoRA 分支的缩放，常见策略是设为 rank 或 rank 的两倍。</td><td>alpha 太大可能破坏原模型能力，输出不稳定。</td></tr>
-        <tr><td>DPO</td><td>直接根据偏好样本调模型。</td><td>Direct Preference Optimization，用 preferred / rejected 回答优化模型偏好。</td><td>以为 DPO 也需要唯一标准答案；其实它学的是相对偏好。</td></tr>
-        <tr><td>support ratio</td><td>喜欢香菜食物占所有食物的比例。</td><td>liked foods 数量除以全部 10 种食物数量，用来构造偏好设定。</td><td>like / dislike 没覆盖全部食物或有交集，观察就不干净。</td></tr>
-        <tr><td>win rate</td><td>你的回答赢过参考回答的比例。</td><td>Judge Boy 用 GPT 成对比较你的输出和参考输出，交错左右顺序后估计胜率。</td><td>只看一次样例聊天，就判断模型已经过 baseline。</td></tr>
-        <tr><td>decoding parameters</td><td>控制生成时“保守还是发散”。</td><td>temperature、top-k、top-p、max length 等影响采样和输出长度。</td><td>训练不好时盲目调生成参数，掩盖真正的数据或训练问题。</td></tr>
-      </table>
-      <p class="checkpoint">你现在应该能做什么：看到 sample code 里的一个参数，能先判断它属于 SFT 训练、LoRA 适配、DPO 设定、生成采样，还是提交评估。</p>
-    </section>
+        </ul>
+      </div>
+    </div>
+  </header>
 
-    <section id="lecture">
-      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#skeleton">概念骨架</a>
+      <a href="#terms">术语表</a>
+      <a href="#lecture">讲义主线</a>
+      <a href="#source">作业线索</a>
+      <a href="#example">最小例子</a>
+      <a href="#viz">交互观察</a>
+      <a href="#diagnosis">误区诊断</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="skeleton">
+        <div class="head">
+          <h2>概念骨架</h2>
+          <span class="tag">MAP</span>
+        </div>
+<p>Phase 0：预训练只提供底座预训练模型最基本的能力是文字接龙。它见过大量文本，但不一定知道“现在是 user 问、model 答”，也不一定会按课程要求输出完整回合。作业不要求从零预训练，而是使用 Gemma-3-4B 系列作为基础模型，再进入后续微调。</p>
+<p>Phase 1：SFT 学会格式和对话SFT 用 question / answer 形式的 small talk 数据训练模型，让它读懂 chat template 的 special token，并输出像对话模型的回答。可调的核心是 LoRA 设置、训练资料数量、epoch、batch size、learning rate 和生成参数。</p>
+<p>Phase 2：DPO 学会偏好取舍现实中很多问题没有唯一标准答案，例如“某种食物要不要加香菜”。DPO 给模型一个 preferred 回答和一个 rejected 回答，让模型靠近喜欢的、远离不喜欢的。作业观察训练前后偏好变化并填写表单。</p>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语表</h2>
+          <span class="tag">TERMS</span>
+        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
+<tr><td>Pretrain</td><td>先让模型从大量文本学通用模式。</td><td>常见目标是预测下一个 token，本作业把它当 Phase 0，不实际从头训练。</td><td>以为预训练模型天然会聊天和遵守模板。</td></tr><tr><td>SFT</td><td>用示范答案教模型怎样回答。</td><td>Supervised Fine-Tuning，用成对输入输出继续训练基础模型。</td><td>把 SFT 当成只是在模型里塞知识，忽略格式和输出边界。</td></tr><tr><td>chat template</td><td>告诉模型谁在说话、轮到谁回答。</td><td>用 BOS、start/end turn、user/model 等 special token 组织对话。</td><td>以为只要 prompt 文本对，special token 少一个也没关系。</td></tr><tr><td>PEFT / LoRA</td><td>不动整颗大模型，只训练少量附加参数。</td><td>LoRA 冻结原权重 W，训练两个低秩矩阵 A、B，并把增量加回输出。</td><td>以为 LoRA 参数越大一定越好，忽略资料量和显存限制。</td></tr><tr><td>rank r</td><td>LoRA 给模型开的“学习通道”宽度。</td><td>A 和 B 的中间维度，r 越大，可训练参数和表达能力越高。</td><td>rank 太小学不动，rank 太大可能过拟合或拖慢训练。</td></tr><tr><td>alpha</td><td>LoRA 增量对原模型影响多强。</td><td>控制 LoRA 分支的缩放，常见策略是设为 rank 或 rank 的两倍。</td><td>alpha 太大可能破坏原模型能力，输出不稳定。</td></tr><tr><td>DPO</td><td>直接根据偏好样本调模型。</td><td>Direct Preference Optimization，用 preferred / rejected 回答优化模型偏好。</td><td>以为 DPO 也需要唯一标准答案；其实它学的是相对偏好。</td></tr><tr><td>support ratio</td><td>喜欢香菜食物占所有食物的比例。</td><td>liked foods 数量除以全部 10 种食物数量，用来构造偏好设定。</td><td>like / dislike 没覆盖全部食物或有交集，观察就不干净。</td></tr><tr><td>win rate</td><td>你的回答赢过参考回答的比例。</td><td>Judge Boy 用 GPT 成对比较你的输出和参考输出，交错左右顺序后估计胜率。</td><td>只看一次样例聊天，就判断模型已经过 baseline。</td></tr><tr><td>decoding parameters</td><td>控制生成时“保守还是发散”。</td><td>temperature、top-k、top-p、max length 等影响采样和输出长度。</td><td>训练不好时盲目调生成参数，掩盖真正的数据或训练问题。</td></tr>
+        </table></div>
+<p>你现在应该能做什么：看到 sample code 里的一个参数，能先判断它属于 SFT 训练、LoRA 适配、DPO 设定、生成采样，还是提交评估。</p>
+      </section>
+      <section id="lecture">
+        <div class="head">
+          <h2>讲义主线</h2>
+          <span class="tag">LECTURE</span>
+        </div>
       <div class="grid2">
         <div class="box">
-          <h3>1. 为什么这节从 fine-tuning 讲起</h3>
-          <p>助教一开始用一句话概括这次作业：“fine-tuning is all you need”。这不是说预训练、prompt 或评估不重要，而是说当你想让一个现有语言模型学会或忘记某种行为时，最根本的工程动作往往是继续训练它。SFT 可以教它如何按示范回答，DPO 可以教它在没有标准答案的问题上偏向某种偏好。</p>
-          <p>这次作业的人设是“对齐李宏毅老师的香菜偏好”。香菜是一个很好的偏好例子，因为它不是事实题。地球到太阳的距离有标准答案，可以用 SFT 记住；但“珍珠奶茶可不可以加香菜”更像价值和偏好取舍，没有唯一正确答案，需要偏好对齐来改变模型倾向。</p>
+<h3>1. 为什么这节从 fine-tuning 讲起</h3>
+<p>助教一开始用一句话概括这次作业：“fine-tuning is all you need”。这说当你想让一个现有语言模型学会或忘记某种行为时，最根本的工程动作往往是继续训练它。SFT 可以教它如何按示范回答，DPO 可以教它在没有标准答案的问题上偏向某种偏好。</p>
+<p>这次作业的人设是“对齐李宏毅老师的香菜偏好”。香菜是一个很好的偏好例子，因为它不是事实题。地球到太阳的距离有标准答案，可以用 SFT 记住；但“珍珠奶茶可不可以加香菜”更像价值和偏好取舍，没有唯一正确答案，需要偏好对齐来改变模型倾向。</p>
         </div>
         <div class="box">
-          <h3>2. Phase 0 为什么不做预训练</h3>
-          <p>预训练成本极高，涉及资料收集、清洗、算力、时间和人力。本作业不会从零训练一颗语言模型，而是使用已经预训练好的 Gemma-3-4B 系列模型作为基础。这个阶段的模型会做文字接龙，但不保证会按人类期待的聊天格式回答。</p>
-          <p>为了把模型放进 Colab 免费版显存，sample code 还会用到量化等技巧。量化的直觉是用更省空间的数值表示模型权重，降低显存占用。你不需要在本作业里深挖量化公式，但要知道：如果显存爆掉，常常不是“代码完全错了”，而是模型大小、batch、adapter 或 Colab session 状态共同造成的。</p>
+<h3>2. Phase 0 为什么不做预训练</h3>
+<p>预训练成本极高，涉及资料收集、清洗、算力、时间和人力。本作业不会从零训练一颗语言模型，而是使用已经预训练好的 Gemma-3-4B 系列模型作为基础。这个阶段的模型会做文字接龙，但不保证会按人类期待的聊天格式回答。</p>
+<p>为了把模型放进 Colab 免费版显存，sample code 还会用到量化等技巧。量化的直觉是用更省空间的数值表示模型权重，降低显存占用。你不需要在本作业里深挖量化公式，但要知道：如果显存爆掉，常常模型大小、batch、adapter 或 Colab session 状态共同造成的。</p>
+<ol>
+<li>SFT 学的是 chat template基础模型看到“请问珍珠奶茶可以加香菜吗”，可能会把“香菜”继续接成百科说明。SFT 给它大量 user / model 的示范，让它知道 user 回合结束后应该进入 model 回合，并用完整回答结束。这就是 chat template 的意义：它不是装饰，而是训练和推理时的协议。少了 start turn、end turn 或角色标记，模型可能不知道哪段是用户输入、哪段是自己要生成的输出。</li>
+<li>训练资料不是越乱越好SFT 使用助教整理过的 small talk 资料，原始资料很大，但作业只允许使用指定资料集。sample code 会做 preprocessing，最后最多约 4772 笔训练资料可用。可调的是 subsample size。少量资料适合先 debug，确认流程能跑；更多资料能给模型更多教材，但训练时间更长，也需要重新考虑 epoch、batch size 和 steps。</li>
+<li>LoRA 决定学习上限与成本全参数微调一颗大模型太贵，所以本作业用 LoRA。LoRA 冻结原本的 weight，只训练两个低秩矩阵 A 和 B，再把 LoRA 分支的输出加回原模型输出。rank 越大，adapter 表达能力越强，但训练参数、显存和时间都会增加。target modules 选得越多，可训练位置越多，上限可能更高，但也更容易超过资源预算。</li>
+<li>steps 是训练量的共同尺度data size、epoch、batch size 单看都不够，因为它们共同决定模型实际更新几次。字幕里给出的参考公式是：steps = data size * epoch / batch size。助教经验提到，想冲 strong baseline，大概需要 150 到 200 steps 左右作为参考。它不是绝对公式，但能帮你避免只盯着 epoch 或只盯着 data size。</li>
+<li>DPO 学的是偏好，不是标准答案DPO 的训练样本由 question、accepted answer、rejected answer 组成。模型要增加 preferred 回答的相对概率，降低 rejected 回答的相对概率。在本作业里，偏好来自 10 种食物与香菜的组合。support ratio 表示喜欢加香菜的食物数量占全部食物数量的比例。训练前后要观察模型回答是否朝这个比例和人设偏好移动。</li>
+<li>评估和交付分两条线SFT 结果上传 Judge Boy，重点看输出是否合格、chat template 是否完整、win rate 是否过 simple / medium / strong baseline。Judge Boy 每人每天只有三次提交机会。RL / DPO 部分比较训练前后的输出，回答 NTU COOL 表单里的观察题。两条线的交付位置不同，混在一起会浪费时间。</li>
+</ol>
+        </div>
+        <div class="box info">
+<h3>完整知识链路</h3>
+<p>这节可以串成一句话：先用预训练模型作为底座，再用 SFT 和 chat template 把它训练成会按回合说话的对话模型；为了省显存和时间，用 LoRA 只训练少量 adapter 参数；SFT 训练完成后在固定 evaluation set 上 inference，导出 CSV 上传 Judge Boy；另一路用 DPO 的 preference data 调整香菜偏好，比较训练前后回答变化，并把观察写到 NTU COOL。你现在应该能做的事：打开 sample code 时，知道哪些格子只是环境准备，哪些格子是你该调的参数，哪些结果要保存和提交。</p>
         </div>
       </div>
-      <div class="grid3" style="margin-top:14px">
-        <div class="box soft"><h3>3. SFT 学的是 chat template</h3><p>基础模型看到“请问珍珠奶茶可以加香菜吗”，可能会把“香菜”继续接成百科说明。SFT 给它大量 user / model 的示范，让它知道 user 回合结束后应该进入 model 回合，并用完整回答结束。</p><p>这就是 chat template 的意义：它不是装饰，而是训练和推理时的协议。少了 start turn、end turn 或角色标记，模型可能不知道哪段是用户输入、哪段是自己要生成的输出。</p></div>
-        <div class="box"><h3>4. 训练资料不是越乱越好</h3><p>SFT 使用助教整理过的 small talk 资料，原始资料很大，但作业只允许使用指定资料集。sample code 会做 preprocessing，最后最多约 4772 笔训练资料可用。</p><p>可调的是 subsample size。少量资料适合先 debug，确认流程能跑；更多资料能给模型更多教材，但训练时间更长，也需要重新考虑 epoch、batch size 和 steps。</p></div>
-        <div class="box warn"><h3>5. LoRA 决定学习上限与成本</h3><p>全参数微调一颗大模型太贵，所以本作业用 LoRA。LoRA 冻结原本的 weight，只训练两个低秩矩阵 A 和 B，再把 LoRA 分支的输出加回原模型输出。</p><p>rank 越大，adapter 表达能力越强，但训练参数、显存和时间都会增加。target modules 选得越多，可训练位置越多，上限可能更高，但也更容易超过资源预算。</p></div>
-        <div class="box soft"><h3>6. steps 是训练量的共同尺度</h3><p>data size、epoch、batch size 单看都不够，因为它们共同决定模型实际更新几次。字幕里给出的参考公式是：steps = data size * epoch / batch size。</p><p>助教经验提到，想冲 strong baseline，大概需要 150 到 200 steps 左右作为参考。它不是绝对公式，但能帮你避免只盯着 epoch 或只盯着 data size。</p></div>
-        <div class="box"><h3>7. DPO 学的是偏好，不是标准答案</h3><p>DPO 的训练样本由 question、accepted answer、rejected answer 组成。模型要增加 preferred 回答的相对概率，降低 rejected 回答的相对概率。</p><p>在本作业里，偏好来自 10 种食物与香菜的组合。support ratio 表示喜欢加香菜的食物数量占全部食物数量的比例。训练前后要观察模型回答是否朝这个比例和人设偏好移动。</p></div>
-        <div class="box warn"><h3>8. 评估和交付分两条线</h3><p>SFT 结果上传 Judge Boy，重点看输出是否合格、chat template 是否完整、win rate 是否过 simple / medium / strong baseline。Judge Boy 每人每天只有三次提交机会。</p><p>RL / DPO 部分不是上传一个分数文件，而是比较训练前后的输出，回答 NTU COOL 表单里的观察题。两条线的交付位置不同，混在一起会浪费时间。</p></div>
-      </div>
-      <div class="box info" style="margin-top:14px">
-        <h3>完整知识链路</h3>
-        <p>这节可以串成一句话：先用预训练模型作为底座，再用 SFT 和 chat template 把它训练成会按回合说话的对话模型；为了省显存和时间，用 LoRA 只训练少量 adapter 参数；SFT 训练完成后在固定 evaluation set 上 inference，导出 CSV 上传 Judge Boy；另一路用 DPO 的 preference data 调整香菜偏好，比较训练前后回答变化，并把观察写到 NTU COOL。你现在应该能做的事：打开 sample code 时，知道哪些格子只是环境准备，哪些格子是你该调的参数，哪些结果要保存和提交。</p>
-      </div>
-    </section>
-
-    <section id="source">
-      <div class="head"><h2>作业线索</h2><span class="tag">作业线索</span></div>
-      <div class="source-lines">
-        <div class="box"><h3>作业目标</h3><p>SFT 学会阅读 chat template、正常对话；RL / DPO 学会对齐李宏毅老师对香菜的偏好。作业给统一人设，是为了评分和观察更稳定。</p></div>
-        <div class="box"><h3>SFT 数据</h3><p>训练资料来自指定 small talk 数据集，助教过滤后约 5000 笔，preprocess 后最多约 4772 笔。作业限制使用指定资料，不可额外换资料集。</p></div>
-        <div class="box"><h3>LoRA 调参</h3><p>建议从 rank 2、4、8、16、32、64 等规模试；alpha 可固定或设为 rank / 2 倍 rank；target modules 可从 q、k、v、o、up、down、gate projection 中选。</p></div>
-        <div class="box"><h3>训练量参考</h3><p>steps = data size * epoch / batch size。想过 strong baseline，字幕给的经验参考是约 150 到 200 steps。loss 小于 1 是收敛信号之一，但不能替代真实 inference 和提交评分。</p></div>
-        <div class="box"><h3>DPO 数据</h3><p>preference data 包含 question、accept、reject。作业通过 like foods / dislike foods 和 support ratio 生成偏好条件，训练后观察模型是否改变回答。</p></div>
-        <div class="box"><h3>Colab 注意</h3><p>每次重新启动 session 后要先跑 environment setup。Hugging Face token 建议放 Colab secret。显存问题优先重启 session，再考虑 batch size、模型保存和 checkpoint。</p></div>
-      </div>
-    </section>
-
-    <section id="example">
-      <div class="head"><h2>最小例子</h2><span class="tag">EXAMPLE</span></div>
-      <p>下面的代码不是完整作业代码，而是把 P18 最关键的三个结构抽出来：chat template、LoRA 配置、DPO preference data。你要能读懂每行在控制哪件事。</p>
-      <div class="codebar"><span class="label">示例 1：chat template 的回合协议</span><span class="kind">python</span></div>
-      <pre><code>def build_chat(user_message):
-    return (
-        "&lt;bos&gt;"
-        "&lt;start_of_turn&gt;user\n"
-        f"{user_message}"
-        "&lt;end_of_turn&gt;\n"
-        "&lt;start_of_turn&gt;model\n"
-    )
+      </section>
+      <section id="source">
+        <div class="head">
+          <h2>作业线索</h2>
+          <span class="tag">作业线索</span>
+        </div>
+<p>作业目标SFT 学会阅读 chat template、正常对话；RL / DPO 学会对齐李宏毅老师对香菜的偏好。作业给统一人设，是为了评分和观察更稳定。</p>
+<p>SFT 数据训练资料来自指定 small talk 数据集，助教过滤后约 5000 笔，preprocess 后最多约 4772 笔。作业限制使用指定资料，不可额外换资料集。</p>
+<p>LoRA 调参建议从 rank 2、4、8、16、32、64 等规模试；alpha 可固定或设为 rank / 2 倍 rank；target modules 可从 q、k、v、o、up、down、gate projection 中选。</p>
+<p>训练量参考steps = data size * epoch / batch size。想过 strong baseline，字幕给的经验参考是约 150 到 200 steps。loss 小于 1 是收敛信号之一，但不能替代真实 inference 和提交评分。</p>
+<p>DPO 数据preference data 包含 question、accept、reject。作业通过 like foods / dislike foods 和 support ratio 生成偏好条件，训练后观察模型是否改变回答。</p>
+<p>Colab 注意每次重新启动 session 后要先跑 environment setup。Hugging Face token 建议放 Colab secret。显存问题优先重启 session，再考虑 batch size、模型保存和 checkpoint。</p>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>最小例子</h2>
+          <span class="tag">EXAMPLE</span>
+        </div>
+<p>下面的代码把 P18 最关键的三个结构抽出来：chat template、LoRA 配置、DPO preference data。你要能读懂每行在控制哪件事。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-example-1">复制</button></div>
+        <pre id="code-example-1" data-export-context="代码" data-export-lang="text"><code class="language-text">def build_chat(user_message):
+ return (
+ "&lt;bos&gt;"
+ "&lt;start_of_turn&gt;user\n"
+ f"{user_message}"
+ "&lt;end_of_turn&gt;\n"
+ "&lt;start_of_turn&gt;model\n"
+ )
 
 prompt = build_chat("请问珍珠奶茶可以加香菜吗？")
 outputs = model.generate(tokenizer(prompt, return_tensors="pt"))</code></pre>
-      <div class="box soft"><h3>逐行理解</h3><p>chat template 的重点是角色和边界。user 回合必须结束，model 回合必须开始，模型才知道自己接下来应该生成回答，而不是继续补全用户的话。SFT 的一个基本目标，就是让模型学会这些 special token 的读写方式。</p><p>你现在应该能做的事：看到一个生成结果，判断它有没有正确结束 model 回合，例如是否出现 end of turn。</p></div>
-      <div class="codebar"><span class="label">示例 2：LoRA 配置要看 rank、alpha 和 target modules</span><span class="kind">python</span></div>
-      <pre><code>lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-    lora_dropout=0.05,
-    task_type="CAUSAL_LM",
-)
-
-model = get_peft_model(base_model, lora_config)
-model.print_trainable_parameters()</code></pre>
-      <div class="formula">若原矩阵是 4096 × 4096，LoRA rank = 8，则可训练参数约为 4096 × 8 + 8 × 4096 = 65,536，只占原矩阵 16,777,216 参数的约 0.39%。</div>
-      <p>这里的直觉是：rank 决定 adapter 的容量，alpha 决定 adapter 输出影响力，target modules 决定哪些投影层会被加上 adapter。你现在应该能做的事：把“想提高上限”和“怕训练太慢”分别映射到不同参数选择。</p>
-      <div class="codebar"><span class="label">示例 3：DPO preference data 的三元组</span><span class="kind">python</span></div>
-      <pre><code>sample = {
-    "question": "珍珠奶茶可以加香菜吗？",
-    "chosen": "如果是李宏毅老师的人设，可以尝试加一点香菜，味道很有层次。",
-    "rejected": "绝对不能加香菜，所有人都会讨厌。",
-}
-
-# DPO 不是要求 chosen 是唯一真理，而是让模型相对偏向 chosen，
-# 同时远离 rejected 代表的偏好方向。</code></pre>
-      <p>你现在应该能做的事：区分 SFT 的“标准回答示范”和 DPO 的“偏好二选一”。前者更像教格式和任务行为，后者更像教取舍。</p>
-    </section>
-
-    <section id="viz">
-      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <h3>SFT steps 计算器</h3>
-            <div class="slider-row"><span>data size</span><input id="dataSize" type="range" min="100" max="4772" step="100" value="1000"><b id="dataOut">1000</b></div>
-            <div class="slider-row"><span>epoch</span><input id="epochSize" type="range" min="1" max="6" value="2"><b id="epochOut">2</b></div>
-            <div class="slider-row"><span>batch size</span><input id="batchSize" type="range" min="1" max="8" value="4"><b id="batchOut">4</b></div>
-            <div class="calc-card">
-              <div><b>steps</b><strong id="stepOut">500</strong></div>
-              <div><b>参考区间</b><strong>150-200</strong></div>
-              <div><b>判断</b><strong id="stepLevel">偏多</strong></div>
-            </div>
-            <p id="stepText" class="checkpoint"></p>
-          </div>
-          <div class="viz-cell">
-            <h3>DPO support ratio</h3>
-            <div class="slider-row"><span>liked foods</span><input id="likedCount" type="range" min="0" max="10" value="5"><b id="likedOut">5/10</b></div>
-            <div class="calc-card">
-              <div><b>ratio</b><strong id="ratioOut">0.50</strong></div>
-              <div><b>like</b><strong id="likeOut">5</strong></div>
-              <div><b>dislike</b><strong id="dislikeOut">5</strong></div>
-            </div>
-            <p id="ratioText" class="checkpoint"></p>
-          </div>
         </div>
-        <div class="viz-grid" style="margin-top:14px">
-          <div class="viz-cell">
-            <h3>生成参数观察</h3>
-            <div class="seg">
-              <button data-check="temperature" class="active">temperature</button>
-              <button data-check="topk">top-k / top-p</button>
-              <button data-check="length">max length</button>
-            </div>
-            <p id="checkText" class="checkpoint"></p>
-          </div>
-          <div class="viz-cell">
-            <h3>提交路径提醒</h3>
-            <table class="metric-table">
-              <tr><th>SFT</th><td>evaluation set inference -> CSV -> Judge Boy</td></tr>
-              <tr><th>DPO</th><td>训练前后回答对比 -> 观察文字 -> NTU COOL 表单</td></tr>
-              <tr><th>风险</th><td>Judge Boy 每天次数有限，DPO 表单别写成 SFT 分数复述。</td></tr>
-            </table>
-          </div>
+      </section>
+      <section id="viz">
+        <div class="head">
+          <h2>交互观察</h2>
+          <span class="tag">OBSERVE</span>
         </div>
-      </div>
-      <p>观察重点：SFT steps 不是越多越好，DPO ratio 也不是随手填。训练设置、资源预算、偏好定义和最终交付要互相一致。</p>
-    </section>
-
-    <section id="diagnosis">
-      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
+<p>SFT steps 计算器</p>
+<p>data size<b>1000</b></p>
+<p>epoch<b>2</b></p>
+<p>batch size<b>4</b></p>
+<p>DPO support ratio</p>
+<p>liked foods<b>5/10</b></p>
+<p>生成参数观察</p>
+<p>提交路径提醒</p>
+<p>观察重点：SFT steps 不是越多越好，DPO ratio 也不是随手填。训练设置、资源预算、偏好定义和最终交付要互相一致。</p>
+      </section>
+      <section id="diagnosis">
+        <div class="head">
+          <h2>误区诊断</h2>
+          <span class="tag">DIAGNOSIS</span>
+        </div>
       <div class="grid2">
         <div class="box redsoft">
-          <h3>常见坑</h3>
-          <ol>
-            <li>把预训练模型当成聊天模型。错因：忽略 pretrain 只学文字接龙；后果：模型可能延续百科式文本，不像回答用户；修法：用 SFT 和 chat template 教它回合格式。</li>
-            <li>破坏 chat template。错因：删掉 start/end turn 或角色 token；后果：Judge Boy 可能判定输出不完整，模型也可能不知道何时停止；修法：训练和 inference 使用同一套 template。</li>
-            <li>使用额外数据集。错因：以为资料越多越好；后果：违反作业限制，评分不可比；修法：只用指定 small talk 数据和 sample code 下载的 evaluation set。</li>
-            <li>只看 final loss。错因：loss 低只说明模型拟合给定训练资料；后果：可能 inference 仍然差，或者 win rate 不够；修法：用小样本聊天、evaluation inference、Judge Boy 反馈一起判断。</li>
-            <li>LoRA rank 和 target modules 一口气开太大。错因：只追求上限；后果：训练慢、显存爆、Colab session 中断；修法：先用小 data size debug，再逐步增加 rank、modules 和训练资料。</li>
-            <li>DPO 的 chosen / rejected 或 like / dislike 食物设反。错因：没检查 preference data；后果：模型朝错误偏好对齐；修法：训练前先打印样本，确认 support ratio 和 accepted / rejected 方向。</li>
-            <li>max length 太短。错因：把生成中断误认为模型不会答；后果：回答半路结束，chat template 可能不完整；修法：适当增加 max length，并检查 end of turn。</li>
-            <li>Colab 显存错误后反复重跑同一格。错因：session 残留对象没有清掉；后果：错误持续出现；修法：优先 restart runtime，重新跑 environment setup，再加载模型。</li>
-          </ol>
+<h3>常见坑</h3>
+<ol>
+<li>把预训练模型当成聊天模型。错因：忽略 pretrain 只学文字接龙；后果：模型可能延续百科式文本，不像回答用户；修法：用 SFT 和 chat template 教它回合格式。</li>
+<li>破坏 chat template。错因：删掉 start/end turn 或角色 token；后果：Judge Boy 可能判定输出不完整，模型也可能不知道何时停止；修法：训练和 inference 使用同一套 template。</li>
+<li>使用额外数据集。错因：以为资料越多越好；后果：违反作业限制，评分不可比；修法：只用指定 small talk 数据和 sample code 下载的 evaluation set。</li>
+<li>只看 final loss。错因：loss 低只说明模型拟合给定训练资料；后果：可能 inference 仍然差，或者 win rate 不够；修法：用小样本聊天、evaluation inference、Judge Boy 反馈一起判断。</li>
+<li>LoRA rank 和 target modules 一口气开太大。错因：只追求上限；后果：训练慢、显存爆、Colab session 中断；修法：先用小 data size debug，再逐步增加 rank、modules 和训练资料。</li>
+<li>DPO 的 chosen / rejected 或 like / dislike 食物设反。错因：没检查 preference data；后果：模型朝错误偏好对齐；修法：训练前先打印样本，确认 support ratio 和 accepted / rejected 方向。</li>
+<li>max length 太短。错因：把生成中断误认为模型不会答；后果：回答半路结束，chat template 可能不完整；修法：适当增加 max length，并检查 end of turn。</li>
+<li>Colab 显存错误后反复重跑同一格。错因：session 残留对象没有清掉；后果：错误持续出现；修法：优先 restart runtime，重新跑 environment setup，再加载模型。</li>
+</ol>
         </div>
         <div class="box">
-          <h3>易混概念</h3>
-          <table class="metric-table">
-            <tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr>
-            <tr><td>SFT</td><td>DPO</td><td>SFT 用示范答案学习任务格式；DPO 用偏好对比学习取舍。</td></tr>
-            <tr><td>rank</td><td>alpha</td><td>rank 控制 LoRA 容量；alpha 控制 LoRA 分支影响强度。</td></tr>
-            <tr><td>data size</td><td>steps</td><td>data size 是样本数；steps 是参数更新次数，受 epoch 和 batch size 共同影响。</td></tr>
-            <tr><td>loss</td><td>win rate</td><td>loss 是训练过程指标；win rate 是 Judge Boy 用参考回答比较出来的评分依据。</td></tr>
-            <tr><td>temperature</td><td>learning rate</td><td>temperature 控制推理采样发散度；learning rate 控制训练更新幅度。</td></tr>
-          </table>
+<h3>易混概念</h3>
+<p>概念 A概念 B区别</p>
+<p>SFTDPOSFT 用示范答案学习任务格式；DPO 用偏好对比学习取舍。</p>
+<p>rankalpharank 控制 LoRA 容量；alpha 控制 LoRA 分支影响强度。</p>
+<p>data sizestepsdata size 是样本数；steps 是参数更新次数，受 epoch 和 batch size 共同影响。</p>
+<p>losswin rateloss 是训练过程指标；win rate 是 Judge Boy 用参考回答比较出来的评分依据。</p>
+<p>temperaturelearning ratetemperature 控制推理采样发散度；learning rate 控制训练更新幅度。</p>
         </div>
       </div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">DRILL</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答前先抓主线</strong><p>先写 Phase 0 / SFT / DPO 各自负责什么，再写 LoRA 怎么省参数，最后写 SFT 和 RL 分别如何提交。</p></div>
-        <div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起 SFT、chat template、LoRA、DPO、preference data、Judge Boy 和 NTU COOL。</p></div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、基础概念</h3><p>先确认你知道每个阶段解决什么问题。</p></div><div class="quick-review"><b>REMIND</b>不要只背英文缩写，要写出输入、训练信号和输出。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-title="1. P18 作业会从零预训练一颗语言模型。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. P18 作业会从零预训练一颗语言模型。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
-          <div class="q" data-role="homework" data-title="2. SFT 部分主要交到哪里？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. SFT 部分主要交到哪里？</h3><div class="choices"><label><input type="radio" name="q2" value="Judge Boy">Judge Boy</label><label><input type="radio" name="q2" value="NTU COOL 表单">NTU COOL 表单</label><label><input type="radio" name="q2" value="只交 Colab 截图">只交 Colab 截图</label></div></div>
-          <div class="q short" data-role="homework" data-title="3. 用一句话说明 SFT 和 DPO 的区别。"><div class="q-meta"><span class="pill">简答</span></div><h3>3. 用一句话说明 SFT 和 DPO 的区别。</h3><textarea name="q3"></textarea></div>
-          <div class="q short" data-role="homework" data-title="4. chat template 为什么会影响模型能否正常对话？"><div class="q-meta"><span class="pill">解释</span></div><h3>4. chat template 为什么会影响模型能否正常对话？</h3><textarea name="q4"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>二、流程理解</h3><p>把作业流程排清楚，避免把提交和训练混在一起。</p></div><div class="quick-review"><b>REMIND</b>SFT 和 DPO 是两条不同交付线。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="5. 把 SFT 流程排成顺序：environment setup、load model、load dataset、subsample、LoRA config、train、inference、upload CSV。"><div class="q-meta"><span class="pill">排序</span></div><h3>5. 把 SFT 流程排成顺序：environment setup、load model、load dataset、subsample、LoRA config、train、inference、upload CSV。</h3><textarea name="q5"></textarea></div>
-          <div class="q short" data-role="homework" data-title="6. 为什么一开始 debug 时可以先用少量 training data？"><div class="q-meta"><span class="pill">解释</span></div><h3>6. 为什么一开始 debug 时可以先用少量 training data？</h3><textarea name="q6"></textarea></div>
-          <div class="q short" data-role="homework" data-title="7. steps = data size * epoch / batch size。若 data size=1000、epoch=2、batch size=4，steps 是多少？"><div class="q-meta"><span class="pill">计算</span></div><h3>7. <code>steps = data size * epoch / batch size</code>。若 data size=1000、epoch=2、batch size=4，steps 是多少？</h3><input type="text" name="q7"></div>
-          <div class="q short" data-role="homework" data-title="8. 为什么 Judge Boy 提交次数有限时，不能每改一个小参数就立刻上传？"><div class="q-meta"><span class="pill">策略</span></div><h3>8. 为什么 Judge Boy 提交次数有限时，不能每改一个小参数就立刻上传？</h3><textarea name="q8"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、代码与参数阅读</h3><p>这一组检查 LoRA 和生成参数。</p></div><div class="quick-review"><b>REMIND</b>参数要说影响，不要只说“调大调小”。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="9. LoRA rank 变大通常会带来哪些好处和成本？"><div class="q-meta"><span class="pill">对照</span></div><h3>9. LoRA rank 变大通常会带来哪些好处和成本？</h3><textarea name="q9"></textarea></div>
-          <div class="q short" data-role="homework" data-title="10. alpha 控制的是什么？alpha 太大可能有什么问题？"><div class="q-meta"><span class="pill">解释</span></div><h3>10. alpha 控制的是什么？alpha 太大可能有什么问题？</h3><textarea name="q10"></textarea></div>
-          <div class="q short" data-role="homework" data-title="11. target_modules 选更多 projection 时，为什么训练上限和训练成本都会变？"><div class="q-meta"><span class="pill">解释</span></div><h3>11. target_modules 选更多 projection 时，为什么训练上限和训练成本都会变？</h3><textarea name="q11"></textarea></div>
-          <div class="q" data-role="homework" data-title="12. temperature 属于训练参数，直接影响梯度更新。"><div class="q-meta"><span class="pill">判断</span></div><h3>12. temperature 属于训练参数，直接影响梯度更新。</h3><div class="choices"><label><input type="radio" name="q12" value="对">对</label><label><input type="radio" name="q12" value="错">错</label></div></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、错误诊断</h3><p>按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b>诊断题必须写出实际会坏在哪里。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="13. 有人删掉 chat template 里的 end_of_turn。错因是什么、后果是什么、怎么改？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 有人删掉 chat template 里的 end_of_turn。错因是什么、后果是什么、怎么改？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q13"></textarea></div>
-          <div class="q short" data-role="homework" data-title="14. 有人看到 final loss 很低，就不跑 evaluation inference。这个判断哪里不稳？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. 有人看到 final loss 很低，就不跑 evaluation inference。这个判断哪里不稳？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q14"></textarea></div>
-          <div class="q short" data-role="homework" data-title="15. 有人把 chosen 和 rejected 食物偏好写反，然后说 DPO 没有效。应该如何排查？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 有人把 chosen 和 rejected 食物偏好写反，然后说 DPO 没有效。应该如何排查？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q15"></textarea></div>
-          <div class="q short" data-role="homework" data-title="16. 有人训练到一半 Colab 显存爆掉，还继续重复执行同一个 cell。可能造成什么后果？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 有人训练到一半 Colab 显存爆掉，还继续重复执行同一个 cell。可能造成什么后果？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q16"></textarea></div>
-          <div class="q short" data-role="homework" data-title="17. 有人使用额外资料集提升 SFT 表现。为什么这在作业里有问题？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>17. 有人使用额外资料集提升 SFT 表现。为什么这在作业里有问题？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q17"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>五、DPO 与观察</h3><p>这一组检查偏好数据和报告写法。</p></div><div class="quick-review"><b>REMIND</b>DPO 的重点是比较训练前后行为变化。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="18. support ratio = 0.3 时，10 种食物里应该有几种被放到 like foods？"><div class="q-meta"><span class="pill">计算</span></div><h3>18. support ratio = 0.3 时，10 种食物里应该有几种被放到 like foods？</h3><input type="text" name="q18"></div>
-          <div class="q short" data-role="homework" data-title="19. DPO 表单里的观察结果应该比较哪些内容？"><div class="q-meta"><span class="pill">应用</span></div><h3>19. DPO 表单里的观察结果应该比较哪些内容？</h3><textarea name="q19"></textarea></div>
-          <div class="q short" data-role="homework" data-title="20. 写出 5 条 SFT 结果上传前的检查清单。"><div class="q-meta"><span class="pill">清单</span></div><h3>20. 写出 5 条 SFT 结果上传前的检查清单。</h3><textarea name="q20"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>六、表达输出</h3><p>最后两题检查你能不能讲给别人听。</p></div><div class="quick-review"><b>REMIND</b>先讲任务，再讲训练方法，最后讲评估和交付。</div></div>
-        <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="21. 如果面试官问“P18 作业7 的核心是什么”，你会怎么答？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>21. 如果面试官问“P18 作业7 的核心是什么”，你会怎么答？</h3><textarea name="q21"></textarea></div>
-          <div class="q full" data-role="homework" data-title="22. 用 6-9 句话讲清楚 P18 作业7：从预训练底座到 SFT 和 DPO 交付。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>22. 用 6-9 句话讲清楚 P18 作业7：从预训练底座到 SFT 和 DPO 交付。</h3><div class="solve-note">请串联 SFT、chat template、LoRA、DPO、preference data、support ratio、Judge Boy、NTU COOL。</div><textarea name="q22"></textarea></div>
-        </div>
-      </div>
-    </section>
 
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          <div class="quick-review">REMIND 不要只背英文缩写，要写出输入、训练信号和输出。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 1. P18 作业会从零预训练一颗语言模型。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 2. SFT 部分主要交到哪里？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="Judge Boy">Judge Boy</label>
+      <label><input type="radio" name="q?" value="NTU COOL 表单">NTU COOL 表单</label>
+      <label><input type="radio" name="q?" value="只交 Colab 截图">只交 Colab 截图</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 3. 用一句话说明 SFT 和 DPO 的区别。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 4. chat template 为什么会影响模型能否正常对话？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、流程理解</h3></div>
+          <div class="quick-review">REMIND SFT 和 DPO 是两条不同交付线。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">排序</span></div>
+        <h3><b>Q:</b> 5. 把 SFT 流程排成顺序：environment setup、load model、load dataset、subsample、LoRA config、train、inference、upload CSV。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 6. 为什么一开始 debug 时可以先用少量 training data？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">计算</span></div>
+        <h3><b>Q:</b> 7. <code>steps = data size * epoch / batch size</code>。若 data size=1000、epoch=2、batch size=4，steps 是多少？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">策略</span></div>
+        <h3><b>Q:</b> 8. 为什么 Judge Boy 提交次数有限时，不能每改一个小参数就立刻上传？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、代码与参数阅读</h3></div>
+          <div class="quick-review">REMIND 参数要说影响，不要只说“调大调小”。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 9. LoRA rank 变大通常会带来哪些好处和成本？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 10. alpha 控制的是什么？alpha 太大可能有什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 11. target_modules 选更多 projection 时，为什么训练上限和训练成本都会变？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 12. temperature 属于训练参数，直接影响梯度更新。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、错误诊断</h3></div>
+          <div class="quick-review">REMIND 诊断题必须写出实际会坏在哪里。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 13. 有人删掉 chat template 里的 end_of_turn。错因是什么、后果是什么、怎么改？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 14. 有人看到 final loss 很低，就不跑 evaluation inference。这个判断哪里不稳？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 15. 有人把 chosen 和 rejected 食物偏好写反，然后说 DPO 没有效。应该如何排查？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 16. 有人训练到一半 Colab 显存爆掉，还继续重复执行同一个 cell。可能造成什么后果？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 17. 有人使用额外资料集提升 SFT 表现。为什么这在作业里有问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、DPO 与观察</h3></div>
+          <div class="quick-review">REMIND DPO 的重点是比较训练前后行为变化。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">计算</span></div>
+        <h3><b>Q:</b> 18. support ratio = 0.3 时，10 种食物里应该有几种被放到 like foods？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">应用</span></div>
+        <h3><b>Q:</b> 19. DPO 表单里的观察结果应该比较哪些内容？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 20. 写出 5 条 SFT 结果上传前的检查清单。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>六、表达输出</h3></div>
+          <div class="quick-review">REMIND 先讲任务，再讲训练方法，最后讲评估和交付。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 21. 如果面试官问“P18 作业7 的核心是什么”，你会怎么答？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 22. 用 6-9 句话讲清楚 P18 作业7：从预训练底座到 SFT 和 DPO 交付。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>导出练习记录</h2><span class="tag">EXPORT</span></div>
-      <p class="muted">完成练习后生成 Markdown 练习记录，便于保存和回看订正。</p>
-      <div class="actions"><button onclick="generateRecord()">生成 Markdown 练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
-<script src="../../../../assets/study-page.js"></script>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){
-  const max=document.documentElement.scrollHeight-innerHeight;
-  progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";
-  let current=sections[0]?.id;
-  for(const section of sections){
-    const rect=section.getBoundingClientRect();
-    if(rect.top<innerHeight*.36) current=section.id;
-    section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);
-  }
-  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));
-}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-function fallbackCopy(text,onOk,onFail){
-  const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";document.body.appendChild(ta);ta.focus();ta.select();
-  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
-}
-function copyText(text,onOk,onFail){
-  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
-  else fallbackCopy(text,onOk,onFail);
-}
-document.querySelectorAll(".codebar").forEach(bar=>{
-  const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";
-  btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});
-  bar.appendChild(btn);
-});
-const dataSize=document.getElementById("dataSize"),epochSize=document.getElementById("epochSize"),batchSize=document.getElementById("batchSize");
-function updateSteps(){
-  const data=Number(dataSize.value),epoch=Number(epochSize.value),batch=Number(batchSize.value);
-  const steps=Math.round(data*epoch/batch);
-  document.getElementById("dataOut").textContent=data;
-  document.getElementById("epochOut").textContent=epoch;
-  document.getElementById("batchOut").textContent=batch;
-  document.getElementById("stepOut").textContent=steps;
-  const level=steps<120?"偏少":steps<=220?"接近参考":"偏多";
-  document.getElementById("stepLevel").textContent=level;
-  document.getElementById("stepText").textContent=steps<120?"适合快速 debug，但可能训练信号不足。先确认流程能跑，再增加 data size 或 epoch。":steps<=220?"接近字幕里的 strong baseline 参考区间，下一步看 final loss、inference 质量和 Judge Boy 反馈。":"训练量偏多，可能更慢也更容易撞 Colab 时间限制；确认收益后再跑。";
-}
-[dataSize,epochSize,batchSize].forEach(input=>input.addEventListener("input",updateSteps));updateSteps();
-const likedCount=document.getElementById("likedCount");
-function updateRatio(){
-  const liked=Number(likedCount.value),disliked=10-liked,ratio=liked/10;
-  document.getElementById("likedOut").textContent=liked+"/10";
-  document.getElementById("ratioOut").textContent=ratio.toFixed(2);
-  document.getElementById("likeOut").textContent=liked;
-  document.getElementById("dislikeOut").textContent=disliked;
-  document.getElementById("ratioText").textContent=liked===0?"极端偏好：所有食物都不喜欢加香菜，观察时要看模型是否稳定拒绝。":liked===10?"极端偏好：所有食物都喜欢加香菜，观察时要看模型是否过度泛化。":"中间比例：like / dislike 都有样本，适合观察模型是否按不同食物做区分。";
-}
-likedCount.addEventListener("input",updateRatio);updateRatio();
-const checkTexts={
-  temperature:"temperature 越高，采样越发散，回答可能更有变化也更不稳定；越低越保守，但可能重复或缺少创造性。",
-  topk:"top-k / top-p 会限制候选 token 范围。它们影响推理时选词，不会替代 SFT 或 DPO 的训练效果。",
-  length:"max length 太短会让回答被截断，甚至缺少 end of turn；太长则可能浪费时间并增加无关输出。"
-};
-document.querySelectorAll("[data-check]").forEach(btn=>btn.addEventListener("click",()=>{
-  document.querySelectorAll("[data-check]").forEach(b=>b.classList.toggle("active",b===btn));
-  document.getElementById("checkText").textContent=checkTexts[btn.dataset.check];
-}));
-document.getElementById("checkText").textContent=checkTexts.temperature;
-function valueOfQuestion(q){
-  const radio=q.querySelector("input[type=radio]:checked"); if(radio) return radio.value;
-  const text=q.querySelector("textarea,input[type=text],select"); return text?text.value.trim():"";
-}
-function questionGroup(q){return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";}
-function generateRecord(){
-  const qs=[...document.querySelectorAll('[data-role="homework"]')],groups={},warnings=[];
-  qs.forEach((q,i)=>{
-    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";
-    const hint=q.querySelector(".solve-note")?.innerText.trim()||"";
-    const answer=valueOfQuestion(q);
-    if(!answer) warnings.push("第 "+(i+1)+" 题未填写："+title);
-    if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))) warnings.push("第 "+(i+1)+" 题建议补齐“错因 / 后果 / 修法”。");
-    if(q.dataset.type==="feynman"){
-      const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
-      if(answer&&answer.length<120) warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");
-      const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):[];
-      if(lack.length) warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");
-    }
-    const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
-  });
-  let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";
-  Object.keys(groups).forEach(group=>{out+="## "+group+"\n\n";groups[group].forEach(item=>{out+="### "+item.title+"\n";if(item.hint) out+="提示摘要："+item.hint+"\n\n";out+=item.answer+"\n\n";});});
-  document.getElementById("record").textContent=out;
-  const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，适合回看订正。";
-}
-function copyRecord(){
-  copyText(document.getElementById("record").textContent,()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";},()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";});
-}
-</script>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

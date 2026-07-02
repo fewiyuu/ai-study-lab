@@ -4,991 +4,667 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PagedAttention 与块管理</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="现代 LLM 推理引擎内核" data-unit="03｜PagedAttention 与块管理">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>现代 LLM 推理引擎内核</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">现代 LLM 推理引擎内核</a>
+        <span class="sep">/</span>
         <span>03｜PagedAttention 与块管理</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#overview"><span class="dot"></span>先抓主线</a>
-        <a href="#ledger"><span class="dot"></span>块表与读写</a>
-        <a href="#mechanism"><span class="dot"></span>核心机制</a>
-        <a href="#example"><span class="dot"></span>例子</a>
-        <a href="#boundary"><span class="dot"></span>边界</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">先把块表、复用和尾部浪费看清，再去看后面的调度循环。这里先不追 kernel 细节。</div>
-    </aside>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">第 03 单元</div>
-          <h1>PagedAttention 与块管理</h1>
-          <p>这一页接着 02 单元的显存账本往下走，把 KV cache 进一步拆成块表、共享前缀和尾部浪费三个问题。先看懂逻辑块和物理块怎么对应，再看例子里的 copy-on-write；调度循环、kernel 访存和 speculative decoding 放到后面的单元继续展开。</p>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">第 03 单元</div>
+      <div class="hero-meta">
+        <span class="hero-badge">03｜PagedAttention 与块管理</span>
+      </div>
+      <h1 class="hero-title">PagedAttention 与块管理</h1>
+      <p class="hero-desc">这一页接着 02 单元的显存账本往下走，把 KV cache 进一步拆成块表、共享前缀和尾部浪费三个问题。先看懂逻辑块和物理块怎么对应，再看例子里的 copy-on-write；调度循环、kernel 访存和 speculative decoding 放到后面的单元继续展开。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../02_KV_cache与显存账本/学习页.html">上一单元</a>
+            <a href="../04_Continuous_batching与调度循环/学习页.html">下一单元</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>你能把一条序列的 token 长度换算成需要多少个 KV block，并算出最后一块浪费多少槽位。</li>
+            <li>你能区分“逻辑上连续”与“物理上连续”，知道块表在中间做了什么映射。</li>
+            <li>你能判断 prefix cache 什么时候能复用、什么时候必须重算，并说出 copy-on-write 为什么要存在。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
 
-          <div class="course-links">
-            <a href="../index.html">课程地图</a><a href="../02_KV_cache与显存账本/学习页.html">上一单元</a><a href="../04_Continuous_batching与调度循环/学习页.html">下一单元</a>
-          </div>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">先把这节课的边界定住</a>
+      <a href="#overview">为什么会有 PagedAttention</a>
+      <a href="#ledger">块表在读写什么</a>
+      <a href="#mechanism">读写顺序怎么走</a>
+      <a href="#example">两个请求共享前缀时会发生什么</a>
+      <a href="#prefix">前缀缓存和块管理是什么关系</a>
+      <a href="#route">读公开资料时先抓哪三条线</a>
+      <a href="#boundary">这里先不追的几件事</a>
+      <a href="#diagnosis">排障时先看哪一步</a>
+      <a href="#mistakes">最容易错的 4 个判断</a>
+      <a href="#capacity">block size 为什么不是越大越好</a>
+      <a href="#code">把这笔账写成一段小代码</a>
+      <a href="#lab">三种常见症状在终端里长什么样</a>
+      <a href="#boundary-cases">把 32、33、48、49 token 放在一起看</a>
+      <a href="#handoff">把块边界和线上症状接起来</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>先把这节课的边界定住</h2>
+          <span class="tag">goals</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>你要抓住的主线</h3>
+<p>第 02 单元已经把 KV cache 算成了显存账；这一单元继续问：这笔账要怎么摆，怎么复用，怎么避免最后一段空洞把预算吃掉。</p>
+        </div>
+        <div class="box info">
+<h3>先别展开的部分</h3>
+<p>先不要把注意力放到 continuous batching、scheduler、speculative decoding、chunked prefill 或 kernel 级优化上。那些问题会回到第 04、05 单元。</p>
+<p>> [!NOTE] 学完这一页，你应该能做什么：</p>
+<p>> 拿到一段 prompt，先算它会占多少 block，再判断哪些块能共享、哪些块需要新分配、哪里会产生尾部浪费。</p>
+        </div>
+      </div>
+      </section>
+      <section id="overview">
+        <div class="head">
+          <h2>为什么会有 PagedAttention</h2>
+          <span class="tag">overview</span>
+        </div>
+<p>如果每个请求都预留一整段连续 KV cache，服务很快会被两件事拖住：请求长度变化太大，很多请求又只用到预留区的一小部分。PagedAttention 关注的是 KV cache 的物理摆放方式；attention 的数学公式本身在这里不变。</p>
+<p>物理层</p>
+<p>显存里放的是固定大小的 block。一个请求可以占很多块，块之间不必挨在一起。</p>
+        <div class="callout note">
+<div class="callout-title">读这页时的直觉：</div><p>先把“序列长度”翻成“块数”，再看“块之间怎么共享”。先盯 kernel，容量问题很容易被看成纯算力问题。</p>
+        </div>
+      </section>
+      <section id="ledger">
+        <div class="head">
+          <h2>块表在读写什么</h2>
+          <span class="tag">state</span>
+        </div>
+<p>把 KV cache 看成块表之后，最重要的就“这段数据现在处于什么状态”。下面这张表把读写、共享和故障症状摆在一起。</p>
+        <div class="callout note">
+<div class="callout-title">下一步怎么检查：</div><p>看到一个 prefix 命中或分支请求时，先问块表有没有指向同一批 block，再问有没有超过共享边界的写入动作。</p>
+        </div>
+      </section>
+      <section id="mechanism">
+        <div class="head">
+          <h2>读写顺序怎么走</h2>
+          <span class="tag">trace</span>
+        </div>
+<p>这张 trace 只跟踪一个锚定例子：一个 49 token 的序列，block size 是 16。它的作用不是背数，而是让你看到“多出来的 1 个 token”为什么会把一整块一起记账。</p>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>两个请求共享前缀时会发生什么</h2>
+          <span class="tag">example</span>
+        </div>
+<p>设请求 A 和请求 B 的前 32 个 token 完全一致，block size 是 16。A 先进入 prefill，B 后来跟进。这里真正重要的token 序列是否完全一致。</p>
+        <div class="box">
+<h3>B 复用前缀</h3>
+<p>B 可以直接复用 A0 和 A1，两块的内容不需要重算；如果 B 在共享块上继续写自己的分支，就要先复制出私有块。</p>
+<pre><code class="language-text">B0 -&gt; 0..15 (shared)
+B1 -&gt; 16..31 (shared)
+B2 -&gt; 32..47 (private after branch)</code></pre>
+<p>> [!NOTE] 这例子告诉你的事：</p>
+<p>> prefix cache 省的是重复 prefill，不会自动帮你缩短生成长度；PagedAttention 省的是摆放和碎片，不会把理论 bytes/token 变小。</p>
+        </div>
+      </section>
+      <section id="prefix">
+        <div class="head">
+          <h2>前缀缓存和块管理是什么关系</h2>
+          <span class="tag">prefix</span>
+        </div>
+<p>前缀缓存做什么</p>
+<p>它找的是“完全相同的前缀”，命中后直接复用已有 KV block。它不是语义相近就行，也不是看长度一样就行。</p>
+<p>两者合起来</p>
+<p>prefix cache 负责减少重复 prefill，PagedAttention 负责把复用的 KV 放进块表里，让它能被多个请求共享。</p>
+      </section>
+      <section id="route">
+        <div class="head">
+          <h2>读公开资料时先抓哪三条线</h2>
+          <span class="tag">route</span>
+        </div>
+<p>这节课的资料边界不复杂，但很容易读散。最稳的办法，是每份资料只抓一件事：谁管块、谁管复用、谁管层级。</p>
+<p>vLLM Prefix Caching</p>
+<p>先看它如何定义前缀命中、何时复用、何时重算。重点是“完全一致”而不是“差不多”。</p>
+        <div class="callout note">
+<div class="callout-title">下一页怎么接：</div><p>这页停在块管理和复用边界；第 04 单元会把这些块放进 continuous batching 的调度循环里，看它们怎么在多请求之间轮转。</p>
+        </div>
+      </section>
+      <section id="boundary">
+        <div class="head">
+          <h2>这里先不追的几件事</h2>
+          <span class="tag">boundary</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先放一边</h3>
+<p>continuous batching、scheduler、kernel fusion、speculative decoding、chunked prefill。它们都重要，但不是这页要解决的主问题。</p>
         </div>
         <div class="box soft">
-          <h3>读完本页，你可以</h3>
-          <ul>
-  <li>你能把一条序列的 token 长度换算成需要多少个 KV block，并算出最后一块浪费多少槽位。</li>
-  <li>你能区分“逻辑上连续”与“物理上连续”，知道块表在中间做了什么映射。</li>
-  <li>你能判断 prefix cache 什么时候能复用、什么时候必须重算，并说出 copy-on-write 为什么要存在。</li>
-</ul>
-
+<h3>这页要完成的动作</h3>
+<p>能用 block size 算块数、用前缀长度判断复用、用 copy-on-write 解释分支写入、用尾块解释为什么“多一个 token”会多记一整块账。</p>
         </div>
       </div>
-
-      <section id="goals">
-  <div class="head">
-    <h2>先把这节课的边界定住</h2>
-    <span class="tag">goals</span>
-  </div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>你要抓住的主线</h3>
-      <p>第 02 单元已经把 KV cache 算成了显存账；这一单元继续问：这笔账要怎么摆，怎么复用，怎么避免最后一段空洞把预算吃掉。</p>
-    </div>
-    <div class="box info">
-      <h3>先别展开的部分</h3>
-      <p>先不要把注意力放到 continuous batching、scheduler、speculative decoding、chunked prefill 或 kernel 级优化上。那些问题会回到第 04、05 单元。</p>
-    </div>
-  </div>
-  <div class="callout">
-    <strong>学完这一页，你应该能做什么：</strong>
-    拿到一段 prompt，先算它会占多少 block，再判断哪些块能共享、哪些块需要新分配、哪里会产生尾部浪费。
-  </div>
-</section>
-
-<section id="overview">
-  <div class="head">
-    <h2>为什么会有 PagedAttention</h2>
-    <span class="tag">overview</span>
-  </div>
-  <p>如果每个请求都预留一整段连续 KV cache，服务很快会被两件事拖住：请求长度变化太大，很多请求又只用到预留区的一小部分。PagedAttention 关注的是 KV cache 的物理摆放方式；attention 的数学公式本身在这里不变。</p>
-  <div class="grid3">
-    <div class="box">
-      <h3>逻辑层</h3>
-      <p>模型看到的是一串连续 token。前缀、续写和分支都还是“序列”的概念。</p>
-    </div>
-    <div class="box">
-      <h3>物理层</h3>
-      <p>显存里放的是固定大小的 block。一个请求可以占很多块，块之间不必挨在一起。</p>
-    </div>
-    <div class="box">
-      <h3>管理层</h3>
-      <p>块表把逻辑位置映射到物理 block；prefix cache 和 copy-on-write 在这张表上做复用和分叉。</p>
-    </div>
-  </div>
-  <div class="callout">
-    <strong>读这页时的直觉：</strong>
-    先把“序列长度”翻成“块数”，再看“块之间怎么共享”。先盯 kernel，容量问题很容易被看成纯算力问题。
-  </div>
-</section>
-
-<section id="ledger">
-  <div class="head">
-    <h2>块表在读写什么</h2>
-    <span class="tag">state ledger</span>
-  </div>
-  <p>把 KV cache 看成块表之后，最重要的就不是“有没有这段数据”，而是“这段数据现在处于什么状态”。下面这张表把读写、共享和故障症状摆在一起。</p>
-  <div class="table-wrap">
-    <table data-export-context="PagedAttention 块表读写状态表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>对象</th>
-          <th>进入前是什么</th>
-          <th>进入后是什么</th>
-          <th>读什么</th>
-          <th>写什么</th>
-          <th>错了会怎样</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>逻辑序列</td>
-          <td>一串连续 token</td>
-          <td>被切成多个块的逻辑段</td>
-          <td>当前 token 位置、前缀长度</td>
-          <td>生成新的 token 位置</td>
-          <td>会把一个连续前缀误算成多个不相关片段</td>
-        </tr>
-        <tr>
-          <td>物理 block</td>
-          <td>空闲或被别的序列占用</td>
-          <td>被当前序列引用</td>
-          <td>引用计数、块大小、块哈希</td>
-          <td>写入新的 K/V 数据</td>
-          <td>会出现覆盖、重复分配，或尾块浪费被漏算</td>
-        </tr>
-        <tr>
-          <td>块表</td>
-          <td>没有映射或只映射到旧块</td>
-          <td>指向当前序列的物理 block 列表</td>
-          <td>逻辑块号、共享前缀位置</td>
-          <td>新的块指针、分叉后的私有块</td>
-          <td>会让 kernel 读错块，表现成错 token 或异常延迟</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="callout">
-    <strong>下一步怎么检查：</strong>
-    看到一个 prefix 命中或分支请求时，先问块表有没有指向同一批 block，再问有没有超过共享边界的写入动作。
-  </div>
-</section>
-
-<section id="mechanism">
-  <div class="head">
-    <h2>读写顺序怎么走</h2>
-    <span class="tag">trace</span>
-  </div>
-  <p>这张 trace 只跟踪一个锚定例子：一个 49 token 的序列，block size 是 16。它的作用不是背数，而是让你看到“多出来的 1 个 token”为什么会把一整块一起记账。</p>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button type="button" class="trace-line" data-trace-step="prefill">
-        <span>prefill</span>
-        <em>把前缀切成块并写入 block table</em>
-      </button>
-      <button type="button" class="trace-line" data-trace-step="decode">
-        <span>decode</span>
-        <em>每步只追加当前 token 所在的末尾块</em>
-      </button>
-      <button type="button" class="trace-line" data-trace-step="tail">
-        <span>尾块</span>
-        <em>49 token 会占 4 个块，最后一块只用 1 个槽位</em>
-      </button>
-      <button type="button" class="trace-line" data-trace-step="coW">
-        <span>copy-on-write</span>
-        <em>共享块一旦要写，就先复制成私有块</em>
-      </button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card" data-trace-target="prefill">
-        <b>prefill</b>
-        <span>读 prompt token，写 4 个逻辑块中的前 3 个完整块和 1 个尾块。</span>
-        <p>看点：block table 记录的是“第几块指向哪个物理 block”，不是 token 的连续地址。</p>
+      </section>
+      <section id="diagnosis">
+        <div class="head">
+          <h2>排障时先看哪一步</h2>
+          <span class="tag">diagnosis</span>
+        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>症状</th><th>更像哪类问题</th><th>先看什么</th><th>为什么先看它</th></tr>
+<tr><td>同样的 prompt，第二次却没命中前缀缓存</td><td>token 序列不完全一致</td><td>tokenizer、模板、特殊 token、前导空白</td><td>prefix cache 只认完全一致的前缀</td></tr>
+<tr><td>请求越长，尾部浪费越明显</td><td>block size 过大或长度分布很碎</td><td>block size、长度分布、尾块占用</td><td>块越大，尾部空洞越容易被放大</td></tr>
+<tr><td>共享前缀后，后续写入结果错了</td><td>共享块被直接写了</td><td>copy-on-write 是否真的发生</td><td>共享块只能读，写前必须复制成私有块</td></tr>
+        </table></div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>最容易错的 4 个判断</h2>
+          <span class="tag">mistakes</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>把“看起来一样”当成“可以复用”</h3>
+<p>prefix cache 不是语义缓存。token 序列不完全一样，就不能默认复用。</p>
+        </div>
+        <div class="box">
+<h3>把 block size 当成越大越好</h3>
+<p>块越大，尾块浪费越容易堆起来。你会减少管理开销，但也会放大空洞。</p>
+        </div>
+        <div class="box">
+<h3>把 PagedAttention 当成算子近似</h3>
+<p>它改 KV cache 的布局、引用和访问方式。</p>
+        </div>
+        <div class="box">
+<h3>把共享前缀当成写共享块</h3>
+<p>共享只对读成立；一旦写，必须 copy-on-write，不然两个请求会互相污染。</p>
+        </div>
       </div>
-      <div class="tensor-card" data-trace-target="decode">
-        <b>decode</b>
-        <span>历史 K/V 继续被读取，新增 token 只会让最后一块的占用往前推进。</span>
-        <p>看点：decode 不会重新写整段前缀，只会为新增 token 追加 KV。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="tail">
-        <b>尾块</b>
-        <span>49 token 需要 ceil(49/16)=4 块，其中 4 号块只有 1 个 token。</span>
-        <p>看点：理论上的 token 数和物理上的占用槽位不是同一个数字。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="coW">
-        <b>copy-on-write</b>
-        <span>如果另一个请求共享了前缀块，写新 token 前要先把共享块复制成私有块。</span>
-        <p>看点：共享只对读友好，写时要切开。</p>
-      </div>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="PagedAttention 例子：49 token / block size 16 的块计算" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>步骤</th>
-          <th>计算</th>
-          <th>结论</th>
-          <th>诊断意义</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>请求长度</td>
-          <td>49 token</td>
-          <td>不是整块数</td>
-          <td>已经预示会有尾块浪费</td>
-        </tr>
-        <tr>
-          <td>块数</td>
-          <td>ceil(49 / 16)</td>
-          <td>4 块</td>
-          <td>物理显存要为 4 个 block 记账</td>
-        </tr>
-        <tr>
-          <td>尾块占用</td>
-          <td>49 - 3×16</td>
-          <td>1 个槽位</td>
-          <td>最后 15 个槽位是浪费，不是“还没用到的未来 token”</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="example">
-  <div class="head">
-    <h2>两个请求共享前缀时会发生什么</h2>
-    <span class="tag">example</span>
-  </div>
-  <p>设请求 A 和请求 B 的前 32 个 token 完全一致，block size 是 16。A 先进入 prefill，B 后来跟进。这里真正重要的不是“字符串看起来像不像”，而是 token 序列是否完全一致。</p>
-  <div class="grid2">
-    <div class="box">
-      <h3>A 先进入</h3>
-      <p>A 的前 32 个 token 会占 2 个完整 block。A 继续生成自己的后续 token 时，会在自己的尾块里追加。</p>
-      <pre data-export-context="共享前缀示意：A 的块布局" data-export-lang="text"><code>A0 -> 0..15
-A1 -> 16..31
-A2 -> 32..47
-A3 -> 48..63</code></pre>
-    </div>
-    <div class="box">
-      <h3>B 复用前缀</h3>
-      <p>B 可以直接复用 A0 和 A1，两块的内容不需要重算；如果 B 在共享块上继续写自己的分支，就要先复制出私有块。</p>
-      <pre data-export-context="共享前缀示意：B 的块布局" data-export-lang="text"><code>B0 -> 0..15 (shared)
-B1 -> 16..31 (shared)
-B2 -> 32..47 (private after branch)</code></pre>
-    </div>
-  </div>
-  <div class="callout">
-    <strong>这例子告诉你的事：</strong>
-    prefix cache 省的是重复 prefill，不会自动帮你缩短生成长度；PagedAttention 省的是摆放和碎片，不会把理论 bytes/token 变小。
-  </div>
-</section>
-
-<section id="prefix">
-  <div class="head">
-    <h2>前缀缓存和块管理是什么关系</h2>
-    <span class="tag">prefix cache</span>
-  </div>
-  <div class="grid3">
-    <div class="box soft">
-      <h3>前缀缓存做什么</h3>
-      <p>它找的是“完全相同的前缀”，命中后直接复用已有 KV block。它不是语义相近就行，也不是看长度一样就行。</p>
-    </div>
-    <div class="box info">
-      <h3>块管理做什么</h3>
-      <p>它解决的是 block 怎么放、怎么指、怎么共享、怎么在写时复制成私有块。没有块管理，前缀缓存就没有安全的承载方式。</p>
-    </div>
-    <div class="box">
-      <h3>两者合起来</h3>
-      <p>prefix cache 负责减少重复 prefill，PagedAttention 负责把复用的 KV 放进块表里，让它能被多个请求共享。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="PagedAttention、prefix cache、HiCache 的分工表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>机制</th>
-          <th>主要解决什么</th>
-          <th>不解决什么</th>
-          <th>你在这页里先记住的判断</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>PagedAttention</td>
-          <td>块式摆放、碎片、块表映射</td>
-          <td>不会改变理论 bytes/token</td>
-          <td>它是物理布局层的优化</td>
-        </tr>
-        <tr>
-          <td>Prefix cache</td>
-          <td>重复前缀复用</td>
-          <td>不会做语义近似，也不会缩短输出长度</td>
-          <td>它省的是重复 prefill</td>
-        </tr>
-        <tr>
-          <td>HiCache</td>
-          <td>把 KV 放到 GPU 之外的更慢层</td>
-          <td>不会让低复用短请求天然更快</td>
-          <td>它是驻留层级的扩展，不是这节课的主角</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="route">
-  <div class="head">
-    <h2>读公开资料时先抓哪三条线</h2>
-    <span class="tag">route</span>
-  </div>
-  <p>这节课的资料边界不复杂，但很容易读散。最稳的办法，是每份资料只抓一件事：谁管块、谁管复用、谁管层级。</p>
-  <div class="grid3">
-    <div class="box">
-      <h3>vLLM Paged Attention</h3>
-      <p>先看它如何解释 block、block table 和物理摆放。你只要抓到“逻辑连续、物理分块”这一句就够了。</p>
-    </div>
-    <div class="box">
-      <h3>vLLM Prefix Caching</h3>
-      <p>先看它如何定义前缀命中、何时复用、何时重算。重点是“完全一致”而不是“差不多”。</p>
-    </div>
-    <div class="box">
-      <h3>SGLang HiCache</h3>
-      <p>先看它如何把 KV 分层放置。你只要知道它更适合长上下文和多轮会话，就不会把它误当成本页的主问题。</p>
-    </div>
-  </div>
-  <div class="callout">
-    <strong>下一页怎么接：</strong>
-    这页停在块管理和复用边界；第 04 单元会把这些块放进 continuous batching 的调度循环里，看它们怎么在多请求之间轮转。
-  </div>
-</section>
-
-<section id="boundary">
-  <div class="head">
-    <h2>这里先不追的几件事</h2>
-    <span class="tag">boundary</span>
-  </div>
-  <div class="grid2">
-    <div class="box danger">
-      <h3>先放一边</h3>
-      <p>continuous batching、scheduler、kernel fusion、speculative decoding、chunked prefill。它们都重要，但不是这页要解决的主问题。</p>
-    </div>
-    <div class="box soft">
-      <h3>这页要完成的动作</h3>
-      <p>能用 block size 算块数、用前缀长度判断复用、用 copy-on-write 解释分支写入、用尾块解释为什么“多一个 token”会多记一整块账。</p>
-    </div>
-  </div>
-</section>
-
-<section id="diagnosis">
-  <div class="head">
-    <h2>排障时先看哪一步</h2>
-    <span class="tag">diagnosis</span>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="PagedAttention 故障排查表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>症状</th>
-          <th>更像哪类问题</th>
-          <th>先看什么</th>
-          <th>为什么先看它</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>同样的 prompt，第二次却没命中前缀缓存</td>
-          <td>token 序列不完全一致</td>
-          <td>tokenizer、模板、特殊 token、前导空白</td>
-          <td>prefix cache 只认完全一致的前缀</td>
-        </tr>
-        <tr>
-          <td>请求越长，尾部浪费越明显</td>
-          <td>block size 过大或长度分布很碎</td>
-          <td>block size、长度分布、尾块占用</td>
-          <td>块越大，尾部空洞越容易被放大</td>
-        </tr>
-        <tr>
-          <td>共享前缀后，后续写入结果错了</td>
-          <td>共享块被直接写了</td>
-          <td>copy-on-write 是否真的发生</td>
-          <td>共享块只能读，写前必须复制成私有块</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="mistakes">
-  <div class="head">
-    <h2>最容易错的 4 个判断</h2>
-    <span class="tag">mistakes</span>
-  </div>
-  <div class="grid2">
-    <div class="box danger">
-      <h3>把“看起来一样”当成“可以复用”</h3>
-      <p>prefix cache 不是语义缓存。token 序列不完全一样，就不能默认复用。</p>
-    </div>
-    <div class="box danger">
-      <h3>把 block size 当成越大越好</h3>
-      <p>块越大，尾块浪费越容易堆起来。你会减少管理开销，但也会放大空洞。</p>
-    </div>
-    <div class="box danger">
-      <h3>把 PagedAttention 当成算子近似</h3>
-      <p>它不是改变 attention 数学的算法，而是改 KV cache 的布局、引用和访问方式。</p>
-    </div>
-    <div class="box danger">
-      <h3>把共享前缀当成写共享块</h3>
-      <p>共享只对读成立；一旦写，必须 copy-on-write，不然两个请求会互相污染。</p>
-    </div>
-  </div>
-</section>
-
-<section id="capacity">
-  <div class="head">
-    <h2>block size 为什么不是越大越好</h2>
-    <span class="tag">capacity</span>
-  </div>
-  <p>Block size 越大，块表里的指针数会变少，管理会更轻；但尾块浪费也会更大，尤其是请求长度分布很碎的时候。PagedAttention 解决的是“摆得更灵活”，不是“把每个 token 都变成更少字节”。</p>
-  <p>所以这里要分开看三件事：第一，块数决定要记多少条映射；第二，尾块浪费决定物理显存里会空出多少槽位；第三，block size 决定你是在减少碎片，还是在放大空洞。单看平均长度，很容易把这个取舍看反。</p>
-  <div class="math-block" data-export-context="PagedAttention 的块数与尾块公式" data-export-lang="math">
-    $$\text{blocks}(T, B) = \left\lceil \frac{T}{B} \right\rceil$$
-    $$\text{tail waste}(T, B) = (B - T \bmod B) \bmod B$$
-    <p>这里 \(T\) 是 token 数，\(B\) 是 block size。第一个式子告诉你要分配多少块，第二个式子告诉你最后一块会空出多少槽位。两者合起来，才是这页真正关心的占用账。</p>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="block size 取舍示例" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>block size</th>
-          <th>49 token 要几块</th>
-          <th>尾块浪费</th>
-          <th>块表与管理开销</th>
-          <th>更适合什么请求分布</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>8</td>
-          <td>7 块</td>
-          <td>7 槽位</td>
-          <td>块表更长，管理更细</td>
-          <td>短请求多、长度变化碎、想压小尾块</td>
-        </tr>
-        <tr>
-          <td>16</td>
-          <td>4 块</td>
-          <td>15 槽位</td>
-          <td>折中</td>
-          <td>常见的混合负载，既想要复用又不想把表做太长</td>
-        </tr>
-        <tr>
-          <td>32</td>
-          <td>2 块</td>
-          <td>15 槽位</td>
-          <td>表短，但空洞更大</td>
-          <td>长度更整齐、长请求占比高、管理开销更敏感</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="callout">
-    <strong>这张表真正想让你记住的事：</strong>
-    你不是在找“最省”的单个数，而是在找“尾块浪费、块表长度和复用稳定性”之间的平衡点。块越小，不一定整体更好；块越大，也不一定更稳定。
-  </div>
-</section>
-
-<section id="code">
-  <div class="head">
-    <h2>把这笔账写成一段小代码</h2>
-    <span class="tag">code</span>
-  </div>
-  <p>这段代码的作用不是“跑分”，而是把公式写成可检查的步骤。你在读块管理时，最容易出错的地方就是把“理论 token 数”和“实际分配槽位”混成一个数；代码会把这两个量拆开。</p>
-  <p>下面的函数分别做两件事：`plan_blocks` 负责算块数、尾块和利用率；`shared_prefix_blocks` 负责判断前缀能安全共享到哪一个完整 block。后面做 copy-on-write 或 prefix cache 排障时，先跑这两个量，通常就知道问题落在哪一层。</p>
-  <div class="codebar"><span>块数、尾块和共享前缀检查</span><button class="copy" data-copy="pagedattention-code">复制</button></div>
-  <pre id="pagedattention-code" data-export-context="PagedAttention 账本代码" data-export-lang="python"><code class="language-python">def plan_blocks(tokens, block_size=16):
-    blocks = (tokens + block_size - 1) // block_size
-    allocated = blocks * block_size
-    waste = allocated - tokens
-    utilization = tokens / allocated if allocated else 0
-    return {
-        "tokens": tokens,
-        "block_size": block_size,
-        "blocks": blocks,
-        "allocated_slots": allocated,
-        "tail_waste": waste,
-        "utilization": round(utilization, 4),
-    }
-
-
-def shared_prefix_blocks(prefix_tokens, block_size=16):
-    shared_blocks = prefix_tokens // block_size
-    shared_tokens = shared_blocks * block_size
-    return {
-        "prefix_tokens": prefix_tokens,
-        "block_size": block_size,
-        "safe_shared_blocks": shared_blocks,
-        "safe_shared_tokens": shared_tokens,
-    }</code></pre>
-  <div class="table-wrap">
-    <table data-export-context="代码输出示意：31 / 32 / 33 token 的共享边界" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>prefix_tokens</th>
-          <th>safe_shared_blocks</th>
-          <th>safe_shared_tokens</th>
-          <th>读这行代码时要盯住什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>31</td>
-          <td>1</td>
-          <td>16</td>
-          <td>只够共享一个完整块；尾部 15 个 token 还不能算安全共享</td>
-        </tr>
-        <tr>
-          <td>32</td>
-          <td>2</td>
-          <td>32</td>
-          <td>刚好卡在完整块边界，这是最干净的复用边界</td>
-        </tr>
-        <tr>
-          <td>33</td>
-          <td>2</td>
-          <td>32</td>
-          <td>多出来的 1 个 token 不能让前两块之外的部分自动共享</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="callout">
-    <strong>如果这段代码算错了，通常说明什么：</strong>
-    不是公式写错，而是你把“完整块边界”看漏了。对于 prefix cache 来说，安全共享只发生在整块上，不发生在半块上。
-  </div>
-</section>
-
-<section id="lab">
-  <div class="head">
-    <h2>三种常见症状在终端里长什么样</h2>
-    <span class="tag">failure lab</span>
-  </div>
-  <p>很多块管理问题不是“算术不会”，而是你看到了症状，却不知道它到底是在说复用失败、尾块浪费，还是共享块被错误写入。这个小终端实验把三种常见场景拆开，让你直接对着输出判断问题类别。</p>
-  <div class="terminal-lab" data-terminal-lab>
-    <div class="terminal-controls">
-      <button class="ghost active" data-terminal-case="case-1">prefix hit</button>
-      <button class="ghost" data-terminal-case="case-2">prefix miss</button>
-      <button class="ghost" data-terminal-case="case-3">copy-on-write</button>
-    </div>
-    <pre class="terminal-output" aria-live="polite">prefix hit:
-  shared blocks reused: 2
-  recompute prefill: no
-  tail waste unchanged: yes</pre>
-    <template data-terminal-output="case-1">prefix hit:
-  shared blocks reused: 2
-  recompute prefill: no
-  tail waste unchanged: yes</template>
-    <template data-terminal-output="case-2">prefix miss:
-  tokenizer or template changed
-  shared blocks reused: 0
-  recompute prefill: yes</template>
-    <template data-terminal-output="case-3">copy-on-write:
-  shared block is read-only
-  private block allocated: yes
-  write target switched to private copy</template>
-  </div>
-  <div class="grid2">
-    <div class="box">
-      <h3>看到 prefix hit 时</h3>
-      <p>先确认是不是完整前缀命中，再看复用的是几块。这里的目标不是更快地“猜中”，而是知道重复 prefill 已经被省掉了。</p>
-    </div>
-    <div class="box">
-      <h3>看到 prefix miss 时</h3>
-      <p>优先检查 tokenizer、模板、特殊 token 和前导空白。只要前缀 token 序列变了，块表里的缓存就不会自动接上。</p>
-    </div>
-  </div>
-  <div class="grid2">
-    <div class="box">
-      <h3>看到 copy-on-write 时</h3>
-      <p>这说明共享块已经被保护起来了。后续写入必须落到新的私有块上，不能继续往共享块里写。</p>
-    </div>
-    <div class="box info">
-      <h3>这节课的排障顺序</h3>
-      <p>先看前缀是否完全一致，再看块边界是否对齐，最后才看 block size 是否需要调小。把顺序反过来，往往会把问题定位错层。</p>
-    </div>
-  </div>
-</section>
-
-<section id="boundary-cases">
-  <div class="head">
-    <h2>把 32、33、48、49 token 放在一起看</h2>
-    <span class="tag">boundary cases</span>
-  </div>
-  <p>这页最容易读歪的地方，不在 49 token，而在“刚好卡边界”和“只差 1 个 token”这两类情况。它们会让块数、共享边界和尾块浪费同时改变，所以你要把它们放在同一张表里看。</p>
-  <div class="table-wrap">
-    <table data-export-context="32 / 33 / 48 / 49 token 的边界案例表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>token 数</th>
-          <th>block size = 16 时的块数</th>
-          <th>是否刚好卡在完整块边界</th>
-          <th>尾块浪费</th>
-          <th>对 prefix cache 的意义</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>32</td>
-          <td>2</td>
-          <td>是</td>
-          <td>0</td>
-          <td>这是最干净的共享边界，前两块可以整块复用</td>
-        </tr>
-        <tr>
-          <td>33</td>
-          <td>3</td>
-          <td>否</td>
-          <td>15</td>
-          <td>只比 32 多 1 个 token，却已经逼出一个新块和 15 个空槽位</td>
-        </tr>
-        <tr>
-          <td>48</td>
-          <td>3</td>
-          <td>是</td>
-          <td>0</td>
-          <td>如果前缀稳定，这里还能做整块共享；一旦分支，就从第 4 块开始分开</td>
-        </tr>
-        <tr>
-          <td>49</td>
-          <td>4</td>
-          <td>否</td>
-          <td>15</td>
-          <td>只多 1 个 token，就把整条请求的物理占用推到下一档</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <p>这也是为什么这节课要把“完整块边界”讲得这么细。你如果把 33 当成 32 的“差不多版本”，就会误以为还能整块复用；你如果把 49 当成 48 的“差不多版本”，就会漏掉一整块的记账。真正会让线上容量拐弯的，往往就是这一个 token 的差异。</p>
-  <div class="callout">
-    <strong>失败后果：</strong>
-    一旦把 33 当成 32、把 49 当成 48，排障时你会先去怀疑 kernel 或采样，而不是先看块边界和前缀稳定性。这个顺序一错，后面的优化就会落到错层。
-  </div>
-</section>
-
-<section id="handoff">
-  <div class="head">
-    <h2>把块边界和线上症状接起来</h2>
-    <span class="tag">handoff</span>
-  </div>
-  <p>现在把问题换成一个更像线上排障的场景：团队说“同样的 prompt 第二次没有复用，TTFT 也没降”。如果你只看延迟，很容易先怀疑算子；但在这页的视角里，先问的是前缀是否完全一致、块表是否还指向同一批 block，以及最后一块是不是在每次请求里都被重新占掉了。</p>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>先做什么</h3>
-      <p>先把输入拆成 token 序列，再检查块边界。只要 tokenizer、模板、特殊 token 或前导空白变了，prefix cache 就可能直接失效。</p>
-    </div>
-    <div class="box info">
-      <h3>再看什么</h3>
-      <p>再算 block 数和尾块浪费。一个本来卡在 32 的前缀，只要变成 33，就会多出一整块和 15 个空槽位，这就是容量线上最常见的“只差一点点”问题。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="PagedAttention 线上症状与排查动作表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>线上症状</th>
-          <th>先看哪一层</th>
-          <th>要检查的对象</th>
-          <th>如果这里没问题，下一步再看什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>TTFT 没降</td>
-          <td>prefix cache</td>
-          <td>token 序列是否完全一致</td>
-          <td>再看块表是否真的复用了前缀 block</td>
-        </tr>
-        <tr>
-          <td>显存突然紧了</td>
-          <td>块数和尾块</td>
-          <td>block size 与请求长度分布</td>
-          <td>再看是不是该缩小 block size，或换更稳定的 prompt 模板</td>
-        </tr>
-        <tr>
-          <td>共享后结果互相污染</td>
-          <td>copy-on-write</td>
-          <td>共享块是否在写前复制成私有块</td>
-          <td>再看引用计数和块表更新是否同步</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <p>这就是这页真正想训练你的地方：不是记住“PagedAttention 很重要”，而是拿到一个看起来像性能问题的症状时，先把它拆成块边界、共享边界和写时隔离三个检查点。这样做的好处，是你能很快分清问题到底在布局层、复用层，还是在后面的调度层。</p>
-  <div class="callout">
-    <strong>练习 hook：</strong>
-    去练习区先做 q7、q10 和 q15。它们分别对应共享边界、前缀失效和排障起手式，最适合拿来检验你是不是已经把这一页的链条串起来了。
-  </div>
-</section>
-
-
+      </section>
+      <section id="capacity">
+        <div class="head">
+          <h2>block size 为什么不是越大越好</h2>
+          <span class="tag">capacity</span>
+        </div>
+<p>Block size 越大，块表里的指针数会变少，管理会更轻；但尾块浪费也会更大，尤其是请求长度分布很碎的时候。PagedAttention 解决的是“摆得更灵活”，不是“把每个 token 都变成更少字节”。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+\text{blocks}(T, B) = \left\lceil \frac{T}{B} \right\rceil
+$$
+        </div>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+\text{tail waste}(T, B) = (B - T \bmod B) \bmod B
+$$
+        </div>
+<p>这里 \(T\) 是 token 数，\(B\) 是 block size。第一个式子告诉你要分配多少块，第二个式子告诉你最后一块会空出多少槽位。两者合起来，才是这页真正关心的占用账。</p>
+        <div class="callout note">
+<div class="callout-title">这张表真正想让你记住的事：</div><p>你在找“尾块浪费、块表长度和复用稳定性”之间的平衡点。块越小，不一定整体更好；块越大，也不一定更稳定。</p>
+        </div>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>把这笔账写成一段小代码</h2>
+          <span class="tag">code</span>
+        </div>
+<p>这段代码的作用把公式写成可检查的步骤。你在读块管理时，最容易出错的地方就是把“理论 token 数”和“实际分配槽位”混成一个数；代码会把这两个量拆开。</p>
+<p>块数、尾块和共享前缀检查复制</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>prefix_tokens</th><th>safe_shared_blocks</th><th>safe_shared_tokens</th><th>读这行代码时要盯住什么</th></tr>
+<tr><td>31</td><td>1</td><td>16</td><td>只够共享一个完整块；尾部 15 个 token 还不能算安全共享</td></tr>
+<tr><td>32</td><td>2</td><td>32</td><td>刚好卡在完整块边界，这是最干净的复用边界</td></tr>
+<tr><td>33</td><td>2</td><td>32</td><td>多出来的 1 个 token 不能让前两块之外的部分自动共享</td></tr>
+        </table></div>
+        <div class="callout note">
+<div class="callout-title">如果这段代码算错了，通常说明什么：</div><p>你把“完整块边界”看漏了。对于 prefix cache 来说，安全共享只发生在整块上，不发生在半块上。</p>
+        </div>
+      </section>
+      <section id="lab">
+        <div class="head">
+          <h2>三种常见症状在终端里长什么样</h2>
+          <span class="tag">failure</span>
+        </div>
+<p>很多块管理问题你看到了症状，却不知道它到底是在说复用失败、尾块浪费，还是共享块被错误写入。这个小终端实验把三种常见场景拆开，让你直接对着输出判断问题类别。</p>
+        <div class="box">
+<h3>看到 prefix miss 时</h3>
+<p>优先检查 tokenizer、模板、特殊 token 和前导空白。只要前缀 token 序列变了，块表里的缓存就不会自动接上。</p>
+        </div>
+        <div class="box">
+<h3>看到 copy-on-write 时</h3>
+<p>这说明共享块已经被保护起来了。后续写入必须落到新的私有块上，不能继续往共享块里写。</p>
+        </div>
+        <div class="box info">
+<h3>这节课的排障顺序</h3>
+<p>先看前缀是否完全一致，再看块边界是否对齐，最后才看 block size 是否需要调小。把顺序反过来，往往会把问题定位错层。</p>
+        </div>
+      </section>
+      <section id="boundary-cases">
+        <div class="head">
+          <h2>把 32、33、48、49 token 放在一起看</h2>
+          <span class="tag">boundary</span>
+        </div>
+<p>这页最容易读歪的地方，不在 49 token，而在“刚好卡边界”和“只差 1 个 token”这两类情况。它们会让块数、共享边界和尾块浪费同时改变，所以你要把它们放在同一张表里看。</p>
+        <div class="callout note">
+<div class="callout-title">失败后果：</div><p>一旦把 33 当成 32、把 49 当成 48，排障时你会先去怀疑 kernel 或采样，而不是先看块边界和前缀稳定性。这个顺序一错，后面的优化就会落到错层。</p>
+        </div>
+      </section>
+      <section id="handoff">
+        <div class="head">
+          <h2>把块边界和线上症状接起来</h2>
+          <span class="tag">handoff</span>
+        </div>
+<p>现在把问题换成一个更像线上排障的场景：团队说“同样的 prompt 第二次没有复用，TTFT 也没降”。如果你只看延迟，很容易先怀疑算子；但在这页的视角里，先问的是前缀是否完全一致、块表是否还指向同一批 block，以及最后一块是不是在每次请求里都被重新占掉了。</p>
+        <div class="box info">
+<h3>再看什么</h3>
+<p>再算 block 数和尾块浪费。一个本来卡在 32 的前缀，只要变成 33，就会多出一整块和 15 个空槽位，这就是容量线上最常见的“只差一点点”问题。</p>
+<p>线上症状</p>
+<p>先看哪一层</p>
+<p>要检查的对象</p>
+<p>如果这里没问题，下一步再看什么</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>TTFT 没降</th><th>prefix cache</th><th>token 序列是否完全一致</th><th>再看块表是否真的复用了前缀 block</th></tr>
+<tr><td>显存突然紧了</td><td>块数和尾块</td><td>block size 与请求长度分布</td><td>再看是不是该缩小 block size，或换更稳定的 prompt 模板</td></tr>
+<tr><td>共享后结果互相污染</td><td>copy-on-write</td><td>共享块是否在写前复制成私有块</td><td>再看引用计数和块表更新是否同步</td></tr>
+</table></div>
+<p>这就是这页真正想训练你的地方：拿到一个看起来像性能问题的症状时，先把它拆成块边界、共享边界和写时隔离三个检查点。这样做的好处，是你能很快分清问题到底在布局层、复用层，还是在后面的调度层。</p>
+<p>> [!NOTE] 练习 hook：</p>
+<p>> 去练习区先做 q7、q10 和 q15。它们分别对应共享边界、前缀失效和排障起手式，最适合拿来检验你是不是已经把这一页的链条串起来了。</p>
+        </div>
+      </section>
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-intro">
-  <div class="box soft">
-    <h3>怎么答才算会</h3>
-    <p>先把对象说清楚，再说块数和尾块，再说复用条件和故障症状。只给结论、不讲块表，通常说明你还没把这页的机制读进去。</p>
-  </div>
-  <div class="box info">
-    <h3>检查重点</h3>
-    <p>你要能说出：谁在读、谁在写、谁能共享、谁必须复制、哪些 token 一定会形成尾块浪费，以及这些动作会怎样影响显存和 TTFT。</p>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>第一组：块数、尾块和读写顺序</h3>
-      <p>这组先确认你能把一个长度转换成块表视角，而不是只会背概念。</p>
-    </div>
-    <div class="quick-review"><b>快速复盘</b><span>逻辑连续不等于物理连续；尾块浪费是按块记账，不是按 token 记账。</span></div>
-  </div>
-  <div class="drill-grid">
-    <div class="q full" data-question="q1" data-group="第一组：块数、尾块和读写顺序" data-title="PagedAttention 主要改哪一层？" data-answer="B">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">布局</span></div>
-      <h3>PagedAttention 主要改哪一层？</h3>
-      <label><input type="radio" name="q1" value="A">A. attention 的数学公式本身</label>
-      <label><input type="radio" name="q1" value="B">B. KV cache 的物理摆放和访问方式</label>
-      <label><input type="radio" name="q1" value="C">C. 模型的词表大小</label>
-      <label><input type="radio" name="q1" value="D">D. 输出采样的温度参数</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q full" data-question="q2" data-group="第一组：块数、尾块和读写顺序" data-title="49 token / block size 16 需要几块？" data-answer="4">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">手算</span></div>
-      <h3>49 token、block size = 16，需要几块？</h3>
-      <label><input type="radio" name="q2" value="3">A. 3 块</label>
-      <label><input type="radio" name="q2" value="4">B. 4 块</label>
-      <label><input type="radio" name="q2" value="16">C. 16 块</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">先做 ceil(49 / 16)，再看最后一块的占用。</p>
-    </div>
-
-    <div class="q short" data-question="q3" data-group="第一组：块数、尾块和读写顺序" data-title="49 token 的尾块浪费" >
-      <div class="q-meta"><span class="pill">fill</span><span class="pill">尾块</span></div>
-      <h3>49 token、block size = 16，最后一块浪费多少槽位？</h3>
-      <textarea name="q3" placeholder="写出计算过程和答案。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>49 token 需要 4 块，前 3 块占 48 个槽位，最后一块只用 1 个槽位，所以浪费 15 个槽位。答题时要写出“按块记账”的意思，不要只写一个数字。</p></details>
-    </div>
-
-    <div class="q full" data-question="q4" data-group="第一组：块数、尾块和读写顺序" data-title="decode 阶段会不会继续写 KV？" data-answer="false">
-      <div class="q-meta"><span class="pill">true/false</span><span class="pill">读写</span></div>
-      <h3>decode 阶段只读不写，不会继续增加 KV cache。</h3>
-      <label><input type="radio" name="q4" value="true">对</label>
-      <label><input type="radio" name="q4" value="false">错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>第二组：前缀复用和 copy-on-write</h3>
-      <p>这组看的是复用边界。能不能复用、能复用到哪一块、何时必须复制，都是这节课的重点。</p>
-    </div>
-    <div class="quick-review"><b>快速复盘</b><span>前缀缓存只认完全一致；共享块能读不能写；写之前先 copy-on-write。</span></div>
-  </div>
-  <div class="drill-grid">
-    <div class="q full" data-question="q5" data-group="第二组：前缀复用和 copy-on-write" data-title="prefix cache 的条件" data-answer="C">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">复用</span></div>
-      <h3>下面哪句话最准确地描述了 prefix cache？</h3>
-      <label><input type="radio" name="q5" value="A">A. 语义相近就能复用同一份 KV</label>
-      <label><input type="radio" name="q5" value="B">B. 长度一样就能复用同一份 KV</label>
-      <label><input type="radio" name="q5" value="C">C. 只有 token 前缀完全一致时才有机会复用</label>
-      <label><input type="radio" name="q5" value="D">D. 同一个 batch 里的请求都能自动复用</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q full" data-question="q6" data-group="第二组：前缀复用和 copy-on-write" data-title="共享前缀后为什么还要复制？">
-      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">copy-on-write</span></div>
-      <h3>共享前缀后，为什么写入时还要复制一份私有块？</h3>
-      <label><input type="checkbox" name="q6" value="避免两个请求写坏同一个物理块">避免两个请求写坏同一个物理块</label>
-      <label><input type="checkbox" name="q6" value="让共享块继续只读">让共享块继续只读</label>
-      <label><input type="checkbox" name="q6" value="把理论 bytes/token 变小">把理论 bytes/token 变小</label>
-      <details><summary>展开反馈</summary><p>前两项是对的，第三项不是。copy-on-write 解决的是写时隔离，不会改变理论 bytes/token。你如果把它当成压缩手段，就会误判容量。</p></details>
-    </div>
-
-    <div class="q full" data-question="q7" data-group="第二组：前缀复用和 copy-on-write" data-title="B 共享 A 前缀时能复用什么？">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">分支</span></div>
-      <h3>A 和 B 的前 32 个 token 完全一致，block size = 16。B 复用 A 的前缀时，最多能安全共享到哪一层？</h3>
-      <p class="solve-note">答案要说到“完整块边界”，不要只写“前 32 个 token”。</p>
-      <textarea name="q7" placeholder="先写共享到哪两个 block，再写为什么不能直接写共享块。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>B 最多共享 A 的前两个完整 block，也就是 0..15 和 16..31 两块。因为共享只对读成立，一旦 B 要在共享块上继续写，就必须先复制成私有块。答题时要同时写出“完整块边界”和“写前复制”两个点。</p></details>
-    </div>
-
-    <div class="q full" data-question="q8" data-group="第二组：前缀复用和 copy-on-write" data-title="什么情况会让 prefix cache 失效？" data-answer="A">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">失效</span></div>
-      <h3>下面哪种情况最容易让 prefix cache 失效？</h3>
-      <label><input type="radio" name="q8" value="A">A. tokenizer 或模板改了，前缀 token 序列不再完全一致</label>
-      <label><input type="radio" name="q8" value="B">B. block size 从 16 变成 8</label>
-      <label><input type="radio" name="q8" value="C">C. 请求里多了一个无关的说明文本，但 token 序列不变</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>第三组：迁移、诊断和课程衔接</h3>
-      <p>这组把机制放回工程判断：什么时候该看块大小，什么时候该看前缀稳定性，什么时候该去读下一单元。</p>
-    </div>
-    <div class="quick-review"><b>快速复盘</b><span>PagedAttention 管摆放，prefix cache 管复用，HiCache 管层级。别把三件事混成一件事。</span></div>
-  </div>
-  <div class="drill-grid">
-    <div class="q full" data-question="q9" data-group="第三组：迁移、诊断和课程衔接" data-title="block size 变小的收益和代价">
-      <div class="q-meta"><span class="pill">scenario transfer</span><span class="pill">取舍</span></div>
-      <h3>如果 block size 从 16 改成 8，最直接的收益和代价分别是什么？</h3>
-      <textarea name="q9" placeholder="分别写收益、代价和你会先看哪种长度分布。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>收益是尾块浪费通常会变小，短请求更容易贴近真实占用；代价是块表可能变长、管理开销和元数据压力会上来。答题时要把“收益”和“代价”分开写，不要只写“更省显存”。</p></details>
-    </div>
-
-    <div class="q full" data-question="q10" data-group="第三组：迁移、诊断和课程衔接" data-title="命中失败时先看什么？" data-answer="B">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">诊断</span></div>
-      <h3>同一个 prompt 第二次没有命中前缀缓存，你最先该看什么？</h3>
-      <label><input type="radio" name="q10" value="A">A. 先换更大的 GPU</label>
-      <label><input type="radio" name="q10" value="B">B. 先看 tokenizer、模板和特殊 token 是否让前缀 token 序列发生了变化</label>
-      <label><input type="radio" name="q10" value="C">C. 先把 block size 调到最大</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q full" data-question="q11" data-group="第三组：迁移、诊断和课程衔接" data-title="PagedAttention 和下一单元的关系">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">课程衔接</span></div>
-      <h3>用两三句话说清楚：这页和第 04 单元的关系是什么？</h3>
-      <p class="solve-note">要写出“块如何进入调度循环”，不要只重复“下一单元讲 batching”。</p>
-      <textarea name="q11" placeholder="先说这页解决什么，再说下一页为什么必须接着看。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>这页先把 KV cache 组织成块表、前缀缓存和 copy-on-write 的问题讲清楚；第 04 单元会把这些块放进 continuous batching 的调度循环里，看请求到达后如何分配、抢占和回收。答题时要同时提到“块表”与“调度循环”。</p></details>
-    </div>
-
-    <div class="q full" data-question="q12" data-group="第三组：迁移、诊断和课程衔接" data-title="什么时候该考虑 HiCache？" data-answer="A">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">边界</span></div>
-      <h3>什么负载更适合把 KV 放到更高层级的缓存里？</h3>
-      <label><input type="radio" name="q12" value="A">A. 长上下文、多轮会话、共享前缀高、复用值得搬运</label>
-      <label><input type="radio" name="q12" value="B">B. 低复用、短请求、搬运成本很高</label>
-      <label><input type="radio" name="q12" value="C">C. 完全不需要 KV cache 的请求</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>第四组：代码、终端和公式回读</h3>
-      <p>这组检查你能不能把这页的公式和代码真正读回去，而不是只会背题干。</p>
-    </div>
-    <div class="quick-review"><b>快速复盘</b><span>公式先算块数，再算尾块；代码把完整块边界单独提出来；终端输出告诉你问题落在哪层。</span></div>
-  </div>
-  <div class="drill-grid">
-    <div class="q full" data-question="q13" data-group="第四组：代码、终端和公式回读" data-title="公式和代码是否一致？" data-answer="A">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">公式</span></div>
-      <h3>下面哪句话和这页的公式/代码最一致？</h3>
-      <label><input type="radio" name="q13" value="A">A. `blocks = ceil(tokens / block_size)`，尾块浪费要单独算，不会自动变成 0</label>
-      <label><input type="radio" name="q13" value="B">B. 只要 tokens 增加 1，块数一定增加 1</label>
-      <label><input type="radio" name="q13" value="C">C. `shared_prefix_blocks` 会把半块也当成安全共享</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q full" data-question="q14" data-group="第四组：代码、终端和公式回读" data-title="31 / 32 / 33 的共享边界">
-      <div class="q-meta"><span class="pill">code reading</span><span class="pill">边界</span></div>
-      <h3>看代码：`shared_prefix_blocks(31, 16)`、`shared_prefix_blocks(32, 16)`、`shared_prefix_blocks(33, 16)` 的区别是什么？</h3>
-      <p class="solve-note">答案要写出“完整块边界”这四个字。</p>
-      <textarea name="q14" placeholder="用 2-4 句说清楚三个输入的不同输出。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>31 只能安全共享 1 个完整块，也就是 16 个 token；32 刚好能共享 2 个完整块；33 仍然只能共享到前 32 个 token，因为多出来的 1 个 token 还没有让下一个块变成完整块。答题时必须写出“完整块边界”以及“不能共享半块”。</p></details>
-    </div>
-
-    <div class="q full" data-question="q15" data-group="第四组：代码、终端和公式回读" data-title="终端里看到 prefix miss 先做什么？" data-answer="B">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">terminal</span></div>
-      <h3>终端 lab 里看到 `prefix miss` 时，第一步应该做什么？</h3>
-      <label><input type="radio" name="q15" value="A">A. 先把 block size 调到 32</label>
-      <label><input type="radio" name="q15" value="B">B. 先检查 tokenizer、模板、特殊 token、前导空白</label>
-      <label><input type="radio" name="q15" value="C">C. 先把所有请求都合并成一个 batch</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q full" data-question="q16" data-group="第四组：代码、终端和公式回读" data-title="把这页讲给别人听" >
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">口头解释</span></div>
-      <h3>如果你只剩 60 秒，怎么向同事解释“PagedAttention 解决的到底是什么”？</h3>
-      <p class="solve-note">答案里至少要出现“块表”“前缀复用”“尾块浪费”三个词。</p>
-      <textarea name="q16" placeholder="用最短的话讲出：它改的是布局和共享，不是 attention 的数学公式。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>可参考的答法：PagedAttention 把 KV cache 切成固定大小的 block，用块表把逻辑序列映射到物理显存；这样可以复用完全一致的前缀，减少重复 prefill，同时把尾块浪费和碎片显式地管起来。答题时要把“布局”和“复用”说出来，不要只说“更省显存”。</p></details>
-    </div>
-  </div>
-</div>
-
-      </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
+      <div class="practice-intro">
+      <div class="box soft">
+<h3>怎么答才算会</h3>
+<p>先把对象说清楚，再说块数和尾块，再说复用条件和故障症状。只给结论、不讲块表，通常说明你还没把这页的机制读进去。</p>
+      </div>
+      <div class="box info">
+<h3>检查重点</h3>
+<p>你要能说出：谁在读、谁在写、谁能共享、谁必须复制、哪些 token 一定会形成尾块浪费，以及这些动作会怎样影响显存和 TTFT。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>第一组：块数、尾块和读写顺序</h3></div>
+          <div class="quick-review">快速复盘 逻辑连续不等于物理连续；尾块浪费是按块记账，不是按 token 记账。 --></div>
         </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="KV cache 的物理摆放和访问方式">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> PagedAttention 主要改哪一层？</h3>
 
-      <section id="sources">
+      <div class="choices">
+      <label><input type="radio" name="q1" value="attention 的数学公式本身">attention 的数学公式本身</label>
+      <label><input type="radio" name="q1" value="KV cache 的物理摆放和访问方式">KV cache 的物理摆放和访问方式</label>
+      <label><input type="radio" name="q1" value="模型的词表大小">模型的词表大小</label>
+      <label><input type="radio" name="q1" value="输出采样的温度参数">输出采样的温度参数</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>KV cache 的物理摆放和访问方式</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="4">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 49 token、block size = 16，需要几块？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q2" value="A. 3 块">A. 3 块</label>
+      <label><input type="radio" name="q2" value="B. 4 块">B. 4 块</label>
+      <label><input type="radio" name="q2" value="C. 16 块">C. 16 块</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>4</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 49 token、block size = 16，最后一块浪费多少槽位？</h3>
+
+
+      <textarea name="q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。49 token 需要 4 块，前 3 块占 48 个槽位，最后一块只用 1 个槽位，所以浪费 15 个槽位。答题时要写出“按块记账”的意思，不要只写一个数字。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="false">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> decode 阶段只读不写，不会继续增加 KV cache。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q4" value="对">对</label>
+      <label><input type="radio" name="q4" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>false</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>第二组：前缀复用和 copy-on-write</h3></div>
+          <div class="quick-review">快速复盘 前缀缓存只认完全一致；共享块能读不能写；写之前先 copy-on-write。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="只有 token 前缀完全一致时才有机会复用">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 下面哪句话最准确地描述了 prefix cache？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q5" value="语义相近就能复用同一份 KV">语义相近就能复用同一份 KV</label>
+      <label><input type="radio" name="q5" value="长度一样就能复用同一份 KV">长度一样就能复用同一份 KV</label>
+      <label><input type="radio" name="q5" value="只有 token 前缀完全一致时才有机会复用">只有 token 前缀完全一致时才有机会复用</label>
+      <label><input type="radio" name="q5" value="同一个 batch 里的请求都能自动复用">同一个 batch 里的请求都能自动复用</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>只有 token 前缀完全一致时才有机会复用</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">debug-checklist</span></div>
+        <h3><b>Q:</b> 共享前缀后，为什么写入时还要复制一份私有块？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q6" value="避免两个请求写坏同一个物理块">避免两个请求写坏同一个物理块</label>
+      <label><input type="radio" name="q6" value="让共享块继续只读">让共享块继续只读</label>
+      <label><input type="radio" name="q6" value="把理论 bytes/token 变小">把理论 bytes/token 变小</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。前两项是对的，第三项不是。copy-on-write 解决的是写时隔离，不会改变理论 bytes/token。你如果把它当成压缩手段，就会误判容量。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> A 和 B 的前 32 个 token 完全一致，block size = 16。B 复用 A 的前缀时，最多能安全共享到哪一层？</h3>
+
+
+      <textarea name="q7"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。B 最多共享 A 的前两个完整 block，也就是 0..15 和 16..31 两块。因为共享只对读成立，一旦 B 要在共享块上继续写，就必须先复制成私有块。答题时要同时写出“完整块边界”和“写前复制”两个点。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="tokenizer 或模板改了，前缀 token 序列不再完全一致">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 下面哪种情况最容易让 prefix cache 失效？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q8" value="tokenizer 或模板改了，前缀 token 序列不再完全一致">tokenizer 或模板改了，前缀 token 序列不再完全一致</label>
+      <label><input type="radio" name="q8" value="block size 从 16 变成 8">block size 从 16 变成 8</label>
+      <label><input type="radio" name="q8" value="请求里多了一个无关的说明文本，但 token 序列不变">请求里多了一个无关的说明文本，但 token 序列不变</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>tokenizer 或模板改了，前缀 token 序列不再完全一致</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>第三组：迁移、诊断和课程衔接</h3></div>
+          <div class="quick-review">快速复盘 PagedAttention 管摆放，prefix cache 管复用，HiCache 管层级。别把三件事混成一件事。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">scenario-transfer</span></div>
+        <h3><b>Q:</b> 如果 block size 从 16 改成 8，最直接的收益和代价分别是什么？</h3>
+
+
+      <textarea name="q9"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。收益是尾块浪费通常会变小，短请求更容易贴近真实占用；代价是块表可能变长、管理开销和元数据压力会上来。答题时要把“收益”和“代价”分开写，不要只写“更省显存”。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="先看 tokenizer、模板和特殊 token 是否让前缀 token 序列发生了变化">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 同一个 prompt 第二次没有命中前缀缓存，你最先该看什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q10" value="先换更大的 GPU">先换更大的 GPU</label>
+      <label><input type="radio" name="q10" value="先看 tokenizer、模板和特殊 token 是否让前缀 token 序列发生了变化">先看 tokenizer、模板和特殊 token 是否让前缀 token 序列发生了变化</label>
+      <label><input type="radio" name="q10" value="先把 block size 调到最大">先把 block size 调到最大</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>先看 tokenizer、模板和特殊 token 是否让前缀 token 序列发生了变化</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 用两三句话说清楚：这页和第 04 单元的关系是什么？</h3>
+
+
+      <textarea name="q11"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。这页先把 KV cache 组织成块表、前缀缓存和 copy-on-write 的问题讲清楚；第 04 单元会把这些块放进 continuous batching 的调度循环里，看请求到达后如何分配、抢占和回收。答题时要同时提到“块表”与“调度循环”。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="长上下文、多轮会话、共享前缀高、复用值得搬运">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 什么负载更适合把 KV 放到更高层级的缓存里？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q12" value="长上下文、多轮会话、共享前缀高、复用值得搬运">长上下文、多轮会话、共享前缀高、复用值得搬运</label>
+      <label><input type="radio" name="q12" value="低复用、短请求、搬运成本很高">低复用、短请求、搬运成本很高</label>
+      <label><input type="radio" name="q12" value="完全不需要 KV cache 的请求">完全不需要 KV cache 的请求</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>长上下文、多轮会话、共享前缀高、复用值得搬运</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>第四组：代码、终端和公式回读</h3></div>
+          <div class="quick-review">快速复盘 公式先算块数，再算尾块；代码把完整块边界单独提出来；终端输出告诉你问题落在哪层。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q13" data-group="" data-title="" data-answer="`blocks = ceil(tokens / block_size)`，尾块浪费要单独算，不会自动变成 0">
+        <div class="q-meta"><span class="pill">13</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 下面哪句话和这页的公式/代码最一致？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q13" value="`blocks = ceil(tokens / block_size)`，尾块浪费要单独算，不会自动变成 0"><code>blocks = ceil(tokens / block_size)</code>，尾块浪费要单独算，不会自动变成 0</label>
+      <label><input type="radio" name="q13" value="只要 tokens 增加 1，块数一定增加 1">只要 tokens 增加 1，块数一定增加 1</label>
+      <label><input type="radio" name="q13" value="`shared_prefix_blocks` 会把半块也当成安全共享"><code>shared_prefix_blocks</code> 会把半块也当成安全共享</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p><code>blocks = ceil(tokens / block_size)</code>，尾块浪费要单独算，不会自动变成 0</p>
+        </details>
+      </article>
+      <article class="q" data-question="q14" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">14</span><span class="pill">code reading</span></div>
+        <h3><b>Q:</b> 看代码：<code>shared_prefix_blocks(31, 16)</code>、<code>shared_prefix_blocks(32, 16)</code>、<code>shared_prefix_blocks(33, 16)</code> 的区别是什么？</h3>
+
+
+      <textarea name="q14"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。31 只能安全共享 1 个完整块，也就是 16 个 token；32 刚好能共享 2 个完整块；33 仍然只能共享到前 32 个 token，因为多出来的 1 个 token 还没有让下一个块变成完整块。答题时必须写出“完整块边界”以及“不能共享半块”。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q15" data-group="" data-title="" data-answer="先检查 tokenizer、模板、特殊 token、前导空白">
+        <div class="q-meta"><span class="pill">15</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 终端 lab 里看到 <code>prefix miss</code> 时，第一步应该做什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q15" value="先把 block size 调到 32">先把 block size 调到 32</label>
+      <label><input type="radio" name="q15" value="先检查 tokenizer、模板、特殊 token、前导空白">先检查 tokenizer、模板、特殊 token、前导空白</label>
+      <label><input type="radio" name="q15" value="先把所有请求都合并成一个 batch">先把所有请求都合并成一个 batch</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>先检查 tokenizer、模板、特殊 token、前导空白</p>
+        </details>
+      </article>
+      <article class="q" data-question="q16" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">16</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 如果你只剩 60 秒，怎么向同事解释“PagedAttention 解决的到底是什么”？</h3>
+
+
+      <textarea name="q16"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。可参考的答法：PagedAttention 把 KV cache 切成固定大小的 block，用块表把逻辑序列映射到物理显存；这样可以复用完全一致的前缀，减少重复 prefill，同时把尾块浪费和碎片显式地管起来。答题时要把“布局”和“复用”说出来，不要只说“更省显存”。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-  <li>
-    <strong>vLLM - Paged Attention</strong>
-    <span>解释 block、block table、按块读取 KV cache 的基本模型，是这页的主来源。</span>
-  </li>
-  <li>
-    <strong>vLLM - Automatic Prefix Caching</strong>
-    <span>用来说明 prefix cache 只在前缀完全一致时复用，省的是重复 prefill，不是生成阶段本身。</span>
-  </li>
-  <li>
-    <strong>vLLM - block_pool API</strong>
-    <span>用来理解 block hash、append-only block table 和 cache hit / miss 的实现语义。</span>
-  </li>
-  <li>
-    <strong>vLLM - Engine Arguments</strong>
-    <span>支撑 `--block-size`、`--enable-prefix-caching`、`--kv-cache-dtype` 这些页面里的配置词汇。</span>
-  </li>
-  <li>
-    <strong>PagedAttention paper</strong>
-    <span>支撑这页对 fragmentation、重复拷贝和块式管理收益的解释。</span>
-  </li>
-  <li>
-    <strong>SGLang - HiCache System Design and Optimization</strong>
-    <span>支撑层次化 KV cache、长上下文和多轮会话的工程边界。</span>
-  </li>
-  <li>
-    <strong>SGLang - HiCache Best Practices</strong>
-    <span>支撑这页对“什么时候值得上更高层级缓存、什么时候不值”的判断。</span>
-  </li>
+<ul>
+<li><b>vLLM - Paged Attention</b></li>
 </ul>
-
+<p>解释 block、block table、按块读取 KV cache 的基本模型，是这页的主来源。</p>
+<ul>
+<li><b>vLLM - Automatic Prefix Caching</b></li>
+</ul>
+<p>用来说明 prefix cache 只在前缀完全一致时复用，省的是重复 prefill，不是生成阶段本身。</p>
+<ul>
+<li><b>vLLM - block_pool API</b></li>
+</ul>
+<p>用来理解 block hash、append-only block table 和 cache hit / miss 的实现语义。</p>
+<ul>
+<li><b>vLLM - Engine Arguments</b></li>
+</ul>
+<p>支撑 <code>--block-size</code>、<code>--enable-prefix-caching</code>、<code>--kv-cache-dtype</code> 这些页面里的配置词汇。</p>
+<ul>
+<li><b>PagedAttention paper</b></li>
+</ul>
+<p>支撑这页对 fragmentation、重复拷贝和块式管理收益的解释。</p>
+<ul>
+<li><b>SGLang - HiCache System Design and Optimization</b></li>
+</ul>
+<p>支撑层次化 KV cache、长上下文和多轮会话的工程边界。</p>
+<ul>
+<li><b>SGLang - HiCache Best Practices</b></li>
+</ul>
+<p>支撑这页对“什么时候值得上更高层级缓存、什么时候不值”的判断。</p>
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

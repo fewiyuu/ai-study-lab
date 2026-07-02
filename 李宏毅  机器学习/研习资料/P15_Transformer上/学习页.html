@@ -4,283 +4,570 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P15｜Transformer（上）</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="sequence-to-sequence,seq2seq,output length,encoder,decoder,Transformer,self-attention,positional encoding,residual connection,LayerNorm,feed-forward,BERT,customized model">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Transformer 上</strong><span>P15。先理解 seq2seq 为什么强大，再拆 Transformer encoder block 的真实结构。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#seq2seq"><span class="dot"></span>Seq2seq 是什么</a>
-      <a href="#apps"><span class="dot"></span>应用与硬解</a>
-      <a href="#encoder-decoder"><span class="dot"></span>Encoder / Decoder</a>
-      <a href="#encoder"><span class="dot"></span>Encoder block</a>
-      <a href="#layernorm"><span class="dot"></span>LayerNorm</a>
-      <a href="#design"><span class="dot"></span>架构不是唯一</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#terms"><span class="dot"></span>术语与检查</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">这一节的判断句：Transformer 是 seq2seq 模型；P15 先讲 encoder，decoder 留到下一节。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P15</div>
-        <h1>Transformer（上）：从 Seq2seq 到 Encoder</h1>
-        <p>Transformer 是一种 sequence-to-sequence model，简称 seq2seq。它处理的任务是：输入是一段 sequence，输出也是一段 sequence，而且输出长度由模型自己决定。语音辨识、机器翻译、语音翻译、聊天机器人、问答、摘要，甚至一些看起来不像序列输出的任务，都可以被改写成 seq2seq。</p>
-        <p>P15 的后半段进入 Transformer 的 encoder。Encoder 负责读入输入 sequence，把它转成另一串向量。一个 encoder block 不只是 self-attention，一般还包含 positional encoding、multi-head self-attention、residual connection、LayerNorm、feed-forward network，再加一次 residual 和 LayerNorm。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释 seq2seq 与 sequence labeling 的区别。</li>
-          <li>举出语音辨识、翻译、QA、文法剖析等 seq2seq 应用。</li>
-          <li>说明 encoder 和 decoder 的分工。</li>
-          <li>画出 Transformer encoder block 的主要步骤。</li>
-          <li>区分 BatchNorm 和 LayerNorm 的统计维度。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">map</span></div>
-      <p>Seq2seq 的核心是输出长度不固定。前面 self-attention 讲过 sequence labeling：输入 N 个向量，输出 N 个 label。而 seq2seq 不要求输出和输入一样长，模型需要自己决定什么时候继续输出、什么时候停止。</p>
-      <p>Transformer 是 seq2seq 的代表模型。它通常分成 encoder 和 decoder 两块：encoder 读输入，decoder 产生输出。P15 只讲 encoder 的结构；decoder 因为涉及如何一步步生成输出，留到 P16。</p>
-      <p>Encoder 的基本功能是输入一串向量、输出一串同长度向量。这个功能 RNN、CNN、self-attention 都可以做；Transformer encoder 选择 self-attention，并用 residual、LayerNorm、feed-forward 组成可堆叠的 block。</p>
-      <div class="map">
-        <span class="node">input sequence</span><span class="arrow">→</span>
-        <span class="node">encoder</span><span class="arrow">→</span>
-        <span class="node">context vectors</span><span class="arrow">→</span>
-        <span class="node">decoder</span><span class="arrow">→</span>
-        <span class="node">output sequence</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P15</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>用“输入序列、输出序列、输出长度由模型决定”一句话抓住 seq2seq。</p></div>
-    </section>
-
-    <section id="seq2seq">
-      <div class="head"><h2>Seq2seq：输出多长由机器决定</h2><span class="tag">sequence-to-sequence</span></div>
-      <p>语音辨识是典型 seq2seq。输入是一段声音讯号，可以表示成一串 frame 向量；输出是文字序列。声音长度和文字长度有关系，但没有固定比例。模型必须听内容，自己决定输出几个字。</p>
-      <p>机器翻译也是 seq2seq。中文“机器学习”有四个字，英文是两个词，但这不代表所有中英翻译都是 1/2 的长度关系。不同语言语序、词汇粒度和表达方式都不同，输出长度必须由模型根据内容决定。</p>
-      <p>语音翻译更直接：输入某种语言的声音，输出另一种语言的文字。课程用台语例子说明，很多语言文字系统不普及，先做语音辨识再翻译未必可行；直接训练声音到文字的 seq2seq 模型，虽然粗暴，却可能有效。</p>
-      <table class="metric-table">
-        <thead><tr><th>任务</th><th>输入</th><th>输出</th><th>为什么是 seq2seq</th></tr></thead>
-        <tbody>
-          <tr><td>语音辨识</td><td>frame sequence</td><td>文字 sequence</td><td>声音长度不直接决定字数。</td></tr>
-          <tr><td>机器翻译</td><td>源语言词序列</td><td>目标语言词序列</td><td>两种语言长度和语序不同。</td></tr>
-          <tr><td>语音翻译</td><td>声音 sequence</td><td>另一语言文字</td><td>中间不一定有可用文字转写。</td></tr>
-        </tbody>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>判断一个任务是否需要模型自己决定输出长度。</p></div>
-    </section>
-
-    <section id="apps">
-      <div class="head"><h2>Seq2seq 的威力：很多任务可以硬改写</h2><span class="tag">applications</span></div>
-      <p>聊天机器人可以看成 seq2seq：输入一句话，输出一句回应。训练资料可以来自大量对话，例如影视剧台词。模型学习“看到这句话，接下来应该输出什么回应”。</p>
-      <p>NLP 里很多任务可以改写成 question answering。翻译可以问“这个句子的德文翻译是什么”；摘要可以问“这段文字的摘要是什么”；情感分析可以问“这段文字是正面还是负面”。把文章和问题拼在一起作为输入，输出答案，就是一个 seq2seq 任务。</p>
-      <p>一些看起来不是序列输出的任务也能硬解。文法剖析输出的是树，但树可以用括号序列表示；multi-label classification 输出标签集合，标签数量不固定，也可以让模型依序输出标签；object detection 也可以把框和类别转成序列输出。课程强调：这不一定是每个任务的最佳专用模型，但说明 seq2seq 很通用。</p>
-      <div class="grid3">
-        <div class="box soft"><h3>好处</h3><p>统一输入输出形式，很多问题都能先跑起来。</p></div>
-        <div class="box warn"><h3>代价</h3><p>像瑞士刀：能做很多事，但不一定是每个任务的最佳工具。</p></div>
-        <div class="box info"><h3>判断</h3><p>专用模型可能更好，seq2seq 是强大基线和统一框架。</p></div>
+      <h1 class="hero-title">P15｜Transformer（上）</h1>
+      <p class="hero-desc">Transformer 是一种 sequence-to-sequence model，简称 seq2seq。它处理的任务是：输入是一段 sequence，输出也是一段 sequence，而且输出长度由模型自己决定。语音辨识、机器翻译、语音翻译、聊天机器人、问答、摘要，甚至一些看起来不像序列输出的任务，都可以被改写成 seq2seq。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P14_批次标准化_Batch_Normalization/学习页.html">上一节</a>
+            <a href="../P16_Transformer下/学习页.html">下一节</a>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把一个非典型任务改写成“输入序列 → 输出序列”，同时指出这种硬解的局限。</p></div>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="encoder-decoder">
-      <div class="head"><h2>Encoder / Decoder：读进去，再生出来</h2><span class="tag">architecture</span></div>
-      <p>一般 seq2seq model 会分成 encoder 和 decoder。Encoder 负责处理输入 sequence，把每个输入位置变成带上下文的表示。Decoder 负责根据 encoder 的结果生成输出 sequence，并决定输出多长。</p>
-      <p>P15 只讲 encoder，因为 decoder 涉及生成过程：如何从开始符号产生第一个 token，再把前面已经输出的 token 当条件继续产生下一个 token，直到输出结束。这部分留到 P16。</p>
-      <p>在 Transformer 里，encoder 的核心模块是 self-attention。它输入一串向量，输出另一串同长度向量。多个 encoder block 堆叠后，输出的每个向量都可以看作对输入 sequence 的更深层表示。</p>
-      <div class="formula">
-        Encoder: x₁, x₂, ..., xₙ → h₁, h₂, ..., hₙ<br>
-        Decoder: h₁...hₙ + previous outputs → y₁, y₂, ..., yₘ
+        </ul>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么 P15 讲 encoder 还没有真正讲“如何生成输出”。</p></div>
-    </section>
+    </div>
+  </header>
 
-    <section id="encoder">
-      <div class="head"><h2>Transformer Encoder Block 里到底有什么</h2><span class="tag">encoder block</span></div>
-      <p>课程先给出简化版：一个 block 先做 self-attention，再做 fully connected feed-forward network。Self-attention 负责让每个位置看全序列；feed-forward network 负责对每个位置的向量做进一步非线性变换。</p>
-      <p>真实 Transformer encoder block 更复杂。输入先加 positional encoding，补上顺序资讯；经过 multi-head self-attention；attention 输出与原输入相加，形成 residual connection；再做 LayerNorm；接着进入 feed-forward network；feed-forward 输出再和它的输入做 residual；最后再做一次 LayerNorm。</p>
-      <p>Residual connection 的直觉是保留原始信息和梯度通路。LayerNorm 则让每个向量内部的维度分布更稳定。多个这样的 block 重复 N 次，就形成 Transformer encoder。</p>
-      <div class="block-flow">
-        <div class="flow-step"><b>1. input + positional encoding</b><span>让内容带上位置资讯</span></div>
-        <div class="flow-step"><b>2. multi-head self-attention</b><span>每个位置看完整输入</span></div>
-        <div class="flow-step"><b>3. add + LayerNorm</b><span>residual 后标准化</span></div>
-        <div class="flow-step"><b>4. feed-forward network</b><span>逐位置非线性变换</span></div>
-        <div class="flow-step"><b>5. add + LayerNorm</b><span>形成 block 输出</span></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>按顺序复述一个 Transformer encoder block 的主要组件。</p></div>
-    </section>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#seq2seq">Seq2seq：输出多长由机器决定</a>
+      <a href="#apps">Seq2seq 的威力：很多任务可以硬改写</a>
+      <a href="#encoder-decoder">Encoder / Decoder：读进去，再生出来</a>
+      <a href="#encoder">Transformer Encoder Block 里到底有什么</a>
+      <a href="#layernorm">LayerNorm：不是 BatchNorm 换个名字</a>
+      <a href="#design">原始 Transformer 不是唯一最优答案</a>
+      <a href="#code">最小代码：Encoder Block 的骨架</a>
+      <a href="#mistakes">常见误区与修正</a>
+      <a href="#terms">术语与检查：先分清 seq2seq 和 encoder</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
 
-    <section id="layernorm">
-      <div class="head"><h2>LayerNorm：不是 BatchNorm 换个名字</h2><span class="tag">normalization</span></div>
-      <p>P14 刚讲过 BatchNorm：它对同一个 dimension，在一个 batch 的不同 examples 上计算 mean 和 standard deviation。LayerNorm 不看 batch，它对同一个 example 的一个向量内部，不同 dimensions 计算 mean 和 standard deviation。</p>
-      <p>这一区分非常关键。Transformer 经常处理长度可变的序列，也常在生成时一次处理一个样本或一个 token；如果依赖 batch statistics，会带来不稳定和实现问题。LayerNorm 只依赖当前向量本身，因此更适合 Transformer 的典型设置。</p>
-      <p>课程还提到，为什么 LayerNorm 放在 residual 之后，或者能否放到 block 输入处，这不是绝对定论。原始 Transformer 是一种经典设计，但后续研究提出了不同顺序，有时效果更好。</p>
-      <table class="metric-table">
-        <thead><tr><th>方法</th><th>统计维度</th><th>是否依赖 batch</th><th>本节用途</th></tr></thead>
-        <tbody>
-          <tr><td>BatchNorm</td><td>同一 feature dimension 的 batch 样本</td><td>依赖</td><td>CNN 等场景常见。</td></tr>
-          <tr><td>LayerNorm</td><td>同一个向量内部的 dimensions</td><td>不依赖</td><td>Transformer encoder block 常用。</td></tr>
-        </tbody>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说明 LayerNorm 和 BatchNorm 的统计对象差在哪里。</p></div>
-    </section>
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">map</span>
+        </div>
+<p>Seq2seq 的核心是输出长度不固定。前面 self-attention 讲过 sequence labeling：输入 N 个向量，输出 N 个 label。而 seq2seq 不要求输出和输入一样长，模型需要自己决定什么时候继续输出、什么时候停止。</p>
+<p>Encoder 的基本功能是输入一串向量、输出一串同长度向量。这个功能 RNN、CNN、self-attention 都可以做；Transformer encoder 选择 self-attention，并用 residual、LayerNorm、feed-forward 组成可堆叠的 block。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>用“输入序列、输出序列、输出长度由模型决定”一句话抓住 seq2seq。</p>
+        </div>
+      </section>
+      <section id="seq2seq">
+        <div class="head">
+          <h2>Seq2seq：输出多长由机器决定</h2>
+          <span class="tag">sequence-to-sequence</span>
+        </div>
+<p>语音辨识是典型 seq2seq。输入是一段声音讯号，可以表示成一串 frame 向量；输出是文字序列。声音长度和文字长度有关系，但没有固定比例。模型必须听内容，自己决定输出几个字。</p>
+<p>语音翻译更直接：输入某种语言的声音，输出另一种语言的文字。课程用台语例子说明，很多语言文字系统不普及，先做语音辨识再翻译未必可行；直接训练声音到文字的 seq2seq 模型，虽然粗暴，却可能有效。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>判断一个任务是否需要模型自己决定输出长度。</p>
+        </div>
+      </section>
+      <section id="apps">
+        <div class="head">
+          <h2>Seq2seq 的威力：很多任务可以硬改写</h2>
+          <span class="tag">applications</span>
+        </div>
+<p>聊天机器人可以看成 seq2seq：输入一句话，输出一句回应。训练资料可以来自大量对话，例如影视剧台词。模型学习“看到这句话，接下来应该输出什么回应”。</p>
+<p>一些看起来不是序列输出的任务也能硬解。文法剖析输出的是树，但树可以用括号序列表示；multi-label classification 输出标签集合，标签数量不固定，也可以让模型依序输出标签；object detection 也可以把框和类别转成序列输出。课程强调：这不一定是每个任务的最佳专用模型，但说明 seq2seq 很通用。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>把一个非典型任务改写成“输入序列 → 输出序列”，同时指出这种硬解的局限。</p>
+        </div>
+      </section>
+      <section id="encoder-decoder">
+        <div class="head">
+          <h2>Encoder / Decoder：读进去，再生出来</h2>
+          <span class="tag">architecture</span>
+        </div>
+<p>一般 seq2seq model 会分成 encoder 和 decoder。Encoder 负责处理输入 sequence，把每个输入位置变成带上下文的表示。Decoder 负责根据 encoder 的结果生成输出 sequence，并决定输出多长。</p>
+<p>在 Transformer 里，encoder 的核心模块是 self-attention。它输入一串向量，输出另一串同长度向量。多个 encoder block 堆叠后，输出的每个向量都可以看作对输入 sequence 的更深层表示。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释为什么 P15 讲 encoder 还没有真正讲“如何生成输出”。</p>
+        </div>
+      </section>
+      <section id="encoder">
+        <div class="head">
+          <h2>Transformer Encoder Block 里到底有什么</h2>
+          <span class="tag">encoder</span>
+        </div>
+<p>课程先给出简化版：一个 block 先做 self-attention，再做 fully connected feed-forward network。Self-attention 负责让每个位置看全序列；feed-forward network 负责对每个位置的向量做进一步非线性变换。</p>
+<p>Residual connection 的直觉是保留原始信息和梯度通路。LayerNorm 则让每个向量内部的维度分布更稳定。多个这样的 block 重复 N 次，就形成 Transformer encoder。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>按顺序复述一个 Transformer encoder block 的主要组件。</p>
+        </div>
+      </section>
+      <section id="layernorm">
+        <div class="head">
+          <h2>LayerNorm：不是 BatchNorm 换个名字</h2>
+          <span class="tag">normalization</span>
+        </div>
+<p>P14 刚讲过 BatchNorm：它对同一个 dimension，在一个 batch 的不同 examples 上计算 mean 和 standard deviation。LayerNorm 不看 batch，它对同一个 example 的一个向量内部，不同 dimensions 计算 mean 和 standard deviation。</p>
+<p>课程还提到，为什么 LayerNorm 放在 residual 之后，或者能否放到 block 输入处，这不是绝对定论。原始 Transformer 是一种经典设计，但后续研究提出了不同顺序，有时效果更好。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>说明 LayerNorm 和 BatchNorm 的统计对象差在哪里。</p>
+        </div>
+      </section>
+      <section id="design">
+        <div class="head">
+          <h2>原始 Transformer 不是唯一最优答案</h2>
+          <span class="tag">design</span>
+        </div>
+<p>课程特别提醒：原始 Transformer 论文里的 encoder 结构很重要，但不代表它是永远最优的架构。比如 LayerNorm 放在哪里，就有后续论文专门研究。有些变体把 LayerNorm 放到 block input 处，也可能得到更好结果。</p>
+<p>你应该把 Transformer encoder block 看成一个经过验证的强基线，而不是不能动的圣旨。学会原始结构之后，才有能力理解 Pre-LN、Post-LN、NormFormer 等后续设计。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>回答“为什么 Transformer 长这样”时，能区分经典设计、经验选择和可研究的替代方案。</p>
+        </div>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：Encoder Block 的骨架</h2>
+          <span class="tag">minimal</span>
+        </div>
+<p>下面是概念版代码，只表达 P15 的结构。真实实现还会包含 dropout、mask、multi-head 维度拆分、参数初始化等细节。关键是读出两个 residual 分支和两次 LayerNorm。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">class EncoderBlock:
+ def forward(self, x):
+ # x: [length, dim]，已经加上 positional encoding
+ attn_out = self.self_attention(x)
+ x = self.layer_norm1(x + attn_out) # residual + LayerNorm
 
-    <section id="design">
-      <div class="head"><h2>原始 Transformer 不是唯一最优答案</h2><span class="tag">design choices</span></div>
-      <p>课程特别提醒：原始 Transformer 论文里的 encoder 结构很重要，但不代表它是永远最优的架构。比如 LayerNorm 放在哪里，就有后续论文专门研究。有些变体把 LayerNorm 放到 block input 处，也可能得到更好结果。</p>
-      <p>为什么不用 BatchNorm，而用 LayerNorm？这也不是一句“大家都这样做”就结束。Transformer 的 sequence setting、batch 变化、生成过程和 normalization 统计维度，都会影响选择。后续也有 PowerNorm 等变体尝试替代或改进 LayerNorm。</p>
-      <p>你应该把 Transformer encoder block 看成一个经过验证的强基线，而不是不能动的圣旨。学会原始结构之后，才有能力理解 Pre-LN、Post-LN、NormFormer 等后续设计。</p>
-      <div class="box warn"><h3>学习态度</h3><p>先会画原始 block，再知道它不是唯一设计；先理解每个组件解决什么问题，再讨论换顺序或换 normalization。</p></div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>回答“为什么 Transformer 长这样”时，能区分经典设计、经验选择和可研究的替代方案。</p></div>
-    </section>
-
-    <section id="code">
-      <div class="head"><h2>最小代码：Encoder Block 的骨架</h2><span class="tag">minimal code</span></div>
-      <p>下面是概念版代码，只表达 P15 的结构。真实实现还会包含 dropout、mask、multi-head 维度拆分、参数初始化等细节。关键是读出两个 residual 分支和两次 LayerNorm。</p>
-      <div class="codebar"><span class="label">正确示例：Transformer encoder block</span><span class="kind">python</span></div>
-      <pre><code><span class="kw">class</span> <span class="fn">EncoderBlock</span>:
-    <span class="kw">def</span> <span class="fn">forward</span>(self, x):
-        <span class="cmt"># x: [length, dim]，已经加上 positional encoding</span>
-        attn_out = self.self_attention(x)
-        x = self.layer_norm1(x + attn_out)      <span class="cmt"># residual + LayerNorm</span>
-
-        ff_out = self.feed_forward(x)
-        x = self.layer_norm2(x + ff_out)        <span class="cmt"># residual + LayerNorm</span>
-        <span class="kw">return</span> x</code></pre>
-      <div class="codebar error"><span class="label">错误示例：把 encoder block 说成只有 self-attention</span><span class="kind">pseudo</span></div>
-      <pre><code><span class="cmt"># 错误理解：Transformer encoder = self-attention 一层。</span>
+ ff_out = self.feed_forward(x)
+ x = self.layer_norm2(x + ff_out) # residual + LayerNorm
+ return x</code></pre>
+<p>错误示例：把 encoder block 说成只有 self-attentionpseudo</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误理解：Transformer encoder = self-attention 一层。
 encoder_output = self_attention(input)
 
-<span class="cmt"># 修正：还要考虑 positional encoding、residual、LayerNorm、feed-forward 等结构。</span></code></pre>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>读一段 encoder 代码时，标出 attention 子层、FFN 子层、residual 和 LayerNorm。</p></div>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区与修正</h2><span class="tag">pitfalls</span></div>
+# 修正：还要考虑 positional encoding、residual、LayerNorm、feed-forward 等结构。</code></pre>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与修正</h2>
+          <span class="tag">pitfalls</span>
+        </div>
       <div class="grid2">
-        <div class="box redsoft"><h3>误区 1：seq2seq 输出长度等于输入长度</h3><p>错因：混淆 sequence labeling。后果：无法理解翻译和语音辨识。修法：seq2seq 的输出长度由模型决定。</p></div>
-        <div class="box redsoft"><h3>误区 2：所有任务都用 seq2seq 就最好</h3><p>错因：只看到通用性。后果：忽略任务专用模型可能更强。修法：seq2seq 是强大通用框架，不一定是最佳专用解。</p></div>
-        <div class="box redsoft"><h3>误区 3：P15 已经讲完 Transformer</h3><p>错因：只看到 encoder。后果：不知道 decoder 如何生成输出。修法：P15 是 encoder，P16 继续 decoder。</p></div>
-        <div class="box redsoft"><h3>误区 4：encoder block 只有 self-attention</h3><p>错因：忽略真实 block。后果：看不懂论文图。修法：attention 后还有 residual、LayerNorm、FFN、residual、LayerNorm。</p></div>
-        <div class="box redsoft"><h3>误区 5：LayerNorm 和 BatchNorm 一样</h3><p>错因：只看名字都有 normalization。后果：统计维度说错。修法：BN 跨 batch，LN 在单个向量内部。</p></div>
-        <div class="box redsoft"><h3>误区 6：原始论文结构不能改</h3><p>错因：把经典设计当绝对最优。后果：无法理解后续 Transformer 变体。修法：先掌握原始结构，再理解改进动机。</p></div>
+        <div class="box redsoft">
+<h3>误区 1：seq2seq 输出长度等于输入长度</h3>
+<p>错因：混淆 sequence labeling。后果：无法理解翻译和语音辨识。修法：seq2seq 的输出长度由模型决定。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 2：所有任务都用 seq2seq 就最好</h3>
+<p>错因：只看到通用性。后果：忽略任务专用模型可能更强。修法：seq2seq 是强大通用框架，不一定是最佳专用解。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 3：P15 已经讲完 Transformer</h3>
+<p>错因：只看到 encoder。后果：不知道 decoder 如何生成输出。修法：P15 是 encoder，P16 继续 decoder。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 4：encoder block 只有 self-attention</h3>
+<p>错因：忽略真实 block。后果：看不懂论文图。修法：attention 后还有 residual、LayerNorm、FFN、residual、LayerNorm。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 5：LayerNorm 和 BatchNorm 一样</h3>
+<p>错因：只看名字都有 normalization。后果：统计维度说错。修法：BN 跨 batch，LN 在单个向量内部。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 6：原始论文结构不能改</h3>
+<p>错因：把经典设计当绝对最优。后果：无法理解后续 Transformer 变体。修法：先掌握原始结构，再理解改进动机。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>诊断别人是否把 seq2seq、Transformer encoder、LayerNorm 的概念混在一起。</p>
+        </div>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>诊断别人是否把 seq2seq、Transformer encoder、LayerNorm 的概念混在一起。</p></div>
-    </section>
-
-    <section id="terms">
-      <div class="head"><h2>术语与检查：先分清 seq2seq 和 encoder</h2><span class="tag">terms / checklist</span></div>
-      <p>P15 容易混在一起的点有两个：seq2seq 是任务框架，Transformer 是一种模型架构；encoder 是读入模块，decoder 是生成模块。本页只把 encoder block 打稳，decoder 的生成细节留到 P16。</p>
-      <table class="metric-table">
-        <thead><tr><th>术语</th><th>一句话解释</th><th>易混点</th></tr></thead>
-        <tbody>
-          <tr><td>Seq2seq</td><td>输入一段序列，输出另一段长度可变的序列。</td><td>不是每个输入位置都必须对应一个输出标签。</td></tr>
-          <tr><td>Encoder</td><td>把输入序列读成一串上下文表示。</td><td>它不负责一步步吐出最终答案。</td></tr>
-          <tr><td>Decoder</td><td>根据 encoder 信息生成输出序列。</td><td>P15 只铺垫概念，P16 才讲 masked attention 和生成。</td></tr>
-          <tr><td>LayerNorm</td><td>在单个样本的向量维度内做 normalization。</td><td>不要和跨 batch 统计的 BatchNorm 混用解释。</td></tr>
-        </tbody>
-      </table>
-      <div class="grid2">
-        <div class="box soft"><h3>Worked example</h3><p>语音翻译可以写成 seq2seq：输入是很多声学 frame，输出是目标语言句子，长度通常不同。Transformer encoder 先读声音特征，产生上下文向量；后续 decoder 再决定输出多少 token。</p></div>
-        <div class="box info"><h3>小检查表</h3><ul><li>任务是否真的需要长度可变输出？</li><li>讲 Transformer encoder 时是否包含 attention、FFN、residual、LayerNorm？</li><li>有没有把“通用可用”误说成“所有任务最优”？</li></ul></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>面对一个任务，先判断它是不是 seq2seq，再决定是否需要完整 encoder-decoder，而不是默认套一种模型。</p></div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 questions</span></div>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语与检查：先分清 seq2seq 和 encoder</h2>
+          <span class="tag">terms</span>
+        </div>
+<p>P15 容易混在一起的点有两个：seq2seq 是任务框架，Transformer 是一种模型架构；encoder 是读入模块，decoder 是生成模块。本页只把 encoder block 打稳，decoder 的生成细节留到 P16。</p>
+        <div class="box soft">
+<h3>Worked example</h3>
+<p>语音翻译可以写成 seq2seq：输入是很多声学 frame，输出是目标语言句子，长度通常不同。Transformer encoder 先读声音特征，产生上下文向量；后续 decoder 再决定输出多少 token。</p>
+        </div>
+        <div class="box info">
+<h3>小检查表</h3>
+<ul>
+<li>任务是否真的需要长度可变输出？</li>
+<li>讲 Transformer encoder 时是否包含 attention、FFN、residual、LayerNorm？</li>
+<li>有没有把“通用可用”误说成“所有任务最优”？</li>
+</ul>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>面对一个任务，先判断它是不是 seq2seq，再决定是否需要完整 encoder-decoder，而不是默认套一种模型。</p>
+        </div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>做题前先抓住主线</strong><p>P15 是 seq2seq 的通用性 + Transformer encoder 的结构。不要把 decoder 内容提前塞进来。</p></div>
-        <div class="review-card"><strong>自检重点</strong><p class="muted">1-4 题是低摩擦判断；5-18 题迁移到 QA、剖析树、多标签任务和模型结构表达。</p><ul><li>能不能判断任务是不是 seq2seq？</li><li>能不能画出 encoder block？</li><li>能不能区分 LayerNorm 和 BatchNorm？</li></ul></div>
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、Seq2seq 任务</h3></div>
+          <div class="quick-review">抓手 input seq → output seq。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. 哪个任务最典型是 seq2seq？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="输入图片输出一个类别">输入图片输出一个类别</label>
+      <label><input type="radio" name="q?" value="输入中文句子输出英文句子">输入中文句子输出英文句子</label>
+      <label><input type="radio" name="q?" value="输入一个向量输出一个数值">输入一个向量输出一个数值</label>
+      <label><input type="radio" name="q?" value="输入 frame 输出同长度 frame label">输入 frame 输出同长度 frame label</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、Seq2seq 任务</h3><p>确认输出长度由模型决定。</p></div><div class="quick-review"><b>抓手</b><span>input seq → output seq。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="选择" data-title="1. 哪个最典型是 seq2seq？"><div class="q-meta"><span class="pill">选择</span></div><h3>1. 哪个任务最典型是 seq2seq？</h3><label><input type="radio" name="q1" value="A">A. 输入图片输出一个类别</label><label><input type="radio" name="q1" value="B">B. 输入中文句子输出英文句子</label><label><input type="radio" name="q1" value="C">C. 输入一个向量输出一个数值</label><label><input type="radio" name="q1" value="D">D. 输入 frame 输出同长度 frame label</label></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="2. seq2seq 与 sequence labeling 的差别。"><div class="q-meta"><span class="pill">短答</span></div><h3>2. Seq2seq 和 sequence labeling 最大差别是什么？</h3><textarea name="q2" placeholder="从输出长度回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="场景判断" data-title="3. 语音翻译为什么适合 seq2seq？"><div class="q-meta"><span class="pill">场景判断</span></div><h3>3. 为什么语音翻译可以直接用 seq2seq 建模？</h3><textarea name="q3" placeholder="从声音序列到文字序列回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="判断" data-title="4. seq2seq 对任何任务都是最佳模型。"><div class="q-meta"><span class="pill">判断</span></div><h3>4. Seq2seq 很通用，所以对任何任务都是最佳模型。</h3><label><input type="radio" name="q4" value="对">对</label><label><input type="radio" name="q4" value="错">错</label></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 2. Seq2seq 和 sequence labeling 最大差别是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景判断</span></div>
+        <h3><b>Q:</b> 3. 为什么语音翻译可以直接用 seq2seq 建模？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 4. Seq2seq 很通用，所以对任何任务都是最佳模型。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、应用改写</h3><p>把任务改写成序列到序列。</p></div><div class="quick-review"><b>方法</b><span>把答案也表示成文字序列。</span></div></div>
+        <div class="group-head">
+          <div><h3>二、应用改写</h3></div>
+          <div class="quick-review">方法 把答案也表示成文字序列。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="简答" data-title="5. QA 如何用 seq2seq 解？"><div class="q-meta"><span class="pill">短答</span></div><h3>5. Question answering 如何改写成 seq2seq？</h3><textarea name="q5" placeholder="输入是什么，输出是什么"></textarea></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="6. 文法剖析怎么变成序列输出？"><div class="q-meta"><span class="pill">短答</span></div><h3>6. 文法剖析输出是树，为什么仍可用 seq2seq 硬解？</h3><textarea name="q6" placeholder="从树可转成括号序列回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="场景判断" data-title="7. multi-label classification 为什么可用 seq2seq？"><div class="q-meta"><span class="pill">场景判断</span></div><h3>7. Multi-label classification 为什么可以改写成 seq2seq？</h3><textarea name="q7" placeholder="从标签数量不固定回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="错误诊断" data-title="8. 只取分类器前三名就能解决 multi-label。"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>8. “Multi-label 只要取分类器分数最高前三名就好。”这句话哪里不稳？</h3><textarea name="q8" placeholder="按错因 / 后果 / 修法回答"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 5. Question answering 如何改写成 seq2seq？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 6. 文法剖析输出是树，为什么仍可用 seq2seq 硬解？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景判断</span></div>
+        <h3><b>Q:</b> 7. Multi-label classification 为什么可以改写成 seq2seq？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 8. “Multi-label 只要取分类器分数最高前三名就好。”这句话哪里不稳？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>三、Encoder / Decoder 与 Encoder Block</h3><p>掌握 P15 的结构边界。</p></div><div class="quick-review"><b>边界</b><span>P15 只讲 encoder。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="填空" data-title="9. encoder 和 decoder 的分工。"><div class="q-meta"><span class="pill">填空</span></div><h3>9. Encoder 和 decoder 的基本分工是什么？</h3><input type="text" name="q9" placeholder="encoder→...；decoder→..."></div>
-          <div class="q" data-role="homework" data-type="选择" data-title="10. Transformer encoder 核心使用什么？"><div class="q-meta"><span class="pill">选择</span></div><h3>10. Transformer encoder 中处理整段输入序列的核心模块是什么？</h3><label><input type="radio" name="q10" value="A">A. self-attention</label><label><input type="radio" name="q10" value="B">B. K-means</label><label><input type="radio" name="q10" value="C">C. 决策树</label><label><input type="radio" name="q10" value="D">D. 只靠 softmax</label></div>
-          <div class="q" data-role="homework" data-type="排序" data-title="11. 排列 encoder block 的主要步骤。"><div class="q-meta"><span class="pill">排序</span></div><h3>11. 按顺序写出一个 Transformer encoder block 的主要步骤。</h3><textarea name="q11" placeholder="positional encoding / self-attention / add+norm / FFN / add+norm"></textarea></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="12. residual connection 做什么？"><div class="q-meta"><span class="pill">短答</span></div><h3>12. Residual connection 在 encoder block 里做什么？</h3><textarea name="q12" placeholder="从 input 加 output、保留信息和梯度通路回答"></textarea></div>
+        <div class="group-head">
+          <div><h3>三、Encoder / Decoder 与 Encoder Block</h3></div>
+          <div class="quick-review">边界 P15 只讲 encoder。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 9. Encoder 和 decoder 的基本分工是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 10. Transformer encoder 中处理整段输入序列的核心模块是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="self-attention">self-attention</label>
+      <label><input type="radio" name="q?" value="K-means">K-means</label>
+      <label><input type="radio" name="q?" value="决策树">决策树</label>
+      <label><input type="radio" name="q?" value="只靠 softmax">只靠 softmax</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、LayerNorm 与设计选择</h3><p>不要把 normalization 混成一团。</p></div><div class="quick-review"><b>区分</b><span>BN 看 batch，LN 看向量内部。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="简答" data-title="13. LayerNorm 和 BatchNorm 的统计维度。"><div class="q-meta"><span class="pill">短答</span></div><h3>13. LayerNorm 和 BatchNorm 的统计维度有什么不同？</h3><textarea name="q13" placeholder="分别说明对哪些数算 mean/std"></textarea></div>
-          <div class="q" data-role="homework" data-type="判断" data-title="14. Transformer 原始结构就是永远最优。"><div class="q-meta"><span class="pill">判断</span></div><h3>14. 原始 Transformer 的 encoder block 顺序就是永远最优，不能改。</h3><label><input type="radio" name="q14" value="对">对</label><label><input type="radio" name="q14" value="错">错</label></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="15. 为什么 encoder 要 positional encoding？"><div class="q-meta"><span class="pill">短答</span></div><h3>15. 为什么 Transformer encoder 还需要 positional encoding？</h3><textarea name="q15" placeholder="从 self-attention 本身没有顺序回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="错误诊断" data-title="16. encoder block 只有 self-attention。"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>16. “Transformer encoder block 其实就是一层 self-attention。”这句话哪里不完整？</h3><textarea name="q16" placeholder="按错因 / 后果 / 修法回答"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">排序</span></div>
+        <h3><b>Q:</b> 11. 按顺序写出一个 Transformer encoder block 的主要步骤。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 12. Residual connection 在 encoder block 里做什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>五、表达输出</h3><p>把本节讲给别人听。</p></div><div class="quick-review"><b>主线</b><span>seq2seq 通用，encoder 读入。</span></div></div>
+        <div class="group-head">
+          <div><h3>四、LayerNorm 与设计选择</h3></div>
+          <div class="quick-review">区分 BN 看 batch，LN 看向量内部。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="面试短答" data-title="17. 一句话说明 Transformer 上。"><div class="q-meta"><span class="pill">面试短答</span></div><h3>17. 用一句话说明 P15 主要讲了什么。</h3><textarea name="q17" placeholder="控制在 1-2 句话"></textarea></div>
-          <div class="q full" data-role="homework" data-type="费曼解释" data-title="18. 费曼解释：seq2seq 与 Transformer encoder。" data-keywords="sequence-to-sequence,seq2seq,output length,encoder,decoder,Transformer,self-attention,positional encoding,residual connection,LayerNorm,feed-forward,BERT,customized model"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 8-12 句话讲清楚：什么是 seq2seq，Transformer encoder block 又由什么组成？</h3><textarea name="q18" placeholder="必须串起：sequence-to-sequence、seq2seq、output length、encoder、decoder、Transformer、self-attention、positional encoding、residual connection、LayerNorm、feed-forward、BERT、customized model"></textarea><div class="solve-note">提示：先讲 seq2seq 的输出长度，再讲 encoder/decoder，最后讲 encoder block 组件和架构可变性。</div></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 13. LayerNorm 和 BatchNorm 的统计维度有什么不同？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 14. 原始 Transformer 的 encoder block 顺序就是永远最优，不能改。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 15. 为什么 Transformer encoder 还需要 positional encoding？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 16. “Transformer encoder block 其实就是一层 self-attention。”这句话哪里不完整？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、表达输出</h3></div>
+          <div class="quick-review">主线 seq2seq 通用，encoder 读入。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 17. 用一句话说明 P15 主要讲了什么。</h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 18. 用 8-12 句话讲清楚：什么是 seq2seq，Transformer encoder block 又由什么组成？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>生成练习记录</h2><span class="tag">review</span></div>
-      <p class="muted">完成练习后生成记录。未填写题目、错误诊断缺少“错因 / 后果 / 修法”、费曼解释过短，都会在下方提示。</p>
-      <div class="actions"><button onclick="generateRecord()">生成记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const s of sections){if(s.getBoundingClientRect().top<innerHeight*.36) current=s.id;}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`));}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";navigator.clipboard.writeText(code).then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});bar.appendChild(btn);});
+      </ul>
+    </section>
+  </article>
 
-function valueOfQuestion(q){const checks=[...q.querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value);if(checks.length) return checks.join('、');const radio=q.querySelector('input[type=radio]:checked');if(radio) return radio.value;const text=q.querySelector('textarea,input[type=text],select');return text ? text.value.trim() : '';}
-function questionGroup(q){const group=q.closest('.practice-group');return group?.querySelector('.group-head h3')?.innerText.trim() || '综合练习';}
-function generateRecord(){
-  const qs=[...document.querySelectorAll('[data-role="homework"]')];const groups={};const warnings=[];
-  qs.forEach((q,i)=>{const title=q.dataset.title || q.querySelector('h3')?.innerText.trim() || `第 ${i+1} 题`;const hint=q.querySelector('.solve-note')?.innerText.trim() || '';const answer=valueOfQuestion(q);if(!answer) warnings.push(`第 ${i+1} 题未填写：${title}`);const typeText=`${q.dataset.type||''} ${title}`;if(/诊断|错误/.test(typeText) && answer && !(/错因|原因/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))){warnings.push(`第 ${i+1} 题建议按“错因 / 后果 / 修法”补全。`);}if(/费曼/.test(typeText)){const keys=(q.dataset.keywords || document.body.dataset.feynmanKeywords || '').split(/[、,，\s]+/).filter(Boolean);if(answer && answer.length<170) warnings.push(`第 ${i+1} 题解释偏短，建议至少写 170 个中文字符。`);if(answer && keys.length){const lack=keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase()));if(lack.length) warnings.push(`第 ${i+1} 题可能缺少关键词：${lack.join('、')}。`);}}const group=questionGroup(q);(groups[group] ||= []).push({title, hint, answer: answer || '（未填写）'});});
-  const pageTitle=(document.querySelector('.brand strong,h1')?.innerText || document.title).replace(/\s+/g,' ').trim();let out=`# P15｜${pageTitle}｜练习记录\n\n`;Object.keys(groups).forEach(group=>{out+=`## ${group}\n\n`;groups[group].forEach(item=>{out+=`### ${item.title}\n`;if(item.hint) out+=`提示摘要：${item.hint}\n\n`;out+=`${item.answer}\n\n`;});});document.getElementById('record').textContent=out;const quality=document.getElementById('quality');quality.style.display='block';quality.textContent=warnings.length ? warnings.join('\n') : '练习记录完整，可以直接用于公开分享。';
-}
-function copyRecord(){const text=document.getElementById('record').textContent;navigator.clipboard.writeText(text).catch(()=>alert('复制失败，请手动复制页面中的记录。'));}
-</script>
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

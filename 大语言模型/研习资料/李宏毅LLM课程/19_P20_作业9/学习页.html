@@ -4,243 +4,587 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>19_P20｜作业9：Diffusion Model Customization</title>
-  <link rel="stylesheet" href="../../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body data-study-kind="homework" data-feynman-keywords="diffusion,denoising,noise predictor,latent diffusion,text-to-image,customization,Custom Diffusion,BLIP-Diffusion,image alignment,text alignment,guidance scale,inference steps">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>19_P20</strong><span>作业9：Diffusion Customization<br>去噪过程 · 对象客制化 · 双指标</span></div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>学习目标</a><a href="#skeleton"><span class="dot"></span>概念骨架</a><a href="#terms"><span class="dot"></span>术语表</a><a href="#lecture"><span class="dot"></span>讲义主线</a><a href="#source"><span class="dot"></span>作业线索</a><a href="#example"><span class="dot"></span>最小例子</a><a href="#viz"><span class="dot"></span>交互观察</a><a href="#diagnosis"><span class="dot"></span>误区诊断</a><a href="#practice"><span class="dot"></span>综合练习</a><a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">这一节有两个交付：Task 1 是观察 diffusion 过程并在 NTU COOL 作答；Task 2 是用两种方法生成客制化图片并上传两个 zip。</div>
-  </aside>
-  <main>
-    <section class="hero in-view" id="goal">
-      <div>
-        <div class="kicker">LEE HUNG-YI LLM 2026 · P20</div>
-        <h1>作业9：Diffusion Model and Customization</h1>
-        <p>这次作业让你体验 text-to-image diffusion model 的两个核心：第一，图片是怎样从 noise 一步步 denoise 出来的；第二，怎样让模型生成“指定对象”的新场景图片，也就是 customization。</p>
-        <p>作业分两部分。Task 1 观察 denoising 中间过程和 prompt 条件向量操作，在 NTU COOL 回答两题，共 2 分。Task 2 实作 Custom Diffusion 与 BLIP-Diffusion 两种客制化方法，分别生成 30 张图片，压缩成两个 zip 上传 Judge Boy，共 8 分。</p>
-        <div class="map"><span class="node">noise</span><span class="arrow">→</span><span class="node">denoising steps</span><span class="arrow">→</span><span class="node">text guidance</span><span class="arrow">→</span><span class="node">custom token</span><span class="arrow">→</span><span class="node">image/text alignment</span></div>
-        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=20">https://www.bilibili.com/video/BV1JKoeBiEt4?p=20</a></p>
-      </div>
-      <div class="route">
-        <h3>学完后要能做四件事</h3>
-        <ol>
-          <li>解释 diffusion 的 forward process 和 reverse process。</li>
-          <li>说明 noise predictor 为什么预测 noise 而不是直接输出干净图片。</li>
-          <li>区分 Custom Diffusion 和 BLIP-Diffusion 的客制化方式。</li>
-          <li>用 image alignment 与 text alignment 同时判断生成结果。</li>
-        </ol>
-      </div>
-    </section>
+<body data-course="李宏毅 LLM 课程" data-unit="19">
 
-    <section id="skeleton">
-      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
-      <div class="grid3">
-        <div class="box soft"><h3>Diffusion：从噪声到图片</h3><p>forward process 往干净图片加 noise；reverse process 从 noise 逐步 denoise。模型真正学的是在给定 step 和条件时预测噪声。</p></div>
-        <div class="box"><h3>Text-to-image：加上文字条件</h3><p>如果只给 step 和 noisy image，模型只能去噪。加上 text prompt 的 condition 后，模型就能朝“河边毛绒娃娃”“海边背包”等目标生成。</p></div>
-        <div class="box warn"><h3>Customization：指定对象身份</h3><p>普通 prompt 很难精确描述“我家的这只狗”。客制化通过参考图片和 special token，让模型把某个 token 绑定到指定对象特征。</p></div>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅 LLM 课程</a>
+        <span class="sep">/</span>
+        <span>19</span>
       </div>
-      <table class="metric-table" style="margin-top:14px">
-        <tr><th>任务</th><th>要做什么</th><th>交付</th><th>分数</th></tr>
-        <tr><td>Task 1</td><td>观察 diffusion denoising 与 prompt 向量操作</td><td>NTU COOL 两题问答</td><td>2 分</td></tr>
-        <tr><td>Task 2A</td><td>Custom Diffusion：训练模型学会新 token 指代对象</td><td><code>results_custom_diffusion.zip</code></td><td>4 分的一部分</td></tr>
-        <tr><td>Task 2B</td><td>BLIP-Diffusion：用 pretrained predictor 编码 reference image，不额外 fine-tune</td><td><code>results_blip.zip</code></td><td>4 分的一部分</td></tr>
-      </table>
-    </section>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <section id="terms">
-      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
-      <table class="metric-table">
-        <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
-        <tr><td>text-to-image</td><td>用文字生成图片。</td><td>模型接收 prompt，生成与文字描述对齐的图像。</td><td>以为 prompt 越长越一定能描述出指定对象。</td></tr>
-        <tr><td>forward process</td><td>把干净图片逐步弄脏。</td><td>对图片逐步加入 noise，构造训练需要的 noisy image / noise pair。</td><td>以为训练只需要最终纯噪声，不需要中间 step。</td></tr>
-        <tr><td>reverse process</td><td>从噪声一步步还原图片。</td><td>从高 noise step 开始，多次 denoise 得到 clean image 或 clean latent。</td><td>以为模型一步直接生成完整图片。</td></tr>
-        <tr><td>noise predictor</td><td>预测这一步要移除的噪声。</td><td>输入 noisy image / latent、step 和 condition，输出预测 noise。</td><td>以为模型直接输出去噪后的图片；实际常预测 noise 更稳定。</td></tr>
-        <tr><td>latent diffusion</td><td>在压缩表示里去噪。</td><td>先把图片表示成 latent，在 latent space denoise，再用 decoder 还原成图片。</td><td>以为 diffusion 一定在像素空间做所有计算。</td></tr>
-        <tr><td>special token</td><td>代表指定对象的新词。</td><td>例如 <code>new1</code>，训练后模型把它和 reference object 的视觉特征绑定。</td><td>token 不放进 prompt，模型就能自己知道对象是谁。</td></tr>
-        <tr><td>Custom Diffusion</td><td>通过训练学会指定对象。</td><td>用 reference images 微调部分参数，让 <code>new1</code> 指向目标对象。</td><td>只改 prompt 不训练，也叫 Custom Diffusion。</td></tr>
-        <tr><td>BLIP-Diffusion</td><td>不训练，直接用图像编码器给对象条件。</td><td>predictor / image encoder 把 reference image 编成模型可识别的条件 token。</td><td>它不需要任何 reference image；其实 reference image 是条件来源。</td></tr>
-        <tr><td>guidance scale</td><td>文字条件影响多强。</td><td>越高越强迫模型听 prompt，但太高可能颜色怪异或图像失真。</td><td>越高越好，最高一定最符合 prompt。</td></tr>
-        <tr><td>image alignment</td><td>生成图像像不像参考对象。</td><td>评估目标对象身份、外观特征是否保留。</td><td>只要符合场景就算好，不看对象像不像。</td></tr>
-        <tr><td>text alignment</td><td>生成图像是否符合 prompt 场景。</td><td>评估姿态、环境、动作、物品等文字条件是否满足。</td><td>只要对象像就算好，不管 prompt 要求。</td></tr>
-      </table>
-      <p class="checkpoint">你现在应该能做什么：看到一张生成图，分别说出它的 image alignment 和 text alignment 可能高还是低。</p>
-    </section>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">LEE HUNG-YI LLM 2026 · P20</div>
+      <div class="hero-meta">
+        <span class="hero-badge">19</span>
+      </div>
+      <h1 class="hero-title">19_P20｜作业9：Diffusion Model Customization</h1>
+      <p class="hero-desc">这次作业让你体验 text-to-image diffusion model 的两个核心：第一，图片是怎样从 noise 一步步 denoise 出来的；第二，怎样让模型生成“指定对象”的新场景图片，也就是 customization。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../18_P19_作业8/学习页.html">上一节</a>
+            <a href="../20_P21_作业10/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="lecture">
-      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#skeleton">概念骨架</a>
+      <a href="#terms">术语表</a>
+      <a href="#lecture">讲义主线</a>
+      <a href="#source">作业线索</a>
+      <a href="#example">最小例子</a>
+      <a href="#viz">交互观察</a>
+      <a href="#diagnosis">误区诊断</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="skeleton">
+        <div class="head">
+          <h2>概念骨架</h2>
+          <span class="tag">MAP</span>
+        </div>
+<p>Diffusion：从噪声到图片forward process 往干净图片加 noise；reverse process 从 noise 逐步 denoise。模型真正学的是在给定 step 和条件时预测噪声。</p>
+<p>Text-to-image：加上文字条件如果只给 step 和 noisy image，模型只能去噪。加上 text prompt 的 condition 后，模型就能朝“河边毛绒娃娃”“海边背包”等目标生成。</p>
+<p>Customization：指定对象身份普通 prompt 很难精确描述“我家的这只狗”。客制化通过参考图片和 special token，让模型把某个 token 绑定到指定对象特征。</p>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语表</h2>
+          <span class="tag">TERMS</span>
+        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
+<tr><td>text-to-image</td><td>用文字生成图片。</td><td>模型接收 prompt，生成与文字描述对齐的图像。</td><td>以为 prompt 越长越一定能描述出指定对象。</td></tr><tr><td>forward process</td><td>把干净图片逐步弄脏。</td><td>对图片逐步加入 noise，构造训练需要的 noisy image / noise pair。</td><td>以为训练只需要最终纯噪声，不需要中间 step。</td></tr><tr><td>reverse process</td><td>从噪声一步步还原图片。</td><td>从高 noise step 开始，多次 denoise 得到 clean image 或 clean latent。</td><td>以为模型一步直接生成完整图片。</td></tr><tr><td>noise predictor</td><td>预测这一步要移除的噪声。</td><td>输入 noisy image / latent、step 和 condition，输出预测 noise。</td><td>以为模型直接输出去噪后的图片；实际常预测 noise 更稳定。</td></tr><tr><td>latent diffusion</td><td>在压缩表示里去噪。</td><td>先把图片表示成 latent，在 latent space denoise，再用 decoder 还原成图片。</td><td>以为 diffusion 一定在像素空间做所有计算。</td></tr><tr><td>special token</td><td>代表指定对象的新词。</td><td>例如 new1 ，训练后模型把它和 reference object 的视觉特征绑定。</td><td>token 不放进 prompt，模型就能自己知道对象是谁。</td></tr><tr><td>Custom Diffusion</td><td>通过训练学会指定对象。</td><td>用 reference images 微调部分参数，让 new1 指向目标对象。</td><td>只改 prompt 不训练，也叫 Custom Diffusion。</td></tr><tr><td>BLIP-Diffusion</td><td>不训练，直接用图像编码器给对象条件。</td><td>predictor / image encoder 把 reference image 编成模型可识别的条件 token。</td><td>它不需要任何 reference image；其实 reference image 是条件来源。</td></tr><tr><td>guidance scale</td><td>文字条件影响多强。</td><td>越高越强迫模型听 prompt，但太高可能颜色怪异或图像失真。</td><td>越高越好，最高一定最符合 prompt。</td></tr><tr><td>image alignment</td><td>生成图像像不像参考对象。</td><td>评估目标对象身份、外观特征是否保留。</td><td>只要符合场景就算好，不看对象像不像。</td></tr><tr><td>text alignment</td><td>生成图像是否符合 prompt 场景。</td><td>评估姿态、环境、动作、物品等文字条件是否满足。</td><td>只要对象像就算好，不管 prompt 要求。</td></tr>
+        </table></div>
+<p>你现在应该能做什么：看到一张生成图，分别说出它的 image alignment 和 text alignment 可能高还是低。</p>
+      </section>
+      <section id="lecture">
+        <div class="head">
+          <h2>讲义主线</h2>
+          <span class="tag">LECTURE</span>
+        </div>
       <div class="grid2">
-        <div class="box"><h3>1. Diffusion 为什么从 noise 讲起</h3><p>Text-to-image 的目标是“输入文字，输出图片”。Diffusion model 的做法不是从空白画布直接画出图片，而是从 noise 开始，一步步 denoise。编号越大的 step 通常 noise 越严重；越接近 step 1，图片越干净。</p><p>训练时我们可以从干净图片出发，主动加 noise，得到每个 step 的 noisy image 和真实 noise。这样就构造出了 input / output pair：输入 noisy image 和 step，目标是预测当时加进去的 noise。</p></div>
-        <div class="box"><h3>2. 为什么预测 noise</h3><p>视频强调，实际模型内部常做的是 noise prediction。模型先预测当前图里的 noise，再把预测的 noise 从 noisy image / latent 中扣掉，得到更干净的结果。</p><p>经验上，让模型预测噪声通常比直接吐出去噪图片更好训练。你可以把它理解为：模型每一步只解决“这一步哪里是噪声”，而不是一次性承担“整张图该长什么样”的所有责任。</p></div>
+        <div class="box">
+<h3>1. Diffusion 为什么从 noise 讲起</h3>
+<p>Text-to-image 的目标是“输入文字，输出图片”。Diffusion model 的做法从 noise 开始，一步步 denoise。编号越大的 step 通常 noise 越严重；越接近 step 1，图片越干净。</p>
+<p>训练时我们可以从干净图片出发，主动加 noise，得到每个 step 的 noisy image 和真实 noise。这样就构造出了 input / output pair：输入 noisy image 和 step，目标是预测当时加进去的 noise。</p>
+        </div>
+        <div class="box">
+<h3>2. 为什么预测 noise</h3>
+<p>视频强调，实际模型内部常做的是 noise prediction。模型先预测当前图里的 noise，再把预测的 noise 从 noisy image / latent 中扣掉，得到更干净的结果。</p>
+<p>经验上，让模型预测噪声通常比直接吐出去噪图片更好训练。你可以把它理解为：模型每一步只解决“这一步哪里是噪声”，而不是一次性承担“整张图该长什么样”的所有责任。</p>
+<ol>
+<li>Text guidance 的作用没有文字条件时，模型只知道要变干净，不知道要生成什么。加入 text prompt 后，每一步 denoise 都有方向：毛绒娃娃、海边背包、河边场景等条件会影响最终图像。这也是 Task 1 prompt 向量操作能成立的原因：操作发生在模型内部的 condition / latent 表示上，不是在像素上直接相加相减。</li>
+<li>Latent diffusion 更省计算现代 diffusion 往往不直接在 pixel space 里做所有去噪，而是在 latent space 操作。图片先被编码成 latent representation，denoise 后再通过 decoder 还原成图片。你不需要在作业里推完整公式，但要记住：中间表示模型可处理的向量或张量。</li>
+<li>Customization 为什么难“生成一只柯基”很容易，“生成我这只柯基穿西装、在水里游泳”很难。即使用很长 prompt 描述外观，模型也未必能抓住指定对象身份。所以 customization 要把 reference image 引入模型，让一个 special token 代表这个对象。之后 prompt 里写 <code>new1 dog</code>，模型就应该生成像参考狗的狗。</li>
+<li>Custom Diffusion：训练新 tokenCustom Diffusion 会用 reference images fine-tune 模型，让 <code>new1</code> 学会对应对象特征。instant prompt 很重要，例如参考图是黑狗，就把训练 prompt 写成 “photo of a new1 black dog”。如果训练 prompt 加了修饰，inference prompt 也要做相应调整，否则训练时学到的条件和生成时使用的条件不一致。</li>
+<li>BLIP-Diffusion：用 predictor 免训练BLIP-Diffusion 的路线不同：它不要求你重新 fine-tune 模型，而是用 pretrained predictor / image encoder 把 reference image 编码成模型可识别的条件。好处是省训练时间，且因为预训练时见过很多 reference image，泛化能力可能更好。作业里主要调 inference steps 和 guidance scale。</li>
+<li>双指标评分与提交Judge Boy 用 GPT-5 mini 评估生成结果，既看 reference object 像不像，也看 prompt 场景是否符合。两个指标都要过 baseline，单一指标高不够。Task 2 有两个方法，各要生成 30 张图片并上传对应 zip。不要改 zip 文件名；Judge Boy 每天 3 次提交，临近截止可能排队。</li>
+</ol>
+        </div>
+        <div class="box info">
+<h3>完整知识链路</h3>
+<p>本节可以这样串：diffusion 先通过 forward process 学到不同 step 的噪声，再通过 reverse process 从 noise 逐步 denoise；text-to-image 在每一步加入 prompt condition；customization 进一步加入 reference object，让模型不仅符合文字场景，还保留指定对象身份。Custom Diffusion 靠训练 special token，BLIP-Diffusion 靠 pretrained predictor 编码 reference image。最后结果用 image alignment 和 text alignment 双指标评估。你现在应该能做什么：看到一个生成失败案例，判断它是对象不像、场景不符、guidance 太强，还是训练 prompt / inference prompt 不一致。</p>
+        </div>
       </div>
-      <div class="grid3" style="margin-top:14px">
-        <div class="box soft"><h3>3. Text guidance 的作用</h3><p>没有文字条件时，模型只知道要变干净，不知道要生成什么。加入 text prompt 后，每一步 denoise 都有方向：毛绒娃娃、海边背包、河边场景等条件会影响最终图像。</p><p>这也是 Task 1 prompt 向量操作能成立的原因：操作发生在模型内部的 condition / latent 表示上，不是在像素上直接相加相减。</p></div>
-        <div class="box"><h3>4. Latent diffusion 更省计算</h3><p>现代 diffusion 往往不直接在 pixel space 里做所有去噪，而是在 latent space 操作。图片先被编码成 latent representation，denoise 后再通过 decoder 还原成图片。</p><p>你不需要在作业里推完整公式，但要记住：中间表示不是肉眼可看的 RGB 图片，而是模型可处理的向量或张量。</p></div>
-        <div class="box warn"><h3>5. Customization 为什么难</h3><p>“生成一只柯基”很容易，“生成我这只柯基穿西装、在水里游泳”很难。即使用很长 prompt 描述外观，模型也未必能抓住指定对象身份。</p><p>所以 customization 要把 reference image 引入模型，让一个 special token 代表这个对象。之后 prompt 里写 <code>new1 dog</code>，模型就应该生成像参考狗的狗。</p></div>
-        <div class="box soft"><h3>6. Custom Diffusion：训练新 token</h3><p>Custom Diffusion 会用 reference images fine-tune 模型，让 <code>new1</code> 学会对应对象特征。instant prompt 很重要，例如参考图是黑狗，就把训练 prompt 写成 “photo of a new1 black dog”。</p><p>如果训练 prompt 加了修饰，inference prompt 也要做相应调整，否则训练时学到的条件和生成时使用的条件不一致。</p></div>
-        <div class="box"><h3>7. BLIP-Diffusion：用 predictor 免训练</h3><p>BLIP-Diffusion 的路线不同：它不要求你重新 fine-tune 模型，而是用 pretrained predictor / image encoder 把 reference image 编码成模型可识别的条件。</p><p>好处是省训练时间，且因为预训练时见过很多 reference image，泛化能力可能更好。作业里主要调 inference steps 和 guidance scale。</p></div>
-        <div class="box warn"><h3>8. 双指标评分与提交</h3><p>Judge Boy 用 GPT-5 mini 评估生成结果，既看 reference object 像不像，也看 prompt 场景是否符合。两个指标都要过 baseline，单一指标高不够。</p><p>Task 2 有两个方法，各要生成 30 张图片并上传对应 zip。不要改 zip 文件名；Judge Boy 每天 3 次提交，临近截止可能排队。</p></div>
-      </div>
-      <div class="box info" style="margin-top:14px"><h3>完整知识链路</h3><p>本节可以这样串：diffusion 先通过 forward process 学到不同 step 的噪声，再通过 reverse process 从 noise 逐步 denoise；text-to-image 在每一步加入 prompt condition；customization 进一步加入 reference object，让模型不仅符合文字场景，还保留指定对象身份。Custom Diffusion 靠训练 special token，BLIP-Diffusion 靠 pretrained predictor 编码 reference image。最后结果用 image alignment 和 text alignment 双指标评估。你现在应该能做什么：看到一个生成失败案例，判断它是对象不像、场景不符、guidance 太强，还是训练 prompt / inference prompt 不一致。</p></div>
-    </section>
-
-    <section id="source">
-      <div class="head"><h2>作业线索</h2><span class="tag">作业线索</span></div>
-      <div class="source-lines">
-        <div class="box"><h3>作业结构</h3><p>Task 1 在 NTU COOL 回答 diffusion 观察题；Task 2 生成 Custom Diffusion 与 BLIP-Diffusion 两组图片，上传 Judge Boy。</p></div>
-        <div class="box"><h3>Diffusion 原理</h3><p>forward process 加 noise；reverse process 去 noise。模型输入 noisy image / latent、step 和 text condition，输出预测 noise。</p></div>
-        <div class="box"><h3>客制化目标</h3><p>给 reference image 和生成场景 prompt，让模型生成“同一个对象”在新场景里的图片。</p></div>
-        <div class="box"><h3>评分方式</h3><p>GPT-5 mini 同时看 image alignment 和 text alignment。两个指标都超过 baseline 才能拿对应分数。</p></div>
-        <div class="box"><h3>Custom Diffusion 提示</h3><p>instant prompt 要包含 <code>new1</code>；可加对象类别或外观修饰；parameter to train、max train steps 会影响 image/text alignment 权衡。</p></div>
-        <div class="box"><h3>BLIP-Diffusion 提示</h3><p>主要调 inference steps 和 guidance scale。steps 建议不要超过 150；guidance scale 建议不要超过 20，太高可能颜色怪异。</p></div>
-      </div>
-      <div class="grid2" style="margin-top:14px">
-        <div class="box greenbox"><h3>图片生成自学任务模板</h3><ol><li>先把每张 reference image 的对象身份写清：类别、颜色、显著纹理、姿态或配件。</li><li>生成时把 prompt 拆成两部分：对象身份线索和新场景线索，不要只写场景。</li><li>每组图片按 image alignment 和 text alignment 分别打标，判断是对象不像还是场景不符。</li><li>上传 zip 前检查文件名、数量、方法对应关系和每天提交次数。</li></ol><p class="checkpoint">你现在应该能做什么：看见一张失败图，能说出它该改 reference 条件、prompt 还是 inference 参数。</p></div>
-        <div class="box"><h3>worked example：对象像但场景不符</h3><p>如果生成图里的狗很像 reference，但没有穿西装，问题主要在 text alignment。优先检查 prompt 是否明确写出 “in a suit”，再适度提高 guidance scale 或增加 inference steps；不要先加训练步数，因为对象身份已经足够强。</p></div>
-      </div>
-    </section>
-
-    <section id="example">
-      <div class="head"><h2>最小例子</h2><span class="tag">EXAMPLE</span></div>
-      <p>下面用最小伪代码把 P20 的三个关键结构摆出来：去噪循环、Custom Diffusion prompt、两种 alignment 检查。</p>
-      <div class="codebar"><span class="label">示例 1：diffusion denoising loop</span><span class="kind">python</span></div>
-      <pre><code>latent = torch.randn(shape)  # 起始 noise
+      </section>
+      <section id="source">
+        <div class="head">
+          <h2>作业线索</h2>
+          <span class="tag">作业线索</span>
+        </div>
+<p>作业结构Task 1 在 NTU COOL 回答 diffusion 观察题；Task 2 生成 Custom Diffusion 与 BLIP-Diffusion 两组图片，上传 Judge Boy。</p>
+<p>Diffusion 原理forward process 加 noise；reverse process 去 noise。模型输入 noisy image / latent、step 和 text condition，输出预测 noise。</p>
+<p>客制化目标给 reference image 和生成场景 prompt，让模型生成“同一个对象”在新场景里的图片。</p>
+<p>评分方式GPT-5 mini 同时看 image alignment 和 text alignment。两个指标都超过 baseline 才能拿对应分数。</p>
+<p>Custom Diffusion 提示instant prompt 要包含 <code>new1</code>；可加对象类别或外观修饰；parameter to train、max train steps 会影响 image/text alignment 权衡。</p>
+<p>BLIP-Diffusion 提示主要调 inference steps 和 guidance scale。steps 建议不要超过 150；guidance scale 建议不要超过 20，太高可能颜色怪异。</p>
+        <div class="box">
+<h3>worked example：对象像但场景不符</h3>
+<p>如果生成图里的狗很像 reference，但没有穿西装，问题主要在 text alignment。优先检查 prompt 是否明确写出 “in a suit”，再适度提高 guidance scale 或增加 inference steps；不要先加训练步数，因为对象身份已经足够强。</p>
+        </div>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>最小例子</h2>
+          <span class="tag">EXAMPLE</span>
+        </div>
+<p>下面用最小伪代码把 P20 的三个关键结构摆出来：去噪循环、Custom Diffusion prompt、两种 alignment 检查。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-example-1">复制</button></div>
+        <pre id="code-example-1" data-export-context="代码" data-export-lang="text"><code class="language-text">latent = torch.randn(shape) # 起始 noise
 text_cond = text_encoder("a new1 dog swimming in the water")
 
 for step in scheduler.timesteps:
-    predicted_noise = noise_predictor(latent, step, text_cond)
-    latent = scheduler.step(predicted_noise, step, latent)
+ predicted_noise = noise_predictor(latent, step, text_cond)
+ latent = scheduler.step(predicted_noise, step, latent)
 
 image = decoder(latent)</code></pre>
-      <p class="checkpoint">你现在应该能做什么：指出 <code>step</code>、<code>text_cond</code>、<code>predicted_noise</code> 分别在 reverse process 中扮演什么角色。</p>
-      <div class="codebar"><span class="label">示例 2：Custom Diffusion 的 prompt 一致性</span><span class="kind">python</span></div>
-      <pre><code># 训练时 reference object 是一只黑狗
-instance_prompt = "a photo of a new1 black dog"
-
-# 推理时也保留对象类别和 new1，不要只写场景
-prompts = [
-    "a photo of a new1 black dog in a suit",
-    "a photo of a new1 black dog swimming in the water",
-]</code></pre>
-      <div class="box soft"><h3>逐行理解</h3><p><code>new1</code> 是对象身份，<code>black dog</code> 是辅助描述。训练和推理都保留这些线索，模型更容易同时抓住“这只狗”和“新场景”。如果推理时只写 “a dog in a suit”，模型可能退回生成普通狗。</p></div>
-      <div class="codebar"><span class="label">示例 3：双指标验收</span><span class="kind">python</span></div>
-      <pre><code>def pass_customization(image_alignment, text_alignment, image_th, text_th):
-    return image_alignment >= image_th and text_alignment >= text_th
+<p>你现在应该能做什么：指出 <code>step</code>、<code>text_cond</code>、<code>predicted_noise</code> 分别在 reverse process 中扮演什么角色。</p>
+        </div>
+<p>示例 2：Custom Diffusion 的 prompt 一致性python</p>
+        <div class="box soft">
+<h3>逐行理解</h3>
+<p><code>new1</code> 是对象身份，<code>black dog</code> 是辅助描述。训练和推理都保留这些线索，模型更容易同时抓住“这只狗”和“新场景”。如果推理时只写 “a dog in a suit”，模型可能退回生成普通狗。</p>
+<p>示例 3：双指标验收python</p>
+<pre><code class="language-text">def pass_customization(image_alignment, text_alignment, image_th, text_th):
+ return image_alignment &gt;= image_th and text_alignment &gt;= text_th
 
 print(pass_customization(8.8, 6.0, 6.5, 8.5))
 # False：对象像，但 prompt 场景不够对齐。</code></pre>
-    </section>
-
-    <section id="viz">
-      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <h3>BLIP-Diffusion 参数直觉</h3>
-            <div class="slider-row"><span>inference steps</span><input id="steps" type="range" min="10" max="200" value="80"><b id="stepsOut">80</b></div>
-            <div class="slider-row"><span>guidance scale</span><input id="guidance" type="range" min="1" max="30" value="8"><b id="guidanceOut">8</b></div>
-            <div class="calc-card"><div><b>quality</b><strong id="qualityOut">稳</strong></div><div><b>speed</b><strong id="speedOut">中</strong></div><div><b>risk</b><strong id="riskOut">低</strong></div></div>
-            <p id="paramText" class="checkpoint"></p>
-          </div>
-          <div class="viz-cell">
-            <h3>失败类型切换</h3>
-            <div class="seg"><button data-check="identity" class="active">对象不像</button><button data-check="scene">场景不符</button><button data-check="overguide">颜色怪异</button><button data-check="filename">提交错误</button></div>
-            <p id="checkText" class="checkpoint"></p>
-          </div>
+        </div>
+      </section>
+      <section id="viz">
+        <div class="head">
+          <h2>交互观察</h2>
+          <span class="tag">OBSERVE</span>
+        </div>
+<p>BLIP-Diffusion 参数直觉</p>
+<p>inference steps<b>80</b></p>
+<p>guidance scale<b>8</b></p>
+<p><b>quality</b><b>稳</b><b>speed</b><b>中</b><b>risk</b><b>低</b></p>
+<p>观察重点：diffusion 参数不是越大越好。更多 steps 可能更细致也更慢；guidance 太强会把文字条件压得过猛，出现颜色怪异或构图不自然。</p>
+      </section>
+      <section id="diagnosis">
+        <div class="head">
+          <h2>误区诊断</h2>
+          <span class="tag">DIAGNOSIS</span>
+        </div>
+      <div class="grid2">
+        <div class="box redsoft">
+<h3>常见坑</h3>
+<ol>
+<li>以为 diffusion 一步生成图片。错因：忽略 reverse process；后果：看不懂 Task 1 的中间图；修法：按 step 观察 noise 逐渐减少。</li>
+<li>把 prompt 向量运算理解成像素相减。错因：不知道操作发生在 condition / latent 表示上；后果：NTU COOL 观察题选错；修法：回到 latent diffusion 和 text condition。</li>
+<li>Custom Diffusion prompt 不含 <code>new1</code>。错因：忘记 special token 是对象身份；后果：模型只能生成普通类别；修法：训练和推理 prompt 都保留 <code>new1</code>。</li>
+<li>训练 prompt 加了 cat/dog，推理 prompt 却没加。错因：训练推理条件不一致；后果：对象身份不稳；修法：推理时同步保留关键修饰。</li>
+<li>只追求 image alignment。错因：只看对象像不像；后果：场景不符合 prompt，text alignment 不过线；修法：每张图同时检查对象和场景。</li>
+<li>guidance scale 开太高。错因：以为越听 prompt 越好；后果：颜色怪异、图像失真；修法：参考建议不要超过 20，并实际观察结果。</li>
+<li>zip 文件名或图片数量错误。错因：手动改动输出文件；后果：Judge Boy 上传失败或评分异常；修法：使用 sample code 生成的两个 zip，每个对象 30 张图片。</li>
+</ol>
+        </div>
+        <div class="box">
+<h3>易混概念</h3>
+<p>概念 A概念 B区别</p>
+<p>forward processreverse process前者加噪构造训练资料；后者去噪生成图片。</p>
+<p>pixel spacelatent space像素空间直接是图片；latent 是压缩后的模型内部表示。</p>
+<p>Custom DiffusionBLIP-Diffusion前者训练模型学 token；后者用 pretrained predictor 编 reference image。</p>
+<p>image alignmenttext alignment前者看像不像参考对象；后者看是否符合 prompt 场景。</p>
+<p>guidance scaleinference steps前者控制文字条件强度；后者控制去噪迭代次数。</p>
         </div>
       </div>
-      <p>观察重点：diffusion 参数不是越大越好。更多 steps 可能更细致也更慢；guidance 太强会把文字条件压得过猛，出现颜色怪异或构图不自然。</p>
-    </section>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">DRILL</span>
+        </div>
+      <div class="practice-intro">
 
-    <section id="diagnosis">
-      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
-      <div class="grid2">
-        <div class="box redsoft"><h3>常见坑</h3><ol>
-          <li>以为 diffusion 一步生成图片。错因：忽略 reverse process；后果：看不懂 Task 1 的中间图；修法：按 step 观察 noise 逐渐减少。</li>
-          <li>把 prompt 向量运算理解成像素相减。错因：不知道操作发生在 condition / latent 表示上；后果：NTU COOL 观察题选错；修法：回到 latent diffusion 和 text condition。</li>
-          <li>Custom Diffusion prompt 不含 <code>new1</code>。错因：忘记 special token 是对象身份；后果：模型只能生成普通类别；修法：训练和推理 prompt 都保留 <code>new1</code>。</li>
-          <li>训练 prompt 加了 cat/dog，推理 prompt 却没加。错因：训练推理条件不一致；后果：对象身份不稳；修法：推理时同步保留关键修饰。</li>
-          <li>只追求 image alignment。错因：只看对象像不像；后果：场景不符合 prompt，text alignment 不过线；修法：每张图同时检查对象和场景。</li>
-          <li>guidance scale 开太高。错因：以为越听 prompt 越好；后果：颜色怪异、图像失真；修法：参考建议不要超过 20，并实际观察结果。</li>
-          <li>zip 文件名或图片数量错误。错因：手动改动输出文件；后果：Judge Boy 上传失败或评分异常；修法：使用 sample code 生成的两个 zip，每个对象 30 张图片。</li>
-        </ol></div>
-        <div class="box"><h3>易混概念</h3><table class="metric-table">
-          <tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr>
-          <tr><td>forward process</td><td>reverse process</td><td>前者加噪构造训练资料；后者去噪生成图片。</td></tr>
-          <tr><td>pixel space</td><td>latent space</td><td>像素空间直接是图片；latent 是压缩后的模型内部表示。</td></tr>
-          <tr><td>Custom Diffusion</td><td>BLIP-Diffusion</td><td>前者训练模型学 token；后者用 pretrained predictor 编 reference image。</td></tr>
-          <tr><td>image alignment</td><td>text alignment</td><td>前者看像不像参考对象；后者看是否符合 prompt 场景。</td></tr>
-          <tr><td>guidance scale</td><td>inference steps</td><td>前者控制文字条件强度；后者控制去噪迭代次数。</td></tr>
-        </table></div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          <div class="quick-review">REMIND 先分清加噪和去噪。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 1. diffusion 的 reverse process 是从干净图片逐步加 noise。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 2. P20 Task 1 交到哪里？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="NTU COOL">NTU COOL</label>
+      <label><input type="radio" name="q?" value="Judge Boy zip">Judge Boy zip</label>
+      <label><input type="radio" name="q?" value="只交截图">只交截图</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 3. 用一句话解释 noise predictor。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 4. latent diffusion 为什么不直接在 pixel space 做所有操作？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、流程理解</h3></div>
+          <div class="quick-review">REMIND Task 2 有两个 zip。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">排序</span></div>
+        <h3><b>Q:</b> 5. 把 text-to-image diffusion 流程排成顺序：text encoder、random noise、noise predictor、scheduler step、decoder、image。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 6. Custom Diffusion 和 BLIP-Diffusion 的最大区别是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 7. 为什么 Custom Diffusion 的 prompt 一定要含 <code>new1</code>？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 8. Task 2 每个 object 需要生成 30 张图片。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、参数与评分</h3></div>
+          <div class="quick-review">REMIND 两个 alignment 都要看。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 9. guidance scale 太高可能造成什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 10. inference steps 增加通常带来什么收益和成本？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 11. image alignment 高、text alignment 低，说明生成结果可能哪里有问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 12. parameter to train 或 max train steps 增加，为什么可能提高 image alignment 但降低 text alignment？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、错误诊断</h3></div>
+          <div class="quick-review">REMIND 诊断题要落到生成图和提交。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 13. 有人把 prompt 向量操作理解成 pixel-wise 图片相减。错因是什么、后果是什么、怎么改？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 14. 训练时 prompt 写 <code>a new1 cat</code>，推理时只写 <code>a new1</code>。问题在哪里？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 15. 生成图对象很像参考图，但完全没有出现在 prompt 要求的场景里。该如何调整？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 16. 有人把 result zip 改名后上传，Judge Boy 报错。怎么处理？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 17. guidance scale 调到 30 后颜色怪异。错因是什么、后果是什么、怎么改？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、提交与迁移</h3></div>
+          <div class="quick-review">REMIND 提交前数图片、看文件名、看两个指标。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 18. 写出 P20 提交前的 5 条检查清单。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">应用</span></div>
+        <h3><b>Q:</b> 19. 如果要客制化一个背包而不是狗，你会怎样改 instance prompt？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">策略</span></div>
+        <h3><b>Q:</b> 20. 为什么这类作业要尽早开始，而不是截止前再上传？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>六、表达输出</h3></div>
+          <div class="quick-review">REMIND 先讲生成，再讲客制化。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 21. 如果面试官问“P20 作业9 的核心是什么”，你会怎么答？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 22. 用 6-9 句话讲清楚 P20 作业9：从 diffusion 去噪到对象客制化和双指标提交。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
     </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
-      <div class="practice-intro"><div class="review-card"><strong>作答前先抓主线</strong><p>先讲 diffusion 去噪，再讲 text guidance，最后讲 customization 和双指标。</p></div><div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起 diffusion、latent、Custom Diffusion、BLIP-Diffusion、alignment 和提交。</p></div></div>
-      <div class="practice-group"><div class="group-head"><div><h3>一、基础概念</h3><p>确认你知道 diffusion 的基本流程。</p></div><div class="quick-review"><b>REMIND</b>先分清加噪和去噪。</div></div><div class="drill-grid">
-        <div class="q" data-role="homework" data-title="1. diffusion 的 reverse process 是从干净图片逐步加 noise。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. diffusion 的 reverse process 是从干净图片逐步加 noise。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
-        <div class="q" data-role="homework" data-title="2. P20 Task 1 交到哪里？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. P20 Task 1 交到哪里？</h3><div class="choices"><label><input type="radio" name="q2" value="NTU COOL">NTU COOL</label><label><input type="radio" name="q2" value="Judge Boy zip">Judge Boy zip</label><label><input type="radio" name="q2" value="只交截图">只交截图</label></div></div>
-        <div class="q short" data-role="homework" data-title="3. 用一句话解释 noise predictor。"><div class="q-meta"><span class="pill">简答</span></div><h3>3. 用一句话解释 noise predictor。</h3><textarea name="q3"></textarea></div>
-        <div class="q short" data-role="homework" data-title="4. latent diffusion 为什么不直接在 pixel space 做所有操作？"><div class="q-meta"><span class="pill">解释</span></div><h3>4. latent diffusion 为什么不直接在 pixel space 做所有操作？</h3><textarea name="q4"></textarea></div>
-      </div></div>
-      <div class="practice-group"><div class="group-head"><div><h3>二、流程理解</h3><p>把两个任务和两个方法排清楚。</p></div><div class="quick-review"><b>REMIND</b>Task 2 有两个 zip。</div></div><div class="drill-grid">
-        <div class="q short" data-role="homework" data-title="5. 把 text-to-image diffusion 流程排成顺序：text encoder、random noise、noise predictor、scheduler step、decoder、image。"><div class="q-meta"><span class="pill">排序</span></div><h3>5. 把 text-to-image diffusion 流程排成顺序：text encoder、random noise、noise predictor、scheduler step、decoder、image。</h3><textarea name="q5"></textarea></div>
-        <div class="q short" data-role="homework" data-title="6. Custom Diffusion 和 BLIP-Diffusion 的最大区别是什么？"><div class="q-meta"><span class="pill">对照</span></div><h3>6. Custom Diffusion 和 BLIP-Diffusion 的最大区别是什么？</h3><textarea name="q6"></textarea></div>
-        <div class="q short" data-role="homework" data-title="7. 为什么 Custom Diffusion 的 prompt 一定要含 new1？"><div class="q-meta"><span class="pill">解释</span></div><h3>7. 为什么 Custom Diffusion 的 prompt 一定要含 <code>new1</code>？</h3><textarea name="q7"></textarea></div>
-        <div class="q" data-role="homework" data-title="8. Task 2 每个 object 需要生成 30 张图片。"><div class="q-meta"><span class="pill">判断</span></div><h3>8. Task 2 每个 object 需要生成 30 张图片。</h3><div class="choices"><label><input type="radio" name="q8" value="对">对</label><label><input type="radio" name="q8" value="错">错</label></div></div>
-      </div></div>
-      <div class="practice-group"><div class="group-head"><div><h3>三、参数与评分</h3><p>解释调参和双指标。</p></div><div class="quick-review"><b>REMIND</b>两个 alignment 都要看。</div></div><div class="drill-grid">
-        <div class="q short" data-role="homework" data-title="9. guidance scale 太高可能造成什么问题？"><div class="q-meta"><span class="pill">解释</span></div><h3>9. guidance scale 太高可能造成什么问题？</h3><textarea name="q9"></textarea></div>
-        <div class="q short" data-role="homework" data-title="10. inference steps 增加通常带来什么收益和成本？"><div class="q-meta"><span class="pill">对照</span></div><h3>10. inference steps 增加通常带来什么收益和成本？</h3><textarea name="q10"></textarea></div>
-        <div class="q short" data-role="homework" data-title="11. image alignment 高、text alignment 低，说明生成结果可能哪里有问题？"><div class="q-meta"><span class="pill">诊断</span></div><h3>11. image alignment 高、text alignment 低，说明生成结果可能哪里有问题？</h3><textarea name="q11"></textarea></div>
-        <div class="q short" data-role="homework" data-title="12. parameter to train 或 max train steps 增加，为什么可能提高 image alignment 但降低 text alignment？"><div class="q-meta"><span class="pill">解释</span></div><h3>12. parameter to train 或 max train steps 增加，为什么可能提高 image alignment 但降低 text alignment？</h3><textarea name="q12"></textarea></div>
-      </div></div>
-      <div class="practice-group"><div class="group-head"><div><h3>四、错误诊断</h3><p>按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b>诊断题要落到生成图和提交。</div></div><div class="drill-grid">
-        <div class="q short" data-role="homework" data-title="13. 有人把 prompt 向量操作理解成 pixel-wise 图片相减。错因是什么、后果是什么、怎么改？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 有人把 prompt 向量操作理解成 pixel-wise 图片相减。错因是什么、后果是什么、怎么改？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q13"></textarea></div>
-        <div class="q short" data-role="homework" data-title="14. 训练时 prompt 写 a new1 cat，推理时只写 a new1。问题在哪里？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. 训练时 prompt 写 <code>a new1 cat</code>，推理时只写 <code>a new1</code>。问题在哪里？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q14"></textarea></div>
-        <div class="q short" data-role="homework" data-title="15. 生成图对象很像参考图，但完全没有出现在 prompt 要求的场景里。该如何调整？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 生成图对象很像参考图，但完全没有出现在 prompt 要求的场景里。该如何调整？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q15"></textarea></div>
-        <div class="q short" data-role="homework" data-title="16. 有人把 result zip 改名后上传，Judge Boy 报错。怎么处理？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 有人把 result zip 改名后上传，Judge Boy 报错。怎么处理？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q16"></textarea></div>
-        <div class="q short" data-role="homework" data-title="17. guidance scale 调到 30 后颜色怪异。错因是什么、后果是什么、怎么改？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>17. guidance scale 调到 30 后颜色怪异。错因是什么、后果是什么、怎么改？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q17"></textarea></div>
-      </div></div>
-      <div class="practice-group"><div class="group-head"><div><h3>五、提交与迁移</h3><p>检查你能不能把作业要求落到行动。</p></div><div class="quick-review"><b>REMIND</b>提交前数图片、看文件名、看两个指标。</div></div><div class="drill-grid">
-        <div class="q short" data-role="homework" data-title="18. 写出 P20 提交前的 5 条检查清单。"><div class="q-meta"><span class="pill">清单</span></div><h3>18. 写出 P20 提交前的 5 条检查清单。</h3><textarea name="q18"></textarea></div>
-        <div class="q short" data-role="homework" data-title="19. 如果要客制化一个背包而不是狗，你会怎样改 instance prompt？"><div class="q-meta"><span class="pill">应用</span></div><h3>19. 如果要客制化一个背包而不是狗，你会怎样改 instance prompt？</h3><textarea name="q19"></textarea></div>
-        <div class="q short" data-role="homework" data-title="20. 为什么这类作业要尽早开始，而不是截止前再上传？"><div class="q-meta"><span class="pill">策略</span></div><h3>20. 为什么这类作业要尽早开始，而不是截止前再上传？</h3><textarea name="q20"></textarea></div>
-      </div></div>
-      <div class="practice-group"><div class="group-head"><div><h3>六、表达输出</h3><p>最后两题检查复述能力。</p></div><div class="quick-review"><b>REMIND</b>先讲生成，再讲客制化。</div></div><div class="drill-grid">
-        <div class="q short" data-role="homework" data-title="21. 如果面试官问“P20 作业9 的核心是什么”，你会怎么答？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>21. 如果面试官问“P20 作业9 的核心是什么”，你会怎么答？</h3><textarea name="q21"></textarea></div>
-        <div class="q full" data-role="homework" data-title="22. 用 6-9 句话讲清楚 P20 作业9：从 diffusion 去噪到对象客制化和双指标提交。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>22. 用 6-9 句话讲清楚 P20 作业9：从 diffusion 去噪到对象客制化和双指标提交。</h3><div class="solve-note">请串联 diffusion、noise predictor、latent diffusion、Custom Diffusion、BLIP-Diffusion、image alignment、text alignment、zip 提交。</div><textarea name="q22"></textarea></div>
-      </div></div>
+      </ul>
     </section>
+  </article>
 
-    <section id="export">
-      <div class="head"><h2>导出练习记录</h2><span class="tag">EXPORT</span></div><p class="muted">完成练习后生成 Markdown 记录，方便后续回看订正。</p>
-      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div><div id="quality" class="quality"></div><div id="record" class="answer">练习记录会显示在这里。</div>
-    </section>
-  </main>
-</div>
-<script src="../../../../assets/study-page.js"></script>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")],sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean),progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36) current=section.id;section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-function fallbackCopy(text,onOk,onFail){const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";document.body.appendChild(ta);ta.focus();ta.select();try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}}
-function copyText(text,onOk,onFail){if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}else fallbackCopy(text,onOk,onFail);}
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});bar.appendChild(btn);});
-const steps=document.getElementById("steps"),guidance=document.getElementById("guidance");
-function updateParams(){const s=Number(steps.value),g=Number(guidance.value);document.getElementById("stepsOut").textContent=s;document.getElementById("guidanceOut").textContent=g;document.getElementById("speedOut").textContent=s>150?"慢":s<50?"快":"中";document.getElementById("qualityOut").textContent=s<40?"粗":"稳";document.getElementById("riskOut").textContent=g>20?"高":g<4?"偏弱":"低";document.getElementById("paramText").textContent=g>20?"guidance scale 已超过建议范围，可能过度服从文字导致颜色怪异或图像失真。":s>150?"steps 超过建议上限，可能更慢，先确认质量提升是否值得。":"参数在相对稳妥范围内，下一步看对象身份和 prompt 场景是否同时满足。";}
-[steps,guidance].forEach(input=>input.addEventListener("input",updateParams));updateParams();
-const checkTexts={identity:"对象不像：优先检查 reference image、new1 是否在 prompt 中、训练 steps / parameter to train 是否不足。",scene:"场景不符：优先检查生成 prompt 是否保留场景条件，guidance 是否太弱，是否过度追求对象相似。",overguide:"颜色怪异：常见原因是 guidance scale 太高，降低后重新生成并比较 text alignment。",filename:"提交错误：不要改 sample code 生成的 zip 名；确认两个方法各有一个 zip，且图片数量正确。"};
-document.querySelectorAll("[data-check]").forEach(btn=>btn.addEventListener("click",()=>{document.querySelectorAll("[data-check]").forEach(b=>b.classList.toggle("active",b===btn));document.getElementById("checkText").textContent=checkTexts[btn.dataset.check];}));document.getElementById("checkText").textContent=checkTexts.identity;
-function valueOfQuestion(q){const radio=q.querySelector("input[type=radio]:checked");if(radio)return radio.value;const text=q.querySelector("textarea,input[type=text],select");return text?text.value.trim():"";}
-function questionGroup(q){return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";}
-function generateRecord(){const qs=[...document.querySelectorAll('[data-role="homework"]')],groups={},warnings=[];qs.forEach((q,i)=>{const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";const hint=q.querySelector(".solve-note")?.innerText.trim()||"";const answer=valueOfQuestion(q);if(!answer)warnings.push("第 "+(i+1)+" 题未填写："+title);if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer)))warnings.push("第 "+(i+1)+" 题建议补齐“错因 / 后果 / 修法”。");if(q.dataset.type==="feynman"){const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);if(answer&&answer.length<120)warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):[];if(lack.length)warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");}const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});});let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";Object.keys(groups).forEach(group=>{out+="## "+group+"\n\n";groups[group].forEach(item=>{out+="### "+item.title+"\n";if(item.hint)out+="提示摘要："+item.hint+"\n\n";out+=item.answer+"\n\n";});});document.getElementById("record").textContent=out;const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，适合回看订正。";}
-function copyRecord(){copyText(document.getElementById("record").textContent,()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";},()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";});}
-</script>
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

@@ -4,761 +4,518 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>工具 schema、运行时与安全边界</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="Agentic 后训练与工具使用 RL" data-unit="02">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>Agentic 后训练与工具使用 RL</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">Agentic 后训练与工具使用 RL</a>
+        <span class="sep">/</span>
         <span>02</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#overview"><span class="dot"></span>先抓主线</a>
-        <a href="#terms"><span class="dot"></span>术语与误区</a>
-        <a href="#schema"><span class="dot"></span>Schema 设计</a>
-        <a href="#runtime"><span class="dot"></span>运行时</a>
-        <a href="#safety"><span class="dot"></span>安全边界</a>
-        <a href="#examples"><span class="dot"></span>例题</a>
-        <a href="#boundary-note"><span class="dot"></span>先知道，先别追</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>资料依据</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">先把 schema、运行时和安全边界分开，再看论文和训练方法。这样更容易判断失败该修哪一层。</div>
-    </aside>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">课程单元</div>
-          <h1>工具 schema、运行时与安全边界</h1>
-          <p>本页只讲一件事：怎样把工具调用拆成 schema、运行时和安全边界三层。先把这三层分清，后面读 ReAct、Toolformer、ToolBench、API-Bank 和 OpenEnv 时，才知道每篇材料是在补接口、补轨迹，还是补环境与权限。</p>
-
-          <div class="course-links">
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">课程单元</div>
+      <div class="hero-meta">
+        <span class="hero-badge">02</span>
+      </div>
+      <h1 class="hero-title">工具 schema、运行时与安全边界</h1>
+      <p class="hero-desc">本页只讲一件事：怎样把工具调用拆成 schema、运行时和安全边界三层。先把这三层分清，后面读 ReAct、Toolformer、ToolBench、API-Bank 和 OpenEnv 时，才知道每篇材料是在补接口、补轨迹，还是补环境与权限。</p>
+      <div class="course-links">
             <a href="../index.html">课程地图</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>读完本页后你应该能做什么</h3>
-          <ul>
-  <li>能区分 schema、运行时、guardrail、handoff、tracing 的职责边界。</li>
-  <li>能读一个工具定义，判断它缺了哪些参数约束和权限约束。</li>
-  <li>能把自然语言安全要求改写成可执行的运行时策略。</li>
-</ul>
-
-        </div>
       </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>能区分 schema、运行时、guardrail、handoff、tracing 的职责边界。</li>
+            <li>能读一个工具定义，判断它缺了哪些参数约束和权限约束。</li>
+            <li>能把自然语言安全要求改写成可执行的运行时策略。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
 
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#overview">先抓主线</a>
+      <a href="#terms">术语与误区</a>
+      <a href="#schema">Schema 设计</a>
+      <a href="#runtime">运行时</a>
+      <a href="#decision-trace">决策轨迹</a>
+      <a href="#state-ledger">状态账本</a>
+      <a href="#safety">安全边界</a>
+      <a href="#failure-lab">故障台</a>
+      <a href="#examples">例题</a>
+      <a href="#boundary-note">先知道，先别追</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
-  <div class="head">
-    <h2>学习目标</h2>
-    <span class="tag">Foundation / Interface</span>
-  </div>
-  <div class="grid3">
-    <div class="box soft">
-      <h3>拆开三层</h3>
-      <p>把“模型能生成工具调用”拆成接口描述、运行时处理和安全策略三件事，不再用一个 function calling 标签覆盖全部问题。</p>
-    </div>
-    <div class="box info">
-      <h3>读 schema</h3>
-      <p>理解名称、描述、参数类型、必填项、枚举、范围和额外字段限制为什么会影响模型选择工具和填写参数。</p>
-    </div>
-    <div class="box">
-      <h3>设计边界</h3>
-      <p>知道何时用只读工具、沙盒、人工确认、输出脱敏、trace 审计和动态禁用来限制副作用。</p>
-    </div>
-  </div>
-</section>
-
-<section id="overview">
-  <div class="head">
-    <h2>先抓主线</h2>
-    <span class="tag">Schema -> Runtime -> Boundary</span>
-  </div>
-  <p>工具调用不是“模型输出一个 JSON”这么简单。可靠系统至少有三层：schema 告诉模型能填什么，运行时决定怎样解析、校验、执行和回传观察，安全边界决定哪些调用即使格式正确也不能执行。</p>
-  <div class="map">
-    <span class="node">工具意图</span>
-    <span class="arrow">→</span>
-    <span class="node">schema 约束</span>
-    <span class="arrow">→</span>
-    <span class="node">运行时校验</span>
-    <span class="arrow">→</span>
-    <span class="node">权限与 guardrail</span>
-    <span class="arrow">→</span>
-    <span class="node">执行观察与 trace</span>
-  </div>
-  <div class="grid2">
-    <div class="box info">
-      <h3>一句话判断</h3>
-      <p>如果一个约束可以通过“参数格式”表达，它属于 schema；如果它依赖用户、环境、状态、权限、风险或历史轨迹，它属于运行时和安全边界。</p>
-    </div>
-    <div class="box warn">
-      <h3>本单元不做什么</h3>
-      <p>这里不训练模型，也不展开 ReAct 轨迹。目标是先把工具执行面的工程结构讲清楚，为后面的行动-观察数据和环境 RL 做准备。</p>
-    </div>
-  </div>
-</section>
-
-<section id="terms">
-  <div class="head">
-    <h2>术语与误区</h2>
-    <span class="tag">Terms</span>
-  </div>
-  <table class="metric-table" data-export-context="工具 schema、运行时与安全边界术语表" data-export-lang="table">
-    <thead>
-      <tr>
-        <th>术语</th>
-        <th>直觉解释</th>
-        <th>精确定义</th>
-        <th>常见误解</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>工具 schema</td>
-        <td>告诉模型“这个工具能填哪些格子”。</td>
-        <td>工具名、描述和参数结构的机器可读说明，常用 JSON Schema 风格表达类型、必填项、枚举、范围和额外字段规则。</td>
-        <td>以为 schema 等于安全。schema 只能约束形状，不能判断用户是否有权限删除文件。</td>
-      </tr>
-      <tr>
-        <td>运行时</td>
-        <td>真正接住工具调用并执行的系统。</td>
-        <td>负责解析模型输出、验证参数、注入上下文、选择工具、调用函数或外部服务、处理异常、返回观察和记录日志的执行层。</td>
-        <td>以为模型直接调用 API。实际是模型提出调用，运行时决定是否执行。</td>
-      </tr>
-      <tr>
-        <td>Guardrail</td>
-        <td>调用前后的一道检查门。</td>
-        <td>对输入、工具参数、工具输出或最终回答执行的策略检查；可以放行、拒绝、改写、触发人工确认或终止流程。</td>
-        <td>以为只在最终回答做安全过滤就够。工具输入和工具输出也可能泄密或产生副作用。</td>
-      </tr>
-      <tr>
-        <td>Handoff</td>
-        <td>把任务转交给更合适的 agent 或流程。</td>
-        <td>当当前 agent 不应继续处理时，把上下文转给另一个专业 agent、人工队列或审批流程。</td>
-        <td>把 handoff 当普通工具调用。handoff 通常改变责任边界和后续策略。</td>
-      </tr>
-      <tr>
-        <td>Tracing</td>
-        <td>把一次运行拆成可审计的时间线。</td>
-        <td>记录模型生成、工具调用、函数输入输出、guardrail 结果、handoff 和错误等 span，支持调试、评测和事故复盘。</td>
-        <td>只把 trace 当调试日志。训练数据清洗、奖励归因和安全审计都依赖它。</td>
-      </tr>
-    </tbody>
-  </table>
-</section>
-
-<section id="schema">
-  <div class="head">
-    <h2>Schema 设计</h2>
-    <span class="tag">Tool Interface</span>
-  </div>
-  <div class="grid2">
-    <div>
-      <h3>1. Schema 解决的是“可表达性”问题</h3>
-      <p>模型面对工具列表时，并不知道你的后端函数签名。它只能根据工具名称、描述和参数说明判断：该不该用、什么时候用、每个参数应该填什么。schema 越含糊，模型越容易用错工具；schema 越过宽，模型越容易塞入运行时没准备处理的字段。</p>
-      <p>一个实用 schema 需要同时服务两类读者：模型读描述来决策，运行时读结构来校验。只给模型自然语言提示而没有结构约束，会让错误延迟到执行时才爆；只给结构而不给清晰描述，会让模型选错工具。</p>
-      <div class="formula" data-export-context="好 schema 的教学公式" data-export-lang="math">好 schema = 明确工具意图 + 收窄参数空间 + 保留必要上下文 + 明确不能表达的约束</div>
-    </div>
-    <div class="box info">
-      <h3>最小检查清单</h3>
-      <ul>
-        <li>工具名是否动词化、单一职责？</li>
-        <li>描述是否说明何时用、何时不用？</li>
-        <li>必填参数是否真的必填？</li>
-        <li>枚举、范围、格式是否足够收窄？</li>
-        <li>是否禁止无意义的额外字段？</li>
-        <li>危险动作是否只在 schema 中描述，而没有运行时权限检查？</li>
-      </ul>
-    </div>
-  </div>
-  <div class="codebar">
-    <span class="label">一个较稳的工具 schema</span>
-    <span class="kind">JSON Schema 风格</span>
-  </div>
-  <pre data-export-context="较稳的工具 schema" data-export-lang="json"><code class="language-json">{
-  "name": "search_customer_orders",
-  "description": "按客户 ID 查询订单摘要。只用于读取订单状态，不用于退款、改地址或取消订单。",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "customer_id": {
-        "type": "string",
-        "description": "内部客户 ID，不要填姓名、邮箱或自然语言描述。"
-      },
-      "status": {
-        "type": "string",
-        "enum": ["open", "paid", "shipped", "cancelled"],
-        "description": "要过滤的订单状态。"
-      },
-      "limit": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 20,
-        "description": "最多返回多少条记录。"
-      }
-    },
-    "required": ["customer_id"],
-    "additionalProperties": false
-  }
-}</code></pre>
-  <p>这个 schema 做了几件事：工具名说明动作和对象；描述强调只读边界；<code>customer_id</code> 避免模型填入邮箱或自然语言；<code>status</code> 用枚举降低拼写和语义漂移；<code>limit</code> 限制成本；<code>additionalProperties: false</code> 拒绝模型临时编造字段。</p>
-  <div class="grid3">
-    <div class="box soft"><h3>名称</h3><p>优先用 <code>verb_object</code>，如 <code>create_ticket</code>。不要用 <code>handle_request</code> 这种泛化名字。</p></div>
-    <div class="box soft"><h3>描述</h3><p>描述不仅说功能，也要说不用场景。模型经常通过描述边界决定是否调用。</p></div>
-    <div class="box soft"><h3>参数</h3><p>参数越接近业务原子字段越好。把“query”当万能参数会把风险推给后端。</p></div>
-  </div>
-</section>
-
-<section id="runtime">
-  <div class="head">
-    <h2>运行时</h2>
-    <span class="tag">Runtime</span>
-  </div>
-  <p>在 agent 系统里，模型通常只生成一个“想调用某工具并传入这些参数”的意图。运行时才是执行者。它需要把模型输出转成结构化调用，检查参数是否合法，补入用户身份、租户、会话、权限等上下文，再决定是否真的执行。</p>
-  <div class="flow">
-    <div class="flow-step"><b>1</b><h3>暴露工具</h3><p>运行时把当前可用工具及 schema 放进模型上下文。动态禁用的工具不应出现在模型可见列表里。</p></div>
-    <div class="flow-step"><b>2</b><h3>模型提议</h3><p>模型选择工具并生成参数。这个阶段只产生意图，不应该直接触碰外部系统。</p></div>
-    <div class="flow-step"><b>3</b><h3>解析校验</h3><p>运行时解析 JSON、校验必填项、类型、枚举、范围和额外字段，必要时要求模型重试。</p></div>
-    <div class="flow-step"><b>4</b><h3>执行或拒绝</h3><p>运行时检查权限、速率、沙盒、审批和 guardrail；通过后调用函数或外部服务。</p></div>
-    <div class="flow-step"><b>5</b><h3>回传观察</h3><p>工具输出被脱敏、截断、格式化后回到模型，trace 记录每一步。</p></div>
-  </div>
-  <div class="grid2">
-    <div class="box warn">
-      <h3>运行时必须处理错误</h3>
-      <p>工具调用失败不是异常边角料，而是 agent 训练和评测的核心信号。错误可能来自 schema 不匹配、权限不足、资源不存在、网络失败、工具返回过长、状态已变化或动作不可逆。运行时应把错误转成模型可理解的观察，同时保留机器可读错误码。</p>
-    </div>
-    <div class="box info">
-      <h3>观察不是裸输出</h3>
-      <p>工具返回的原始数据可能包含密钥、内部 ID、超长日志或与任务无关的信息。观察应只包含下一步推理需要的最小信息，并标注成功、失败、部分成功或需要确认。</p>
-    </div>
-  </div>
-  <div class="codebar">
-    <span class="label">运行时包装工具调用的伪代码</span>
-    <span class="kind">Python-like</span>
-  </div>
-  <pre data-export-context="运行时包装工具调用伪代码" data-export-lang="python"><code class="language-python">async def run_tool_call(call, user_context):
-    tool = registry.get(call.name)
-    if tool is None:
-        return observation(error="unknown_tool")
-
-    args = parse_json(call.arguments)
-    schema_result = validate(args, tool.schema)
-    if not schema_result.ok:
-        return observation(error="schema_error", details=schema_result.summary)
-
-    policy_result = check_policy(
-        user=user_context.user,
-        tenant=user_context.tenant,
-        tool=tool.name,
-        args=args,
-        risk=tool.risk_level
-    )
-    if policy_result.requires_approval:
-        return request_human_approval(tool.name, args, policy_result.reason)
-    if not policy_result.allowed:
-        return observation(error="permission_denied", details=policy_result.reason)
-
-    with trace_span("tool_call", tool=tool.name, redacted_args=redact(args)):
-        raw_output = await tool.invoke(args, timeout=tool.timeout)
-        safe_output = redact_and_limit(raw_output, max_tokens=1200)
-        return observation(status="ok", content=safe_output)</code></pre>
-  <p>这段伪代码的关键不是某个框架 API，而是责任分离：模型不负责权限判断；schema 不负责业务策略；工具函数不应该自己承担所有安全控制；trace 不应该泄露敏感参数。</p>
-</section>
-
-<section id="decision-trace">
-  <div class="head">
-    <h2>决策轨迹</h2>
-    <span class="tag">Shape Trace</span>
-  </div>
-  <p>同一条工具请求，在模型、运行时和观察阶段长得不一样。模型看到的是自然语言目标和工具列表，运行时看到的是结构化参数和策略结果，回传给模型的则是经过脱敏和压缩的观察。把这三种形态放在一条轨迹里看，最容易发现问题究竟出在参数、权限，还是回传信息。</p>
-  <div class="viz-panel" data-export-context="工具决策轨迹" data-export-lang="text">
-    <div class="shape-tracer" data-shape-tracer>
-      <div class="trace-lines">
-        <button class="trace-line active" data-trace-step="step-1">
-          <code>call = {"name":"get_invoice","arguments":...}</code><span>提议层</span>
-        </button>
-        <button class="trace-line" data-trace-step="step-2">
-          <code>policy_result -> allow / deny / approve</code><span>裁决层</span>
-        </button>
-        <button class="trace-line" data-trace-step="step-3">
-          <code>observation -> ok / error / confirm</code><span>回传层</span>
-        </button>
-      </div>
-      <div class="trace-canvas">
-        <div class="tensor-card active" data-trace-target="step-1">
-          <b>模型先看到的对象</b><span>before: 自然语言目标</span>
-          <p>模型先把“帮我查发票”翻成工具名和参数草稿。这个阶段最常见的错误是参数看上去像样，但身份、租户或风险信息还没进来。</p>
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">Foundation</span>
         </div>
-        <div class="tensor-card" data-trace-target="step-2">
-          <b>运行时真正处理的对象</b><span>after: 权限和策略结果</span>
-          <p>运行时读的不是“像不像”，而是“能不能做”。同样的参数，在只读查询里能放行，在写入动作里可能直接要求人工确认。</p>
+<p>拆开三层</p>
+<p>把“模型能生成工具调用”拆成接口描述、运行时处理和安全策略三件事，不再用一个 function calling 标签覆盖全部问题。</p>
+<p>设计边界</p>
+<p>知道何时用只读工具、沙盒、人工确认、输出脱敏、trace 审计和动态禁用来限制副作用。</p>
+      </section>
+      <section id="overview">
+        <div class="head">
+          <h2>先抓主线</h2>
+          <span class="tag">Schema</span>
         </div>
-        <div class="tensor-card" data-trace-target="step-3">
-          <b>回到模型里的对象</b><span>after: observation</span>
-          <p>工具执行后，模型拿到的是压缩过的观察，不是原始输出。观察如果没有保留关键错误，下一步就会继续沿着错误上下文推理。</p>
+<p>工具调用不是“模型输出一个 JSON”这么简单。可靠系统至少有三层：schema 告诉模型能填什么，运行时决定怎样解析、校验、执行和回传观察，安全边界决定哪些调用即使格式正确也不能执行。</p>
+        <div class="box info">
+<h3>一句话判断</h3>
+<p>如果一个约束可以通过“参数格式”表达，它属于 schema；如果它依赖用户、环境、状态、权限、风险或历史轨迹，它属于运行时和安全边界。</p>
         </div>
+        <div class="box warn">
+<h3>本单元不做什么</h3>
+<p>这里不训练模型，也不展开 ReAct 轨迹。目标是先把工具执行面的工程结构讲清楚，为后面的行动-观察数据和环境 RL 做准备。</p>
+        </div>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语与误区</h2>
+          <span class="tag">Terms</span>
+        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>术语</th><th>直觉解释</th><th>精确定义</th><th>常见误解</th></tr>
+<tr><td>工具 schema</td><td>告诉模型“这个工具能填哪些格子”。</td><td>工具名、描述和参数结构的机器可读说明，常用 JSON Schema 风格表达类型、必填项、枚举、范围和额外字段规则。</td><td>以为 schema 等于安全。schema 只能约束形状，不能判断用户是否有权限删除文件。</td></tr><tr><td>运行时</td><td>真正接住工具调用并执行的系统。</td><td>负责解析模型输出、验证参数、注入上下文、选择工具、调用函数或外部服务、处理异常、返回观察和记录日志的执行层。</td><td>以为模型直接调用 API。实际是模型提出调用，运行时决定是否执行。</td></tr><tr><td>Guardrail</td><td>调用前后的一道检查门。</td><td>对输入、工具参数、工具输出或最终回答执行的策略检查；可以放行、拒绝、改写、触发人工确认或终止流程。</td><td>以为只在最终回答做安全过滤就够。工具输入和工具输出也可能泄密或产生副作用。</td></tr><tr><td>Handoff</td><td>把任务转交给更合适的 agent 或流程。</td><td>当当前 agent 不应继续处理时，把上下文转给另一个专业 agent、人工队列或审批流程。</td><td>把 handoff 当普通工具调用。handoff 通常改变责任边界和后续策略。</td></tr><tr><td>Tracing</td><td>把一次运行拆成可审计的时间线。</td><td>记录模型生成、工具调用、函数输入输出、guardrail 结果、handoff 和错误等 span，支持调试、评测和事故复盘。</td><td>只把 trace 当调试日志。训练数据清洗、奖励归因和安全审计都依赖它。</td></tr>
+        </table></div>
+      </section>
+      <section id="schema">
+        <div class="head">
+          <h2>Schema 设计</h2>
+          <span class="tag">Tool</span>
+        </div>
+      <div class="grid2">
+<ol>
+<li>Schema 解决的是“可表达性”问题</li>
+</ol>
+<p>模型面对工具列表时，并不知道你的后端函数签名。它只能根据工具名称、描述和参数说明判断：该不该用、什么时候用、每个参数应该填什么。schema 越含糊，模型越容易用错工具；schema 越过宽，模型越容易塞入运行时没准备处理的字段。</p>
+<p>一个实用 schema 需要同时服务两类读者：模型读描述来决策，运行时读结构来校验。只给模型自然语言提示而没有结构约束，会让错误延迟到执行时才爆；只给结构而不给清晰描述，会让模型选错工具。</p>
+<p>好 schema = 明确工具意图 + 收窄参数空间 + 保留必要上下文 + 明确不能表达的约束</p>
       </div>
-    </div>
-  </div>
-  <table class="metric-table" data-export-context="工具决策轨迹对照表" data-export-lang="table">
-    <thead>
-      <tr>
-        <th>步骤</th>
-        <th>看见什么</th>
-        <th>写回什么</th>
-        <th>失败症状</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>提议层</td>
-        <td>工具名、参数草稿、请求目标。</td>
-        <td>结构化调用。</td>
-        <td>字段对了，但身份或上下文不在。</td>
-      </tr>
-      <tr>
-        <td>裁决层</td>
-        <td>用户身份、租户、风险、审批状态。</td>
-        <td>allow / deny / approve。</td>
-        <td>该拦没拦住，或者该放没放。</td>
-      </tr>
-      <tr>
-        <td>回传层</td>
-        <td>工具输出、错误码、脱敏后的摘要。</td>
-        <td>下一轮可继续用的 observation。</td>
-        <td>模型看不到关键错误，重复走错路。</td>
-      </tr>
-    </tbody>
-  </table>
-  <div class="box warn">
-    <h3>为什么要单独看这层</h3>
-    <p>如果 trace 里只有“模型说了什么”，你看不出运行时为什么拒绝；如果只有“工具返回了什么”，你看不出它是在放行后执行、审批中等待，还是直接被拦截。把三层都记录下来，错误才有机会被准确归类。</p>
-  </div>
-</section>
+      </section>
+      <section id="runtime">
+        <div class="head">
+          <h2>运行时</h2>
+          <span class="tag">Runtime</span>
+        </div>
+<p>在 agent 系统里，模型通常只生成一个“想调用某工具并传入这些参数”的意图。运行时才是执行者。它需要把模型输出转成结构化调用，检查参数是否合法，补入用户身份、租户、会话、权限等上下文，再决定是否真的执行。</p>
+        <div class="box warn">
+<h3>运行时必须处理错误</h3>
+<p>工具调用失败agent 训练和评测的核心信号。错误可能来自 schema 不匹配、权限不足、资源不存在、网络失败、工具返回过长、状态已变化或动作不可逆。运行时应把错误转成模型可理解的观察，同时保留机器可读错误码。</p>
+        </div>
+        <div class="box info">
+<h3>观察不是裸输出</h3>
+<p>工具返回的原始数据可能包含密钥、内部 ID、超长日志或与任务无关的信息。观察应只包含下一步推理需要的最小信息，并标注成功、失败、部分成功或需要确认。</p>
+<p>运行时包装工具调用的伪代码</p>
+<p>Python-like</p>
+<pre><code class="language-python">async def run_tool_call(call, user_context):
+ tool = registry.get(call.name)
+ if tool is None:
+ return observation(error="unknown_tool")
 
-<section id="state-ledger">
-  <div class="head">
-    <h2>状态账本</h2>
-    <span class="tag">Read / Write / Fail</span>
-  </div>
-  <p>工具调用里最容易漏掉的不是函数名，而是状态。模型先看到了什么，运行时又补进了什么上下文，工具执行之后系统状态有没有变化，观察回传时有没有把下一步需要的信息保住，这些都决定了后面还能不能继续做对。</p>
-  <p>下面这张账本把 schema、运行时、权限检查、工具执行和观察回传放到同一张表里。你读表的时候，别先急着背术语，先看每一步“读了什么、写了什么、什么时候失效、出错后症状是什么”。</p>
-  <table class="metric-table" data-export-context="工具调用状态账本" data-export-lang="table">
-    <thead>
-      <tr>
-        <th>步骤</th>
-        <th>读什么</th>
-        <th>写什么</th>
-        <th>什么时候还有效</th>
-        <th>错了会怎样</th>
-        <th>下一步查什么</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>schema 解析</td>
-        <td>工具名、参数类型、必填项、枚举和范围。</td>
-        <td>把模型输出变成结构化参数。</td>
-        <td>当模型输出能被稳定解析时。</td>
-        <td>字段缺失、类型错、额外字段混入。</td>
-        <td>先看工具定义和参数约束。</td>
-      </tr>
-      <tr>
-        <td>policy 检查</td>
-        <td>用户、租户、环境、风险级别和审批状态。</td>
-        <td>允许、拒绝或要求人工确认。</td>
-        <td>当身份和环境信息还是最新时。</td>
-        <td>越权、误放行、该拦没拦住。</td>
-        <td>先看运行时有没有注入正确上下文。</td>
-      </tr>
-      <tr>
-        <td>工具执行</td>
-        <td>校验通过的参数、超时、可回滚条件。</td>
-        <td>真实系统状态或外部服务请求。</td>
-        <td>只有在权限和上下文都一致时。</td>
-        <td>副作用、网络失败、状态已经变了。</td>
-        <td>先看是否要沙盒、只读或可回滚。</td>
-      </tr>
-      <tr>
-        <td>观察回传</td>
-        <td>原始输出、错误码、脱敏规则、任务上下文。</td>
-        <td>给模型的 observation 和 trace 记录。</td>
-        <td>当下一步还要继续推理时。</td>
-        <td>泄密、截断过度、模型看不到关键错误。</td>
-        <td>检查观察是否保留了下一步需要的信息。</td>
-      </tr>
-    </tbody>
-  </table>
-  <div class="box info">
-    <h3>为什么这张表有用</h3>
-    <p>工具调用里的很多 bug 不是“模型太笨”，而是状态在某一步丢了：参数没校验、身份没注入、执行没有回滚、观察没脱敏。把这些步骤拆开之后，错误就不再是一团雾，而是能逐层排查的对象。</p>
-  </div>
-</section>
+ args = parse_json(call.arguments)
+ schema_result = validate(args, tool.schema)
+ if not schema_result.ok:
+ return observation(error="schema_error", details=schema_result.summary)
 
-<section id="safety">
-  <div class="head">
-    <h2>安全边界</h2>
-    <span class="tag">Boundary</span>
-  </div>
-  <div class="grid2">
-    <div>
-      <h3>2. 安全边界解决的是“可执行性”问题</h3>
-      <p>工具 schema 能阻止 <code>limit: "很多"</code> 这种类型错误，但不能阻止“把别人的订单取消掉”。真正的安全边界来自运行时上下文：谁在请求、请求哪个租户、工具是否只读、动作是否有副作用、是否处于训练沙盒、是否需要人工确认。</p>
-      <p>副作用是理解边界的关键词。只读检索失败通常只是回答不完整；写入文件、发邮件、转账、下单、删除资源、调用生产 API 则会改变世界状态。工具使用 RL 如果把这些动作放进训练环境，必须使用模拟器、沙盒或可回滚环境。</p>
-    </div>
-    <div class="viz-panel" data-export-context="工具调用场景判断" data-export-lang="text">
-      <p>选择场景，观察“schema 通过”和“允许执行”之间的差别。</p>
-      <div class="toggle-row">
-        <button type="button" aria-pressed="true" data-scenario="read">只读查询</button>
-        <button type="button" aria-pressed="false" data-scenario="write">写入动作</button>
-        <button type="button" aria-pressed="false" data-scenario="train">训练沙盒</button>
-        <button type="button" aria-pressed="false" data-scenario="prod">生产系统</button>
+ policy_result = check_policy(
+ user=user_context.user,
+ tenant=user_context.tenant,
+ tool=tool.name,
+ args=args,
+ risk=tool.risk_level
+ )
+ if policy_result.requires_approval:
+ return request_human_approval(tool.name, args, policy_result.reason)
+ if not policy_result.allowed:
+ return observation(error="permission_denied", details=policy_result.reason)
+
+ with trace_span("tool_call", tool=tool.name, redacted_args=redact(args)):
+ raw_output = await tool.invoke(args, timeout=tool.timeout)
+ safe_output = redact_and_limit(raw_output, max_tokens=1200)
+ return observation(status="ok", content=safe_output)</code></pre>
+<p>这段伪代码的关键责任分离：模型不负责权限判断；schema 不负责业务策略；工具函数不应该自己承担所有安全控制；trace 不应该泄露敏感参数。</p>
+        </div>
+      </section>
+      <section id="decision-trace">
+        <div class="head">
+          <h2>决策轨迹</h2>
+          <span class="tag">Shape</span>
+        </div>
+<p>同一条工具请求，在模型、运行时和观察阶段长得不一样。模型看到的是自然语言目标和工具列表，运行时看到的是结构化参数和策略结果，回传给模型的则是经过脱敏和压缩的观察。把这三种形态放在一条轨迹里看，最容易发现问题究竟出在参数、权限，还是回传信息。</p>
+<p><code>policy_result -> allow / deny / approve</code>裁决层</p>
+<p><b>模型先看到的对象</b>before: 自然语言目标</p>
+<p>模型先把“帮我查发票”翻成工具名和参数草稿。这个阶段最常见的错误是参数看上去像样，但身份、租户或风险信息还没进来。</p>
+<p><b>回到模型里的对象</b>after: observation</p>
+<p>工具执行后，模型拿到的是压缩过的观察，不是原始输出。观察如果没有保留关键错误，下一步就会继续沿着错误上下文推理。</p>
+        <div class="box warn">
+<h3>为什么要单独看这层</h3>
+<p>如果 trace 里只有“模型说了什么”，你看不出运行时为什么拒绝；如果只有“工具返回了什么”，你看不出它是在放行后执行、审批中等待，还是直接被拦截。把三层都记录下来，错误才有机会被准确归类。</p>
+        </div>
+      </section>
+      <section id="state-ledger">
+        <div class="head">
+          <h2>状态账本</h2>
+          <span class="tag">Read</span>
+        </div>
+<p>工具调用里最容易漏掉的状态。模型先看到了什么，运行时又补进了什么上下文，工具执行之后系统状态有没有变化，观察回传时有没有把下一步需要的信息保住，这些都决定了后面还能不能继续做对。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>步骤</th><th>读什么</th><th>写什么</th><th>什么时候还有效</th><th>错了会怎样</th><th>下一步查什么</th></tr>
+<tr><td>schema 解析</td><td>工具名、参数类型、必填项、枚举和范围。</td><td>把模型输出变成结构化参数。</td><td>当模型输出能被稳定解析时。</td><td>字段缺失、类型错、额外字段混入。</td><td>先看工具定义和参数约束。</td></tr><tr><td>policy 检查</td><td>用户、租户、环境、风险级别和审批状态。</td><td>允许、拒绝或要求人工确认。</td><td>当身份和环境信息还是最新时。</td><td>越权、误放行、该拦没拦住。</td><td>先看运行时有没有注入正确上下文。</td></tr><tr><td>工具执行</td><td>校验通过的参数、超时、可回滚条件。</td><td>真实系统状态或外部服务请求。</td><td>只有在权限和上下文都一致时。</td><td>副作用、网络失败、状态已经变了。</td><td>先看是否要沙盒、只读或可回滚。</td></tr><tr><td>观察回传</td><td>原始输出、错误码、脱敏规则、任务上下文。</td><td>给模型的 observation 和 trace 记录。</td><td>当下一步还要继续推理时。</td><td>泄密、截断过度、模型看不到关键错误。</td><td>检查观察是否保留了下一步需要的信息。</td></tr>
+        </table></div>
+        <div class="box info">
+<h3>为什么这张表有用</h3>
+<p>工具调用里的很多 bug 状态在某一步丢了：参数没校验、身份没注入、执行没有回滚、观察没脱敏。把这些步骤拆开之后，错误就不再是一团雾，而是能逐层排查的对象。</p>
+        </div>
+      </section>
+      <section id="safety">
+        <div class="head">
+          <h2>安全边界</h2>
+          <span class="tag">Boundary</span>
+        </div>
+      <div class="grid2">
+<ol>
+<li>安全边界解决的是“可执行性”问题</li>
+</ol>
+<p>工具 schema 能阻止 <code>limit: "很多"</code> 这种类型错误，但不能阻止“把别人的订单取消掉”。真正的安全边界来自运行时上下文：谁在请求、请求哪个租户、工具是否只读、动作是否有副作用、是否处于训练沙盒、是否需要人工确认。</p>
+<p>副作用是理解边界的关键词。只读检索失败通常只是回答不完整；写入文件、发邮件、转账、下单、删除资源、调用生产 API 则会改变世界状态。工具使用 RL 如果把这些动作放进训练环境，必须使用模拟器、沙盒或可回滚环境。</p>
+<p>只读查询</p>
+<p>写入动作</p>
+<p>训练沙盒</p>
+<p>生产系统</p>
       </div>
-      <div class="scenario" id="scenarioBox"></div>
-    </div>
-  </div>
-</section>
-
-<section id="failure-lab">
-  <div class="head">
-    <h2>故障台</h2>
-    <span class="tag">Terminal Lab</span>
-  </div>
-  <p>如果你想快速判断一个失败属于哪层，先别急着看整段日志。先切三个最常见的 case：字段破损、权限拒绝、未知工具。它们分别对应 schema、policy 和 tool registry 的不同故障面。</p>
-  <div class="terminal-lab" data-terminal-lab>
-    <div class="terminal-controls">
-      <button class="ghost active" data-terminal-case="case-1">字段破损</button>
-      <button class="ghost" data-terminal-case="case-2">权限拒绝</button>
-      <button class="ghost" data-terminal-case="case-3">未知工具</button>
-    </div>
-    <pre class="terminal-output" aria-live="polite">schema_error: missing required field "customer_id"
-next check: tool schema / required / types</pre>
-    <template data-terminal-output="case-1">schema_error: missing required field "customer_id"
-next check: tool schema / required / types</template>
-    <template data-terminal-output="case-2">permission_denied: tool "request_order_change" requires approval
-next check: user role / tenant / risk / approval</template>
-    <template data-terminal-output="case-3">unknown_tool: registry has no entry for "delete_everything"
-next check: tool registry / exposure / dynamic disable</template>
-  </div>
-  <div class="grid3">
-    <div class="box info">
-      <h3>字段破损</h3>
-      <p>这类错误说明 schema 还没把参数边界收紧，或者模型还没学会按约束填写。先看必填项和类型，而不是先讨论权限。</p>
-    </div>
-    <div class="box info">
-      <h3>权限拒绝</h3>
-      <p>这类错误说明参数可能是对的，但动作不该放行。先看运行时注入的上下文和审批策略，不要把它当成格式问题。</p>
-    </div>
-    <div class="box info">
-      <h3>未知工具</h3>
-      <p>这类错误说明工具暴露面、注册表或者动态禁用逻辑有问题。先检查模型看见的工具列表，而不是先修参数。</p>
-    </div>
-  </div>
-</section>
-
-<section id="examples">
-  <div class="head">
-    <h2>例题</h2>
-    <span class="tag">Worked Cases</span>
-  </div>
-  <div class="box">
-    <h3>例题 1：为什么不能让模型填写 user_id？</h3>
-    <p>某客服 agent 有一个工具 <code>get_invoice(user_id, invoice_id)</code>。schema 很清楚：两个参数都是字符串，且必填。用户说：“帮我查一下发票 INV-8831。”模型可能生成：</p>
-    <div class="codebar">
-      <span class="label">有问题的调用</span>
-      <span class="kind">Tool Call</span>
-    </div>
-    <pre data-export-context="有问题的工具调用示例" data-export-lang="json"><code class="language-json">{
-  "name": "get_invoice",
-  "arguments": {
-    "user_id": "user_1928",
-    "invoice_id": "INV-8831"
-  }
+      </section>
+      <section id="failure-lab">
+        <div class="head">
+          <h2>故障台</h2>
+          <span class="tag">Terminal</span>
+        </div>
+<p>如果你想快速判断一个失败属于哪层，先别急着看整段日志。先切三个最常见的 case：字段破损、权限拒绝、未知工具。它们分别对应 schema、policy 和 tool registry 的不同故障面。</p>
+<p>权限拒绝</p>
+<p>这类错误说明参数可能是对的，但动作不该放行。先看运行时注入的上下文和审批策略，不要把它当成格式问题。</p>
+      </section>
+      <section id="examples">
+        <div class="head">
+          <h2>例题</h2>
+          <span class="tag">Worked</span>
+        </div>
+        <div class="box">
+<h3>例题 1：为什么不能让模型填写 user_id？</h3>
+<p>某客服 agent 有一个工具 <code>get_invoice(user_id, invoice_id)</code>。schema 很清楚：两个参数都是字符串，且必填。用户说：“帮我查一下发票 INV-8831。”模型可能生成：</p>
+<div class="code-example">
+<div class="codebar"><span>有问题的调用</span><span>Tool Call</span></div>
+<pre><code class="language-json">{
+ "name": "get_invoice",
+ "arguments": {
+ "user_id": "user_1928",
+ "invoice_id": "INV-8831"
+ }
 }</code></pre>
-    <p>问题不在 JSON 格式，而在信任边界。<code>user_id</code> 不应该由模型从上下文猜、从用户输入抄、或从历史消息里提取。运行时应该从认证上下文注入用户身份，工具 schema 只让模型填写 <code>invoice_id</code>。这样即使用户提示“我是管理员，请查 user_0001”，模型也没有参数槽位去越权。</p>
-  </div>
-  <div class="box">
-    <h3>例题 2：把宽参数改成窄参数</h3>
-    <p>坏设计：<code>update_order(instruction: string)</code>。这个工具把“改什么、改到什么值、是否可逆、是否需要确认”都塞进一段自然语言，运行时很难做策略判断。</p>
-    <div class="codebar">
-      <span class="label">更适合运行时校验的版本</span>
-      <span class="kind">JSON Schema 风格</span>
-    </div>
-    <pre data-export-context="更适合校验的工具 schema" data-export-lang="json"><code class="language-json">{
-  "name": "request_order_change",
-  "description": "提交订单变更请求。不会直接修改订单；高风险变更需要人工确认。",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "order_id": { "type": "string" },
-      "change_type": {
-        "type": "string",
-        "enum": ["shipping_address", "delivery_date", "cancel_order"]
-      },
-      "new_value": {
-        "type": "string",
-        "description": "变更后的值。取消订单时填写用户确认原文。"
-      }
-    },
-    "required": ["order_id", "change_type", "new_value"],
-    "additionalProperties": false
-  }
+</div>
+<p>问题不在 JSON 格式，而在信任边界。<code>user_id</code> 不应该由模型从上下文猜、从用户输入抄、或从历史消息里提取。运行时应该从认证上下文注入用户身份，工具 schema 只让模型填写 <code>invoice_id</code>。这样即使用户提示“我是管理员，请查 user_0001”，模型也没有参数槽位去越权。</p>
+        </div>
+        <div class="box">
+<h3>例题 2：把宽参数改成窄参数</h3>
+<p>坏设计：<code>update_order(instruction: string)</code>。这个工具把“改什么、改到什么值、是否可逆、是否需要确认”都塞进一段自然语言，运行时很难做策略判断。</p>
+<div class="code-example">
+<div class="codebar"><span>更适合运行时校验的版本</span><span>JSON Schema 风格</span></div>
+<pre><code class="language-json">{
+ "name": "request_order_change",
+ "description": "提交订单变更请求。不会直接修改订单；高风险变更需要人工确认。",
+ "parameters": {
+ "type": "object",
+ "properties": {
+ "order_id": { "type": "string" },
+ "change_type": {
+ "type": "string",
+ "enum": ["shipping_address", "delivery_date", "cancel_order"]
+ },
+ "new_value": {
+ "type": "string",
+ "description": "变更后的值。取消订单时填写用户确认原文。"
+ }
+ },
+ "required": ["order_id", "change_type", "new_value"],
+ "additionalProperties": false
+ }
 }</code></pre>
-    <p>这个版本把风险暴露给运行时：当 <code>change_type</code> 是 <code>cancel_order</code> 时，运行时可以要求二次确认；当只是改配送日期时，可以走低风险流程。</p>
-  </div>
-  <div class="box warn">
-    <h3>常见错误：把提示词当权限系统</h3>
-    <p>“不要删除文件，除非用户允许”这类提示是必要但不充分的。模型可能误判用户是否允许，也可能被工具输出中的提示注入诱导。权限系统必须在运行时强制执行：工具是否可见、参数是否可接受、动作是否需要审批，都不能只靠模型自觉。</p>
-    <p><strong>修法：</strong>把策略写成可执行检查：工具风险分级、用户角色、资源归属、环境类型、审批阈值、trace 脱敏规则。</p>
-  </div>
-
-  <div class="box info">
-    <h3>补一个完整链条：invoice 查询怎么一路走到拒绝</h3>
-    <p>还是同一个 <code>get_invoice(user_id, invoice_id)</code> 场景。用户只说“查 INV-8831”，模型先猜了一个 <code>user_id</code> 并生成调用。运行时读到这个参数后，会先过 schema，再过 policy。假如 <code>user_id</code> 来自模型而不是认证上下文，policy 就应该把它当作越权风险，而不是把它当作普通字符串。</p>
-    <p>这时 trace 的价值就出来了：trace 能把“模型先补了一个身份字段、运行时拒绝、观察里返回 permission_denied”串起来，后面排查时可以直接看到问题是出在参数构造还是权限判断。若没有这条链，排查人员往往会误以为只是用户输入不完整，或者错把拒绝当成 schema 解析失败。</p>
-    <div class="codebar">
-      <span class="label">失败后的观察</span>
-      <span class="kind">policy / trace</span>
-    </div>
-    <pre data-export-context="invoice 查询失败观察" data-export-lang="text"><code class="language-text">call get_invoice({"user_id":"user_1928","invoice_id":"INV-8831"})
+</div>
+<p>这个版本把风险暴露给运行时：当 <code>change_type</code> 是 <code>cancel_order</code> 时，运行时可以要求二次确认；当只是改配送日期时，可以走低风险流程。</p>
+        </div>
+        <div class="box warn">
+<h3>常见错误：把提示词当权限系统</h3>
+<p>“不要删除文件，除非用户允许”这类提示是必要但不充分的。模型可能误判用户是否允许，也可能被工具输出中的提示注入诱导。权限系统必须在运行时强制执行：工具是否可见、参数是否可接受、动作是否需要审批，都不能只靠模型自觉。</p>
+<p><b>修法：</b>把策略写成可执行检查：工具风险分级、用户角色、资源归属、环境类型、审批阈值、trace 脱敏规则。</p>
+        </div>
+        <div class="box info">
+<h3>补一个完整链条：invoice 查询怎么一路走到拒绝</h3>
+<p>还是同一个 <code>get_invoice(user_id, invoice_id)</code> 场景。用户只说“查 INV-8831”，模型先猜了一个 <code>user_id</code> 并生成调用。运行时读到这个参数后，会先过 schema，再过 policy。假如 <code>user_id</code> 来自模型而不是认证上下文，policy 就应该把它当作越权风险，而不是把它当作普通字符串。</p>
+<p>这时 trace 的价值就出来了：trace 能把“模型先补了一个身份字段、运行时拒绝、观察里返回 permission_denied”串起来，后面排查时可以直接看到问题是出在参数构造还是权限判断。若没有这条链，排查人员往往会误以为只是用户输入不完整，或者错把拒绝当成 schema 解析失败。</p>
+<div class="code-example">
+<div class="codebar"><span>失败后的观察</span><span>policy / trace</span></div>
+<pre><code class="language-text">call get_invoice({"user_id":"user_1928","invoice_id":"INV-8831"})
 trace: source=user_message for user_id
-policy: reject -> user_id must come from auth context
+policy: reject -&gt; user_id must come from auth context
 observation: permission_denied / retry without user_id</code></pre>
-    <p>这条链路说明一个实用判断：当参数看上去“格式对了”，但身份来源不对时，问题就不在 schema，而在运行时和安全边界。下一步该修的是注入策略、权限规则和 trace，而不是再给模型更多提示词。</p>
-  </div>
-</section>
-
-<section id="boundary-note">
-  <div class="head">
-    <h2>先知道，先别追</h2>
-    <span class="tag">Boundary</span>
-  </div>
-  <div class="box info">
-    <p>这页先不展开的内容有五个：ReAct 的完整提示模板、Toolformer 的数据生成细节、ToolBench 的任务集合、OpenEnv 的代码接口、沙盒和上线审计的具体实现。现在先把层级坐标记住，它们会在后面的单元重新出现。</p>
-    <p>如果你在读后面的论文时开始纠结“到底先用 SFT 还是先用 RL”，先回到这页，看看问题卡在哪一层。很多时候答案不是换训练法，而是先把失败症状说清楚。</p>
-    <p>再往后读时，记住一个简单规则：接口问题先看可解析性，轨迹问题先看观察是否改变计划，环境问题先看状态、奖励和权限有没有闭环。这个规则比任何一篇单独论文都更早派上用场。</p>
-  </div>
-</section>
-
-
+</div>
+<p>这条链路说明一个实用判断：当参数看上去“格式对了”，但身份来源不对时，问题就不在 schema，而在运行时和安全边界。下一步该修的是注入策略、权限规则和 trace，而不是再给模型更多提示词。</p>
+        </div>
+      </section>
+      <section id="boundary-note">
+        <div class="head">
+          <h2>先知道，先别追</h2>
+          <span class="tag">Boundary</span>
+        </div>
+        <div class="box info">
+<p>这页先不展开的内容有五个：ReAct 的完整提示模板、Toolformer 的数据生成细节、ToolBench 的任务集合、OpenEnv 的代码接口、沙盒和上线审计的具体实现。现在先把层级坐标记住，它们会在后面的单元重新出现。</p>
+<p>如果你在读后面的论文时开始纠结“到底先用 SFT 还是先用 RL”，先回到这页，看看问题卡在哪一层。很多时候答案先把失败症状说清楚。</p>
+<p>再往后读时，记住一个简单规则：接口问题先看可解析性，轨迹问题先看观察是否改变计划，环境问题先看状态、奖励和权限有没有闭环。这个规则比任何一篇单独论文都更早派上用场。</p>
+        </div>
+      </section>
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-intro">
-  <div class="review-card">
-    <strong>作答目标</strong>
-    <p>不要只背术语。每题都尽量把“现象 -> 层级 -> 证据 -> 修法”说出来。</p>
-  </div>
-  <div class="review-card">
-    <strong>检查重点</strong>
-    <p>你的答案是否区分了接口、运行时、环境、权限、沙盒和 trace。</p>
-  </div>
-</div>
+      <div class="practice-intro">
 
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>基础辨认</h3>
-      <p>先把 schema、运行时和安全边界的职责分开。</p>
-    </div>
-    <div class="quick-review">
-      <b>快速复盘</b>
-      <span>看到“类型、枚举、必填”先想 schema；看到“用户、权限、环境、审批”先想运行时。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q1" data-group="基础辨认" data-title="哪个约束最适合写进 schema？" data-answer="B" data-explain="限值属于参数形状，最适合写进 schema；身份和环境判断要放到运行时。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">schema</span></div>
-      <h3>哪个约束最适合写进 schema？</h3>
-      <label><input type="radio" name="q1" value="A"> A. 只有管理员可以退款</label>
-      <label><input type="radio" name="q1" value="B"> B. limit 必须是 1 到 20 的整数</label>
-      <label><input type="radio" name="q1" value="C"> C. 生产环境不能调用真实支付接口做训练</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q" data-question="q2" data-group="基础辨认" data-title="schema 通过就代表工具调用安全吗？" data-answer="false" data-explain="schema 只管参数形状，不管权限、环境和副作用。">
-      <div class="q-meta"><span class="pill">true/false</span><span class="pill">边界判断</span></div>
-      <h3>schema 通过就代表工具调用安全吗？</h3>
-      <label><input type="radio" name="q2" value="true"> 对</label>
-      <label><input type="radio" name="q2" value="false"> 错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q short" data-question="q3" data-group="基础辨认" data-title="模型提出工具调用后，真正执行的是谁？">
-      <div class="q-meta"><span class="pill">fill</span><span class="pill">运行时</span></div>
-      <h3>模型提出工具调用后，真正调用外部服务的是____。</h3>
-      <input type="text" name="q3" placeholder="填写一个术语" data-answer="runtime" data-explain="这里要填运行时，不是模型本身，也不是 schema。">
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">不是模型本身，也不是 schema。</p>
-    </div>
-
-    <div class="q" data-question="q4" data-group="基础辨认" data-title="哪个字段不应该由模型填写？" data-answer="B" data-explain="身份和租户边界应由运行时注入。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">权限</span></div>
-      <h3>哪个字段不应该由模型填写？</h3>
-      <label><input type="radio" name="q4" value="A"> A. 用户输入的查询关键词 query</label>
-      <label><input type="radio" name="q4" value="B"> B. 认证上下文中的 tenant_id</label>
-      <label><input type="radio" name="q4" value="C"> C. 用户选择的排序方式 sort_order</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>设计与诊断</h3>
-      <p>把抽象概念落到工具定义、运行时流程和安全策略上。</p>
-    </div>
-    <div class="quick-review">
-      <b>作答结构</b>
-      <span>先指出风险，再归类到层级，最后给出可执行修法。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q full" data-question="q5" data-group="设计与诊断" data-title="诊断这个工具 schema 的问题">
-      <div class="q-meta"><span class="pill">error diagnosis</span><span class="pill">schema</span></div>
-      <h3>run_admin_action(action: string) 这类工具 schema 有什么问题？请指出至少 3 个。</h3>
-      <p class="solve-note">答题脚手架：问题 1 属于哪层；会导致什么失败；怎么改。</p>
-      <textarea name="q5" placeholder="从工具名、参数宽度、描述、权限、审批、trace 等角度诊断。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>至少应指出三类问题：工具名过泛，无法表达具体动作；<code>action</code> 太宽，运行时无法稳定做策略判断；描述没有写清只读、写入、危险操作的差别；没有把权限、审批和 trace 规则拆开。合格答案要把这些问题分别归到 schema 或运行时层，而不是只说“太模糊”。</p>
-      </details>
-    </div>
-
-    <div class="q full" data-question="q6" data-group="设计与诊断" data-title="为发送邮件工具设计安全边界">
-      <div class="q-meta"><span class="pill">scenario transfer</span><span class="pill">guardrail</span></div>
-      <h3>为发送邮件工具设计安全边界：调用前、调用后、trace 三个位置各要检查什么？</h3>
-      <p class="solve-note">至少写出 2 个调用前检查、1 个调用后检查、1 个 trace 记录规则。</p>
-      <textarea name="q6" placeholder="调用前：收件人/权限/审批；调用后：输出脱敏/状态；trace：记录哪些脱敏字段。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>调用前应检查收件人是否合法、发信人是否有权限、是否需要人工确认、是否超过频率限制。调用后应检查是否成功、是否需要重试、以及邮件内容是否做了脱敏。trace 至少要记录工具名、风险等级、审批结果和脱敏后的参数。只写“要安全”不够，必须是系统可执行的规则。</p>
-      </details>
-    </div>
-
-    <div class="q full" data-question="q7" data-group="设计与诊断" data-title="解释 handoff 和普通工具调用的区别">
-      <div class="q-meta"><span class="pill">解释</span><span class="pill">handoff</span></div>
-      <h3>解释 handoff 和普通工具调用的区别。</h3>
-      <p class="solve-note">用“谁继续负责这个任务”作为核心判断点。</p>
-      <textarea name="q7" placeholder="先说普通工具调用返回观察；再说 handoff 改变责任主体、策略和后续处理流程。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>普通工具调用是“模型提议，运行时执行，返回观察”；handoff 则把任务和上下文交给另一个 agent、人工队列或审批流程，责任主体会变化。答案里如果能提到“后续策略改变”或“trace 里会看到责任转移”，就更完整。</p>
-      </details>
-    </div>
-
-    <div class="q full" data-question="q8" data-group="设计与诊断" data-title="把自然语言安全要求改成可执行策略">
-      <div class="q-meta"><span class="pill">策略化</span><span class="pill">runtime</span></div>
-      <h3>把“不要让模型乱删文件”改写成至少 4 条运行时可执行策略。</h3>
-      <p class="solve-note">不要只写“提示模型不要删”，要写系统能检查的条件。</p>
-      <textarea name="q8" placeholder="例如限定目录、禁止通配删除、要求审批、沙盒执行、记录 trace、最小权限等。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>可执行策略至少应包含：限定可操作目录；禁止通配符删除；高风险删除必须审批；默认在沙盒或可回滚环境执行；记录删除前后 trace；对模型输出做参数白名单检查。合格答案会把“不要乱删”拆成系统可以拦截、审计和回退的规则，而不是停在提示词层。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>综合迁移</h3>
-      <p>把本单元连接到后续 ReAct 和环境 RL：工具调用会变成行动-观察轨迹。</p>
-    </div>
-    <div class="quick-review">
-      <b>核心连接</b>
-      <span>训练数据里的每一步行动都应该能追溯到 schema、运行时状态和安全结果。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q full" data-question="q9" data-group="综合迁移" data-title="为什么 trace 对工具使用 RL 很重要？">
-      <div class="q-meta"><span class="pill">综合解释</span><span class="pill">RL 衔接</span></div>
-      <h3>为什么 trace 对工具使用 RL 很重要？</h3>
-      <p class="solve-note">答题顺序：先说明 trace 记录什么，再说明没有 trace 会导致什么训练问题。</p>
-      <textarea name="q9" placeholder="从轨迹重建、错误归因、奖励设计、数据过滤、安全审计四个角度解释。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>trace 能把工具调用、参数、审批、错误和观察串成可回放的时间线，因此它既能帮助复盘错误，也能帮助构造训练数据和奖励。没有 trace，工具失败很难定位到 schema、运行时或安全策略哪一层，RL 训练也容易学到错误归因。好的回答至少要提到“错误归因”和“数据过滤”中的一项。</p>
-      </details>
-    </div>
-
-    <div class="q full" data-question="q10" data-group="综合迁移" data-title="用一段话讲完整闭环">
-      <div class="q-meta"><span class="pill">费曼解释</span><span class="pill">synthesis</span></div>
-      <h3>用一段话讲完整闭环</h3>
-      <p class="solve-note">要求包含这 5 个词：schema、运行时、guardrail、观察、trace。</p>
-      <textarea name="q10" placeholder="请用 120-200 字解释：模型看到 schema 后提出调用，运行时怎样校验、执行、拦截、回传观察并记录 trace。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>合格答案会把流程说完整：模型先根据 schema 决定是否调用、调用什么参数；运行时负责解析、校验、执行或拒绝；guardrail 在关键节点拦截高风险输入和输出；工具结果被整理成观察回传给模型；trace 则把整个闭环记录下来，便于复盘、评测和审计。只要把这五个环节连起来，答案就已经抓住主线。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-      </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>基础辨认</h3></div>
+          <div class="quick-review">快速复盘 看到“类型、枚举、必填”先想 schema；看到“用户、权限、环境、审批”先想运行时。 --></div>
         </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="limit 必须是 1 到 20 的整数">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 哪个约束最适合写进 schema？</h3>
 
-      <section id="sources">
+      <div class="choices">
+      <label><input type="radio" name="q1" value="只有管理员可以退款">只有管理员可以退款</label>
+      <label><input type="radio" name="q1" value="limit 必须是 1 到 20 的整数">limit 必须是 1 到 20 的整数</label>
+      <label><input type="radio" name="q1" value="生产环境不能调用真实支付接口做训练">生产环境不能调用真实支付接口做训练</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>limit 必须是 1 到 20 的整数。限值属于参数形状，最适合写进 schema；身份和环境判断要放到运行时。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="false">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> schema 通过就代表工具调用安全吗？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>false。schema 只管参数形状，不管权限、环境和副作用。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 模型提出工具调用后，真正调用外部服务的是____。</h3>
+
+
+      <textarea name="q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="认证上下文中的 tenant_id">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 哪个字段不应该由模型填写？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q4" value="用户输入的查询关键词 query">用户输入的查询关键词 query</label>
+      <label><input type="radio" name="q4" value="认证上下文中的 tenant_id">认证上下文中的 tenant_id</label>
+      <label><input type="radio" name="q4" value="用户选择的排序方式 sort_order">用户选择的排序方式 sort_order</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>认证上下文中的 tenant_id。身份和租户边界应由运行时注入。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>设计与诊断</h3></div>
+          <div class="quick-review">作答结构 先指出风险，再归类到层级，最后给出可执行修法。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">error-diagnosis</span></div>
+        <h3><b>Q:</b> run_admin_action(action: string) 这类工具 schema 有什么问题？请指出至少 3 个。</h3>
+
+
+      <textarea name="q5"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。至少应指出三类问题：工具名过泛，无法表达具体动作； action 太宽，运行时无法稳定做策略判断；描述没有写清只读、写入、危险操作的差别；没有把权限、审批和 trace 规则拆开。合格答案要把这些问题分别归到 schema 或运行时层，而不是只说“太模糊”。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">scenario-transfer</span></div>
+        <h3><b>Q:</b> 为发送邮件工具设计安全边界：调用前、调用后、trace 三个位置各要检查什么？</h3>
+
+
+      <textarea name="q6"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。调用前应检查收件人是否合法、发信人是否有权限、是否需要人工确认、是否超过频率限制。调用后应检查是否成功、是否需要重试、以及邮件内容是否做了脱敏。trace 至少要记录工具名、风险等级、审批结果和脱敏后的参数。只写“要安全”不够，必须是系统可执行的规则。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 解释 handoff 和普通工具调用的区别。</h3>
+
+
+      <textarea name="q7"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。普通工具调用是“模型提议，运行时执行，返回观察”；handoff 则把任务和上下文交给另一个 agent、人工队列或审批流程，责任主体会变化。答案里如果能提到“后续策略改变”或“trace 里会看到责任转移”，就更完整。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">策略化</span></div>
+        <h3><b>Q:</b> 把“不要让模型乱删文件”改写成至少 4 条运行时可执行策略。</h3>
+
+
+      <textarea name="q8"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。可执行策略至少应包含：限定可操作目录；禁止通配符删除；高风险删除必须审批；默认在沙盒或可回滚环境执行；记录删除前后 trace；对模型输出做参数白名单检查。合格答案会把“不要乱删”拆成系统可以拦截、审计和回退的规则，而不是停在提示词层。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>综合迁移</h3></div>
+          <div class="quick-review">核心连接 训练数据里的每一步行动都应该能追溯到 schema、运行时状态和安全结果。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">综合解释</span></div>
+        <h3><b>Q:</b> 为什么 trace 对工具使用 RL 很重要？</h3>
+
+
+      <textarea name="q9"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。trace 能把工具调用、参数、审批、错误和观察串成可回放的时间线，因此它既能帮助复盘错误，也能帮助构造训练数据和奖励。没有 trace，工具失败很难定位到 schema、运行时或安全策略哪一层，RL 训练也容易学到错误归因。好的回答至少要提到“错误归因”和“数据过滤”中的一项。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 用一段话讲完整闭环</h3>
+
+
+      <textarea name="q10"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。合格答案会把流程说完整：模型先根据 schema 决定是否调用、调用什么参数；运行时负责解析、校验、执行或拒绝；guardrail 在关键节点拦截高风险输入和输出；工具结果被整理成观察回传给模型；trace 则把整个闭环记录下来，便于复盘、评测和审计。只要把这五个环节连起来，答案就已经抓住主线。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-  <li><a href="https://openai.github.io/openai-agents-python/tools/">OpenAI Agents SDK：Tools</a>。用于理解 hosted tools、function tools、agents as tools，以及工具 schema、错误处理和工具暴露面的工程意义。</li>
-  <li><a href="https://openai.github.io/openai-agents-python/handoffs/">OpenAI Agents SDK：Handoffs</a>，以及 guardrails、tracing 相关文档。用于理解任务转交、运行时检查和轨迹记录，不把它们误写成训练算法。</li>
-  <li><a href="https://huggingface.co/docs/trl/main/openenv">TRL OpenEnv Integration</a>。用于理解 tools 与 environments 的区别、状态化多轮 interaction、environment_factory、reward_func 和 episode 结构。</li>
-  <li><a href="https://arxiv.org/abs/2210.03629">ReAct</a>、<a href="https://arxiv.org/abs/2302.04761">Toolformer</a>、<a href="https://arxiv.org/abs/2307.16789">ToolLLM / ToolBench</a>、<a href="https://arxiv.org/abs/2304.08244">API-Bank</a>。用于说明推理-行动-观察轨迹、工具使用数据构造和多步评测维度。</li>
-  <li><a href="https://github.com/volcengine/verl">verl</a> 与推理训练资料。用于对照可验证奖励和交互式奖励的差异。</li>
+<ul>
+<li><a href="https://openai.github.io/openai-agents-python/tools/">OpenAI Agents SDK：Tools</a>。用于理解 hosted tools、function tools、agents as tools，以及工具 schema、错误处理和工具暴露面的工程意义。</li>
+<li><a href="https://openai.github.io/openai-agents-python/handoffs/">OpenAI Agents SDK：Handoffs</a>，以及 guardrails、tracing 相关文档。用于理解任务转交、运行时检查和轨迹记录，不把它们误写成训练算法。</li>
+<li><a href="https://huggingface.co/docs/trl/main/openenv">TRL OpenEnv Integration</a>。用于理解 tools 与 environments 的区别、状态化多轮 interaction、environment_factory、reward_func 和 episode 结构。</li>
+<li><a href="https://arxiv.org/abs/2210.03629">ReAct</a>、<a href="https://arxiv.org/abs/2302.04761">Toolformer</a>、<a href="https://arxiv.org/abs/2307.16789">ToolLLM / ToolBench</a>、<a href="https://arxiv.org/abs/2304.08244">API-Bank</a>。用于说明推理-行动-观察轨迹、工具使用数据构造和多步评测维度。</li>
+<li><a href="https://github.com/volcengine/verl">verl</a> 与推理训练资料。用于对照可验证奖励和交互式奖励的差异。</li>
 </ul>
-
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

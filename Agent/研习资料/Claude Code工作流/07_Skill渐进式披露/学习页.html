@@ -4,296 +4,455 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>07 Skill渐进式披露｜Claude Code 工作流</title>
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body>
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Claude Code 工作流</strong><span>07｜Skill渐进式披露</span></div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>目标与主线</a>
-      <a href="#skill"><span class="dot"></span>Skill 文件</a>
-      <a href="#loader"><span class="dot"></span>加载与解析</a>
-      <a href="#metadata"><span class="dot"></span>先给元数据</a>
-      <a href="#load"><span class="dot"></span>按需加载 body</a>
-      <a href="#context"><span class="dot"></span>上下文工程</a>
-      <a href="#public-guide"><span class="dot"></span>讲义补强</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>导出练习记录</a>
-    </nav>
-    <div class="side-note">渐进式披露的核心：先让模型知道有哪些 Skill，需要时再把完整说明书交给它。</div>
-  </aside>
-  <main>
-    <header class="hero" id="goal">
-      <div>
-        <div class="kicker">Progressive disclosure</div>
-        <h1>Skill渐进式披露</h1>
-        <p class="muted">Skill 是一份可被 Agent 调用的能力说明书。它通常写在 `SKILL.md` 里，上半部分是 `name`、`description` 等元数据，下半部分是完整工作流。渐进式披露的做法是：启动时只把元数据放进 system prompt，等模型判断需要某个 Skill 并调用 `load_skill` 时，再把这个 Skill 的完整 body 加入 messages。</p>
-        <div class="map">
-          <span class="node">scan SKILL.md</span><span class="arrow">→</span>
-          <span class="node">parse metadata/body</span><span class="arrow">→</span>
-          <span class="node">send descriptions</span><span class="arrow">→</span>
-          <span class="node">load_skill</span><span class="arrow">→</span>
-          <span class="node">send body</span>
-        </div>
-        <p>学完本页，你应该能解释 `SkillLoader` 如何扫描和解析 Skill，为什么不要一开始发送所有 body，以及 `load_skill` 工具如何让模型按需获得详细工作流。</p>
+<body data-course="Claude Code 工作流" data-unit="07">
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">Claude Code 工作流</a>
+        <span class="sep">/</span>
+        <span>07</span>
       </div>
-      <div class="box soft">
-        <h3>来源材料</h3>
-        <p>视频：《Learn Claude Code 源码详解》渐进式披露 Skill，开发实战分享屋，2026-03-13。</p>
-        <p>本页聚焦 Skill 文件结构、递归加载、metadata/body 分离、`load_skill` 工具和上下文管理。</p>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
-    </header>
+    </div>
+  </nav>
 
-    <section id="skill">
-      <div class="head"><h2>1. Skill 是可加载的能力说明书</h2><span class="tag">SKILL.md</span></div>
-      <p>Skill 的直觉是“给 Agent 的操作手册”。当用户提出某类需求时，Agent 可以加载对应 Skill，获得更具体的步骤、约束、工具使用规则和输出规范。比如 PDF Skill 会告诉 Agent 如何创建 PDF，Code Review Skill 会告诉 Agent 如何审查代码。</p>
-      <p>一个典型 `SKILL.md` 可以分成两层。第一层是 frontmatter，也就是文件开头用 `---` 包住的元数据，包含 `name` 和 `description`。第二层是 body，也就是元数据下面的完整正文，写具体工作流。渐进式披露依赖的正是这次拆分：元数据短，适合一开始给模型；body 长，适合需要时再加载。</p>
-      <div class="codebar"><span class="label">最小示例：SKILL.md 文件结构</span><span>Markdown</span></div>
-      <pre><code>---
-name: pdf
-description: Create PDF documents from text, Markdown, or generated content.
----
-
-# PDF Skill
-
-1. Clarify the target format and page size.
-2. Generate a source document.
-3. Render or compile it into a PDF.
-4. Verify the output file exists and is readable.</code></pre>
-      <div class="grid2">
-        <div class="box ok">
-          <h3>metadata 适合做什么</h3>
-          <ul>
-            <li>让模型快速知道有哪些 Skill。</li>
-            <li>帮助模型判断用户需求匹配哪个 Skill。</li>
-            <li>构建短小的 Skill 列表。</li>
-          </ul>
-        </div>
-        <div class="box warn">
-          <h3>body 适合做什么</h3>
-          <ul>
-            <li>提供完整执行步骤。</li>
-            <li>写清工具限制和验收标准。</li>
-            <li>在真正需要时进入上下文。</li>
-          </ul>
-        </div>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Progressive disclosure</div>
+      <div class="hero-meta">
+        <span class="hero-badge">07</span>
       </div>
-      <p>你现在应该能做什么：看到一个 Skill 文件时，能指出哪部分用于“发现能力”，哪部分用于“执行能力”。</p>
-    </section>
-
-    <section id="loader">
-      <div class="head"><h2>2. `SkillLoader` 启动时递归扫描</h2><span class="tag">load_all</span></div>
-      <p>程序启动时会创建一个 `SkillLoader` 对象，并指向当前工作目录下的 `skills` 目录。因为 Skill 可能放在多层子目录里，所以加载器会递归查找所有 `SKILL.md` 文件。视频里示例项目有多个 Skill，例如 agent builder、code review、MCP builder、PDF。</p>
-      <p>扫描到文件后，加载器读取文本，解析 frontmatter 和 body，再把结果放进一个字典。这个字典的 key 通常是 Skill 的 `name`，value 则包含 metadata、body 和 path。这样后续模型请求加载某个 Skill 时，可以通过名字快速找到完整内容。</p>
-      <div class="codebar"><span class="label">逐行拆解：扫描并登记 Skill</span><span>Python</span></div>
-      <pre><code>class SkillLoader:
-    def __init__(self, skills_dir):
-        self.skills_dir = skills_dir
-        self.skills = {}
-        self.load_all()
-
-    def load_all(self):
-        for path in sorted(self.skills_dir.rglob("SKILL.md")):
-            text = path.read_text(encoding="utf-8")
-            metadata, body = parse_frontmatter(text)
-            name = metadata["name"]
-            self.skills[name] = {
-                "metadata": metadata,
-                "body": body,
-                "path": str(path),
-            }</code></pre>
-      <p>这里的 `rglob("SKILL.md")` 表示递归匹配当前目录和所有子目录里的 `SKILL.md`。这比只扫描第一层目录稳，因为真实项目里的技能经常会按主题或来源分层存放。</p>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>步骤</th><th>做什么</th><th>为什么必要</th></tr></thead>
-          <tbody>
-            <tr><td>创建 loader</td><td>初始化 `self.skills = {}`。</td><td>准备一个可按名称查询的 Skill 索引。</td></tr>
-            <tr><td>递归扫描</td><td>查找所有 `SKILL.md`。</td><td>覆盖多层目录，不漏技能。</td></tr>
-            <tr><td>解析文件</td><td>拆出 metadata 和 body。</td><td>为渐进式披露做结构分离。</td></tr>
-            <tr><td>登记字典</td><td>按 `name` 存 metadata/body/path。</td><td>后续 `load_skill` 可以快速读取。</td></tr>
-          </tbody>
-        </table>
+      <h1 class="hero-title">07 Skill渐进式披露｜Claude Code 工作流</h1>
+      <p class="hero-desc">Skill 是一份可被 Agent 调用的能力说明书。它通常写在 `SKILL.md` 里，上半部分是 `name`、`description` 等元数据，下半部分是完整工作流。渐进式披露的做法是：启动时只把元数据放进 system prompt，等模型判断需要某个 Skill 并调用 `load_skill` 时，再把这个 Skill 的完整 body 加入 messages。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../06_子Agent与任务委托/学习页.html">上一节</a>
+            <a href="../08_上下文压缩与无限会话/学习页.html">下一节</a>
       </div>
-    </section>
-
-    <section id="metadata">
-      <div class="head"><h2>3. 第一轮只给模型 Skill 描述</h2><span class="tag">descriptions only</span></div>
-      <p>加载器已经把所有 Skill 文件读到本地，但这不等于要把所有内容立刻发送给模型。`get_descriptions()` 会从字典中抽取每个 Skill 的 `name` 和 `description`，拼成简短列表，放到 system prompt 里。这样模型第一次请求时，只知道“有哪些 Skill、各自适合什么场景”。</p>
-      <p>这一步是渐进式披露的第一层：披露能力目录，而不是披露全部说明书。假设只有 4 个 Skill，把 body 都发给模型也许还能忍；但如果有 100 个、1000 个 Skill，一开始就塞完整 body 会让上下文窗口迅速被占满，模型也更难判断当前任务真正相关的信息。</p>
-      <div class="codebar"><span class="label">正确示例：只组装 Skill 摘要</span><span>Python</span></div>
-      <pre><code>def get_descriptions(self):
-    lines = []
-    for name, skill in self.skills.items():
-        desc = skill["metadata"].get("description", "")
-        lines.append(f"- {name}: {desc}")
-    return "\n".join(lines)</code></pre>
-      <div class="codebar error"><span class="label">错误示例：启动时塞入所有 body</span><span>上下文浪费</span></div>
-      <pre><code>system_prompt = "Available skills:\n"
-for skill in loader.skills.values():
-    system_prompt += skill["body"]  # 错误：每次都发送完整工作流</code></pre>
-      <p>坏处不是“代码会立刻崩”，而是上下文工程变差。模型要在大量无关流程里找相关信息，后续响应质量可能下降，成本和延迟也会增加。</p>
-    </section>
-
-    <section id="load">
-      <div class="head"><h2>4. 需要时再调用 `load_skill`</h2><span class="tag">tool gated body</span></div>
-      <p>当用户说“创建一个 PDF，内容是你好 Skill”，模型会先看 system prompt 里的 Skill 描述，判断 PDF Skill 相关，于是返回一个 tool use block：调用 `load_skill`，输入是 Skill 名称，例如 `PDF` 或 `pdf`。本地工具收到名字后，从 loader 字典里取出对应 body。</p>
-      <p>然后 body 会作为工具结果加入 messages。下一轮模型再请求时，messages 里已经有三类关键信息：用户需求、模型调用 `load_skill` 的动作、`load_skill` 返回的完整 Skill 工作流。此时模型才真正拥有执行 PDF 任务所需的详细步骤。</p>
-      <div class="codebar"><span class="label">正确示例：load_skill 工具</span><span>Python</span></div>
-      <pre><code>def load_skill(name: str) -> str:
-    skill = loader.skills.get(name)
-    if not skill:
-        return f"Skill not found: {name}"
-    return skill["body"]</code></pre>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <h3>上下文披露切换</h3>
-            <div class="viz-actions">
-              <button data-mode="catalog" class="active">只给目录</button>
-              <button data-mode="loaded">加载 PDF Skill</button>
-              <button data-mode="dump">一次性全塞</button>
-            </div>
-            <div class="context-box" id="contextBox"></div>
-            <div class="meter"><span id="meterBar"></span></div>
-            <p class="mini" id="meterText">上下文占用：低。模型只看到 Skill 名称和描述。</p>
-          </div>
-          <div class="viz-cell">
-            <h3 id="modeTitle">先给能力目录</h3>
-            <p id="modeText">模型根据简短描述判断是否需要某个 Skill。它还没有看到完整 body，所以上下文保持轻。</p>
-            <div class="viz-note" id="modeHint">观察点：渐进式披露不是不让模型知道能力，而是延迟发送详细说明。</div>
-          </div>
-        </div>
-      </div>
-      <p>你现在应该能做什么：看到一次 `load_skill` 调用时，能说出它为什么发生在“匹配 Skill 之后、执行任务之前”。</p>
-    </section>
-
-    <section id="context">
-      <div class="head"><h2>5. 渐进式披露是一种上下文工程</h2><span class="tag">context engineering</span></div>
-      <p>上下文工程不是只追求少发字，而是把信息放在合适的时间、以合适的粒度交给模型。Skill 系统的做法很典型：启动时发短目录，任务匹配后发完整说明，执行时再根据工具结果继续推进。</p>
-      <p>这和前面几节可以连成一条线：工具 schema 让模型知道能调用什么；todo 把计划变成可见状态；子 Agent 把复杂子任务隔离出去；Skill 则把大量工作流说明按需加载。它们都在解决同一类问题：Agent 不只是“会聊天”，还要管理上下文、状态、工具和权限。</p>
-      <div class="grid3">
-        <div class="route"><h3>少量初始信息</h3><p>只发送 `name` 和 `description`，用于发现匹配能力。</p></div>
-        <div class="route"><h3>按需详细说明</h3><p>模型调用 `load_skill` 后，再把完整 body 放进 messages。</p></div>
-        <div class="route"><h3>执行后继续循环</h3><p>模型根据 Skill 工作流调用 write、bash 等工具，直到完成任务。</p></div>
-      </div>
-      <div class="box warn">
-        <h3>常见坑集中看</h3>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
         <ul>
-          <li>把 Skill body 当成 description，导致目录过长。</li>
-          <li>解析 frontmatter 不稳，`name` 或 `description` 丢失。</li>
-          <li>只扫描 skills 第一层目录，漏掉子目录里的 `SKILL.md`。</li>
-          <li>`load_skill` 对大小写、别名和不存在的 Skill 没有处理。</li>
-          <li>加载 Skill 后不把结果写回 messages，模型下一轮仍然看不到完整工作流。</li>
+
         </ul>
       </div>
-    </section>
+    </div>
+  </header>
 
-    <section id="public-guide">
-      <div class="head"><h2>6. 公开讲义补强：渐进式披露设计清单</h2><span class="tag">progressive disclosure</span></div>
-      <p>把这一页压缩成一句话：Skill 系统把“发现能力”和“执行能力”拆开。模型一开始只看到短目录，用它判断是否相关；确认相关后，再通过工具加载完整说明。这样既保留能力，又避免无关文档占满上下文。</p>
-      <div class="grid3">
-        <div class="route"><h3>发现层</h3><p>只放 `name`、`description`、少量触发条件。目标是让模型判断“要不要加载”。</p></div>
-        <div class="route"><h3>执行层</h3><p>完整 body 放步骤、约束、示例、资源路径。目标是让模型知道“具体怎么做”。</p></div>
-        <div class="route"><h3>反馈层</h3><p>`load_skill` 的结果要写回 messages。目标是让下一轮模型真的看见完整说明。</p></div>
-      </div>
-      <div class="codebar"><span class="label">一个公开可分享的 Skill 摘要</span><span>Markdown</span></div>
-      <pre><code>---
-name: code-review
-description: Review code changes for bugs, regressions, and missing tests.
----
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#skill">1. Skill 是可加载的能力说明书</a>
+      <a href="#loader">2. `SkillLoader` 启动时递归扫描</a>
+      <a href="#metadata">3. 第一轮只给模型 Skill 描述</a>
+      <a href="#load">4. 需要时再调用 `load_skill`</a>
+      <a href="#context">5. 渐进式披露是一种上下文工程</a>
+      <a href="#public-guide">6. 公开讲义补强：渐进式披露设计清单</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
 
-# Code Review
-
-Use this workflow when asked to review a patch.
-Focus on correctness first, then tests, then maintainability.</code></pre>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>设计问题</th><th>推荐答案</th><th>常见误区</th></tr></thead>
-          <tbody>
-            <tr><td>description 写多长</td><td>足够判断适用场景，通常一两句话。</td><td>把完整操作手册塞进 description。</td></tr>
-            <tr><td>body 何时进入上下文</td><td>模型请求 `load_skill` 且名称匹配后。</td><td>启动时全量塞入所有 Skill。</td></tr>
-            <tr><td>找不到 Skill 怎么办</td><td>返回明确错误和可用名称提示。</td><td>静默失败，让模型误以为已经加载。</td></tr>
-            <tr><td>如何避免名称错配</td><td>做大小写归一、别名映射或相似名称提示。</td><td>完全依赖模型拼对名称。</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p>你现在应该能做什么：设计一个 Skill 时，先写短 description 用于发现，再把详细流程放进 body，并确认 `load_skill` 返回内容会进入 messages。</p>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
+  <!-- Content -->
+  <article class="content">
+      <section id="skill">
+        <div class="head">
+          <h2>1. Skill 是可加载的能力说明书</h2>
+          <span class="tag">SKILL.md</span>
+        </div>
+<p>Skill 的直觉是“给 Agent 的操作手册”。当用户提出某类需求时，Agent 可以加载对应 Skill，获得更具体的步骤、约束、工具使用规则和输出规范。比如 PDF Skill 会告诉 Agent 如何创建 PDF，Code Review Skill 会告诉 Agent 如何审查代码。</p>
+<p>最小示例：SKILL.md 文件结构Markdown</p>
+        <div class="box">
+<h3>metadata 适合做什么</h3>
+<ul>
+<li>让模型快速知道有哪些 Skill。</li>
+<li>帮助模型判断用户需求匹配哪个 Skill。</li>
+<li>构建短小的 Skill 列表。</li>
+</ul>
+        </div>
+        <div class="box warn">
+<h3>body 适合做什么</h3>
+<ul>
+<li>提供完整执行步骤。</li>
+<li>写清工具限制和验收标准。</li>
+<li>在真正需要时进入上下文。</li>
+</ul>
+<p>你现在应该能做什么：看到一个 Skill 文件时，能指出哪部分用于“发现能力”，哪部分用于“执行能力”。</p>
+        </div>
+      </section>
+      <section id="loader">
+        <div class="head">
+          <h2>2. `SkillLoader` 启动时递归扫描</h2>
+          <span class="tag">load_all</span>
+        </div>
+<p>程序启动时会创建一个 <code>SkillLoader</code> 对象，并指向当前工作目录下的 <code>skills</code> 目录。因为 Skill 可能放在多层子目录里，所以加载器会递归查找所有 <code>SKILL.md</code> 文件。视频里示例项目有多个 Skill，例如 agent builder、code review、MCP builder、PDF。</p>
+<p>逐行拆解：扫描并登记 SkillPython</p>
+<p>这里的 <code>rglob("SKILL.md")</code> 表示递归匹配当前目录和所有子目录里的 <code>SKILL.md</code>。这比只扫描第一层目录稳，因为真实项目里的技能经常会按主题或来源分层存放。</p>
+<p>创建 loader初始化 <code>self.skills = {}</code>。准备一个可按名称查询的 Skill 索引。</p>
+<p>递归扫描查找所有 <code>SKILL.md</code>。覆盖多层目录，不漏技能。</p>
+<p>解析文件拆出 metadata 和 body。为渐进式披露做结构分离。</p>
+<p>登记字典按 <code>name</code> 存 metadata/body/path。后续 <code>load_skill</code> 可以快速读取。</p>
+      </section>
+      <section id="metadata">
+        <div class="head">
+          <h2>3. 第一轮只给模型 Skill 描述</h2>
+          <span class="tag">descriptions</span>
+        </div>
+<p>加载器已经把所有 Skill 文件读到本地，但这不等于要把所有内容立刻发送给模型。<code>get_descriptions()</code> 会从字典中抽取每个 Skill 的 <code>name</code> 和 <code>description</code>，拼成简短列表，放到 system prompt 里。这样模型第一次请求时，只知道“有哪些 Skill、各自适合什么场景”。</p>
+<p>正确示例：只组装 Skill 摘要Python</p>
+<p>错误示例：启动时塞入所有 body上下文浪费</p>
+<p>坏处上下文工程变差。模型要在大量无关流程里找相关信息，后续响应质量可能下降，成本和延迟也会增加。</p>
+      </section>
+      <section id="load">
+        <div class="head">
+          <h2>4. 需要时再调用 `load_skill`</h2>
+          <span class="tag">tool</span>
+        </div>
+<p>当用户说“创建一个 PDF，内容是你好 Skill”，模型会先看 system prompt 里的 Skill 描述，判断 PDF Skill 相关，于是返回一个 tool use block：调用 <code>load_skill</code>，输入是 Skill 名称，例如 <code>PDF</code> 或 <code>pdf</code>。本地工具收到名字后，从 loader 字典里取出对应 body。</p>
+<p>正确示例：load_skill 工具Python</p>
+<p>上下文披露切换</p>
+<p>上下文占用：低。模型只看到 Skill 名称和描述。</p>
+<p>你现在应该能做什么：看到一次 <code>load_skill</code> 调用时，能说出它为什么发生在“匹配 Skill 之后、执行任务之前”。</p>
+      </section>
+      <section id="context">
+        <div class="head">
+          <h2>5. 渐进式披露是一种上下文工程</h2>
+          <span class="tag">context</span>
+        </div>
+<p>上下文工程把信息放在合适的时间、以合适的粒度交给模型。Skill 系统的做法很典型：启动时发短目录，任务匹配后发完整说明，执行时再根据工具结果继续推进。</p>
+<p>少量初始信息只发送 <code>name</code> 和 <code>description</code>，用于发现匹配能力。</p>
+<p>按需详细说明模型调用 <code>load_skill</code> 后，再把完整 body 放进 messages。</p>
+<p>执行后继续循环模型根据 Skill 工作流调用 write、bash 等工具，直到完成任务。</p>
+      </section>
+      <section id="public-guide">
+        <div class="head">
+          <h2>6. 公开讲义补强：渐进式披露设计清单</h2>
+          <span class="tag">progressive</span>
+        </div>
+<p>把这一页压缩成一句话：Skill 系统把“发现能力”和“执行能力”拆开。模型一开始只看到短目录，用它判断是否相关；确认相关后，再通过工具加载完整说明。这样既保留能力，又避免无关文档占满上下文。</p>
+<p>一个公开可分享的 Skill 摘要Markdown</p>
+<p>设计问题推荐答案常见误区</p>
+<p>你现在应该能做什么：设计一个 Skill 时，先写短 description 用于发现，再把详细流程放进 body，并确认 <code>load_skill</code> 返回内容会进入 messages。</p>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">检查理解</span>
+        </div>
       <div class="practice-group">
-        <div class="group-head"><div><h3>一、Skill 文件结构</h3><p>先分清 metadata、body 和路径索引。</p></div><div class="box soft">提示：metadata 用于发现，body 用于执行。</div></div>
+        <div class="group-head">
+          <div><h3>一、Skill 文件结构</h3></div>
+          
+        </div>
         <div class="drill-grid">
-          <div class="q" data-title="1. Skill本质"><div class="q-meta"><span class="pill">选择</span></div><h3>1. Skill 最准确的作用是什么？</h3><label><input type="radio" name="q1" value="A">A. 给 Agent 的能力说明书</label><br><label><input type="radio" name="q1" value="B">B. 普通聊天记录</label><br><label><input type="radio" name="q1" value="C">C. 只能生成 PDF 的工具</label></div>
-          <div class="q" data-title="2. frontmatter字段"><div class="q-meta"><span class="pill">填空</span></div><h3>2. Skill frontmatter 中最关键的两个字段通常是 ______ 和 ______。</h3><input type="text" name="q2"></div>
-          <div class="q" data-title="3. body作用"><div class="q-meta"><span class="pill">短答</span></div><h3>3. Skill body 主要提供什么？</h3><textarea name="q3"></textarea></div>
-          <div class="q" data-title="4. 发现与执行"><div class="q-meta"><span class="pill">区分</span></div><h3>4. 为什么说 metadata 用于发现能力，body 用于执行能力？</h3><textarea name="q4"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. Skill 最准确的作用是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="给 Agent 的能力说明书">给 Agent 的能力说明书</label>
+      <label><input type="radio" name="q?" value="普通聊天记录">普通聊天记录</label>
+      <label><input type="radio" name="q?" value="只能生成 PDF 的工具">只能生成 PDF 的工具</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 2. Skill frontmatter 中最关键的两个字段通常是 ______ 和 ______。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 3. Skill body 主要提供什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">区分</span></div>
+        <h3><b>Q:</b> 4. 为什么说 metadata 用于发现能力，body 用于执行能力？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、加载器流程</h3><p>检查你能不能讲出 `SkillLoader` 的运行顺序。</p></div><div class="box warn">递归扫描和 frontmatter 解析是渐进式披露的前提。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="5. 递归扫描"><div class="q-meta"><span class="pill">解释</span></div><h3>5. 为什么要递归扫描 skills 目录？</h3><textarea name="q5"></textarea></div>
-          <div class="q" data-title="6. 字典索引"><div class="q-meta"><span class="pill">短答</span></div><h3>6. loader 的 `skills` 字典通常以什么为 key？value 里保存什么？</h3><textarea name="q6"></textarea></div>
-          <div class="q" data-title="7. parse_frontmatter"><div class="q-meta"><span class="pill">机制</span></div><h3>7. `parse_frontmatter` 需要把一个 `SKILL.md` 拆成哪两部分？</h3><input type="text" name="q7"></div>
-          <div class="q" data-title="8. 路径保存"><div class="q-meta"><span class="pill">边界</span></div><h3>8. 为什么 value 里除了 metadata/body，还可以保存 path？</h3><textarea name="q8"></textarea></div>
+        <div class="group-head">
+          <div><h3>二、加载器流程</h3></div>
+          
         </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、渐进式披露</h3><p>理解先发目录、后发 body 的原因。</p></div><div class="box soft">不要把“已加载到本地”和“已发送给模型”混为一谈。</div></div>
         <div class="drill-grid">
-          <div class="q" data-title="9. 初始system"><div class="q-meta"><span class="pill">短答</span></div><h3>9. 初始 system prompt 里应该放 Skill 的哪些信息？</h3><textarea name="q9"></textarea></div>
-          <div class="q" data-title="10. 不全量发送"><div class="q-meta"><span class="pill">解释</span></div><h3>10. 为什么不要一开始把所有 Skill body 都发给模型？</h3><textarea name="q10"></textarea></div>
-          <div class="q" data-title="11. load_skill时机"><div class="q-meta"><span class="pill">流程</span></div><h3>11. `load_skill` 应该发生在任务流程的哪个阶段？</h3><textarea name="q11"></textarea></div>
-          <div class="q" data-title="12. 消息回写"><div class="q-meta"><span class="pill">判断</span></div><h3>12. `load_skill` 返回的 body 不需要写回 messages，模型也能自动知道。</h3><label><input type="radio" name="q12" value="对">对</label><br><label><input type="radio" name="q12" value="错">错</label></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、诊断与迁移</h3><p>把 Skill 机制迁移到真实 Agent 设计里。</p></div><div class="box soft">表达重点：本地索引、短目录、按需加载、写回上下文。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="13. 错误诊断"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 某实现启动时把 200 个 Skill body 全部加入 system prompt，请指出问题和修法。</h3><textarea name="q13"></textarea></div>
-          <div class="q" data-title="14. 缺失Skill"><div class="q-meta"><span class="pill">边界</span></div><h3>14. 用户请求匹配某 Skill，但 `load_skill(name)` 找不到该 Skill，应如何处理？</h3><textarea name="q14"></textarea></div>
-          <div class="q" data-title="15. 大小写"><div class="q-meta"><span class="pill">设计</span></div><h3>15. Skill 名称大小写不一致可能造成什么问题？可以怎么缓解？</h3><textarea name="q15"></textarea></div>
-          <div class="q" data-title="16. 面试短答"><div class="q-meta"><span class="pill">表达</span></div><h3>16. 用 2-3 句话解释渐进式披露的工程价值。</h3><textarea name="q16"></textarea></div>
-          <div class="q full" data-title="17. 流程图"><div class="q-meta"><span class="pill">流程图</span></div><h3>17. 用文字画出 Skill 从扫描、描述披露、按需加载到执行任务的完整流程。</h3><textarea name="q17"></textarea></div>
-          <div class="q full" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：Skill 系统为什么要用渐进式披露。</h3><div class="solve-note">请串联 `SKILL.md`、metadata、body、`SkillLoader`、`get_descriptions`、system prompt、`load_skill`、messages、上下文窗口。</div><textarea name="q18"></textarea></div>
-        </div>
-      </div>
-    </section>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 5. 为什么要递归扫描 skills 目录？</h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 6. loader 的 <code>skills</code> 字典通常以什么为 key？value 里保存什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">机制</span></div>
+        <h3><b>Q:</b> 7. <code>parse_frontmatter</code> 需要把一个 <code>SKILL.md</code> 拆成哪两部分？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">边界</span></div>
+        <h3><b>Q:</b> 8. 为什么 value 里除了 metadata/body，还可以保存 path？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、渐进式披露</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 9. 初始 system prompt 里应该放 Skill 的哪些信息？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 10. 为什么不要一开始把所有 Skill body 都发给模型？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">流程</span></div>
+        <h3><b>Q:</b> 11. <code>load_skill</code> 应该发生在任务流程的哪个阶段？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 12. <code>load_skill</code> 返回的 body 不需要写回 messages，模型也能自动知道。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、诊断与迁移</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 13. 某实现启动时把 200 个 Skill body 全部加入 system prompt，请指出问题和修法。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">边界</span></div>
+        <h3><b>Q:</b> 14. 用户请求匹配某 Skill，但 <code>load_skill(name)</code> 找不到该 Skill，应如何处理？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b> 15. Skill 名称大小写不一致可能造成什么问题？可以怎么缓解？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">表达</span></div>
+        <h3><b>Q:</b> 16. 用 2-3 句话解释渐进式披露的工程价值。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">流程图</span></div>
+        <h3><b>Q:</b> 17. 用文字画出 Skill 从扫描、描述披露、按需加载到执行任务的完整流程。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 18. 用 6-9 句话讲清楚：Skill 系统为什么要用渐进式披露。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>保存练习记录</h2><span class="tag">自测用</span></div>
-      <p class="muted">完成练习后生成本页记录，便于检查理解和复制留存。</p>
-      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-const modes={
-  catalog:["先给能力目录","模型根据简短描述判断是否需要某个 Skill。它还没有看到完整 body，所以上下文保持轻。","观察点：渐进式披露不是不让模型知道能力，而是延迟发送详细说明。","Available skills:\n- PDF: Create PDF documents from text.\n- Code Review: Review code changes.\n- MCP Builder: Build MCP integrations.",22,"上下文占用：低。模型只看到 Skill 名称和描述。"],
-  loaded:["按需加载一个 Skill","模型调用 `load_skill` 后，messages 里加入 PDF Skill 的完整 body。现在模型可以按详细流程执行任务。","观察点：完整说明只给当前任务相关的 Skill。","Available skills:\n- PDF: Create PDF documents from text.\n\nTool result from load_skill('PDF'):\n# PDF Skill\n1. Clarify content and page size.\n2. Generate source.\n3. Render PDF.\n4. Verify output.",58,"上下文占用：中。只加载当前需要的 body。"],
-  dump:["一次性全塞的坏情况","启动时把所有 Skill body 都放进 system prompt，模型需要在大量无关流程里找信息。","修法：保留本地索引，system prompt 只给 descriptions。","System prompt:\n# PDF Skill ...\n# Code Review Skill ...\n# MCP Builder Skill ...\n# Agent Builder Skill ...\n# More skills ...\n# More skills ...",92,"上下文占用：高。许多无关 body 挤占窗口。"]
-};
-function renderMode(name){const d=modes[name]||modes.catalog;document.querySelectorAll("[data-mode]").forEach(b=>b.classList.toggle("active",b.dataset.mode===name));document.getElementById("modeTitle").textContent=d[0];document.getElementById("modeText").textContent=d[1];document.getElementById("modeHint").textContent=d[2];document.getElementById("contextBox").textContent=d[3];document.getElementById("meterBar").style.width=d[4]+"%";document.getElementById("meterText").textContent=d[5]}
-document.querySelectorAll("[data-mode]").forEach(btn=>btn.addEventListener("click",()=>renderMode(btn.dataset.mode)));renderMode("catalog");
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
-const questions=[
-  ["文件结构","1. Skill 最准确的作用是什么？","q1","radio"],["文件结构","2. frontmatter 关键字段。","q2","text"],["文件结构","3. Skill body 主要提供什么？","q3","text"],["文件结构","4. metadata 与 body 的分工。","q4","text"],["加载流程","5. 为什么递归扫描 skills 目录？","q5","text"],["加载流程","6. skills 字典 key/value。","q6","text"],["加载流程","7. parse_frontmatter 拆成哪两部分？","q7","text"],["加载流程","8. 为什么保存 path？","q8","text"],["渐进披露","9. 初始 system prompt 放什么？","q9","text"],["渐进披露","10. 为什么不全量发送 body？","q10","text"],["渐进披露","11. load_skill 的发生阶段。","q11","text"],["渐进披露","12. body 是否需要写回 messages？","q12","radio"],["迁移诊断","13. 200 个 body 全塞的问题和修法。","q13","text"],["迁移诊断","14. 找不到 Skill 怎么处理？","q14","text"],["迁移诊断","15. 名称大小写问题。","q15","text"],["迁移诊断","16. 渐进式披露工程价值。","q16","text"],["迁移诊断","17. Skill 完整流程。","q17","text"],["费曼解释","18. Skill 系统为什么要渐进式披露。","q18","text"]
-];
-function val(q){if(q[3]==="radio"){const el=document.querySelector(`input[name="${q[2]}"]:checked`);return el?el.value:""}const el=document.querySelector(`[name="${q[2]}"]`);return el?el.value.trim():""}
-function generateRecord(){const groups={};const missing=[];questions.forEach(q=>{const v=val(q);if(!v)missing.push(q[1]);if(!groups[q[0]])groups[q[0]]=[];groups[q[0]].push({t:q[1],a:v||"（未填写）"})});let out="# 07 Skill渐进式披露｜练习记录\n\n";Object.keys(groups).forEach(g=>{out+=`## ${g}\n\n`;groups[g].forEach(item=>{out+=`### ${item.t}\n${item.a}\n\n`})});document.getElementById("record").textContent=out;const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=val(["","","q18","text"]);const keys=["SKILL.md","metadata","body","SkillLoader","load_skill","messages"];const lack=keys.filter(k=>!f.includes(k));if(f&&f.length<120)warnings.push("费曼解释偏短，建议讲成 6-9 句话。");if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join("、")}。`);const q=document.getElementById("quality");q.style.display="block";q.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以用于自测检查。"}
-function copyRecord(){navigator.clipboard.writeText(document.getElementById("record").textContent).catch(()=>alert("复制失败，请手动复制。"))}
-</script>
-<script src="../assets/study-page.js"></script>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

@@ -4,496 +4,697 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>53_P54｜第16讲：可以加速所有语言模型生成速度的神奇外挂 Speculative Decoding</title>
-  <link rel="stylesheet" href="../../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body data-study-kind="engineering" data-feynman-keywords="Speculative Decoding、自回归、预言家、草稿模型、目标模型、并行验收、接受、拒绝、速度、计算资源">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand">
-      <strong>53_P54</strong>
-      <span>第16讲：可以加速所有语言模型生成速度的神奇外挂<br>Speculative Decoding</span>
+<body data-course="李宏毅 LLM 课程" data-unit="53">
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅 LLM 课程</a>
+        <span class="sep">/</span>
+        <span>53</span>
+      </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
     </div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>学习目标</a>
-      <a href="#skeleton"><span class="dot"></span>概念骨架</a>
-      <a href="#terms"><span class="dot"></span>术语表</a>
-      <a href="#lecture"><span class="dot"></span>讲义主线</a>
-      <a href="#source"><span class="dot"></span>机制线索</a>
-      <a href="#example"><span class="dot"></span>最小例子</a>
-      <a href="#viz"><span class="dot"></span>交互观察</a>
-      <a href="#diagnosis"><span class="dot"></span>误区诊断</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>自学记录</a>
-    </nav>
-    <div class="side-note">读这一页时抓住一句话：先用很快的系统猜未来 token，再让原本的大语言模型一次并行检查这些猜测；猜对多少，就一次吐出多少。</div>
-  </aside>
-  <main>
-    <section class="hero" id="goal">
-      <div>
-        <div class="kicker">LI HONGYI LLM · P54 CORE STUDY PAGE</div>
-        <h1>第16讲：可以加速所有语言模型生成速度的神奇外挂 Speculative Decoding</h1>
-        <p>本讲解释一个很实用的推理加速技巧：不训练、不改原来的语言模型，而是在生成时外挂一个很快的“预言家”。预言家先猜接下来几个 token，目标模型再把不同前缀一次性放进同一轮前向计算里验证。只要前面若干猜测和目标模型自己的输出一致，就可以一次接受多个 token，从外部看生成速度就变快了。</p>
-        <p>这页不是把字幕压缩成摘要，而是把视频里的口头推演整理成可独立自学的讲义。学完你要能判断：Speculative Decoding 为什么能绕开自回归逐步等待，为什么预言家可以犯错，为什么它用时间换计算资源，以及小模型、非自回归模型、搜索引擎和多个预言家分别适合什么位置。</p>
-        <div class="map"><span class="node">自回归瓶颈</span><span class="arrow">→</span><span class="node">预言家草稿</span><span class="arrow">→</span><span class="node">目标模型并行验收</span><span class="arrow">→</span><span class="node">接受前缀</span><span class="arrow">→</span><span class="node">用算力换延迟</span></div>
-        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=54">Bilibili P54｜李宏毅生成式 AI 课程</a></p>
-      </div>
-      <div class="route">
-        <h3>学完后要能做四件事</h3>
-        <ol>
-          <li>说清楚自回归语言模型为什么慢，以及慢在“必须等上一个 token 结束”。</li>
-          <li>画出 Speculative Decoding 的草稿、并行验收、接受或回退流程。</li>
-          <li>解释预言家猜错时为什么结果仍可信，最差为什么近似不赚不赔。</li>
-          <li>比较非自回归模型、压缩小模型、搜索引擎、多预言家的适用条件。</li>
-        </ol>
-      </div>
-    </section>
+  </nav>
 
-    <section id="skeleton">
-      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
-      <div class="grid3">
-        <div class="box soft">
-          <h3>问题：自回归等待</h3>
-          <p>大语言模型通常按自回归方式生成：先根据上下文算第一个 token，再把这个 token 接回上下文去算第二个 token。这个过程的关键限制不是“模型不知道远处内容”，而是计算依赖链很硬：下一个位置的输入里必须包含上一个位置的输出。</p>
-          <p>如果只生成短答，等待感可能不明显；但当你要长篇回答、长代码或长报告时，逐 token 等待会把延迟拉长。视频开头提到，一些实验中加上 Speculative Decoding 后吞吐能达到原来的两倍到三倍，这正是因为它减少了必须串行等待的轮数。</p>
-        </div>
-        <div class="box info">
-          <h3>方法：先猜再验</h3>
-          <p>Speculative 的意思是“猜测、投机”。它的核心不是让小模型取代大模型，而是让一个很快的预言家先草拟接下来几个 token。目标模型随后用并行计算检查这些草稿前缀：第 0 个前缀检查第 1 个 token，第 1 个前缀检查第 2 个 token，第 2 个前缀检查第 3 个 token。</p>
-          <p>只要草稿 token 与目标模型在相应前缀下的预测一致，就接受；第一个不一致处之后的内容全部丢弃。这样保留了目标模型说了算的原则。</p>
-        </div>
-        <div class="box warn">
-          <h3>边界：不白赚</h3>
-          <p>这个技巧默认你更在意等待时间，而不是单次请求消耗的总计算。目标模型一次要检查多个前缀，猜错的分支会被丢掉，预言家的生成也要花时间。若预言家很快且命中率不差，延迟下降；若预言家很慢或总猜错，收益会消失。</p>
-          <p>所以它像外挂，但不是魔法。真正判断它是否值得用，要看草稿速度、接受长度、目标模型批处理效率和硬件资源。</p>
-        </div>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">LI HONGYI LLM · P54 CORE STUDY PAGE</div>
+      <div class="hero-meta">
+        <span class="hero-badge">53</span>
       </div>
-      <div class="flow">
-        <div class="box"><strong>1 输入上下文</strong>用户问题、已生成 token、系统约束。</div>
-        <div class="box"><strong>2 草稿预测</strong>预言家快速给出 A、B、C 等候选 token。</div>
-        <div class="box"><strong>3 并行构造</strong>把原输入、输入+A、输入+A+B 同时交给目标模型。</div>
-        <div class="box"><strong>4 验收前缀</strong>逐位比较目标模型输出与预言家草稿。</div>
-        <div class="box"><strong>5 接受或回退</strong>接受连续正确 token；错误处之后重新生成。</div>
+      <h1 class="hero-title">53_P54｜第16讲：可以加速所有语言模型生成速度的神奇外挂 Speculative Decoding</h1>
+      <p class="hero-desc">本讲解释一个很实用的推理加速技巧：不训练、不改原来的语言模型，而是在生成时外挂一个很快的“预言家”。预言家先猜接下来几个 token，目标模型再把不同前缀一次性放进同一轮前向计算里验证。只要前面若干猜测和目标模型自己的输出一致，就可以一次接受多个 token，从外部看生成速度就变快了。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../52_P53_第15讲：为什么语言模型用文字接龙，图片生成不用像素接龙呢？_浅谈生成式/学习页.html">上一节</a>
+            <a href="../54_P55_作业九：QuickSummaryofLectureVideo/学习页.html">下一节</a>
       </div>
-      <p class="checkpoint">你现在应该能做什么：看到一个加速说法时，先判断它减少的是串行轮数、单轮计算量，还是只提高了硬件并行利用率。</p>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="terms">
-      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#skeleton">概念骨架</a>
+      <a href="#terms">术语表</a>
+      <a href="#lecture">讲义主线：为什么要加速</a>
+      <a href="#source">机制线索：预言家机制</a>
+      <a href="#example">最小例子：犯错与验收</a>
+      <a href="#viz">交互观察：谁能当预言家</a>
+      <a href="#diagnosis">误区诊断</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="skeleton">
+        <div class="head">
+          <h2>概念骨架</h2>
+          <span class="tag">MAP</span>
+        </div>
+<p>问题：自回归等待</p>
+<p>大语言模型通常按自回归方式生成：先根据上下文算第一个 token，再把这个 token 接回上下文去算第二个 token。这个过程的关键限制计算依赖链很硬：下一个位置的输入里必须包含上一个位置的输出。</p>
+<p>如果只生成短答，等待感可能不明显；但当你要长篇回答、长代码或长报告时，逐 token 等待会把延迟拉长。视频开头提到，一些实验中加上 Speculative Decoding 后吞吐能达到原来的两倍到三倍，这正是因为它减少了必须串行等待的轮数。</p>
+<p>边界：不白赚</p>
+<p>这个技巧默认你更在意等待时间，而不是单次请求消耗的总计算。目标模型一次要检查多个前缀，猜错的分支会被丢掉，预言家的生成也要花时间。若预言家很快且命中率不差，延迟下降；若预言家很慢或总猜错，收益会消失。</p>
+<p>所以它像外挂，但不是魔法。真正判断它是否值得用，要看草稿速度、接受长度、目标模型批处理效率和硬件资源。</p>
+<p>你现在应该能做什么：看到一个加速说法时，先判断它减少的是串行轮数、单轮计算量，还是只提高了硬件并行利用率。</p>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语表</h2>
+          <span class="tag">TERMS</span>
+        </div>
       <div class="grid2">
         <div class="box">
-          <div class="term"><b>自回归模型</b><span>Auto-regressive model。每次根据已有上下文预测下一个 token，然后把新 token 接回上下文继续预测。误区是以为它不能并行计算任何东西；其实训练或固定前缀下的多个位置可以并行，难点在生成时未来 token 尚未确定。</span></div>
-          <div class="term"><b>Speculative Decoding</b><span>推理阶段的解码加速方法。草稿端先提出若干 token，目标模型并行验证这些 token 是否符合自己的输出。它不要求重新训练目标模型，也不直接改变目标模型本身。</span></div>
-          <div class="term"><b>预言家</b><span>视频里的口语比喻，指速度极快、允许犯错的草稿产生器。它可以是小模型、非自回归模型、压缩模型、搜索引擎，甚至多个来源。</span></div>
-          <div class="term"><b>目标模型</b><span>真正决定最终输出分布的大语言模型。它负责验收草稿，哪些 token 被接受，最终仍以它的判断为准。</span></div>
+<p><b>自回归模型</b>Auto-regressive model。每次根据已有上下文预测下一个 token，然后把新 token 接回上下文继续预测。误区是以为它不能并行计算任何东西；其实训练或固定前缀下的多个位置可以并行，难点在生成时未来 token 尚未确定。</p>
+<p><b>Speculative Decoding</b>推理阶段的解码加速方法。草稿端先提出若干 token，目标模型并行验证这些 token 是否符合自己的输出。它不要求重新训练目标模型，也不直接改变目标模型本身。</p>
+<p><b>预言家</b>视频里的口语比喻，指速度极快、允许犯错的草稿产生器。它可以是小模型、非自回归模型、压缩模型、搜索引擎，甚至多个来源。</p>
+<p><b>目标模型</b>真正决定最终输出分布的大语言模型。它负责验收草稿，哪些 token 被接受，最终仍以它的判断为准。</p>
         </div>
         <div class="box">
-          <div class="term"><b>接受前缀</b><span>从第一个草稿 token 开始，连续与目标模型预测一致的部分。只接受连续前缀，不跳过中间错误去接受后面的 token，因为后面的上下文已经建立在错误 token 上。</span></div>
-          <div class="term"><b>非自回归模型</b><span>Non-autoregressive model。它倾向于一次产生多个位置，速度快但质量可能差。视频强调：质量差不致命，因为它只是预言家，最终仍由目标模型验收。</span></div>
-          <div class="term"><b>模型压缩</b><span>把大模型变小或变快，例如量化、蒸馏等。字幕里把 knowledge distillation 口误成 destination，正确术语是知识蒸馏。压缩后模型可能更容易错，但很适合当草稿端。</span></div>
-          <div class="term"><b>计算换时间</b><span>并行验收会做一些最终丢弃的计算，因此总计算可能增加；但如果硬件能并行处理，用户等待时间会下降。这个权衡是理解本讲的关键。</span></div>
+<p><b>接受前缀</b>从第一个草稿 token 开始，连续与目标模型预测一致的部分。只接受连续前缀，不跳过中间错误去接受后面的 token，因为后面的上下文已经建立在错误 token 上。</p>
+<p><b>非自回归模型</b>Non-autoregressive model。它倾向于一次产生多个位置，速度快但质量可能差。视频强调：质量差不致命，因为它只是预言家，最终仍由目标模型验收。</p>
+<p><b>模型压缩</b>把大模型变小或变快，例如量化、蒸馏等。字幕里把 knowledge distillation 口误成 destination，正确术语是知识蒸馏。压缩后模型可能更容易错，但很适合当草稿端。</p>
+<p><b>计算换时间</b>并行验收会做一些最终丢弃的计算，因此总计算可能增加；但如果硬件能并行处理，用户等待时间会下降。这个权衡是理解本讲的关键。</p>
+<p>你现在应该能做什么：用“谁先猜、谁验收、错了怎么办、成本在哪里”四个问题解释任何一个 Speculative Decoding 变体。</p>
         </div>
       </div>
-      <p class="checkpoint">你现在应该能做什么：用“谁先猜、谁验收、错了怎么办、成本在哪里”四个问题解释任何一个 Speculative Decoding 变体。</p>
-    </section>
-
-    <section id="lecture">
-      <div class="head"><h2>讲义主线：为什么要加速</h2><span class="tag">LECTURE</span></div>
+      </section>
+      <section id="lecture">
+        <div class="head">
+          <h2>讲义主线：为什么要加速</h2>
+          <span class="tag">LECTURE</span>
+        </div>
       <div class="grid2">
         <div class="box">
-          <h3>自回归慢在哪里</h3>
-          <p>语言模型生成一句话时，看起来是在连续写字；从计算角度看，它是在重复运行“给定当前上下文，预测下一个 token”。第一个 token 没出来，第二个 token 的输入就不完整；第二个 token 没出来，第三个 token 的输入也不完整。这个串行依赖让长文本生成很难像普通矩阵运算那样一次全算完。</p>
-          <p>视频把这个痛点讲得很直观：第一个 token 没生成之前，我们没办法生成第二个 token。因此，如果每轮只能吐一个 token，生成越长，等待越明显。聊天短答可能还能接受，但长篇解释、代码生成、批量摘要、长文翻译都会把这个等待放大。</p>
-          <p>Speculative Decoding 的切入点很巧：既然目标模型不能凭空知道未来 token，那就让另一个很快的系统先猜未来。目标模型不需要相信它，只需要检查它。这样把“必须等未来出现”变成了“先假设未来可能是这些 token，再并行验证”。</p>
+<h3>自回归慢在哪里</h3>
+<p>语言模型生成一句话时，看起来是在连续写字；从计算角度看，它是在重复运行“给定当前上下文，预测下一个 token”。第一个 token 没出来，第二个 token 的输入就不完整；第二个 token 没出来，第三个 token 的输入也不完整。这个串行依赖让长文本生成很难像普通矩阵运算那样一次全算完。</p>
+<p>视频把这个痛点讲得很直观：第一个 token 没生成之前，我们没办法生成第二个 token。因此，如果每轮只能吐一个 token，生成越长，等待越明显。聊天短答可能还能接受，但长篇解释、代码生成、批量摘要、长文翻译都会把这个等待放大。</p>
+<p>Speculative Decoding 的切入点很巧：既然目标模型不能凭空知道未来 token，那就让另一个很快的系统先猜未来。目标模型不需要相信它，只需要检查它。这样把“必须等未来出现”变成了“先假设未来可能是这些 token，再并行验证”。</p>
         </div>
         <div class="box soft">
-          <h3>为什么说它像外挂</h3>
-          <p>李宏毅在字幕里反复强调，这个方法和你使用的目标模型没有强绑定关系，也不需要对目标模型重新训练。你可以把它理解成推理时加在模型外面的调度策略：原模型仍然负责最终输出，只是前面多了一个草稿来源，旁边多了一套并行验收流程。</p>
-          <p>这也是“神奇”的地方。通常模型想变快，要换结构、剪枝、量化、蒸馏或重新部署；Speculative Decoding 则可以在不改变原模型权重的情况下减少用户感知延迟。它不是让大模型每一步算得更少，而是让大模型每一轮有机会确认多个 token。</p>
-          <p>但“外挂”不等于没有条件。预言家必须足够快，目标模型必须能高效处理并行前缀，系统也必须接受额外计算资源消耗。否则它只是把问题从等待时间转移到无效计算上。</p>
+<h3>为什么说它像外挂</h3>
+<p>李宏毅在字幕里反复强调，这个方法和你使用的目标模型没有强绑定关系，也不需要对目标模型重新训练。你可以把它理解成推理时加在模型外面的调度策略：原模型仍然负责最终输出，只是前面多了一个草稿来源，旁边多了一套并行验收流程。</p>
+<p>这也是“神奇”的地方。通常模型想变快，要换结构、剪枝、量化、蒸馏或重新部署；Speculative Decoding 则可以在不改变原模型权重的情况下减少用户感知延迟。它让大模型每一轮有机会确认多个 token。</p>
+<p>但“外挂”不等于没有条件。预言家必须足够快，目标模型必须能高效处理并行前缀，系统也必须接受额外计算资源消耗。否则它只是把问题从等待时间转移到无效计算上。</p>
+<p>$$</p>
+<p>直觉公式：有效速度提升 ≈ 每轮可接受 token 数 ÷ 原本每轮 1 个 token。若一轮平均接受 2.4 个 token，用户看到的生成轮数大约降到原来的 1 / 2.4。</p>
+<p>$$</p>
+<p>你现在应该能做什么：解释为什么这个方法加速的是“生成轮数和延迟”，而不是保证总 FLOPs 一定下降。</p>
         </div>
       </div>
-      <div class="formula">直觉公式：有效速度提升 ≈ 每轮可接受 token 数 ÷ 原本每轮 1 个 token。<br>若一轮平均接受 2.4 个 token，用户看到的生成轮数大约降到原来的 1 / 2.4。</div>
-      <p class="checkpoint">你现在应该能做什么：解释为什么这个方法加速的是“生成轮数和延迟”，而不是保证总 FLOPs 一定下降。</p>
-    </section>
-
-    <section id="source">
-      <div class="head"><h2>机制线索：预言家机制</h2><span class="tag">线索</span></div>
+      </section>
+      <section id="source">
+        <div class="head">
+          <h2>机制线索：预言家机制</h2>
+          <span class="tag">线索</span>
+        </div>
       <div class="grid2">
         <div class="box">
-          <h3>一次吐出三个 token 的直觉</h3>
-          <p>假设当前输入是蓝色上下文。预言家快速预测：目标模型接下来会先输出红色 token，再输出黄色 token。于是系统把三份输入同时交给目标模型：原始蓝色上下文、蓝色上下文加红色 token、蓝色上下文加红色加黄色 token。</p>
-          <p>目标模型对第一份输入预测“下一个 token 是什么”，这可以验证红色 token；对第二份输入预测“红色之后下一个 token 是什么”，这可以验证黄色 token；对第三份输入预测“红黄之后下一个 token 是什么”，这给出再往后的新 token。如果红、黄都被目标模型认可，那么这一轮外部看起来就产出了红、黄和第三个新 token。</p>
-          <p>关键点是目标模型并没有跳过自己的判断。它只是利用了 Transformer 对一批前缀并行计算的能力。预言家的 token 像临时脚手架，帮目标模型提前看到多个可能的未来前缀。</p>
+<h3>一次吐出三个 token 的直觉</h3>
+<p>假设当前输入是蓝色上下文。预言家快速预测：目标模型接下来会先输出红色 token，再输出黄色 token。于是系统把三份输入同时交给目标模型：原始蓝色上下文、蓝色上下文加红色 token、蓝色上下文加红色加黄色 token。</p>
+<p>目标模型对第一份输入预测“下一个 token 是什么”，这可以验证红色 token；对第二份输入预测“红色之后下一个 token 是什么”，这可以验证黄色 token；对第三份输入预测“红黄之后下一个 token 是什么”，这给出再往后的新 token。如果红、黄都被目标模型认可，那么这一轮外部看起来就产出了红、黄和第三个新 token。</p>
+<p>关键点是目标模型并没有跳过自己的判断。它只是利用了 Transformer 对一批前缀并行计算的能力。预言家的 token 像临时脚手架，帮目标模型提前看到多个可能的未来前缀。</p>
         </div>
         <div class="box info">
-          <h3>为什么不是直接用预言家生成</h3>
-          <p>视频里提出了一个自然疑问：如果预言家都能猜中，还要大语言模型干什么？答案是，预言家不需要很聪明，它只需要够快且经常猜对前面若干步。它会犯错，而目标模型的工作正是把这些错误挡住。</p>
-          <p>直接用预言家生成，质量会变成预言家的质量；用 Speculative Decoding，最终质量仍由目标模型控制。草稿端负责“提出候选”，目标端负责“同意或否决”。可以把它理解成先写出多个草稿位置，再由目标模型同时检查多个前缀，而不是等完整草稿写完才逐字处理。</p>
-          <p>因此，预言家越接近目标模型，接受的 token 越多，速度越快；预言家越离谱，接受的 token 越少，速度收益越低。</p>
-        </div>
-      </div>
-      <div class="timeline">
-        <div class="box"><h3>普通自回归</h3><p><span class="token t-blue">X</span> → <span class="token t-red">A</span></p><p>第一轮只能得到 A。</p></div>
-        <div class="box"><h3>预言家草稿</h3><p><span class="token t-red">A</span><span class="token t-yellow">B</span></p><p>快速猜未来两个 token。</p></div>
-        <div class="box"><h3>目标模型验收</h3><p><span class="token t-blue">X</span> / <span class="token t-red">A</span> / <span class="token t-yellow">B</span></p><p>三份前缀同批计算。</p></div>
-        <div class="box"><h3>外部效果</h3><p><span class="token t-red">A</span><span class="token t-yellow">B</span><span class="token t-green">C</span></p><p>若前两步猜中，一轮产出三个。</p></div>
-      </div>
-      <div class="codebar"><span class="label">伪代码：草稿和并行验收</span><span class="kind">pseudo</span></div>
-      <pre><code>context = user_prompt
-draft = prophet.generate(context, k=2)          # 例如 [A, B]
+<h3>为什么不是直接用预言家生成</h3>
+<p>视频里提出了一个自然疑问：如果预言家都能猜中，还要大语言模型干什么？答案是，预言家不需要很聪明，它只需要够快且经常猜对前面若干步。它会犯错，而目标模型的工作正是把这些错误挡住。</p>
+<p>直接用预言家生成，质量会变成预言家的质量；用 Speculative Decoding，最终质量仍由目标模型控制。草稿端负责“提出候选”，目标端负责“同意或否决”。可以把它理解成先写出多个草稿位置，再由目标模型同时检查多个前缀，而不是等完整草稿写完才逐字处理。</p>
+<p>因此，预言家越接近目标模型，接受的 token 越多，速度越快；预言家越离谱，接受的 token 越少，速度收益越低。</p>
+<p>普通自回归X → A第一轮只能得到 A。</p>
+<p>预言家草稿AB快速猜未来两个 token。</p>
+<p>目标模型验收X / A / B三份前缀同批计算。</p>
+<p>外部效果ABC若前两步猜中，一轮产出三个。</p>
+<p>伪代码：草稿和并行验收pseudo</p>
+<pre><code class="language-text">context = user_prompt
+draft = prophet.generate(context, k=2) # 例如 [A, B]
 
 prefixes = [
-  context,                                     # 验 A
-  context + [A],                               # 验 B
-  context + [A, B]                             # 生成额外的 C
+ context, # 验 A
+ context + [A], # 验 B
+ context + [A, B] # 生成额外的 C
 ]
 target_outputs = target_model.forward(prefixes)
 
 accepted = longest_prefix_agree(draft, target_outputs)
 context = context + accepted + next_safe_token(target_outputs)</code></pre>
-      <div class="box warn">
-        <h3>Worked case：一轮验收到底提交哪些 token</h3>
-        <p>假设当前上下文是“明天台北的天气”，草稿模型一次猜 3 个 token：<span class="token t-red">可能</span><span class="token t-yellow">会</span><span class="token t-gray">下雪</span>。目标模型同批计算四个前缀：原上下文、原上下文+可能、原上下文+可能+会、原上下文+可能+会+下雪。</p>
-        <div class="table-wrap"><table class="metric-table">
-          <tr><th>被目标模型检查的前缀</th><th>目标模型给出的下一个 token</th><th>用来验证</th><th>结果</th></tr>
-          <tr><td>明天台北的天气</td><td><span class="token t-red">可能</span></td><td>草稿第 1 个 token</td><td>接受“可能”</td></tr>
-          <tr><td>明天台北的天气可能</td><td><span class="token t-yellow">会</span></td><td>草稿第 2 个 token</td><td>接受“会”</td></tr>
-          <tr><td>明天台北的天气可能会</td><td><span class="token t-blue">下雨</span></td><td>草稿第 3 个 token</td><td>拒绝“下雪”</td></tr>
-          <tr><td>明天台北的天气可能会下雪</td><td><span class="token t-green">。</span></td><td>错误前缀后的预测</td><td>丢弃，不能越过错误继续用</td></tr>
-        </table></div>
-        <p>这一轮最终提交的是“可能”“会”，再接上目标模型在正确前缀下给出的“下雨”。外部看到 3 个可信 token，但系统没有相信草稿里的“下雪”。你现在应该能做的事：给任意一组草稿 token 标出“连续接受到哪里、从哪里开始丢弃、目标模型补上的第一个 token 是什么”。</p>
-      </div>
-      <p class="checkpoint">你现在应该能做什么：把“输入、草稿、并行前缀、目标模型输出、接受前缀”五个对象在一张纸上画出来。</p>
-    </section>
-
-    <section id="example">
-      <div class="head"><h2>最小例子：犯错与验收</h2><span class="tag">EXAMPLE</span></div>
-      <div class="grid2">
-        <div class="box danger">
-          <h3>预言家第二步猜错时</h3>
-          <p>视频给了一个很重要的错误场景：预言家先猜红色 token，这一步对；第二步猜灰色 token，但目标模型真正会输出黄色 token。系统仍会把“输入”“输入+红色”“输入+红色+灰色”一起喂给目标模型。目标模型算完后，我们就能比较：第一步草稿红色与目标模型一致，所以红色可接受；第二步草稿灰色与目标模型不一致，所以灰色及其后续全部不能用。</p>
-          <p>为什么灰色后面的绿色输出也不能信？因为它是在错误前缀“输入+红色+灰色”上算出来的。即使绿色看起来合理，它的上下文已经偏离目标模型真实路径，所以必须丢弃。Speculative Decoding 接受的是连续正确前缀，不会越过错误继续拿后面的 token。</p>
-          <p>即便如此，这轮仍然赚到了：原本一轮只能得到红色一个 token；现在因为第一步猜中，除了红色，还能从目标模型知道第二步应该是黄色，因此一轮产出两个可信 token。速度收益从三倍退到两倍，但结果不坏。</p>
-        </div>
-        <div class="box">
-          <h3>全部猜错时为什么近似不赔</h3>
-          <p>最糟糕的情况是预言家烂到不行，草稿 token 全部不被目标模型接受。这时所有带有草稿 token 的前缀输出都不能用，只有原始上下文那一路得到的第一个目标 token 是可信的。也就是说，这一轮至少还和普通自回归一样拿到了一个 token。</p>
-          <p>这就是视频中“几乎不赚不赔”的意思：从用户看到的 token 数量看，你没有比普通生成更差；但系统确实损失了预言家的时间和那些无用前缀的计算。所以更精确地说，是延迟上的下界接近普通生成，计算资源上可能更贵。</p>
-          <p>这也解释了为什么预言家必须“奇快无比”。如果草稿端本身慢，全部猜错时就会明显拖累；如果草稿端很快，失败代价主要是额外算力，而不是等待时间。</p>
-        </div>
-      </div>
-      <div class="viz-panel">
-        <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <h3>草稿长度与命中</h3>
-            <div class="slider-row"><span>草稿 token 数</span><input id="draftLen" type="range" min="1" max="6" value="3"><b id="draftOut">3</b></div>
-            <div class="slider-row"><span>连续猜中数</span><input id="hitLen" type="range" min="0" max="6" value="2"><b id="hitOut">2</b></div>
-            <div class="meter"><div class="fill" id="speedFill"></div></div>
-            <p id="speedText" class="checkpoint"></p>
-          </div>
-          <div class="viz-cell">
-            <h3>验收状态</h3>
-            <div id="tokenViz" class="accept-list"></div>
-            <div class="seg">
-              <button data-mode="latency" class="active">看延迟</button>
-              <button data-mode="compute">看计算</button>
-              <button data-mode="quality">看质量</button>
-            </div>
-            <p id="modeText" class="checkpoint"></p>
-          </div>
-        </div>
-      </div>
-      <p class="checkpoint">你现在应该能做什么：解释“接受前缀”为什么保证不会把预言家的错误直接交给用户。</p>
-    </section>
-
-    <section id="viz">
-      <div class="head"><h2>交互观察：谁能当预言家</h2><span class="tag">OBSERVE</span></div>
-      <div class="grid2">
-        <div class="box">
-          <h3>候选一：非自回归模型</h3>
-          <p>非自回归模型的特点是快，因为它倾向于一次产生多个位置。缺点是生成质量通常不如自回归模型，容易犯错。放在普通生成场景里，这个缺点很致命；但放在 Speculative Decoding 里，它反而很适合当预言家：快是刚需，错可以被目标模型拦住。</p>
-          <p>从这个角度看，Speculative Decoding 可以被理解成非自回归模型和自回归模型的结合。非自回归模型提供草稿，自回归大模型提供最终验收。一个负责速度，一个负责质量。</p>
-        </div>
-        <div class="box soft">
-          <h3>候选二：压缩后的小模型</h3>
-          <p>另一条路线是从目标模型或同族模型压缩出一个更小、更快的草稿模型。常见手段包括量化、剪枝、知识蒸馏等。字幕中说到 knowledge destination，这里应理解为 knowledge distillation，即知识蒸馏。</p>
-          <p>小模型压缩后可能“脑袋不好使”，输出质量下降；但只要它和目标模型在常见前缀上足够相似，就能大量猜中前几个 token。它不需要独立交付最终答案，只需要快速提供候选。</p>
-        </div>
-        <div class="box info">
-          <h3>候选三：搜索引擎或资料库</h3>
-          <p>视频还提到一种很有意思的做法：预言家不一定是语言模型。假设当前上下文是“语言模型”，系统可以去资料库里搜索常见续写，例如“经常使用在许多自然语言处理方面的应用”。搜索速度如果足够快，这段检索到的常见续写也可以作为草稿。</p>
-          <p>这说明 Speculative Decoding 的本质不是“小模型加大模型”，而是“快速草稿加目标模型验收”。草稿来源可以很灵活，只要它便宜、快、与目标模型输出有一定重合。</p>
         </div>
         <div class="box warn">
-          <h3>候选四：多个预言家</h3>
-          <p>一定只能有一个预言家吗？视频答案是否定的。多个预言家可以各自提出草稿，目标模型再比较不同草稿路径。哪个草稿和目标模型更一致，哪个就能帮助接受更多 token。</p>
-          <p>多预言家提高了命中机会，但也增加并行分支和计算成本。它适合硬件并行资源充足、延迟目标很紧、草稿来源互补的场景。若分支太多却命中率一般，额外计算会迅速膨胀。</p>
+<h3>Worked case：一轮验收到底提交哪些 token</h3>
+<p>假设当前上下文是“明天台北的天气”，草稿模型一次猜 3 个 token：可能会下雪。目标模型同批计算四个前缀：原上下文、原上下文+可能、原上下文+可能+会、原上下文+可能+会+下雪。</p>
+<p>被目标模型检查的前缀目标模型给出的下一个 token用来验证结果</p>
+<p>明天台北的天气可能草稿第 1 个 token接受“可能”</p>
+<p>明天台北的天气可能会草稿第 2 个 token接受“会”</p>
+<p>明天台北的天气可能会下雨草稿第 3 个 token拒绝“下雪”</p>
+<p>明天台北的天气可能会下雪。错误前缀后的预测丢弃，不能越过错误继续用</p>
+<p>这一轮最终提交的是“可能”“会”，再接上目标模型在正确前缀下给出的“下雨”。外部看到 3 个可信 token，但系统没有相信草稿里的“下雪”。你现在应该能做的事：给任意一组草稿 token 标出“连续接受到哪里、从哪里开始丢弃、目标模型补上的第一个 token 是什么”。</p>
+<p>你现在应该能做什么：把“输入、草稿、并行前缀、目标模型输出、接受前缀”五个对象在一张纸上画出来。</p>
         </div>
       </div>
-      <table style="margin-top:12px">
-        <tr><th>预言家来源</th><th>优势</th><th>风险</th><th>适合判断</th></tr>
-        <tr><td>非自回归模型</td><td>一次生成多个 token，速度快</td><td>质量弱，可能频繁被拒绝</td><td>是否能稳定命中前缀</td></tr>
-        <tr><td>压缩小模型</td><td>部署便宜，接近目标模型风格</td><td>压缩过度会降低接受率</td><td>速度收益是否超过额外计算</td></tr>
-        <tr><td>搜索引擎/资料库</td><td>对固定短语和常见续写很快</td><td>可能贴出不合上下文的续写</td><td>检索结果是否与目标模型偏好一致</td></tr>
-        <tr><td>多个预言家</td><td>提高至少一条路径猜中的概率</td><td>分支过多导致算力浪费</td><td>硬件并行是否足够、分支是否互补</td></tr>
-      </table>
-      <p class="checkpoint">你现在应该能做什么：面对一个草稿来源，判断它是否足够快、是否经常猜中、猜错时代价是什么。</p>
-    </section>
-
-    <section id="diagnosis">
-      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
-      <p>下面的例子不是可运行实现，而是把视频流程压成最小可读伪代码。重点看每一步的语义：草稿端只提出候选，目标模型负责批量验收，系统只提交连续正确前缀。</p>
-      <div class="codebar"><span class="label">正确示例：接受连续正确前缀</span><span class="kind">python-like</span></div>
-      <pre><code>def speculative_step(context, prophet, target, k=3):
-    draft = prophet.fast_draft(context, k)      # 例如 ["红", "灰", "绿"]
-    prefixes = [context + draft[:i] for i in range(k + 1)]
-
-    # 目标模型一次检查多个前缀：
-    # prefixes[0] 检查 draft[0]
-    # prefixes[1] 检查 draft[1]
-    # prefixes[2] 检查 draft[2]
-    target_next = target.forward_batch(prefixes)
-
-    accepted = []
-    for i, token in enumerate(draft):
-        if target_next[i] == token:
-            accepted.append(token)
-        else:
-            accepted.append(target_next[i])     # 错误处改用目标模型 token
-            break
-
-    return context + accepted</code></pre>
-      <div class="box soft">
-        <h3>逐行拆解</h3>
-        <p><code>fast_draft</code> 表示预言家先猜 k 个 token，它的目标是快，不是最终可信。<code>prefixes</code> 构造出一组前缀：原始上下文、加一个草稿 token、加两个草稿 token，依此类推。<code>forward_batch</code> 是加速的关键，因为目标模型可以在一轮里并行处理这些前缀。</p>
-        <p>循环里的比较体现了验收逻辑。只要目标模型在第 i 个前缀下的输出等于草稿第 i 个 token，就接受；一旦不一致，就把目标模型自己的 token 作为安全输出，并停止使用更后面的草稿。这样做的原因是后续草稿建立在错误上下文上，不能继续信。</p>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>最小例子：犯错与验收</h2>
+          <span class="tag">EXAMPLE</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>预言家第二步猜错时</h3>
+<p>视频给了一个很重要的错误场景：预言家先猜红色 token，这一步对；第二步猜灰色 token，但目标模型真正会输出黄色 token。系统仍会把“输入”“输入+红色”“输入+红色+灰色”一起喂给目标模型。目标模型算完后，我们就能比较：第一步草稿红色与目标模型一致，所以红色可接受；第二步草稿灰色与目标模型不一致，所以灰色及其后续全部不能用。</p>
+<p>为什么灰色后面的绿色输出也不能信？因为它是在错误前缀“输入+红色+灰色”上算出来的。即使绿色看起来合理，它的上下文已经偏离目标模型真实路径，所以必须丢弃。Speculative Decoding 接受的是连续正确前缀，不会越过错误继续拿后面的 token。</p>
+<p>即便如此，这轮仍然赚到了：原本一轮只能得到红色一个 token；现在因为第一步猜中，除了红色，还能从目标模型知道第二步应该是黄色，因此一轮产出两个可信 token。速度收益从三倍退到两倍，但结果不坏。</p>
+        </div>
+        <div class="box">
+<h3>全部猜错时为什么近似不赔</h3>
+<p>最糟糕的情况是预言家烂到不行，草稿 token 全部不被目标模型接受。这时所有带有草稿 token 的前缀输出都不能用，只有原始上下文那一路得到的第一个目标 token 是可信的。也就是说，这一轮至少还和普通自回归一样拿到了一个 token。</p>
+<p>这就是视频中“几乎不赚不赔”的意思：从用户看到的 token 数量看，你没有比普通生成更差；但系统确实损失了预言家的时间和那些无用前缀的计算。所以更精确地说，是延迟上的下界接近普通生成，计算资源上可能更贵。</p>
+<p>这也解释了为什么预言家必须“奇快无比”。如果草稿端本身慢，全部猜错时就会明显拖累；如果草稿端很快，失败代价主要是额外算力，而不是等待时间。</p>
+<p>交互观察OBSERVE</p>
+<p>草稿长度与命中</p>
+<p>草稿 token 数<b>3</b></p>
+<p>连续猜中数<b>2</b></p>
+<p>验收状态</p>
+<p>看延迟</p>
+<p>看计算</p>
+<p>看质量</p>
+<p>你现在应该能做什么：解释“接受前缀”为什么保证不会把预言家的错误直接交给用户。</p>
+        </div>
       </div>
-      <div class="codebar"><span class="label">错误示例：越过错误继续接受</span><span class="kind">anti-pattern</span></div>
-      <pre><code># 错误：只要某个位置猜中就接受，不管前面有没有错
-accepted = []
-for i, token in enumerate(draft):
-    if target_next[i] == token:
-        accepted.append(token)
-
-# 问题：如果 draft[1] 已经错了，draft[2] 的验证上下文也错了。
-# 即使 draft[2] 看起来匹配，也不能把它交给用户。</code></pre>
-      <div class="box danger">
-        <h3>集中误区</h3>
-        <ol>
-          <li>误以为预言家必须和目标模型一样强。错因：把草稿生成和最终验收混成一件事。修法：预言家只要快且经常猜中前缀。</li>
-          <li>误以为猜错会污染最终答案。错因：忘了目标模型会逐位验收。修法：只接受连续正确前缀，错误处之后丢弃。</li>
-          <li>误以为速度提升完全免费。错因：只看用户等待时间，不看额外前缀计算。修法：同时记录延迟、吞吐、接受率和算力消耗。</li>
-          <li>误以为草稿越长越好。错因：草稿越长，后面越容易基于错误前缀白算。修法：根据接受率选择合适 k。</li>
-          <li>误以为它只能配小语言模型。错因：把一种实现当成本质。修法：任何快速且有命中率的来源都可能当预言家。</li>
-        </ol>
+      </section>
+      <section id="viz">
+        <div class="head">
+          <h2>交互观察：谁能当预言家</h2>
+          <span class="tag">OBSERVE</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>候选一：非自回归模型</h3>
+<p>非自回归模型的特点是快，因为它倾向于一次产生多个位置。缺点是生成质量通常不如自回归模型，容易犯错。放在普通生成场景里，这个缺点很致命；但放在 Speculative Decoding 里，它反而很适合当预言家：快是刚需，错可以被目标模型拦住。</p>
+<p>从这个角度看，Speculative Decoding 可以被理解成非自回归模型和自回归模型的结合。非自回归模型提供草稿，自回归大模型提供最终验收。一个负责速度，一个负责质量。</p>
+        </div>
+        <div class="box soft">
+<h3>候选二：压缩后的小模型</h3>
+<p>另一条路线是从目标模型或同族模型压缩出一个更小、更快的草稿模型。常见手段包括量化、剪枝、知识蒸馏等。字幕中说到 knowledge destination，这里应理解为 knowledge distillation，即知识蒸馏。</p>
+<p>小模型压缩后可能“脑袋不好使”，输出质量下降；但只要它和目标模型在常见前缀上足够相似，就能大量猜中前几个 token。它不需要独立交付最终答案，只需要快速提供候选。</p>
+        </div>
+        <div class="box info">
+<h3>候选三：搜索引擎或资料库</h3>
+<p>视频还提到一种很有意思的做法：预言家不一定是语言模型。假设当前上下文是“语言模型”，系统可以去资料库里搜索常见续写，例如“经常使用在许多自然语言处理方面的应用”。搜索速度如果足够快，这段检索到的常见续写也可以作为草稿。</p>
+<p>这说明 Speculative Decoding 的本质“快速草稿加目标模型验收”。草稿来源可以很灵活，只要它便宜、快、与目标模型输出有一定重合。</p>
+        </div>
+        <div class="box warn">
+<h3>候选四：多个预言家</h3>
+<p>一定只能有一个预言家吗？视频答案是否定的。多个预言家可以各自提出草稿，目标模型再比较不同草稿路径。哪个草稿和目标模型更一致，哪个就能帮助接受更多 token。</p>
+<p>多预言家提高了命中机会，但也增加并行分支和计算成本。它适合硬件并行资源充足、延迟目标很紧、草稿来源互补的场景。若分支太多却命中率一般，额外计算会迅速膨胀。</p>
+<table class="metric-table">
+<tr><th>预言家来源</th><th>优势</th><th>风险</th><th>适合判断</th></tr>
+<tr><td>非自回归模型</td><td>一次生成多个 token，速度快</td><td>质量弱，可能频繁被拒绝</td><td>是否能稳定命中前缀</td></tr>
+<tr><td>压缩小模型</td><td>部署便宜，接近目标模型风格</td><td>压缩过度会降低接受率</td><td>速度收益是否超过额外计算</td></tr>
+<tr><td>搜索引擎/资料库</td><td>对固定短语和常见续写很快</td><td>可能贴出不合上下文的续写</td><td>检索结果是否与目标模型偏好一致</td></tr>
+<tr><td>多个预言家</td><td>提高至少一条路径猜中的概率</td><td>分支过多导致算力浪费</td><td>硬件并行是否足够、分支是否互补</td></tr>
+</table>
+<p>你现在应该能做什么：面对一个草稿来源，判断它是否足够快、是否经常猜中、猜错时代价是什么。</p>
+        </div>
       </div>
-    </section>
+      </section>
+      <section id="diagnosis">
+        <div class="head">
+          <h2>误区诊断</h2>
+          <span class="tag">DIAGNOSIS</span>
+        </div>
+<p>下面的例子把视频流程压成最小可读伪代码。重点看每一步的语义：草稿端只提出候选，目标模型负责批量验收，系统只提交连续正确前缀。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-diagnosis-1">复制</button></div>
+        <pre id="code-diagnosis-1" data-export-context="代码" data-export-lang="text"><code class="language-text">def speculative_step(context, prophet, target, k=3):
+ draft = prophet.fast_draft(context, k) # 例如 ["红", "灰", "绿"]
+ prefixes = [context + draft[:i] for i in range(k + 1)]
 
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
+ # 目标模型一次检查多个前缀：
+ # prefixes[0] 检查 draft[0]
+ # prefixes[1] 检查 draft[1]
+ # prefixes[2] 检查 draft[2]
+ target_next = target.forward_batch(prefixes)
+
+ accepted = []
+ for i, token in enumerate(draft):
+ if target_next[i] == token:
+ accepted.append(token)
+ else:
+ accepted.append(target_next[i]) # 错误处改用目标模型 token
+ break
+
+ return context + accepted</code></pre>
+        </div>
+        <div class="box">
+<h3>集中误区</h3>
+<ol>
+<li>误以为预言家必须和目标模型一样强。错因：把草稿生成和最终验收混成一件事。修法：预言家只要快且经常猜中前缀。</li>
+<li>误以为猜错会污染最终答案。错因：忘了目标模型会逐位验收。修法：只接受连续正确前缀，错误处之后丢弃。</li>
+<li>误以为速度提升完全免费。错因：只看用户等待时间，不看额外前缀计算。修法：同时记录延迟、吞吐、接受率和算力消耗。</li>
+<li>误以为草稿越长越好。错因：草稿越长，后面越容易基于错误前缀白算。修法：根据接受率选择合适 k。</li>
+<li>误以为它只能配小语言模型。错因：把一种实现当成本质。修法：任何快速且有命中率的来源都可能当预言家。</li>
+</ol>
+        </div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">DRILL</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答前先抓主线</strong><p>每题尽量按“自回归瓶颈 → 预言家草稿 → 目标模型验收 → 接受或丢弃 → 成本权衡”来组织。诊断题必须写错因、后果和修法。</p></div>
-        <div class="review-card"><strong>检查答案的方式</strong><p>费曼题要串起 Speculative Decoding、自回归、预言家、草稿模型、目标模型、并行验收、接受、拒绝、速度、计算资源。</p></div>
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          <div class="quick-review">REMIND 短答也要写出“谁做什么”。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 1. Speculative Decoding 的目标是重新训练目标模型，让它本身变小。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、基础概念</h3><p>先检查你有没有把术语放到正确位置。</p></div><div class="quick-review"><b>REMIND</b>短答也要写出“谁做什么”。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-title="1. Speculative Decoding 的目标是重新训练目标模型，让它本身变小。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. Speculative Decoding 的目标是重新训练目标模型，让它本身变小。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div>
-          <div class="q" data-role="homework" data-title="2. 自回归生成慢的核心原因是什么？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. 自回归生成慢的核心原因是什么？</h3><div class="choices"><label><input type="radio" name="q2" value="每个新 token 依赖前一个 token">每个新 token 依赖前一个 token</label><label><input type="radio" name="q2" value="模型永远不能并行做矩阵计算">模型永远不能并行做矩阵计算</label><label><input type="radio" name="q2" value="tokenizer 会改变事实">tokenizer 会改变事实</label></div></div>
-          <div class="q short" data-role="homework" data-title="3. 用一句话解释“预言家”在本讲中指什么。"><div class="q-meta"><span class="pill">简答</span></div><h3>3. 用一句话解释“预言家”在本讲中指什么。</h3><textarea name="q3"></textarea></div>
-          <div class="q short" data-role="homework" data-title="4. 目标模型在 Speculative Decoding 里负责什么？"><div class="q-meta"><span class="pill">简答</span></div><h3>4. 目标模型在 Speculative Decoding 里负责什么？</h3><textarea name="q4"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 2. 自回归生成慢的核心原因是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="每个新 token 依赖前一个 token">每个新 token 依赖前一个 token</label>
+      <label><input type="radio" name="q?" value="模型永远不能并行做矩阵计算">模型永远不能并行做矩阵计算</label>
+      <label><input type="radio" name="q?" value="tokenizer 会改变事实">tokenizer 会改变事实</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 3. 用一句话解释“预言家”在本讲中指什么。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 4. 目标模型在 Speculative Decoding 里负责什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、流程推理</h3><p>这一组检查你能不能复现视频里的红黄灰 token 推演。</p></div><div class="quick-review"><b>REMIND</b>答题时写出“连续正确前缀”。</div></div>
+        <div class="group-head">
+          <div><h3>二、流程推理</h3></div>
+          <div class="quick-review">REMIND 答题时写出“连续正确前缀”。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="5. 预言家猜 A、B 两个 token 都正确时，目标模型一轮最多可以让外部看到几个新 token？为什么？"><div class="q-meta"><span class="pill">推理</span></div><h3>5. 预言家猜 A、B 两个 token 都正确时，目标模型一轮最多可以让外部看到几个新 token？为什么？</h3><textarea name="q5"></textarea></div>
-          <div class="q short" data-role="homework" data-title="6. 预言家第一步猜对、第二步猜错时，哪些 token 可以输出，哪些必须丢弃？"><div class="q-meta"><span class="pill">推理</span></div><h3>6. 预言家第一步猜对、第二步猜错时，哪些 token 可以输出，哪些必须丢弃？</h3><textarea name="q6"></textarea></div>
-          <div class="q short" data-role="homework" data-title="7. 为什么不能越过中间错误，继续接受后面看似正确的 token？"><div class="q-meta"><span class="pill">解释</span></div><h3>7. 为什么不能越过中间错误，继续接受后面看似正确的 token？</h3><textarea name="q7"></textarea></div>
-          <div class="q short" data-role="homework" data-title="8. 如果所有草稿 token 都错了，这一轮至少还能得到什么？额外损失是什么？"><div class="q-meta"><span class="pill">边界</span></div><h3>8. 如果所有草稿 token 都错了，这一轮至少还能得到什么？额外损失是什么？</h3><textarea name="q8"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">推理</span></div>
+        <h3><b>Q:</b> 5. 预言家猜 A、B 两个 token 都正确时，目标模型一轮最多可以让外部看到几个新 token？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">推理</span></div>
+        <h3><b>Q:</b> 6. 预言家第一步猜对、第二步猜错时，哪些 token 可以输出，哪些必须丢弃？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 7. 为什么不能越过中间错误，继续接受后面看似正确的 token？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">边界</span></div>
+        <h3><b>Q:</b> 8. 如果所有草稿 token 都错了，这一轮至少还能得到什么？额外损失是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>三、预言家选择</h3><p>这一组把不同草稿来源放进同一个判断框架里。</p></div><div class="quick-review"><b>REMIND</b>判断标准：快、命中率、失败代价。</div></div>
+        <div class="group-head">
+          <div><h3>三、预言家选择</h3></div>
+          <div class="quick-review">REMIND 判断标准：快、命中率、失败代价。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="9. 为什么非自回归模型适合当预言家，却不一定适合直接交付最终答案？"><div class="q-meta"><span class="pill">对照</span></div><h3>9. 为什么非自回归模型适合当预言家，却不一定适合直接交付最终答案？</h3><textarea name="q9"></textarea></div>
-          <div class="q short" data-role="homework" data-title="10. 量化或知识蒸馏得到的小模型当预言家，优势和风险分别是什么？"><div class="q-meta"><span class="pill">对照</span></div><h3>10. 量化或知识蒸馏得到的小模型当预言家，优势和风险分别是什么？</h3><textarea name="q10"></textarea></div>
-          <div class="q short" data-role="homework" data-title="11. 搜索引擎或资料库为什么也可能当预言家？它最容易在哪类上下文里失效？"><div class="q-meta"><span class="pill">迁移</span></div><h3>11. 搜索引擎或资料库为什么也可能当预言家？它最容易在哪类上下文里失效？</h3><textarea name="q11"></textarea></div>
-          <div class="q short" data-role="homework" data-title="12. 多个预言家能提高什么，代价又是什么？"><div class="q-meta"><span class="pill">权衡</span></div><h3>12. 多个预言家能提高什么，代价又是什么？</h3><textarea name="q12"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 9. 为什么非自回归模型适合当预言家，却不一定适合直接交付最终答案？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 10. 量化或知识蒸馏得到的小模型当预言家，优势和风险分别是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 11. 搜索引擎或资料库为什么也可能当预言家？它最容易在哪类上下文里失效？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">权衡</span></div>
+        <h3><b>Q:</b> 12. 多个预言家能提高什么，代价又是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>四、错误诊断</h3><p>请按错因、后果、修法回答。</p></div><div class="quick-review"><b>REMIND</b>不要只写“错了”，要写为什么会出事。</div></div>
+        <div class="group-head">
+          <div><h3>四、错误诊断</h3></div>
+          <div class="quick-review">REMIND 不要只写“错了”，要写为什么会出事。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="13. 有人说“预言家如果会错，最终答案一定会被污染”。诊断这句话。" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 有人说“预言家如果会错，最终答案一定会被污染”。诊断这句话。</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q13"></textarea></div>
-          <div class="q short" data-role="homework" data-title="14. 有人只报告速度提升，不报告接受率和算力消耗。这个评估缺什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. 有人只报告速度提升，不报告接受率和算力消耗。这个评估缺什么？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q14"></textarea></div>
-          <div class="q short" data-role="homework" data-title="15. 草稿长度 k 设得很大，但大多数请求第一二步就错。会发生什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. 草稿长度 k 设得很大，但大多数请求第一二步就错。会发生什么？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q15"></textarea></div>
-          <div class="q short" data-role="homework" data-title="16. 系统把所有匹配位置都接受，而不是只接受连续前缀。错误在哪里？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 系统把所有匹配位置都接受，而不是只接受连续前缀。错误在哪里？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q16"></textarea></div>
-          <div class="q short" data-role="homework" data-title="17. 预言家和目标模型的 tokenizer 不一致，可能导致什么问题？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>17. 预言家和目标模型的 tokenizer 不一致，可能导致什么问题？</h3><div class="solve-note">按“错因 / 后果 / 修法”三点回答。</div><textarea name="q17"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 13. 有人说“预言家如果会错，最终答案一定会被污染”。诊断这句话。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 14. 有人只报告速度提升，不报告接受率和算力消耗。这个评估缺什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 15. 草稿长度 k 设得很大，但大多数请求第一二步就错。会发生什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 16. 系统把所有匹配位置都接受，而不是只接受连续前缀。错误在哪里？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 17. 预言家和目标模型的 tokenizer 不一致，可能导致什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>五、例子与计算</h3><p>这一组检查你能不能把伪代码和速度直觉连起来。</p></div><div class="quick-review"><b>REMIND</b>算速度时先看平均接受 token 数。</div></div>
+        <div class="group-head">
+          <div><h3>五、例子与计算</h3></div>
+          <div class="quick-review">REMIND 算速度时先看平均接受 token 数。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="18. 在伪代码中，prefixes 为什么要包含 context、context+A、context+A+B？"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>18. 在伪代码中，prefixes 为什么要包含 context、context+A、context+A+B？</h3><textarea name="q18"></textarea></div>
-          <div class="q short" data-role="homework" data-title="19. 如果平均每轮接受 2 个草稿 token，并额外得到 1 个目标 token，直觉速度约是普通生成的几倍？"><div class="q-meta"><span class="pill">估算</span></div><h3>19. 如果平均每轮接受 2 个草稿 token，并额外得到 1 个目标 token，直觉速度约是普通生成的几倍？</h3><textarea name="q19"></textarea></div>
-          <div class="q short" data-role="homework" data-title="20. 为什么说 Speculative Decoding 是用计算资源换等待时间？"><div class="q-meta"><span class="pill">解释</span></div><h3>20. 为什么说 Speculative Decoding 是用计算资源换等待时间？</h3><textarea name="q20"></textarea></div>
-          <div class="q short" data-role="homework" data-title="21. 如果硬件批处理效率很差，这个方法的收益会怎样变化？"><div class="q-meta"><span class="pill">边界</span></div><h3>21. 如果硬件批处理效率很差，这个方法的收益会怎样变化？</h3><textarea name="q21"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">代码阅读</span></div>
+        <h3><b>Q:</b> 18. 在伪代码中，prefixes 为什么要包含 context、context+A、context+A+B？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">估算</span></div>
+        <h3><b>Q:</b> 19. 如果平均每轮接受 2 个草稿 token，并额外得到 1 个目标 token，直觉速度约是普通生成的几倍？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 20. 为什么说 Speculative Decoding 是用计算资源换等待时间？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">边界</span></div>
+        <h3><b>Q:</b> 21. 如果硬件批处理效率很差，这个方法的收益会怎样变化？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>六、表达输出</h3><p>最后检查你能不能讲给别人听。</p></div><div class="quick-review"><b>REMIND</b>先讲直觉，再上术语。</div></div>
+        <div class="group-head">
+          <div><h3>六、表达输出</h3></div>
+          <div class="quick-review">REMIND 先讲直觉，再上术语。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q short" data-role="homework" data-title="22. 面试官问：Speculative Decoding 为什么不需要重新训练目标模型？你怎么答？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>22. 面试官问：Speculative Decoding 为什么不需要重新训练目标模型？你怎么答？</h3><textarea name="q22"></textarea></div>
-          <div class="q short" data-role="homework" data-title="23. 请用一个日常系统例子解释“草稿端可以错，验收端必须准”。"><div class="q-meta"><span class="pill">类比解释</span></div><h3>23. 请用一个日常系统例子解释“草稿端可以错，验收端必须准”。</h3><textarea name="q23"></textarea></div>
-          <div class="q short" data-role="homework" data-title="24. 写出上线 Speculative Decoding 前你会看的 5 个指标或检查项。"><div class="q-meta"><span class="pill">清单</span></div><h3>24. 写出上线 Speculative Decoding 前你会看的 5 个指标或检查项。</h3><textarea name="q24"></textarea></div>
-          <div class="q full" data-role="homework" data-title="25. 用 6-9 句话费曼解释 Speculative Decoding 的完整主线。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>25. 用 6-9 句话费曼解释 Speculative Decoding 的完整主线。</h3><div class="solve-note">必须串联：自回归、预言家、草稿模型、目标模型、并行验收、接受、拒绝、速度、计算资源。</div><textarea name="q25"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 22. 面试官问：Speculative Decoding 为什么不需要重新训练目标模型？你怎么答？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">类比解释</span></div>
+        <h3><b>Q:</b> 23. 请用一个日常系统例子解释“草稿端可以错，验收端必须准”。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 24. 写出上线 Speculative Decoding 前你会看的 5 个指标或检查项。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 25. 用 6-9 句话费曼解释 Speculative Decoding 的完整主线。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
-
+      </section>
     <section id="export">
-      <div class="head"><h2>自学记录</h2><span class="tag">记录</span></div>
-      <p class="muted">完成练习后生成 Markdown 学习记录，方便自查和讨论。记录会保留题干摘要和你的答案。</p>
-      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../../assets/study-page.js"></script>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){
-  const max=document.documentElement.scrollHeight-innerHeight;
-  progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";
-  let current=sections[0]?.id;
-  for(const section of sections){
-    const rect=section.getBoundingClientRect();
-    if(rect.top<innerHeight*.36) current=section.id;
-    section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);
-  }
-  navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));
-}
-addEventListener("scroll",updateReadingState,{passive:true});
-addEventListener("resize",updateReadingState);
-updateReadingState();
-function fallbackCopy(text,onOk,onFail){
-  const ta=document.createElement("textarea");
-  ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";
-  document.body.appendChild(ta);ta.focus();ta.select();
-  try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}
-}
-function copyText(text,onOk,onFail){
-  if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}
-  else fallbackCopy(text,onOk,onFail);
-}
-document.querySelectorAll(".codebar").forEach(bar=>{
-  const btn=document.createElement("button");
-  btn.type="button";btn.className="copy-code";btn.textContent="复制";
-  btn.addEventListener("click",()=>{
-    const code=bar.nextElementSibling?.innerText||"";
-    copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});
-  });
-  bar.appendChild(btn);
-});
-const draftLen=document.getElementById("draftLen");
-const hitLen=document.getElementById("hitLen");
-function updateSpecViz(){
-  const draft=Number(draftLen.value);
-  hitLen.max=String(draft);
-  if(Number(hitLen.value)>draft) hitLen.value=String(draft);
-  const hit=Number(hitLen.value);
-  document.getElementById("draftOut").textContent=draft;
-  document.getElementById("hitOut").textContent=hit;
-  const visible=hit+1;
-  const pct=Math.min(100,visible/(draft+1)*100);
-  document.getElementById("speedFill").style.width=pct+"%";
-  document.getElementById("speedText").textContent=`本轮草稿 ${draft} 个，连续猜中 ${hit} 个；外部可安全看到约 ${visible} 个新 token。普通生成同等轮数通常只看到 1 个。`;
-  const viz=document.getElementById("tokenViz");
-  viz.innerHTML="";
-  for(let i=0;i<draft;i++){
-    const s=document.createElement("span");
-    s.textContent=`草稿${i+1} ${i<hit?"接受":"拒绝"}`;
-    s.style.background=i<hit?"#eaf4ef":"#ffede8";
-    viz.appendChild(s);
-  }
-  const final=document.createElement("span");
-  final.textContent="目标模型安全 token";
-  final.style.background="#eaf0f8";
-  viz.appendChild(final);
-}
-draftLen.addEventListener("input",updateSpecViz);
-hitLen.addEventListener("input",updateSpecViz);
-updateSpecViz();
-const modeText={
-  latency:"看延迟时，关注平均每轮安全吐出多少 token。接受前缀越长，串行轮数越少。",
-  compute:"看计算时，关注预言家耗时、目标模型并行前缀数量，以及被丢弃分支造成的浪费。",
-  quality:"看质量时，关注最终是否仍由目标模型验收。只要验收规则正确，预言家错误不会直接交付。"
-};
-document.querySelectorAll("[data-mode]").forEach(btn=>btn.addEventListener("click",()=>{
-  document.querySelectorAll("[data-mode]").forEach(b=>b.classList.toggle("active",b===btn));
-  document.getElementById("modeText").textContent=modeText[btn.dataset.mode];
-}));
-document.getElementById("modeText").textContent=modeText.latency;
-function valueOfQuestion(q){
-  const radio=q.querySelector("input[type=radio]:checked");
-  if(radio) return radio.value;
-  const text=q.querySelector("textarea,input[type=text],select");
-  return text?text.value.trim():"";
-}
-function questionGroup(q){
-  return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";
-}
-function generateRecord(){
-  const qs=[...document.querySelectorAll('[data-role="homework"]')],groups={},warnings=[];
-  qs.forEach((q,i)=>{
-    const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";
-    const hint=q.querySelector(".solve-note")?.innerText.trim()||"";
-    const answer=valueOfQuestion(q);
-    if(!answer) warnings.push("第 "+(i+1)+" 题未填写："+title);
-    if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险|导致/.test(answer)&&/修法|修正|解决|改|应该/.test(answer))) warnings.push("第 "+(i+1)+" 题建议补齐“错因 / 后果 / 修法”。");
-    if(q.dataset.type==="feynman"){
-      const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);
-      if(answer&&answer.length<120) warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");
-      const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):keys;
-      if(lack.length) warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");
-    }
-    const group=questionGroup(q);
-    (groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});
-  });
-  let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";
-  Object.keys(groups).forEach(group=>{
-    out+="## "+group+"\n\n";
-    groups[group].forEach(item=>{
-      out+="### "+item.title+"\n";
-      if(item.hint) out+="提示摘要："+item.hint+"\n\n";
-      out+=item.answer+"\n\n";
-    });
-  });
-  document.getElementById("record").textContent=out;
-  const quality=document.getElementById("quality");
-  quality.style.display="block";
-  quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以用于自查。";
-}
-function copyRecord(){
-  copyText(document.getElementById("record").textContent,()=>{
-    const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";
-  },()=>{
-    const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";
-  });
-}
-</script>
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

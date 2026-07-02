@@ -4,385 +4,167 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>数据并行、梯度同步与通信</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="分布式训练系统" data-unit="02｜数据并行梯度同步与通信">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>分布式训练系统</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">分布式训练系统</a>
+        <span class="sep">/</span>
         <span>02｜数据并行梯度同步与通信</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#overview"><span class="dot"></span>先看主线</a>
-        <a href="#sampler"><span class="dot"></span>样本分片</a>
-        <a href="#terms"><span class="dot"></span>术语与角色</a>
-        <a href="#ledger"><span class="dot"></span>训练步账本</a>
-        <a href="#trace"><span class="dot"></span>同步轨迹</a>
-        <a href="#walkthrough"><span class="dot"></span>两卡推演</a>
-        <a href="#allreduce"><span class="dot"></span>all-reduce</a>
-        <a href="#accum"><span class="dot"></span>梯度累积</a>
-        <a href="#cost"><span class="dot"></span>通信账单</a>
-        <a href="#boundary"><span class="dot"></span>边界</a>
-        <a href="#failure"><span class="dot"></span>故障信号</a>
-        <a href="#bridge"><span class="dot"></span>下一步</a>
-        <a href="#mistakes"><span class="dot"></span>练习前提醒</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">先把训练 step 复制到多个 rank，再看梯度为什么要同步、同步量为什么会变成通信账单。</div>
-    </aside>
-
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">数据并行</div>
-          <h1>数据并行、梯度同步与通信</h1>
-          <p>本页接着 01 的训练步账本往下看：同一个 forward、backward、step，被复制到多个 rank 之后，哪些对象还留在本地，哪些对象必须同步，哪一步一旦顺序错了就会挂住。这里先把数据并行讲透；FSDP2 的分片和 Megatron Core 的多维并行只先点出边界，留给后续单元展开。</p>
-
-          <div class="course-links">
-            <a href="../index.html">课程地图</a><a href="../01_训练循环与扩展目标/学习页.html">上一单元</a><a href="../03_FSDP2与参数分片/学习页.html">下一单元</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>读完本页，你应该能做什么</h3>
-          <ul>
-  <li>能从一段训练代码里指出 <code>rank</code>、<code>world size</code>、<code>process group</code>、<code>DDP</code> 和 <code>all-reduce</code> 分别在做什么。</li>
-  <li>能顺着一次训练步说清楚：哪些值是每个 rank 本地算的，哪一步开始同步梯度，最后谁在写参数。</li>
-  <li>能粗略估算梯度同步的通信量，并从“数据重复、collective 顺序不一致、batch 变了”这三类线索里先找到排查方向。</li>
-</ul>
-
-        </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
+    </div>
+  </nav>
 
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">数据并行</div>
+      <div class="hero-meta">
+        <span class="hero-badge">02｜数据并行梯度同步与通信</span>
+      </div>
+      <h1 class="hero-title">数据并行、梯度同步与通信</h1>
+      <p class="hero-desc">本页接着 01 的训练步账本往下看：同一个 forward、backward、step，被复制到多个 rank 之后，哪些对象还留在本地，哪些对象必须同步，哪一步一旦顺序错了就会挂住。这里先把数据并行讲透；FSDP2 的分片和 Megatron Core 的多维并行只先点出边界，留给后续单元展开。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../01_训练循环与扩展目标/学习页.html">上一单元</a>
+            <a href="../03_FSDP2与参数分片/学习页.html">下一单元</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>能从一段训练代码里指出 rank 、 world size 、 process group 、 DDP 和 all-reduce 分别在做什么。</li>
+            <li>能顺着一次训练步说清楚：哪些值是每个 rank 本地算的，哪一步开始同步梯度，最后谁在写参数。</li>
+            <li>能粗略估算梯度同步的通信量，并从“数据重复、collective 顺序不一致、batch 变了”这三类线索里先找到排查方向。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#overview">先看主线</a>
+      <a href="#sampler">样本分片</a>
+      <a href="#terms">术语与角色</a>
+      <a href="#ledger">训练步账本</a>
+      <a href="#trace">同步轨迹</a>
+      <a href="#walkthrough">两卡推演</a>
+      <a href="#allreduce">all-reduce 到底在做什么</a>
+      <a href="#accum">梯度累积和通信频率</a>
+      <a href="#cost">通信账单</a>
+      <a href="#boundary">边界先钉住</a>
+      <a href="#failure">故障信号</a>
+      <a href="#mistakes">练习前提醒</a>
+      <a href="#bridge">下一步怎么接</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
-  <div class="head">
-    <h2>学习目标</h2>
-    <span class="tag">goal</span>
-  </div>
-  <p>这单元只盯三件事：把代码里的通信对象认出来，把一次训练步里同步发生的时刻认出来，把通信账单和性能瓶颈认出来。你能把同一段 DDP 代码拆成这三层，就算抓住了主线。</p>
-  <div class="grid3">
-    <div class="box soft">
-      <h3>先认对象</h3>
-      <p>看到 <code>rank</code>、<code>world size</code>、<code>process group</code>、<code>DDP</code>、<code>all-reduce</code>，能说出它们各自负责什么，不再把身份号、协作范围和同步动作混成一团。</p>
-    </div>
-    <div class="box soft">
-      <h3>再认时序</h3>
-      <p>能顺着 <code>forward → backward → 同步 → optimizer.step()</code> 追一遍本地读写和 collective 读写的切换，知道同步发生在 backward 之后。</p>
-    </div>
-    <div class="box soft">
-      <h3>最后看代价</h3>
-      <p>能估算梯度同步的大致字节量，并判断问题是算子慢、通信慢，还是 rank 之间已经走散。</p>
-    </div>
-  </div>
-</section>
-
-<section id="overview">
-  <div class="head">
-    <h2>先看主线</h2>
-    <span class="tag">route</span>
-  </div>
-  <p>我们用一个最小锚点：两张 GPU、同一模型、不同 batch。每个 rank 先本地 forward/backward，再把梯度合成同一个更新方向。你要抓的是：哪些值可以各自算，哪些值必须在 backward 之后对齐。</p>
-  <div class="map" aria-label="训练主线">
-    <span class="node">参数副本</span>
-    <span class="arrow">→</span>
-    <span class="node">本地 forward</span>
-    <span class="arrow">→</span>
-    <span class="node">本地 backward</span>
-    <span class="arrow">→</span>
-    <span class="node">梯度同步</span>
-    <span class="arrow">→</span>
-    <span class="node">optimizer.step()</span>
-  </div>
-  <div class="grid2">
-    <div class="box">
-      <h3>这页先把 DDP 想成什么</h3>
-      <p>先把 DDP 看成“复制训练步”。每个 rank 都有自己的 batch 分片，但最终要把梯度合成同一份更新。</p>
-    </div>
-    <div class="box warn">
-      <h3>先别追什么</h3>
-      <p>先别把 bucket、通信重叠、混合精度、ZeRO 风格状态分片、pipeline bubble 当成起点。它们会在 03、04、05、06 里回来；本页先把同步边界钉住。</p>
-    </div>
-  </div>
-</section>
-
-<section id="sampler">
-  <div class="head">
-    <h2>样本分片</h2>
-    <span class="tag">data</span>
-  </div>
-  <p>数据并行要成立，除了模型副本要一致，样本也要切开。两张 GPU 用同一份数据，梯度会重复；两张 GPU 用不同分片，梯度才是在互补信息上做合成。这个差别很小，结果却很大，所以它是 DDP 里最值得先查的地方之一。</p>
-  <p>最常见的接法是 <code>DistributedSampler</code>。它知道 <code>rank</code> 和 <code>world size</code>，会把数据集切成若干份，让每个进程看到不同的样本子集。训练时还要在每个 epoch 重新设种子，否则 shuffle 虽然开着，顺序却可能每轮都一样。</p>
-  <div class="table-wrap">
-    <table data-export-context="样本分片对比" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>情况</th>
-          <th>rank 0 看到什么</th>
-          <th>rank 1 看到什么</th>
-          <th>对梯度有什么影响</th>
-          <th>常见症状</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>正确分片</td>
-          <td>样本 id 0, 1, 4, 5</td>
-          <td>样本 id 2, 3, 6, 7</td>
-          <td>两个 rank 提供互补梯度，合成后更新更稳。</td>
-          <td>loss 变化正常，验证结果和单卡不一样。</td>
-        </tr>
-        <tr>
-          <td>忘了分片</td>
-          <td>样本 id 0, 1, 2, 3</td>
-          <td>样本 id 0, 1, 2, 3</td>
-          <td>两个 rank 在重复提供同一批信息。</td>
-          <td>训练看起来在跑，效果却像没扩大数据量。</td>
-        </tr>
-        <tr>
-          <td>分片有了，但没重设 epoch</td>
-          <td>每轮顺序相同</td>
-          <td>每轮顺序相同</td>
-          <td>样本覆盖不充分，shuffle 失去意义。</td>
-          <td>每轮曲线几乎复制上一轮，泛化会慢。</td>
-        </tr>
-        <tr>
-          <td>分片和 batch 不匹配</td>
-          <td>最后一个 batch 很小</td>
-          <td>最后一个 batch 很小或空</td>
-          <td>局部 batch 波动，统计量可能不稳定。</td>
-          <td>最后几个 step 波动大，或者某些实现会卡住。</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar">
-    <span>DistributedSampler 骨架</span>
-    <button class="copy" type="button" data-copy="sampler-code">复制</button>
-  </div>
-  <pre id="sampler-code" data-export-context="DistributedSampler 训练骨架" data-export-lang="python"><code class="language-python">from torch.utils.data import DataLoader, DistributedSampler
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">goal</span>
+        </div>
+<p>这单元只盯三件事：把代码里的通信对象认出来，把一次训练步里同步发生的时刻认出来，把通信账单和性能瓶颈认出来。你能把同一段 DDP 代码拆成这三层，就算抓住了主线。</p>
+<p>再认时序</p>
+<p>能顺着 <code>forward → backward → 同步 → optimizer.step()</code> 追一遍本地读写和 collective 读写的切换，知道同步发生在 backward 之后。</p>
+      </section>
+      <section id="overview">
+        <div class="head">
+          <h2>先看主线</h2>
+          <span class="tag">route</span>
+        </div>
+<p>我们用一个最小锚点：两张 GPU、同一模型、不同 batch。每个 rank 先本地 forward/backward，再把梯度合成同一个更新方向。你要抓的是：哪些值可以各自算，哪些值必须在 backward 之后对齐。</p>
+        <div class="box">
+<h3>这页先把 DDP 想成什么</h3>
+<p>先把 DDP 看成“复制训练步”。每个 rank 都有自己的 batch 分片，但最终要把梯度合成同一份更新。</p>
+        </div>
+        <div class="box warn">
+<h3>先别追什么</h3>
+<p>先别把 bucket、通信重叠、混合精度、ZeRO 风格状态分片、pipeline bubble 当成起点。它们会在 03、04、05、06 里回来；本页先把同步边界钉住。</p>
+        </div>
+      </section>
+      <section id="sampler">
+        <div class="head">
+          <h2>样本分片</h2>
+          <span class="tag">data</span>
+        </div>
+<p>数据并行要成立，除了模型副本要一致，样本也要切开。两张 GPU 用同一份数据，梯度会重复；两张 GPU 用不同分片，梯度才是在互补信息上做合成。这个差别很小，结果却很大，所以它是 DDP 里最值得先查的地方之一。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>情况</th><th>rank 0 看到什么</th><th>rank 1 看到什么</th><th>对梯度有什么影响</th><th>常见症状</th></tr>
+<tr><td>正确分片</td><td>样本 id 0, 1, 4, 5</td><td>样本 id 2, 3, 6, 7</td><td>两个 rank 提供互补梯度，合成后更新更稳。</td><td>loss 变化正常，验证结果和单卡不一样。</td></tr>
+<tr><td>忘了分片</td><td>样本 id 0, 1, 2, 3</td><td>样本 id 0, 1, 2, 3</td><td>两个 rank 在重复提供同一批信息。</td><td>训练看起来在跑，效果却像没扩大数据量。</td></tr>
+<tr><td>分片有了，但没重设 epoch</td><td>每轮顺序相同</td><td>每轮顺序相同</td><td>样本覆盖不充分，shuffle 失去意义。</td><td>每轮曲线几乎复制上一轮，泛化会慢。</td></tr>
+<tr><td>分片和 batch 不匹配</td><td>最后一个 batch 很小</td><td>最后一个 batch 很小或空</td><td>局部 batch 波动，统计量可能不稳定。</td><td>最后几个 step 波动大，或者某些实现会卡住。</td></tr>
+        </table></div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-sampler-1">复制</button></div>
+        <pre id="code-sampler-1" data-export-context="代码" data-export-lang="python"><code class="language-python">from torch.utils.data import DataLoader, DistributedSampler
 
 sampler = DistributedSampler(
-    dataset,
-    num_replicas=world_size,
-    rank=rank,
-    shuffle=True,
-    drop_last=True,
+ dataset,
+ num_replicas=world_size,
+ rank=rank,
+ shuffle=True,
+ drop_last=True,
 )
 loader = DataLoader(dataset, batch_size=micro_batch, sampler=sampler)
 
 for epoch in range(num_epochs):
-    sampler.set_epoch(epoch)
-    for batch in loader:
-        step(batch)</code></pre>
-  <p>这段代码里，<code>sampler</code> 读的是 <code>dataset</code>、<code>world size</code> 和 <code>rank</code>，写的是每个进程能看到的样本顺序。<code>set_epoch(epoch)</code> 则是在每轮训练开始时换掉洗牌种子，让不同 epoch 不再重复同一串顺序。省掉这一行，DDP 还能跑，但样本顺序会太整齐。</p>
-  <div class="grid2">
-    <div class="box warn">
-      <h3>为什么这里先查它</h3>
-      <p>很多“多卡训练没变好”的问题，最后都落在数据分片上。梯度同步本身可以是对的，但如果每个 rank 读的是同一批样本，你得到的只是重复计算，不是更好的优化方向。</p>
-    </div>
-    <div class="box soft">
-      <h3>和练习的关系</h3>
-      <p>后面的诊断题里，先让你检查数据分片而不是先查算子，就是因为这个环节最容易把训练语义直接写歪。你把这一节看明白，很多“验证像单卡小 batch”的现象就会更好判断。</p>
-    </div>
-  </div>
-</section>
-
-<section id="terms">
-  <div class="head">
-    <h2>术语与角色</h2>
-    <span class="tag">trace</span>
-  </div>
-  <p>在 DDP 里，<code>rank</code> 表示通信组里的身份号，<code>world size</code> 表示参与协作的进程总数，<code>process group</code> 表示能彼此做 collective 的那组进程。把这几个对象拆开，后面才不会把 sampler、collective 和 wrapper 混在一起。</p>
-  <div class="table-wrap">
-    <table data-export-context="术语与角色一览" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>对象</th>
-          <th>一句话</th>
-          <th>读什么</th>
-          <th>写什么</th>
-          <th>错了会怎样</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><code>rank</code></td>
-          <td>通信组里的身份号。</td>
-          <td>进程在组内的编号。</td>
-          <td>不写模型，只标识自己。</td>
-          <td>把它当机器号，排查时会看错组。</td>
-        </tr>
-        <tr>
-          <td><code>world size</code></td>
-          <td>参与协作的进程总数。</td>
-          <td>组里有多少个 rank。</td>
-          <td>影响 batch、通信量和平均语义。</td>
-          <td>把它当单机 GPU 数，会错估全局 batch。</td>
-        </tr>
-        <tr>
-          <td><code>process group</code></td>
-          <td>能彼此做 collective 的那组进程。</td>
-          <td>这次同步的成员集合。</td>
-          <td>决定谁要一起进入 all-reduce。</td>
-          <td>把 group 搞错，轻则结果错，重则 hang。</td>
-        </tr>
-        <tr>
-          <td><code>DistributedSampler</code></td>
-          <td>把数据切给不同 rank。</td>
-          <td>epoch、rank、world size。</td>
-          <td>样本顺序和分片。</td>
-          <td>所有 rank 读到同一批样本，等于重复训练。</td>
-        </tr>
-        <tr>
-          <td><code>DDP</code></td>
-          <td>给模型加上梯度同步逻辑。</td>
-          <td>参数、梯度和反向 hook。</td>
-          <td>同步后的梯度 bucket。</td>
-          <td>以为它会切模型参数，结果只是在同步副本。</td>
-        </tr>
-        <tr>
-          <td><code>all-reduce</code></td>
-          <td>把多个 rank 的值规约到一起。</td>
-          <td>本地梯度或其他张量。</td>
-          <td>同步后的结果张量。</td>
-          <td>把它当自动平均，漏掉代码里的显式除法。</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="ledger">
-  <div class="head">
-    <h2>训练步账本</h2>
-    <span class="tag">state</span>
-  </div>
-  <p>把一次 step 拆成账本，比背 DDP 名词更有用。你只要看每步在读什么、写什么，就知道同步发生在哪个边界。</p>
-  <div class="table-wrap">
-    <table data-export-context="训练步状态账本" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>步骤</th>
-          <th>读什么</th>
-          <th>写什么</th>
-          <th>谁能独立做</th>
-          <th>谁必须一致</th>
-          <th>出错时的症状</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>读 batch</td>
-          <td>本地样本分片。</td>
-          <td>输入张量。</td>
-          <td>每个 rank 都能自己做。</td>
-          <td>样本分片方式。</td>
-          <td>所有 rank 看到同一批样本，验证像单卡小 batch。</td>
-        </tr>
-        <tr>
-          <td>forward</td>
-          <td>参数副本和 batch。</td>
-          <td>激活、loss。</td>
-          <td>每个 rank 独立做。</td>
-          <td>模型结构和参数初始值。</td>
-          <td>前向结果不一致，后面再同步也救不回来。</td>
-        </tr>
-        <tr>
-          <td>backward</td>
-          <td>激活、loss、局部梯度路径。</td>
-          <td>本地梯度。</td>
-          <td>每个 rank 独立做。</td>
-          <td>反向图必须一致。</td>
-          <td>有些参数没参与反向，某些 rank 会缺梯度。</td>
-        </tr>
-        <tr>
-          <td>all-reduce</td>
-          <td>本地梯度。</td>
-          <td>同步后的梯度。</td>
-          <td>不能单独完成。</td>
-          <td>进入顺序和 group 成员。</td>
-          <td>挂住、等待、或者某个 rank 先跑到别的分支。</td>
-        </tr>
-        <tr>
-          <td><code>optimizer.step()</code></td>
-          <td>同步后的梯度和优化器状态。</td>
-          <td>参数副本、动量、学习率相关状态。</td>
-          <td>每个 rank 都能做同一件事。</td>
-          <td>更新方向必须一致。</td>
-          <td>参数副本分叉，下一轮 loss 开始不一致。</td>
-        </tr>
-        <tr>
-          <td><code>sampler.set_epoch()</code></td>
-          <td>epoch 和 shuffle 种子。</td>
-          <td>新的数据顺序。</td>
-          <td>每个 rank 都会看见同一 epoch 号。</td>
-          <td>数据分片和洗牌规则。</td>
-          <td>每轮样本顺序重复，训练效果看起来像没 shuffle。</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="trace">
-  <div class="head">
-    <h2>同步轨迹</h2>
-    <span class="tag">trace</span>
-  </div>
-  <p>点每一步，看“本地读写”怎么切换到“同步读写”。这个小轨迹比单纯读代码更容易看出，梯度同步真正发生在 backward 之后。</p>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button class="trace-line active" type="button" data-trace-step="step-1">
-        <code>1. forward</code><span>参数副本 + 不同 batch</span>
-      </button>
-      <button class="trace-line" type="button" data-trace-step="step-2">
-        <code>2. backward</code><span>本地梯度出现</span>
-      </button>
-      <button class="trace-line" type="button" data-trace-step="step-3">
-        <code>3. all-reduce</code><span>梯度对齐</span>
-      </button>
-      <button class="trace-line" type="button" data-trace-step="step-4">
-        <code>4. step</code><span>参数副本一起更新</span>
-      </button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="step-1">
-        <b>本地 forward</b>
-        <span>参数副本不变</span>
-        <p>读参数和 batch，写激活与 loss。此时每个 rank 还在各算各的。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-2">
-        <b>本地 backward</b>
-        <span>本地梯度出现</span>
-        <p>读激活和 loss，写每个参数的局部梯度。梯度还没同步，副本之间仍可能不同。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-3">
-        <b>梯度同步</b>
-        <span>同一份更新方向</span>
-        <p>all-reduce 把各 rank 的梯度合成同一份结果。这里顺序或 group 一旦错了，程序就容易挂住。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-4">
-        <b>optimizer.step()</b>
-        <span>参数副本继续一致</span>
-        <p>读同步后的梯度和优化器状态，写回参数。只要前面同步正确，下一轮副本就还能保持一致。</p>
-      </div>
-    </div>
-  </div>
-  <div class="codebar">
-    <span>DDP 训练步骨架</span>
-    <button class="copy" type="button" data-copy="ddp-step">复制</button>
-  </div>
-  <pre id="ddp-step" data-export-context="DDP 训练步骨架" data-export-lang="python"><code class="language-python">import torch
+ sampler.set_epoch(epoch)
+ for batch in loader:
+ step(batch)</code></pre>
+<p>这段代码里，<code>sampler</code> 读的是 <code>dataset</code>、<code>world size</code> 和 <code>rank</code>，写的是每个进程能看到的样本顺序。<code>set_epoch(epoch)</code> 则是在每轮训练开始时换掉洗牌种子，让不同 epoch 不再重复同一串顺序。省掉这一行，DDP 还能跑，但样本顺序会太整齐。</p>
+        </div>
+        <div class="box warn">
+<h3>为什么这里先查它</h3>
+<p>很多“多卡训练没变好”的问题，最后都落在数据分片上。梯度同步本身可以是对的，但如果每个 rank 读的是同一批样本，你得到的只是重复计算，不是更好的优化方向。</p>
+        </div>
+        <div class="box soft">
+<h3>和练习的关系</h3>
+<p>后面的诊断题里，先让你检查数据分片而不是先查算子，就是因为这个环节最容易把训练语义直接写歪。你把这一节看明白，很多“验证像单卡小 batch”的现象就会更好判断。</p>
+        </div>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语与角色</h2>
+          <span class="tag">trace</span>
+        </div>
+<p>在 DDP 里，<code>rank</code> 表示通信组里的身份号，<code>world size</code> 表示参与协作的进程总数，<code>process group</code> 表示能彼此做 collective 的那组进程。把这几个对象拆开，后面才不会把 sampler、collective 和 wrapper 混在一起。</p>
+      </section>
+      <section id="ledger">
+        <div class="head">
+          <h2>训练步账本</h2>
+          <span class="tag">state</span>
+        </div>
+<p>把一次 step 拆成账本，比背 DDP 名词更有用。你只要看每步在读什么、写什么，就知道同步发生在哪个边界。</p>
+      </section>
+      <section id="trace">
+        <div class="head">
+          <h2>同步轨迹</h2>
+          <span class="tag">trace</span>
+        </div>
+<p>点每一步，看“本地读写”怎么切换到“同步读写”。这个小轨迹比单纯读代码更容易看出，梯度同步真正发生在 backward 之后。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-trace-1">复制</button></div>
+        <pre id="code-trace-1" data-export-context="代码" data-export-lang="python"><code class="language-python">import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -391,695 +173,437 @@ rank = dist.get_rank()
 model = DDP(model.cuda(rank), device_ids=[rank])
 
 for batch in loader:
-    x, y = batch[0].cuda(rank), batch[1].cuda(rank)
-    optimizer.zero_grad(set_to_none=True)
-    loss = loss_fn(model(x), y)
-    loss.backward()  # 这里触发梯度同步
-    optimizer.step()  # 各 rank 用同一份梯度更新参数副本</code></pre>
-  <p>这段骨架里，真正触发同步的是 <code>loss.backward()</code>。<code>DDP</code> 做的是把同步逻辑挂进反向过程里。</p>
-</section>
-
-<section id="walkthrough">
-  <div class="head">
-    <h2>两卡推演</h2>
-    <span class="tag">case</span>
-  </div>
-  <p>把这件事手算一遍，最容易看清同步到底在修正什么。假设两张 GPU 用同一个模型副本，rank 0 看到样本 A，rank 1 看到样本 B。它们在 forward 和 backward 阶段各自独立计算，直到梯度同步才开始合并信息。</p>
-  <div class="table-wrap">
-    <table data-export-context="两卡梯度推演" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>时刻</th>
-          <th>rank 0</th>
-          <th>rank 1</th>
-          <th>共同结果</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>forward 前</td>
-          <td>参数副本 p</td>
-          <td>参数副本 p</td>
-          <td>两边参数一样。</td>
-        </tr>
-        <tr>
-          <td>forward 后</td>
-          <td>局部 loss<sub>0</sub></td>
-          <td>局部 loss<sub>1</sub></td>
-          <td>每边看到的样本不同，loss 也不同。</td>
-        </tr>
-        <tr>
-          <td>backward 后</td>
-          <td>局部梯度 g<sub>0</sub></td>
-          <td>局部梯度 g<sub>1</sub></td>
-          <td>还没有同步，两个梯度可能不同。</td>
-        </tr>
-        <tr>
-          <td>all-reduce 后</td>
-          <td>(g<sub>0</sub> + g<sub>1</sub>) / 2</td>
-          <td>(g<sub>0</sub> + g<sub>1</sub>) / 2</td>
-          <td>两边拿到同一份更新方向。</td>
-        </tr>
-        <tr>
-          <td><code>optimizer.step()</code> 后</td>
-          <td>p' = p - η · mean(g)</td>
-          <td>p' = p - η · mean(g)</td>
-          <td>参数副本继续一致。</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar">
-    <span>两卡手算公式</span>
-    <button class="copy" type="button" data-copy="two-rank-formula">复制</button>
-  </div>
-  <pre id="two-rank-formula" data-export-context="两卡手算公式" data-export-lang="python"><code class="language-python">mean_grad = (g0 + g1) / 2
+ x, y = batch[0].cuda(rank), batch[1].cuda(rank)
+ optimizer.zero_grad(set_to_none=True)
+ loss = loss_fn(model(x), y)
+ loss.backward() # 这里触发梯度同步
+ optimizer.step() # 各 rank 用同一份梯度更新参数副本</code></pre>
+<p>这段骨架里，真正触发同步的是 <code>loss.backward()</code>。<code>DDP</code> 做的是把同步逻辑挂进反向过程里。</p>
+        </div>
+      </section>
+      <section id="walkthrough">
+        <div class="head">
+          <h2>两卡推演</h2>
+          <span class="tag">case</span>
+        </div>
+<p>把这件事手算一遍，最容易看清同步到底在修正什么。假设两张 GPU 用同一个模型副本，rank 0 看到样本 A，rank 1 看到样本 B。它们在 forward 和 backward 阶段各自独立计算，直到梯度同步才开始合并信息。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-walkthrough-1">复制</button></div>
+        <pre id="code-walkthrough-1" data-export-context="代码" data-export-lang="python"><code class="language-python">mean_grad = (g0 + g1) / 2
 p_next = p - eta * mean_grad</code></pre>
-  <p>这两行很短，却把 DDP 的责任边界说得很清楚：本地先算出局部梯度，再把局部梯度合成同一份更新方向，最后所有副本一起走向下一轮。如果某个 rank 提前跳到别的分支，或者把别人的样本读成自己的，第二轮开始参数就会分叉。</p>
-  <div class="grid2">
-    <div class="box warn">
-      <h3>一个常见误会</h3>
-      <p>如果你只看到“多个副本都在跑”，很容易误以为同步已经完成。实际上，forward 只是把同一份模型放到不同数据上做局部计算；同步发生在 backward 之后。</p>
-    </div>
-    <div class="box soft">
-      <h3>这个推演怎么用</h3>
-      <p>读训练脚本时，把自己的模型、sampler 和 optimizer 套进这张表：哪一步写激活，哪一步写梯度，哪一步把局部梯度变成全局更新。你一旦能把脚本对上这张表，就不容易在 DDP 里看错职责。</p>
-    </div>
-  </div>
-</section>
-
-<section id="allreduce">
-  <div class="head">
-    <h2>all-reduce 到底在做什么</h2>
-    <span class="tag">math</span>
-  </div>
-    <p>all-reduce 这个词只说明“把多个 rank 的值规约到一起”。在训练里最常见的是先求和，再除以 <code>world size</code> 得到平均梯度。把这两个动作拆开，是避免误读代码的关键。</p>
-  <div class="math-block" data-export-context="梯度同步通信量估算" data-export-lang="math">
-    $$
-    B_{\mathrm{sync}} \approx 2 \cdot \frac{N-1}{N} \cdot G
-    $$
-    <p>其中 <code>N</code> 是 <code>world size</code>，<code>G</code> 是一个 rank 上所有梯度张量的总字节数。这个式子是在 ring all-reduce 的常见量级上做的粗估，目的是帮你判断通信会不会压住收益。要做精确估计，还得看具体实现和网络条件。</p>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="sum 与平均的 toy case" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>rank</th>
-          <th>本地梯度</th>
-          <th>sum all-reduce 之后</th>
-          <th>再除以 world size</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>0</td>
-          <td>0.5</td>
-          <td>8.0</td>
-          <td>2.0</td>
-        </tr>
-        <tr>
-          <td>1</td>
-          <td>1.5</td>
-          <td>8.0</td>
-          <td>2.0</td>
-        </tr>
-        <tr>
-          <td>2</td>
-          <td>2.0</td>
-          <td>8.0</td>
-          <td>2.0</td>
-        </tr>
-        <tr>
-          <td>3</td>
-          <td>4.0</td>
-          <td>8.0</td>
-          <td>2.0</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar">
-    <span>sum 和 average 的分界线</span>
-    <button class="copy" type="button" data-copy="allreduce-code">复制</button>
-  </div>
-  <pre id="allreduce-code" data-export-context="sum 与 average 的分界线" data-export-lang="python"><code class="language-python">grad = local_grad.clone()
+<p>这两行很短，却把 DDP 的责任边界说得很清楚：本地先算出局部梯度，再把局部梯度合成同一份更新方向，最后所有副本一起走向下一轮。如果某个 rank 提前跳到别的分支，或者把别人的样本读成自己的，第二轮开始参数就会分叉。</p>
+        </div>
+        <div class="box warn">
+<h3>一个常见误会</h3>
+<p>如果你只看到“多个副本都在跑”，很容易误以为同步已经完成。实际上，forward 只是把同一份模型放到不同数据上做局部计算；同步发生在 backward 之后。</p>
+        </div>
+        <div class="box soft">
+<h3>这个推演怎么用</h3>
+<p>读训练脚本时，把自己的模型、sampler 和 optimizer 套进这张表：哪一步写激活，哪一步写梯度，哪一步把局部梯度变成全局更新。你一旦能把脚本对上这张表，就不容易在 DDP 里看错职责。</p>
+        </div>
+      </section>
+      <section id="allreduce">
+        <div class="head">
+          <h2>all-reduce 到底在做什么</h2>
+          <span class="tag">math</span>
+        </div>
+<p>all-reduce 这个词只说明“把多个 rank 的值规约到一起”。在训练里最常见的是先求和，再除以 <code>world size</code> 得到平均梯度。把这两个动作拆开，是避免误读代码的关键。</p>
+<p>其中 <code>N</code> 是 <code>world size</code>，<code>G</code> 是一个 rank 上所有梯度张量的总字节数。这个式子是在 ring all-reduce 的常见量级上做的粗估，目的是帮你判断通信会不会压住收益。要做精确估计，还得看具体实现和网络条件。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-allreduce-1">复制</button></div>
+        <pre id="code-allreduce-1" data-export-context="代码" data-export-lang="python"><code class="language-python">grad = local_grad.clone()
 dist.all_reduce(grad, op=dist.ReduceOp.SUM)
-grad /= world_size  # 平均是训练代码层面的约定，不是 all_reduce 自动保证的</code></pre>
-  <p>如果你只看到 <code>all_reduce(..., op=SUM)</code>，却没有看到后面的除法，就不要默认它已经是平均梯度。很多误判就发生在这里。</p>
-</section>
-
-<section id="accum">
-  <div class="head">
-    <h2>梯度累积和通信频率</h2>
-    <span class="tag">frequency</span>
-  </div>
-  <p>当显存不够装更大的 batch 时，常见做法是把一个大 batch 拆成几个 micro-batch。前几个 micro-batch 只做局部 backward，不立刻同步；最后一个 micro-batch 再统一同步并 step。这样做的目的很明确：不改更新方向的前提下，减少通信频率。</p>
-  <div class="table-wrap">
-    <table data-export-context="梯度累积与 no_sync" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>micro-batch</th>
-          <th>本地发生什么</th>
-          <th>是否同步梯度</th>
-          <th>对通信的影响</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>第 1 个</td>
-          <td>forward + backward</td>
-          <td>否</td>
-          <td>本地先攒梯度，不发通信。</td>
-        </tr>
-        <tr>
-          <td>第 2 个</td>
-          <td>forward + backward</td>
-          <td>否</td>
-          <td>继续累积本地梯度。</td>
-        </tr>
-        <tr>
-          <td>最后 1 个</td>
-          <td>forward + backward + all-reduce</td>
-          <td>是</td>
-          <td>一次性对齐再更新。</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar">
-    <span>DDP 的累积骨架</span>
-    <button class="copy" type="button" data-copy="accum-code">复制</button>
-  </div>
-  <pre id="accum-code" data-export-context="DDP 梯度累积骨架" data-export-lang="python"><code class="language-python">for i, batch in enumerate(loader):
-    if i % accum_steps != accum_steps - 1:
-        with model.no_sync():
-            loss = loss_fn(model(batch), y)
-            loss.backward()
-    else:
-        loss = loss_fn(model(batch), y)
-        loss.backward()
-        optimizer.step()</code></pre>
-  <p>如果忘了在前几个 micro-batch 上用 <code>no_sync()</code>，你会在每个 micro-batch 都做一次梯度同步，通信频率就没有降下来。反过来，如果最后一步忘了同步，参数副本会在下一轮开始前带着不同的累积结果往前走。</p>
-  <div class="grid2">
-    <div class="box warn">
-      <h3>为什么它和全局 batch 连着</h3>
-      <p>梯度累积会把一个 step 里看到的样本数放大，所以全局 batch 公式要把累积步数算进去。这个地方如果算错，学习率和 warmup 都会跟着跑偏。</p>
-    </div>
-    <div class="box soft">
-      <h3>和前面两节的关系</h3>
-      <p>这节把“什么时候同步”再往前推了一层：前几个 micro-batch 先本地攒，最后一个 micro-batch 再合并。你看懂这个开关，前面的 all-reduce 和通信账单就更完整了。</p>
-    </div>
-  </div>
-</section>
-
-<section id="cost">
-  <div class="head">
-    <h2>通信账单</h2>
-    <span class="tag">cost</span>
-  </div>
-  <p>GPU 数量上去以后，慢的未必是算子本身。常见瓶颈是通信字节、等待最慢 rank、以及全局 batch 改变后带来的优化器和学习率重配。</p>
-  <div class="table-wrap">
-    <table data-export-context="通信账单拆解" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>成本项</th>
-          <th>你会看到什么</th>
-          <th>先查哪里</th>
-          <th>容易误判成什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>梯度字节</td>
-          <td>step time 里通信占比高。</td>
-          <td>总梯度大小和 world size。</td>
-          <td>以为只是 GPU 算力不够。</td>
-        </tr>
-        <tr>
-          <td>慢 rank 等待</td>
-          <td>平均吞吐不错，但尾部 rank 拉长。</td>
-          <td>数据加载、网络、降频、IO。</td>
-          <td>以为 all-reduce 自己很慢。</td>
-        </tr>
-        <tr>
-          <td>全局 batch 变化</td>
-          <td>loss 曲线和收敛节奏变了。</td>
-          <td><code>micro-batch × accum × world size</code>。</td>
-          <td>只调 GPU 数，不调学习率和 warmup。</td>
-        </tr>
-        <tr>
-          <td>bucket / overlap</td>
-          <td>通信看起来更顺，但问题没消失。</td>
-          <td>同步是否被更早开始、是否真正重叠。</td>
-          <td>以为优化器逻辑已经变了。</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="grid2">
-    <div class="box info">
-      <h3>一个很实用的判断</h3>
-      <p>如果你把 world size 从 4 提到 8，通信通常不会简单减半。梯度总量没变，协作人数变多，通信和等待的形状都会改。</p>
-    </div>
-    <div class="box warn">
-      <h3>先看每个 rank 的时间线</h3>
-      <p>先看每个 rank 各自卡在哪一步，再看平均 step time。只看平均值，最容易把“某个 rank 走散了”误判成“算子整体慢”。</p>
-    </div>
-  </div>
-</section>
-
-<section id="boundary">
-  <div class="head">
-    <h2>边界先钉住</h2>
-    <span class="tag">boundary</span>
-  </div>
-  <p>这页先把 DDP 的同步边界讲清楚。bucket、通信重叠、loss scaling、激活检查点、optimizer state sharding、pipeline bubble 这些词都重要；本页先从同步边界开始，它们会在后面的单元回来。</p>
-  <div class="table-wrap">
-    <table data-export-context="本页边界与后续单元" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>现在先追</th>
-          <th>后面再看</th>
-          <th>会在哪一单元回来</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>DDP 里的梯度同步点</td>
-          <td>bucket、通信重叠、梯度压缩</td>
-          <td>06、07</td>
-        </tr>
-        <tr>
-          <td>数据分片和 sampler</td>
-          <td>更复杂的数据管道、输入 pipeline</td>
-          <td>01、07</td>
-        </tr>
-        <tr>
-          <td>复制模型副本</td>
-          <td>参数分片、优化器状态分片</td>
-          <td>03</td>
-        </tr>
-        <tr>
-          <td>单一数据并行组</td>
-          <td>张量并行组、流水线并行组、组合 group</td>
-          <td>04、05</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="box soft">
-    <h3>现在可以忽略什么</h3>
-    <p>先不要去改 NCCL 参数，也不要急着猜网络拓扑。只要你还没把“谁读、谁写、谁同步”三件事对齐，调参数通常只是把症状挪地方。</p>
-  </div>
-</section>
-
-<section id="failure">
-  <div class="head">
-    <h2>故障信号</h2>
-    <span class="tag">debug</span>
-  </div>
-  <p>看错时序时，程序不一定立刻报错。多半是卡住、变慢、或者结果悄悄变歪。先把最常见的几种症状和第一个检查动作对起来。</p>
-  <div class="table-wrap">
-    <table data-export-context="常见故障信号" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>症状</th>
-          <th>更可能的原因</th>
-          <th>第一个检查动作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>训练卡住不动</td>
-          <td>collective 顺序不一致，或者某个 rank 走进了别的分支。</td>
-          <td>看每个 rank 到达了哪一个同步点。</td>
-        </tr>
-        <tr>
-          <td>吞吐看起来上去了，但验证像单卡小 batch</td>
-          <td>每个 rank 读到了同一批样本。</td>
-          <td>打印少量样本 id，确认分片是否不同。</td>
-        </tr>
-        <tr>
-          <td>loss 震荡变大</td>
-          <td>world size 变了，但全局 batch、学习率或 warmup 没跟着改。</td>
-          <td>先把 batch 公式算清楚。</td>
-        </tr>
-        <tr>
-          <td>只有部分 rank 报错</td>
-          <td>模型图或条件分支在各 rank 不一致。</td>
-          <td>检查有没有按 rank 走不同逻辑。</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="terminal-lab" data-terminal-lab>
-    <div class="terminal-controls">
-      <button class="ghost active" type="button" data-terminal-case="case-1">健康同步</button>
-      <button class="ghost" type="button" data-terminal-case="case-2">重复采样</button>
-      <button class="ghost" type="button" data-terminal-case="case-3">顺序不一致</button>
-    </div>
-    <pre class="terminal-output" aria-live="polite">[rank 0] backward done
-[rank 1] backward done
-[rank 0] all-reduce ok
-[rank 1] all-reduce ok
-[rank 0] optimizer.step ok
-[rank 1] optimizer.step ok</pre>
-    <template data-terminal-output="case-1">[rank 0] backward done
-[rank 1] backward done
-[rank 0] all-reduce ok
-[rank 1] all-reduce ok
-[rank 0] optimizer.step ok
-[rank 1] optimizer.step ok</template>
-    <template data-terminal-output="case-2">[rank 0] sample ids: 12, 18, 44
-[rank 1] sample ids: 12, 18, 44
-[rank 0] loss curve looks like small batch
-[rank 1] loss curve looks like small batch</template>
-    <template data-terminal-output="case-3">[rank 0] enter all-reduce bucket 3
-[rank 1] enter broadcast branch
-[rank 0] waiting...
-[rank 1] step continues</template>
-  </div>
-  <p>这些输出是模拟出来的症状，用来先看见“谁先走偏了”，再去怀疑 NCCL、网络或者算子。</p>
-</section>
-
-<section id="mistakes">
-  <div class="head">
-    <h2>练习前提醒</h2>
-    <span class="tag">check</span>
-  </div>
-  <div class="grid2">
-    <div class="box danger">
-      <h3>错误 1：把 all-reduce 当成自动平均</h3>
-      <p>all-reduce 只说明规约动作；平均梯度要看代码里有没有再除以 <code>world size</code>。</p>
-    </div>
-    <div class="box danger">
-      <h3>错误 2：把 DDP 当成显存分片</h3>
-      <p>DDP 的核心是同步副本的梯度；把模型状态切小是 FSDP2 这类分片策略要做的事。</p>
-    </div>
-    <div class="box danger">
-      <h3>错误 3：只盯平均 step time</h3>
-      <p>collective 会等最慢的 rank。只看平均值，很容易把“某个 rank 走散了”误看成“系统整体都慢”。</p>
-    </div>
-    <div class="box danger">
-      <h3>错误 4：把 group 混成一个</h3>
-      <p>数据并行、张量并行、流水线并行的通信对象不同。到了 Megatron Core 里，这个区分会直接影响结果对不对。</p>
-    </div>
-  </div>
-</section>
-
-<section id="bridge">
-  <div class="head">
-    <h2>下一步怎么接</h2>
-    <span class="tag">bridge</span>
-  </div>
-  <p>如果你要继续读代码，先找 <code>init_process_group</code>、<code>DistributedSampler</code>、<code>DDP(model)</code>、<code>loss.backward()</code>、<code>optimizer.step()</code>。先把这几个点在训练脚本里对齐，再去看 03 的 <code>fully_shard</code>，你会更容易明白“复制副本”和“分片状态”为什么是两类不同问题。</p>
-  <div class="table-wrap">
-    <table data-export-context="DDP、FSDP2、Megatron 的边界" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>策略</th>
-          <th>主要切什么</th>
-          <th>这页已经帮你看懂的部分</th>
-          <th>下一步去哪里</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>DDP</td>
-          <td>复制完整模型副本，同步梯度。</td>
-          <td>同步点、通信账单、数据分片。</td>
-          <td>继续看训练脚本和 sampler。</td>
-        </tr>
-        <tr>
-          <td>FSDP2</td>
-          <td>分片参数、梯度和优化器状态。</td>
-          <td>知道为什么只复制副本还不够。</td>
-          <td>03 单元。</td>
-        </tr>
-        <tr>
-          <td>Megatron Core</td>
-          <td>组合数据并行、张量并行、流水线并行。</td>
-          <td>知道为什么一个全局 group 不够用。</td>
-          <td>04、05 单元。</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="box info">
-    <h3>一句话收束</h3>
-    <p>DDP 先让多个副本在同一份梯度上更新；FSDP2 再解决副本本身放不下的问题；Megatron Core 再把通信对象拆到多个维度里。它们属于同一条训练主线上的不同层。</p>
-  </div>
-</section>
-
-
+grad /= world_size # 平均是训练代码层面的约定，不是 all_reduce 自动保证的</code></pre>
+<p>如果你只看到 <code>all_reduce(..., op=SUM)</code>，却没有看到后面的除法，就不要默认它已经是平均梯度。很多误判就发生在这里。</p>
+        </div>
+      </section>
+      <section id="accum">
+        <div class="head">
+          <h2>梯度累积和通信频率</h2>
+          <span class="tag">frequency</span>
+        </div>
+<p>当显存不够装更大的 batch 时，常见做法是把一个大 batch 拆成几个 micro-batch。前几个 micro-batch 只做局部 backward，不立刻同步；最后一个 micro-batch 再统一同步并 step。这样做的目的很明确：不改更新方向的前提下，减少通信频率。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-accum-1">复制</button></div>
+        <pre id="code-accum-1" data-export-context="代码" data-export-lang="python"><code class="language-python">for i, batch in enumerate(loader):
+ if i % accum_steps != accum_steps - 1:
+ with model.no_sync():
+ loss = loss_fn(model(batch), y)
+ loss.backward()
+ else:
+ loss = loss_fn(model(batch), y)
+ loss.backward()
+ optimizer.step()</code></pre>
+<p>如果忘了在前几个 micro-batch 上用 <code>no_sync()</code>，你会在每个 micro-batch 都做一次梯度同步，通信频率就没有降下来。反过来，如果最后一步忘了同步，参数副本会在下一轮开始前带着不同的累积结果往前走。</p>
+        </div>
+        <div class="box warn">
+<h3>为什么它和全局 batch 连着</h3>
+<p>梯度累积会把一个 step 里看到的样本数放大，所以全局 batch 公式要把累积步数算进去。这个地方如果算错，学习率和 warmup 都会跟着跑偏。</p>
+        </div>
+        <div class="box soft">
+<h3>和前面两节的关系</h3>
+<p>这节把“什么时候同步”再往前推了一层：前几个 micro-batch 先本地攒，最后一个 micro-batch 再合并。你看懂这个开关，前面的 all-reduce 和通信账单就更完整了。</p>
+        </div>
+      </section>
+      <section id="cost">
+        <div class="head">
+          <h2>通信账单</h2>
+          <span class="tag">cost</span>
+        </div>
+<p>GPU 数量上去以后，慢的未必是算子本身。常见瓶颈是通信字节、等待最慢 rank、以及全局 batch 改变后带来的优化器和学习率重配。</p>
+        <div class="box info">
+<h3>一个很实用的判断</h3>
+<p>如果你把 world size 从 4 提到 8，通信通常不会简单减半。梯度总量没变，协作人数变多，通信和等待的形状都会改。</p>
+        </div>
+        <div class="box warn">
+<h3>先看每个 rank 的时间线</h3>
+<p>先看每个 rank 各自卡在哪一步，再看平均 step time。只看平均值，最容易把“某个 rank 走散了”误判成“算子整体慢”。</p>
+        </div>
+      </section>
+      <section id="boundary">
+        <div class="head">
+          <h2>边界先钉住</h2>
+          <span class="tag">boundary</span>
+        </div>
+<p>这页先把 DDP 的同步边界讲清楚。bucket、通信重叠、loss scaling、激活检查点、optimizer state sharding、pipeline bubble 这些词都重要；本页先从同步边界开始，它们会在后面的单元回来。</p>
+        <div class="box soft">
+<h3>现在可以忽略什么</h3>
+<p>先不要去改 NCCL 参数，也不要急着猜网络拓扑。只要你还没把“谁读、谁写、谁同步”三件事对齐，调参数通常只是把症状挪地方。</p>
+        </div>
+      </section>
+      <section id="failure">
+        <div class="head">
+          <h2>故障信号</h2>
+          <span class="tag">debug</span>
+        </div>
+<p>看错时序时，程序不一定立刻报错。多半是卡住、变慢、或者结果悄悄变歪。先把最常见的几种症状和第一个检查动作对起来。</p>
+<p>这些输出是模拟出来的症状，用来先看见“谁先走偏了”，再去怀疑 NCCL、网络或者算子。</p>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>练习前提醒</h2>
+          <span class="tag">check</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>错误 1：把 all-reduce 当成自动平均</h3>
+<p>all-reduce 只说明规约动作；平均梯度要看代码里有没有再除以 <code>world size</code>。</p>
+        </div>
+        <div class="box">
+<h3>错误 2：把 DDP 当成显存分片</h3>
+<p>DDP 的核心是同步副本的梯度；把模型状态切小是 FSDP2 这类分片策略要做的事。</p>
+        </div>
+        <div class="box">
+<h3>错误 3：只盯平均 step time</h3>
+<p>collective 会等最慢的 rank。只看平均值，很容易把“某个 rank 走散了”误看成“系统整体都慢”。</p>
+        </div>
+        <div class="box">
+<h3>错误 4：把 group 混成一个</h3>
+<p>数据并行、张量并行、流水线并行的通信对象不同。到了 Megatron Core 里，这个区分会直接影响结果对不对。</p>
+        </div>
+      </div>
+      </section>
+      <section id="bridge">
+        <div class="head">
+          <h2>下一步怎么接</h2>
+          <span class="tag">bridge</span>
+        </div>
+<p>如果你要继续读代码，先找 <code>init_process_group</code>、<code>DistributedSampler</code>、<code>DDP(model)</code>、<code>loss.backward()</code>、<code>optimizer.step()</code>。先把这几个点在训练脚本里对齐，再去看 03 的 <code>fully_shard</code>，你会更容易明白“复制副本”和“分片状态”为什么是两类不同问题。</p>
+        <div class="box info">
+<h3>一句话收束</h3>
+<p>DDP 先让多个副本在同一份梯度上更新；FSDP2 再解决副本本身放不下的问题；Megatron Core 再把通信对象拆到多个维度里。它们属于同一条训练主线上的不同层。</p>
+        </div>
+      </section>
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-intro">
-  <div class="box soft">
-    <h3>怎么答才算会</h3>
-    <p>先别追求长答案。每题都尽量回答“对象是什么、在哪一步发生、如果错了会怎样、如何排查”。能把答案放回训练步账本，比术语说得漂亮更重要。</p>
-  </div>
-  <div class="box info">
-    <h3>检查重点</h3>
-    <p>你是否能把梯度同步和训练循环连起来，是否能区分数据并行、FSDP2、Megatron 多维并行的边界，是否能从症状反推第一个检查动作。</p>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>一、术语和时序</h3>
-      <p>先确认你能把身份号、协作范围和同步时刻拆开。</p>
-    </div>
-    <div class="quick-review">先把 <code>rank</code>、<code>world size</code>、<code>process group</code> 和 <code>backward</code> 这四个点分开，再谈通信。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q1" data-group="一、术语和时序" data-title="rank 的含义" data-answer="B">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">术语</span></div>
-      <h3>在 PyTorch Distributed 中，<code>rank</code> 最准确的含义是什么？</h3>
-      <label class="option"><input type="radio" name="q1" value="A">A. 当前机器的物理编号</label>
-      <label class="option"><input type="radio" name="q1" value="B">B. 某个通信组中进程的编号</label>
-      <label class="option"><input type="radio" name="q1" value="C">C. 当前 GPU 的显存容量等级</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q" data-question="q2" data-group="一、术语和时序" data-title="all-reduce 是否自动平均" data-answer="false">
-      <div class="q-meta"><span class="pill">true/false</span><span class="pill">collective</span></div>
-      <h3><code>all-reduce</code> 这个操作本身就保证输出是平均梯度。</h3>
-      <label class="option"><input type="radio" name="q2" value="true">对</label>
-      <label class="option"><input type="radio" name="q2" value="false">错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q full" data-question="q3" data-group="一、术语和时序" data-title="全局 batch 的三段式计算">
-      <div class="q-meta"><span class="pill">fill</span><span class="pill">计算</span></div>
-      <h3>把四个量分别写出来，再给出全局 batch。</h3>
-      <div class="mini-fields">
-        <label>micro-batch <input type="text" name="q3_micro" data-answer="8"></label>
-        <label>梯度累积步数 <input type="text" name="q3_accum" data-answer="4"></label>
-        <label><code>world size</code> <input type="text" name="q3_world" data-answer="16"></label>
-        <label>全局 batch <input type="text" name="q3_global" data-answer="512"></label>
+      <div class="practice-intro">
+      <div class="box soft">
+<h3>怎么答才算会</h3>
+<p>先别追求长答案。每题都尽量回答“对象是什么、在哪一步发生、如果错了会怎样、如何排查”。能把答案放回训练步账本，比术语说得漂亮更重要。</p>
       </div>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">把公式拆成三段：micro-batch × 累积步数 × world size。</p>
-    </div>
-
-    <div class="q full" data-question="q4" data-group="一、术语和时序" data-title="一轮 DDP 迭代">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">时序</span></div>
-      <h3>用 5-7 句描述一轮 DDP 训练迭代，从读取 batch 到 <code>optimizer.step()</code>。</h3>
-      <p class="solve-note">写的时候先说每个 rank 本地做什么，再说哪一步需要 collective，最后说为什么参数还能保持一致。</p>
-      <textarea name="q4" placeholder="按顺序写：数据、forward、loss、backward、all-reduce、step。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>好答案至少要包含：每个 rank 读自己的 batch 分片、前向本地计算激活和 loss、反向先产生本地梯度、<code>backward()</code> 触发梯度同步、同步后的梯度再进入 <code>optimizer.step()</code>、参数副本因此继续一致。漏掉“本地先算、后同步”或把同步放到 forward 里，都算没抓住主线。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>二、计算和代价</h3>
-      <p>先算一遍小数字，再看代码里哪一行真的触发同步。</p>
-    </div>
-    <div class="quick-review">算清平均梯度，再看通信量。先别急着把瓶颈都归给算子本身。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q short" data-question="q5" data-group="二、计算和代价" data-title="平均梯度是多少" data-answer="2;2.0">
-      <div class="q-meta"><span class="pill">fill</span><span class="pill">计算</span></div>
-      <h3>4 个 rank 的本地梯度分别是 0.5、1.5、2.0、4.0。平均后的梯度是多少？</h3>
-      <input type="text" name="q5" placeholder="写数字即可">
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q" data-question="q6" data-group="二、计算和代价" data-title="哪一行触发同步" data-answer="B">
-      <div class="q-meta"><span class="pill">code reading</span><span class="pill">时序</span></div>
-      <h3>下面这段代码里，哪一行最直接触发梯度同步？</h3>
-      <pre data-export-context="哪一行触发同步" data-export-lang="python"><code class="language-python">1 dist.init_process_group("nccl")
-2 model = DDP(model, device_ids=[rank])
-3 loss = loss_fn(model(x), y)
-4 loss.backward()
-5 optimizer.step()</code></pre>
-      <label class="option"><input type="radio" name="q6" value="A">A. 第 2 行</label>
-      <label class="option"><input type="radio" name="q6" value="B">B. 第 4 行</label>
-      <label class="option"><input type="radio" name="q6" value="C">C. 第 5 行</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q full" data-question="q7" data-group="二、计算和代价" data-title="为什么 step 不会线性缩短">
-      <div class="q-meta"><span class="pill">explain</span><span class="pill">cost</span></div>
-      <h3>为什么 GPU 数增加后，step time 不一定按比例下降？</h3>
-      <p class="solve-note">回答时至少说到三个点：本地计算、梯度通信、慢 rank 等待。能补上 batch 变化更好。</p>
-      <textarea name="q7" placeholder="先说理想情况，再说通信和等待如何把收益吃掉。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>好答案会说清：本地计算只是总时间的一部分；world size 变大后梯度同步的字节和等待链路不会凭空消失；任何一个 rank 慢了，collective 都要等它；如果全局 batch 也变了，优化器和学习率曲线还会跟着变。只写“通信开销大”不够，要点出“等待最慢 rank”和“batch 变化”。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>三、故障与诊断</h3>
-      <p>这组题不考术语背诵，只看你会不会先查最可能的地方。</p>
-    </div>
-    <div class="quick-review">卡住时先查数据分片和 collective 顺序，不要先怀疑模型结构。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q8" data-group="三、故障与诊断" data-title="验证像单卡小 batch 的第一检查点" data-answer="A">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">diagnosis</span></div>
-      <h3>多卡训练吞吐看起来提高了，但验证效果像单卡小 batch，最应该先检查哪项？</h3>
-      <label class="option"><input type="radio" name="q8" value="A">A. 每个 rank 是否读到了不同数据分片</label>
-      <label class="option"><input type="radio" name="q8" value="B">B. 模型文件名是否足够短</label>
-      <label class="option"><input type="radio" name="q8" value="C">C. 日志目录是否按日期命名</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q full" data-question="q9" data-group="三、故障与诊断" data-title="collective 顺序不一致的排查动作">
-      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">collective</span></div>
-      <h3>某训练作业卡住不动，没有明确 Python 异常。你怀疑 collective 顺序不一致，请勾出应该优先做的排查动作。</h3>
-      <label class="option"><input type="checkbox" name="q9" value="打印每个 rank 到达同步点的日志">打印每个 rank 到达同步点的日志</label>
-      <label class="option"><input type="checkbox" name="q9" value="检查是否有 rank 走进了条件分支">检查是否有 rank 走进了条件分支</label>
-      <label class="option"><input type="checkbox" name="q9" value="确认所有 rank 调用的是同一组 collective">确认所有 rank 调用的是同一组 collective</label>
-      <label class="option"><input type="checkbox" name="q9" value="把 batch size 调到最大">把 batch size 调到最大</label>
-      <details>
-        <summary>展开反馈</summary>
-        <p>优先动作只有前三个：先看谁停在了哪一步，再看是否有 rank 走进了不同分支，最后确认 collective 的成员和顺序一致。把 batch 调大不会修复顺序问题，反而可能把症状放大。</p>
-      </details>
-    </div>
-
-    <div class="q full" data-question="q10" data-group="三、故障与诊断" data-title="挂住时的三步排查">
-      <div class="q-meta"><span class="pill">explain</span><span class="pill">hang</span></div>
-      <h3>某训练作业挂住不动，你先怀疑数据或分支。请写出 3 个排查动作。</h3>
-      <p class="solve-note">回答从“哪个 rank 先偏离”展开，别只写“重启试试”。</p>
-      <textarea name="q10" placeholder="按：日志、分支、group 三个方向写。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>至少写出三件事：给每个 rank 打到达点日志、检查有没有 rank 走进了不同分支、确认所有 rank 调用的是同一组 collective。更好的答案会再补一条：先打印少量样本 id，确认数据分片没有重复。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>四、边界和迁移</h3>
-      <p>把 DDP 放回 FSDP2 和 Megatron Core 的大图里，看看它究竟负责哪一层。</p>
-    </div>
-    <div class="quick-review">先判断要扩吞吐，还是要压显存，再决定 DDP、FSDP2 还是多维并行。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q11" data-group="四、边界和迁移" data-title="DDP 与 FSDP2 的边界" data-answer="B">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">boundary</span></div>
-      <h3>如果完整模型、梯度和优化器状态放不进单卡，仅增加 DDP 数据并行 rank 通常能解决吗？</h3>
-      <label class="option"><input type="radio" name="q11" value="A">A. 能，因为卡越多单卡参数越少</label>
-      <label class="option"><input type="radio" name="q11" value="B">B. 不能，因为 DDP 通常在每个 rank 保留完整副本</label>
-      <label class="option"><input type="radio" name="q11" value="C">C. 一定能，只要学习率调小</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-
-    <div class="q full" data-question="q12" data-group="四、边界和迁移" data-title="DDP 和 FSDP2 分别更偏向什么">
-      <div class="q-meta"><span class="pill">fill</span><span class="pill">boundary</span></div>
-      <h3>把这两个空填上：DDP 更偏向____；FSDP2 更偏向____。</h3>
-      <div class="mini-fields">
-        <label>DDP <input type="text" name="q12_ddp" data-answer="吞吐,速度,扩展"></label>
-        <label>FSDP2 <input type="text" name="q12_fsdp" data-answer="显存,内存,状态"></label>
+      <div class="box info">
+<h3>检查重点</h3>
+<p>你是否能把梯度同步和训练循环连起来，是否能区分数据并行、FSDP2、Megatron 多维并行的边界，是否能从症状反推第一个检查动作。</p>
       </div>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">重点是把这两个策略各自要解决的主问题说对。</p>
-    </div>
-
-    <div class="q full" data-question="q13" data-group="四、边界和迁移" data-title="为什么 Megatron Core 不能只靠一个全局 group">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">multi-dim</span></div>
-      <h3>用 180-260 字解释：为什么 Megatron Core 这类多维并行训练不能只维护一个全局 <code>process group</code>？</h3>
-      <p class="solve-note">回答里至少要说到数据并行、张量并行和流水线并行各自切的东西不同。</p>
-      <textarea name="q13" placeholder="先说切分对象，再说通信成员集合，最后说为什么 group 必须分开。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>好答案会说：数据并行切的是 batch，张量并行切的是层内张量，流水线并行切的是层或阶段，所以它们的通信成员集合并不一样。一个全局 group 不能同时满足所有维度的同步需要；如果硬混在一起，轻则通信效率差，重则顺序混乱甚至死锁。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-      </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、术语和时序</h3></div>
+          <div class="quick-review">先把 rank 、 world size 、 process group 和 backward 这四个点分开，再谈通信。 --></div>
         </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="某个通信组中进程的编号">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 在 PyTorch Distributed 中，<code>rank</code> 最准确的含义是什么？</h3>
 
-      <section id="sources">
+      <div class="choices">
+      <label><input type="radio" name="q1" value="当前机器的物理编号">当前机器的物理编号</label>
+      <label><input type="radio" name="q1" value="某个通信组中进程的编号">某个通信组中进程的编号</label>
+      <label><input type="radio" name="q1" value="当前 GPU 的显存容量等级">当前 GPU 的显存容量等级</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>某个通信组中进程的编号</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="false">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> <code>all-reduce</code> 这个操作本身就保证输出是平均梯度。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>false</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 把四个量分别写出来，再给出全局 batch。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q3" value="micro-batch">micro-batch</label>
+      <label><input type="radio" name="q3" value="梯度累积步数">梯度累积步数</label>
+      <label><input type="radio" name="q3" value="world size">world size</label>
+      <label><input type="radio" name="q3" value="全局 batch">全局 batch</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 用 5-7 句描述一轮 DDP 训练迭代，从读取 batch 到 <code>optimizer.step()</code>。</h3>
+
+
+      <textarea name="q4"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案至少要包含：每个 rank 读自己的 batch 分片、前向本地计算激活和 loss、反向先产生本地梯度、 backward() 触发梯度同步、同步后的梯度再进入 optimizer.step() 、参数副本因此继续一致。漏掉“本地先算、后同步”或把同步放到 forward 里，都算没抓住主线。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、计算和代价</h3></div>
+          <div class="quick-review">算清平均梯度，再看通信量。先别急着把瓶颈都归给算子本身。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="2;2.0">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 4 个 rank 的本地梯度分别是 0.5、1.5、2.0、4.0。平均后的梯度是多少？</h3>
+
+
+      <textarea name="q5"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>2;2.0</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="第 4 行">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">code reading</span></div>
+        <h3><b>Q:</b> 下面这段代码里，哪一行最直接触发梯度同步？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q6" value="第 2 行">第 2 行</label>
+      <label><input type="radio" name="q6" value="第 4 行">第 4 行</label>
+      <label><input type="radio" name="q6" value="第 5 行">第 5 行</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>第 4 行</p>
+        </details>
+      </article>
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">explain</span></div>
+        <h3><b>Q:</b> 为什么 GPU 数增加后，step time 不一定按比例下降？</h3>
+
+
+      <textarea name="q7"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案会说清：本地计算只是总时间的一部分；world size 变大后梯度同步的字节和等待链路不会凭空消失；任何一个 rank 慢了，collective 都要等它；如果全局 batch 也变了，优化器和学习率曲线还会跟着变。只写“通信开销大”不够，要点出“等待最慢 rank”和“batch 变化”。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、故障与诊断</h3></div>
+          <div class="quick-review">卡住时先查数据分片和 collective 顺序，不要先怀疑模型结构。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="每个 rank 是否读到了不同数据分片">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 多卡训练吞吐看起来提高了，但验证效果像单卡小 batch，最应该先检查哪项？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q8" value="每个 rank 是否读到了不同数据分片">每个 rank 是否读到了不同数据分片</label>
+      <label><input type="radio" name="q8" value="模型文件名是否足够短">模型文件名是否足够短</label>
+      <label><input type="radio" name="q8" value="日志目录是否按日期命名">日志目录是否按日期命名</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>每个 rank 是否读到了不同数据分片</p>
+        </details>
+      </article>
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">debug-checklist</span></div>
+        <h3><b>Q:</b> 某训练作业卡住不动，没有明确 Python 异常。你怀疑 collective 顺序不一致，请勾出应该优先做的排查动作。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q9" value="打印每个 rank 到达同步点的日志">打印每个 rank 到达同步点的日志</label>
+      <label><input type="radio" name="q9" value="检查是否有 rank 走进了条件分支">检查是否有 rank 走进了条件分支</label>
+      <label><input type="radio" name="q9" value="确认所有 rank 调用的是同一组 collective">确认所有 rank 调用的是同一组 collective</label>
+      <label><input type="radio" name="q9" value="把 batch size 调到最大">把 batch size 调到最大</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。优先动作只有前三个：先看谁停在了哪一步，再看是否有 rank 走进了不同分支，最后确认 collective 的成员和顺序一致。把 batch 调大不会修复顺序问题，反而可能把症状放大。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">explain</span></div>
+        <h3><b>Q:</b> 某训练作业挂住不动，你先怀疑数据或分支。请写出 3 个排查动作。</h3>
+
+
+      <textarea name="q10"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。至少写出三件事：给每个 rank 打到达点日志、检查有没有 rank 走进了不同分支、确认所有 rank 调用的是同一组 collective。更好的答案会再补一条：先打印少量样本 id，确认数据分片没有重复。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、边界和迁移</h3></div>
+          <div class="quick-review">先判断要扩吞吐，还是要压显存，再决定 DDP、FSDP2 还是多维并行。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="不能，因为 DDP 通常在每个 rank 保留完整副本">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 如果完整模型、梯度和优化器状态放不进单卡，仅增加 DDP 数据并行 rank 通常能解决吗？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q11" value="能，因为卡越多单卡参数越少">能，因为卡越多单卡参数越少</label>
+      <label><input type="radio" name="q11" value="不能，因为 DDP 通常在每个 rank 保留完整副本">不能，因为 DDP 通常在每个 rank 保留完整副本</label>
+      <label><input type="radio" name="q11" value="一定能，只要学习率调小">一定能，只要学习率调小</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>不能，因为 DDP 通常在每个 rank 保留完整副本</p>
+        </details>
+      </article>
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 把这两个空填上：DDP 更偏向____；FSDP2 更偏向____。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q12" value="DDP">DDP</label>
+      <label><input type="radio" name="q12" value="FSDP2">FSDP2</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q13" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">13</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 用 180-260 字解释：为什么 Megatron Core 这类多维并行训练不能只维护一个全局 <code>process group</code>？</h3>
+
+
+      <textarea name="q13"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案会说：数据并行切的是 batch，张量并行切的是层内张量，流水线并行切的是层或阶段，所以它们的通信成员集合并不一样。一个全局 group 不能同时满足所有维度的同步需要；如果硬混在一起，轻则通信效率差，重则顺序混乱甚至死锁。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-  <li>课程地图与 01 单元学习页（课程内快照，2026-06-21）：用来确认本单元在课程里的位置、前后衔接和锚点训练步。</li>
-  <li><a href="https://docs.pytorch.org/docs/stable/distributed.html">PyTorch Distributed communication package</a>（访问快照：2026-06-21）：用于 <code>rank</code>、<code>world size</code>、<code>process group</code>、collective 和 <code>all-reduce</code> 的边界。</li>
-  <li><a href="https://docs.pytorch.org/docs/stable/distributed.fsdp.fully_shard.html">PyTorch fully_shard</a>（访问快照：2026-06-21）：用于说明 DDP 和 FSDP2 在副本、分片和通信模式上的差别。</li>
-  <li><a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/">Megatron Core Developer Guide</a>（访问快照：2026-06-21）：用于说明数据并行如何和张量并行、流水线并行组合。</li>
+<ul>
+<li>课程地图与 01 单元学习页（课程内快照，2026-06-21）：用来确认本单元在课程里的位置、前后衔接和锚点训练步。</li>
+<li><a href="https://docs.pytorch.org/docs/stable/distributed.html">PyTorch Distributed communication package</a>（访问快照：2026-06-21）：用于 <code>rank</code>、<code>world size</code>、<code>process group</code>、collective 和 <code>all-reduce</code> 的边界。</li>
+<li><a href="https://docs.pytorch.org/docs/stable/distributed.fsdp.fully_shard.html">PyTorch fully_shard</a>（访问快照：2026-06-21）：用于说明 DDP 和 FSDP2 在副本、分片和通信模式上的差别。</li>
+<li><a href="https://docs.nvidia.com/megatron-core/developer-guide/latest/">Megatron Core Developer Guide</a>（访问快照：2026-06-21）：用于说明数据并行如何和张量并行、流水线并行组合。</li>
 </ul>
-
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

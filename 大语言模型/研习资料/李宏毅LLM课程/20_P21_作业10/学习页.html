@@ -4,218 +4,618 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>20_P21｜作业10：Speech Generation</title>
-  <link rel="stylesheet" href="../../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body data-study-kind="homework" data-feynman-keywords="speech generation,Mimi,codec,VQ,RVQ,speech token,detokenizer,UMAP,PESQ,Whisper,CSM,backbone LLM,voice cloning">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>20_P21</strong><span>作业10：Speech Generation<br>Mimi token · Detokenizer · CSM</span></div>
-    <nav><a href="#goal"><span class="dot"></span>学习目标</a><a href="#skeleton"><span class="dot"></span>概念骨架</a><a href="#terms"><span class="dot"></span>术语表</a><a href="#lecture"><span class="dot"></span>讲义主线</a><a href="#source"><span class="dot"></span>来源整理</a><a href="#example"><span class="dot"></span>最小例子</a><a href="#viz"><span class="dot"></span>交互观察</a><a href="#diagnosis"><span class="dot"></span>误区诊断</a><a href="#practice"><span class="dot"></span>综合练习</a><a href="#export"><span class="dot"></span>练习记录</a></nav>
-    <div class="side-note">P21 的作业答案在 NTU COOL 作答，不上传 Judge Boy。真正要做的事是跑 Colab、听重建音讯、看图和指标，再回到选择题。</div>
-  </aside>
-  <main>
-    <section class="hero in-view" id="goal">
-      <div>
-        <div class="kicker">LEE HUNG-YI LLM 2026 · P21</div>
-        <h1>作业10：Speech Generation</h1>
-        <p>这一节把语音生成拆成三个问题：语音怎样变成模型可处理的 token，token 怎样还原成人能听懂的音讯，模型怎样在 token 空间里生成新语音。字幕里反复强调一点：如果系统先用 ASR 把语音转成文字，再让 LLM 回答，最后用 TTS 读出来，情绪、讽刺、笑声、音色这些资讯很容易在转文字时消失。</p>
-        <p>Mimi codec 负责把语音转成多层 speech tokens，也能把 tokens 解回音讯；CSM 1B 则放在中间，作为 speech LLM 处理这些 tokens。学这页时不要只记模型名字，要能说清每个观察工具回答什么问题：UMAP 看 token embedding 的分布趋势，PESQ 比较重建音质，Whisper transcript 辅助判断内容是否保住。</p>
-        <div class="map"><span class="node">speech</span><span class="arrow">→</span><span class="node">Mimi tokenizer</span><span class="arrow">→</span><span class="node">speech tokens</span><span class="arrow">→</span><span class="node">CSM speech LLM</span><span class="arrow">→</span><span class="node">detokenizer</span></div>
-        <p class="muted">来源：<a href="https://www.bilibili.com/video/BV1JKoeBiEt4?p=21">https://www.bilibili.com/video/BV1JKoeBiEt4?p=21</a></p>
+<body data-course="李宏毅 LLM 课程" data-unit="20">
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅 LLM 课程</a>
+        <span class="sep">/</span>
+        <span>20</span>
       </div>
-      <div class="route"><h3>学完后要会做四件事</h3><ol><li>解释 cascade speech model 为什么会丢失副语言资讯。</li><li>把 Mimi 的 VQ / RVQ、多层 token、frame 方向讲清楚。</li><li>用 UMAP、PESQ、Whisper transcript 判断不同实验该看什么。</li><li>说明 CSM 如何用 text + audio prompt 生成新的语音。</li></ol></div>
-    </section>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <section id="skeleton">
-      <div class="head"><h2>概念骨架</h2><span class="tag">MAP</span></div>
-      <div class="grid3"><div class="box soft"><h3>Tokenizer：把语音离散化</h3><p>Mimi 输入 24 kHz 音讯，按时间切成 frame，经 convolution、transformer、linear projection，再用 VQ / RVQ 量化成多层 token。</p></div><div class="box"><h3>Detokenizer：把 token 还原成语音</h3><p>如果 token 保留了足够资讯，detokenizer 重建出来的音讯就会接近原音。PESQ、听感和 transcript 是三种不同视角。</p></div><div class="box warn"><h3>Backbone：用 token 生成新语音</h3><p>CSM 1B 接收 text 和 audio prompt，输出新语音。它使用 Mimi token，所以前两段观察会直接影响你理解第三段生成。</p></div></div>
-      <table class="metric-table" style="margin-top:14px"><tr><th>Section</th><th>观察对象</th><th>关键问题</th><th>题目</th></tr><tr><td>1</td><td>Mimi tokenizer / speech tokens</td><td>token 层、VQ/RVQ、UMAP 情绪分布</td><td>1-6</td></tr><tr><td>2</td><td>Mimi detokenizer</td><td>重建品质、shuffle token、Alice/James token 交错</td><td>7-10</td></tr><tr><td>3</td><td>CSM backbone LLM</td><td>speech LLM 如何生成新音讯与 voice cloning</td><td>11-12</td></tr></table>
-    </section>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">LEE HUNG-YI LLM 2026 · P21</div>
+      <div class="hero-meta">
+        <span class="hero-badge">20</span>
+      </div>
+      <h1 class="hero-title">20_P21｜作业10：Speech Generation</h1>
+      <p class="hero-desc">这一节把语音生成拆成三个问题：语音怎样变成模型可处理的 token，token 怎样还原成人能听懂的音讯，模型怎样在 token 空间里生成新语音。字幕里反复强调一点：如果系统先用 ASR 把语音转成文字，再让 LLM 回答，最后用 TTS 读出来，情绪、讽刺、笑声、音色这些资讯很容易在转文字时消失。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../19_P20_作业9/学习页.html">上一节</a>
+            <a href="../21_P22_2024版LLM大模型课程_第0讲：课程说明/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="terms">
-      <div class="head"><h2>术语表</h2><span class="tag">TERMS</span></div>
-      <table class="metric-table">
-        <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
-        <tr><td>speech generation</td><td>输入一段语音或条件，输出有关系的新语音。</td><td>输入 speech sequence，输出与输入存在任务关系的 speech sequence。</td><td>以为任意输出音档都算生成；输出必须服务翻译、对话、换声等任务。</td></tr>
-        <tr><td>cascade model</td><td>ASR、LLM、TTS 串起来。</td><td>先把语音转文字，再由文字模型回答，最后把文字转成语音。</td><td>以为文字能完整保留语气、情绪、音色和笑声。</td></tr>
-        <tr><td>Mimi codec</td><td>语音的 tokenizer 加 detokenizer。</td><td>共同训练 encoder、quantizer、decoder，让音讯可离散化并可重建。</td><td>以为 tokenizer 和 detokenizer 是互不相关的两个工具。</td></tr>
-        <tr><td>VQ</td><td>从 codebook 里找最近的 token。</td><td>Vector Quantization，把连续 embedding 映射到最近的 codebook vector。</td><td>以为 token id 的数字大小有连续语义。</td></tr>
-        <tr><td>RVQ</td><td>第一层不够，再量化剩下的误差。</td><td>Residual Vector Quantization，逐层量化 residual，让离散表示更接近原 embedding。</td><td>以为层数越多只是重复，没有补新的资讯。</td></tr>
-        <tr><td>coarse / fine token</td><td>粗层抓大结构，细层补细节。</td><td>较前层常保留较粗的语义或声学结构，后层继续补 residual 细节。</td><td>以为任意一层都保留同样资讯。</td></tr>
-        <tr><td>UMAP</td><td>把高维 token embedding 画成二维点图。</td><td>非线性降维工具，尽量保留局部结构，便于观察聚类趋势。</td><td>把二维距离当成原空间的精确距离。</td></tr>
-        <tr><td>PESQ</td><td>客观比较重建音质。</td><td>比较 reference audio 与 reconstructed audio，分数约 -0.5 到 4.5，越高越接近。</td><td>完全取代听感；它只回答相似度的一部分。</td></tr>
-        <tr><td>Whisper transcript</td><td>把音讯转写成文字来辅助判断内容。</td><td>用 ASR 看重建后说的内容是否接近原句。</td><td>以为 transcript 能说明音色和情绪是否保住。</td></tr>
-        <tr><td>CSM</td><td>使用 Mimi token 的 speech LLM。</td><td>可输入 text + audio prompt，生成带 voice cloning 特性的语音。</td><td>以为它只是普通 TTS，不需要 speech tokens。</td></tr>
-      </table>
-      <p class="checkpoint">读完术语表，先能把“语义内容”“情绪/音色”“重建音质”分开说。P21 的很多选择题就卡在这三件事被混成一件事。</p>
-    </section>
+        </ul>
+      </div>
+    </div>
+  </header>
 
-    <section id="lecture">
-      <div class="head"><h2>讲义主线</h2><span class="tag">LECTURE</span></div>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#skeleton">概念骨架</a>
+      <a href="#terms">术语表</a>
+      <a href="#lecture">讲义主线</a>
+      <a href="#source">来源整理</a>
+      <a href="#example">最小例子</a>
+      <a href="#viz">交互观察</a>
+      <a href="#diagnosis">误区诊断</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="skeleton">
+        <div class="head">
+          <h2>概念骨架</h2>
+          <span class="tag">MAP</span>
+        </div>
+<p>Tokenizer：把语音离散化Mimi 输入 24 kHz 音讯，按时间切成 frame，经 convolution、transformer、linear projection，再用 VQ / RVQ 量化成多层 token。Detokenizer：把 token 还原成语音如果 token 保留了足够资讯，detokenizer 重建出来的音讯就会接近原音。PESQ、听感和 transcript 是三种不同视角。Backbone：用 token 生成新语音CSM 1B 接收 text 和 audio prompt，输出新语音。它使用 Mimi token，所以前两段观察会直接影响你理解第三段生成。</p>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>术语表</h2>
+          <span class="tag">TERMS</span>
+        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>术语</th><th>直觉解释</th><th>准确说法</th><th>常见误解</th></tr>
+<tr><td>speech generation</td><td>输入一段语音或条件，输出有关系的新语音。</td><td>输入 speech sequence，输出与输入存在任务关系的 speech sequence。</td><td>以为任意输出音档都算生成；输出必须服务翻译、对话、换声等任务。</td></tr><tr><td>cascade model</td><td>ASR、LLM、TTS 串起来。</td><td>先把语音转文字，再由文字模型回答，最后把文字转成语音。</td><td>以为文字能完整保留语气、情绪、音色和笑声。</td></tr><tr><td>Mimi codec</td><td>语音的 tokenizer 加 detokenizer。</td><td>共同训练 encoder、quantizer、decoder，让音讯可离散化并可重建。</td><td>以为 tokenizer 和 detokenizer 是互不相关的两个工具。</td></tr><tr><td>VQ</td><td>从 codebook 里找最近的 token。</td><td>Vector Quantization，把连续 embedding 映射到最近的 codebook vector。</td><td>以为 token id 的数字大小有连续语义。</td></tr><tr><td>RVQ</td><td>第一层不够，再量化剩下的误差。</td><td>Residual Vector Quantization，逐层量化 residual，让离散表示更接近原 embedding。</td><td>以为层数越多只是重复，没有补新的资讯。</td></tr><tr><td>coarse / fine token</td><td>粗层抓大结构，细层补细节。</td><td>较前层常保留较粗的语义或声学结构，后层继续补 residual 细节。</td><td>以为任意一层都保留同样资讯。</td></tr><tr><td>UMAP</td><td>把高维 token embedding 画成二维点图。</td><td>非线性降维工具，尽量保留局部结构，便于观察聚类趋势。</td><td>把二维距离当成原空间的精确距离。</td></tr><tr><td>PESQ</td><td>客观比较重建音质。</td><td>比较 reference audio 与 reconstructed audio，分数约 -0.5 到 4.5，越高越接近。</td><td>完全取代听感；它只回答相似度的一部分。</td></tr><tr><td>Whisper transcript</td><td>把音讯转写成文字来辅助判断内容。</td><td>用 ASR 看重建后说的内容是否接近原句。</td><td>以为 transcript 能说明音色和情绪是否保住。</td></tr><tr><td>CSM</td><td>使用 Mimi token 的 speech LLM。</td><td>可输入 text + audio prompt，生成带 voice cloning 特性的语音。</td><td>以为它只是普通 TTS，不需要 speech tokens。</td></tr>
+        </table></div>
+<p>读完术语表，先能把“语义内容”“情绪/音色”“重建音质”分开说。P21 的很多选择题就卡在这三件事被混成一件事。</p>
+      </section>
+      <section id="lecture">
+        <div class="head">
+          <h2>讲义主线</h2>
+          <span class="tag">LECTURE</span>
+        </div>
       <div class="grid2">
         <div class="box">
-          <h3>1. 为什么不满足于 ASR + LLM + TTS</h3>
-          <p>字幕里的例子是，一个人用生气或讽刺的语气说“你真厉害”。ASR 只会留下文字“你真厉害”。这句话单独看可以是称赞，也可以是讽刺；一旦情绪和语调被丢掉，后面的 LLM 很可能按普通称赞来回答，TTS 再把回答读出来，系统就错过了原始语音里的关键信号。</p>
-          <p>cascade model 的问题不是“不能工作”，而是中间的文字瓶颈太窄。文字擅长表示语义内容，却不擅长保留说话人、音色、笑声、停顿、情绪强度。P21 要你观察 speech token model，是因为它尝试把语音先变成离散 token，让模型在 speech token domain 里处理较完整的语音资讯。</p>
-          <p>判断句：如果一个系统先把语音压成 transcript，再进入语言模型，它就可能丢掉 transcript 以外的声音线索。</p>
+<h3>1. 为什么不满足于 ASR + LLM + TTS</h3>
+<p>字幕里的例子是，一个人用生气或讽刺的语气说“你真厉害”。ASR 只会留下文字“你真厉害”。这句话单独看可以是称赞，也可以是讽刺；一旦情绪和语调被丢掉，后面的 LLM 很可能按普通称赞来回答，TTS 再把回答读出来，系统就错过了原始语音里的关键信号。</p>
+<p>cascade model 的问题中间的文字瓶颈太窄。文字擅长表示语义内容，却不擅长保留说话人、音色、笑声、停顿、情绪强度。P21 要你观察 speech token model，是因为它尝试把语音先变成离散 token，让模型在 speech token domain 里处理较完整的语音资讯。</p>
+<p>判断句：如果一个系统先把语音压成 transcript，再进入语言模型，它就可能丢掉 transcript 以外的声音线索。</p>
         </div>
         <div class="box">
-          <h3>2. Mimi codec 的任务</h3>
-          <p>Mimi 是 codec：前半段 tokenizer 把音讯变成 tokens，后半段 detokenizer 把 tokens 重建回音讯。它们不是临时拼起来的两个工具，而是在训练时一起优化，让输入音讯和输出音讯尽量接近。</p>
-          <p>作业不要求你训练 Mimi，只用已经训练好的模型观察它的行为。你要看的不是“模型会不会跑”，而是 token 里面到底保住了什么。能保住内容、情绪、音色，detokenizer 才有机会重建出像原音的结果；保不住的部分，后面再怎么解码也补不回来。</p>
-          <p>判断句：遇到 codec 题，先问 token 是否足以让 detokenizer 重建原音，而不是只问 token id 长什么样。</p>
-        </div>
-      </div>
-      <div class="grid3" style="margin-top:14px">
-        <div class="box soft">
-          <h3>3. 从音讯到二维 token 表</h3>
-          <p>Mimi 输入固定 24 kHz 的音讯，再按时间切成 frame。字幕中提到 frame 率是 12.5 Hz，也就是沿时间轴抽出一段段表示。每个 frame 经过 convolution、transformer 和 linear projection 后，得到连续 embedding。</p>
-          <p>文字 token 通常是一维序列；Mimi 的 speech tokens 更像二维表。横向是时间 frame，纵向是 quantizer layer。你看到的某个 token id，必须同时知道它属于哪一层、哪个时间片，才有解释意义。</p>
-          <p>判断句：如果只把 speech token 当成一串像文字一样的 id，就会看不懂后面的 shuffle、split index 和 layer 观察。</p>
-        </div>
-        <div class="box">
-          <h3>4. VQ / RVQ 怎样把连续向量离散化</h3>
-          <p>VQ 的动作很朴素：先有一个训练好的 codebook，输入一个 embedding 后，找离它最近的 codebook vector，然后用对应 token 表示它。这样做能把连续向量变成离散 token，但一定会留下误差。</p>
-          <p>RVQ 继续处理这个误差。第一层量化后，原 embedding 与选中 vector 之间有 residual；第二层再对 residual 找最近 token，后面层继续重复。层数越多，离散表示理论上越接近原 embedding，但结构也更复杂。</p>
-          <p>判断句：VQ 回答“第一步选哪个 token”，RVQ 回答“剩下的误差怎样逐层补”。</p>
-        </div>
-        <div class="box warn">
-          <h3>5. coarse 与 fine 不等于好坏</h3>
-          <p>字幕里把第 0 层称为 VQ 层，后面的 residual 层从第 1 层往后排。Mimi 可用到 32 层，作业会让你观察第 0、6、16、31 层。通常越后面的层越 fine，补更细的 residual；前面的层更 coarse，可能承载较粗的语义或声学结构。</p>
-          <p>coarse/fine 不是“前层差、后层好”的简单排序。前层可能对内容轮廓更重要，后层可能让音色或细节更接近原音。作业的交错实验正是为了让你听出不同层换成 Alice 或 James 后，结果怎么变。</p>
-          <p>判断句：说某层“有用”时，要说明它对内容、音色、情绪、清晰度中的哪一项有影响。</p>
-        </div>
-        <div class="box soft">
-          <h3>6. UMAP 只帮你看趋势</h3>
-          <p>Section 1 的第 6 题用情绪数据集。每个音档已有情绪标签，例如 amused、angry、disgusted、sleepy、neutral。流程是把音档送进 Mimi tokenizer，取某一层 token 对应的 embedding，再沿时间 frame 做平均，得到固定长度的向量。</p>
-          <p>UMAP 把这些高维向量投到二维。不同颜色的点如果容易分开，说明这一层的表示可能带有可区分的情绪信息；如果挤在一起，就不能轻易说它能分辨情绪。但 UMAP 不是精确分类器，二维图上的远近不能直接等同于原始高维距离。</p>
-          <p>判断句：UMAP 可以支持“看起来有聚类趋势”，不能单独支持“这一层必然能准确分类”。</p>
-        </div>
-        <div class="box">
-          <h3>7. Detokenizer、PESQ 与 transcript 分别看什么</h3>
-          <p>Section 2 才把 tokens 解回音讯。第 7-8 题比较中文、英文、笑声、音乐的重建质量。语音质量带主观性，所以作业引入 PESQ：输入 reference audio 和 reconstructed audio，分数越高表示越接近原始音讯。</p>
-          <p>PESQ 不是全部答案。它能帮你减少纯听感的摇摆，但听感仍能发现一些指标没覆盖的现象。第 10 题还提供 Whisper transcript，因为交错 token 后，音色可能像某个人，但内容是否接近原句要靠 transcript 辅助判断。</p>
-          <p>判断句：PESQ 看音质相似，Whisper transcript 看文字内容，主观听感补充情绪、音色和自然度。</p>
-        </div>
-        <div class="box warn">
-          <h3>8. shuffle 和 split index 在检查层的功能</h3>
-          <p>第 9 题把四层 tokens 随机打乱，你需要尝试不同排列再听重建结果。四层共有 4! = 24 种排列，最坏情况下要系统试完。只听两三个结果就下结论，很容易错过正确顺序。</p>
-          <p>第 10 题把 Alice 和 James 两段同长度音档都 token 化成八层，再按 split index 交错。例如前四层来自 Alice，后四层来自 James，然后 detokenizer 重建。红蓝层的切换让你观察前后层对说话人、内容、清晰度的影响。</p>
-          <p>判断句：shuffle 检查层顺序，split index 检查不同层携带哪类语音资讯。</p>
-        </div>
-      </div>
-      <div class="grid2" style="margin-top:14px">
-        <div class="box">
-          <h3>9. CSM 才是在生成新语音</h3>
-          <p>前两段做的是 reconstruction：输入一段音讯，变成 token，再尽量还原同一段音讯。Section 3 在 tokenizer 和 detokenizer 中间加入 CSM 1B。它接收 text 和 audio prompt，输出新的语音，不只是把原音讯还原回来。</p>
-          <p>字幕里的示例是给 speaker one 和 speaker two 的 audio prompt，再给一句 text prompt，如让 speaker one 说 “Are you ok”。模型需要从 audio prompt 学到说话人的声音条件，再按 text prompt 生成没有直接出现过的新音讯。这就是 voice cloning 式的 speech generation。</p>
-          <p>判断句：reconstruction 问“原音能不能回来”，generation 问“给定条件能不能产生新的目标音讯”。</p>
+<h3>2. Mimi codec 的任务</h3>
+<p>Mimi 是 codec：前半段 tokenizer 把音讯变成 tokens，后半段 detokenizer 把 tokens 重建回音讯。它们在训练时一起优化，让输入音讯和输出音讯尽量接近。</p>
+<p>作业不要求你训练 Mimi，只用已经训练好的模型观察它的行为。你要看的token 里面到底保住了什么。能保住内容、情绪、音色，detokenizer 才有机会重建出像原音的结果；保不住的部分，后面再怎么解码也补不回来。</p>
+<p>判断句：遇到 codec 题，先问 token 是否足以让 detokenizer 重建原音，而不是只问 token id 长什么样。</p>
+<ol>
+<li>从音讯到二维 token 表</li>
+</ol>
+<p>Mimi 输入固定 24 kHz 的音讯，再按时间切成 frame。字幕中提到 frame 率是 12.5 Hz，也就是沿时间轴抽出一段段表示。每个 frame 经过 convolution、transformer 和 linear projection 后，得到连续 embedding。</p>
+<p>文字 token 通常是一维序列；Mimi 的 speech tokens 更像二维表。横向是时间 frame，纵向是 quantizer layer。你看到的某个 token id，必须同时知道它属于哪一层、哪个时间片，才有解释意义。</p>
+<p>判断句：如果只把 speech token 当成一串像文字一样的 id，就会看不懂后面的 shuffle、split index 和 layer 观察。</p>
+<ol>
+<li>VQ / RVQ 怎样把连续向量离散化</li>
+</ol>
+<p>VQ 的动作很朴素：先有一个训练好的 codebook，输入一个 embedding 后，找离它最近的 codebook vector，然后用对应 token 表示它。这样做能把连续向量变成离散 token，但一定会留下误差。</p>
+<p>RVQ 继续处理这个误差。第一层量化后，原 embedding 与选中 vector 之间有 residual；第二层再对 residual 找最近 token，后面层继续重复。层数越多，离散表示理论上越接近原 embedding，但结构也更复杂。</p>
+<p>判断句：VQ 回答“第一步选哪个 token”，RVQ 回答“剩下的误差怎样逐层补”。</p>
+<ol>
+<li>coarse 与 fine 不等于好坏</li>
+</ol>
+<p>字幕里把第 0 层称为 VQ 层，后面的 residual 层从第 1 层往后排。Mimi 可用到 32 层，作业会让你观察第 0、6、16、31 层。通常越后面的层越 fine，补更细的 residual；前面的层更 coarse，可能承载较粗的语义或声学结构。</p>
+<p>coarse/fine 不是“前层差、后层好”的简单排序。前层可能对内容轮廓更重要，后层可能让音色或细节更接近原音。作业的交错实验正是为了让你听出不同层换成 Alice 或 James 后，结果怎么变。</p>
+<p>判断句：说某层“有用”时，要说明它对内容、音色、情绪、清晰度中的哪一项有影响。</p>
+<ol>
+<li>UMAP 只帮你看趋势</li>
+</ol>
+<p>Section 1 的第 6 题用情绪数据集。每个音档已有情绪标签，例如 amused、angry、disgusted、sleepy、neutral。流程是把音档送进 Mimi tokenizer，取某一层 token 对应的 embedding，再沿时间 frame 做平均，得到固定长度的向量。</p>
+<p>UMAP 把这些高维向量投到二维。不同颜色的点如果容易分开，说明这一层的表示可能带有可区分的情绪信息；如果挤在一起，就不能轻易说它能分辨情绪。但 UMAP 不是精确分类器，二维图上的远近不能直接等同于原始高维距离。</p>
+<p>判断句：UMAP 可以支持“看起来有聚类趋势”，不能单独支持“这一层必然能准确分类”。</p>
+<ol>
+<li>Detokenizer、PESQ 与 transcript 分别看什么</li>
+</ol>
+<p>Section 2 才把 tokens 解回音讯。第 7-8 题比较中文、英文、笑声、音乐的重建质量。语音质量带主观性，所以作业引入 PESQ：输入 reference audio 和 reconstructed audio，分数越高表示越接近原始音讯。</p>
+<p>PESQ 不是全部答案。它能帮你减少纯听感的摇摆，但听感仍能发现一些指标没覆盖的现象。第 10 题还提供 Whisper transcript，因为交错 token 后，音色可能像某个人，但内容是否接近原句要靠 transcript 辅助判断。</p>
+<p>判断句：PESQ 看音质相似，Whisper transcript 看文字内容，主观听感补充情绪、音色和自然度。</p>
+<ol>
+<li>shuffle 和 split index 在检查层的功能</li>
+</ol>
+<p>第 9 题把四层 tokens 随机打乱，你需要尝试不同排列再听重建结果。四层共有 4! = 24 种排列，最坏情况下要系统试完。只听两三个结果就下结论，很容易错过正确顺序。</p>
+<p>第 10 题把 Alice 和 James 两段同长度音档都 token 化成八层，再按 split index 交错。例如前四层来自 Alice，后四层来自 James，然后 detokenizer 重建。红蓝层的切换让你观察前后层对说话人、内容、清晰度的影响。</p>
+<p>判断句：shuffle 检查层顺序，split index 检查不同层携带哪类语音资讯。</p>
         </div>
         <div class="box">
-          <h3>10. Colab 的运行顺序很重要</h3>
-          <p>Colab 先有环境准备：检查 GPU、安装套件、下载资料。Section 1 会载入 Mimi，并定义取得 Mimi tokens 的核心函数。字幕特别提醒，这个函数后面还会用到；如果前面没跑，Section 2 和 Section 3 会缺少必要对象。</p>
-          <p>CSM 还需要 Hugging Face 上的授权与 token。生成结果有随机性，偶尔不好听不代表机制错误；按作业要求多生成几次，再结合输出音档和题目选项判断。P21 表面上只是 12 道选择题，实际是在训练你把观察结果转成可解释的判断。</p>
-          <p>判断句：跑作业时先确认环境、Mimi 载入、取 token 函数、待填写代码格和输出观察都完成，再回去选答案。</p>
+<h3>9. CSM 才是在生成新语音</h3>
+<p>前两段做的是 reconstruction：输入一段音讯，变成 token，再尽量还原同一段音讯。Section 3 在 tokenizer 和 detokenizer 中间加入 CSM 1B。它接收 text 和 audio prompt，输出新的语音，不只是把原音讯还原回来。</p>
+<p>字幕里的示例是给 speaker one 和 speaker two 的 audio prompt，再给一句 text prompt，如让 speaker one 说 “Are you ok”。模型需要从 audio prompt 学到说话人的声音条件，再按 text prompt 生成没有直接出现过的新音讯。这就是 voice cloning 式的 speech generation。</p>
+<p>判断句：reconstruction 问“原音能不能回来”，generation 问“给定条件能不能产生新的目标音讯”。</p>
+        </div>
+        <div class="box">
+<h3>10. Colab 的运行顺序很重要</h3>
+<p>Colab 先有环境准备：检查 GPU、安装套件、下载资料。Section 1 会载入 Mimi，并定义取得 Mimi tokens 的核心函数。字幕特别提醒，这个函数后面还会用到；如果前面没跑，Section 2 和 Section 3 会缺少必要对象。</p>
+<p>CSM 还需要 Hugging Face 上的授权与 token。生成结果有随机性，偶尔不好听不代表机制错误；按作业要求多生成几次，再结合输出音档和题目选项判断。P21 表面上只是 12 道选择题，实际是在训练你把观察结果转成可解释的判断。</p>
+<p>判断句：跑作业时先确认环境、Mimi 载入、取 token 函数、待填写代码格和输出观察都完成，再回去选答案。</p>
+        </div>
+        <div class="box info">
+<h3>完整链路</h3>
+<p>从头串起来：cascade speech model 会把语音先压成文字，容易丢失情绪和音色。Mimi codec 用 VQ/RVQ 把语音变成多层离散 tokens，并用 detokenizer 尝试重建。UMAP 帮你观察某层 token embedding 是否呈现情绪聚类，PESQ 和 Whisper transcript 帮你判断重建后的音质和内容。最后 CSM 作为 backbone speech LLM，在 speech token domain 里生成新的语音。读完这一段，你应该能拿到一个语音生成系统，判断它是 cascade 路线还是 speech token 路线，并说出可能保留或丢失哪些资讯。</p>
         </div>
       </div>
-      <div class="box info" style="margin-top:14px"><h3>完整链路</h3><p>从头串起来：cascade speech model 会把语音先压成文字，容易丢失情绪和音色。Mimi codec 用 VQ/RVQ 把语音变成多层离散 tokens，并用 detokenizer 尝试重建。UMAP 帮你观察某层 token embedding 是否呈现情绪聚类，PESQ 和 Whisper transcript 帮你判断重建后的音质和内容。最后 CSM 作为 backbone speech LLM，在 speech token domain 里生成新的语音。读完这一段，你应该能拿到一个语音生成系统，判断它是 cascade 路线还是 speech token 路线，并说出可能保留或丢失哪些资讯。</p></div>
-    </section>
-
-    <section id="source">
-      <div class="head"><h2>来源整理</h2><span class="tag">SOURCE</span></div>
-      <div class="source-lines">
-        <div class="box"><h3>作业目标</h3><p>了解 Mimi model 里的 token 如何表示语音，观察 token 中可能包含的资讯；再用 CSM 观察 speech token 怎样参与生成全新的语音内容。</p></div>
-        <div class="box"><h3>Section 1</h3><p>运行 Mimi tokenizer，观察 token 层、token embedding，以及五类情绪音档在 UMAP 上的分布。第 6 题是多选题，需要注意题目选项。</p></div>
-        <div class="box"><h3>Section 2</h3><p>用 detokenizer 重建中文、英文、笑声、音乐；用 PESQ 评估重建品质；尝试 shuffle token 排列；观察 Alice/James token 交错结果。</p></div>
-        <div class="box"><h3>Section 3</h3><p>使用 CSM 1B，需要 Hugging Face 授权与 token。通过 text + audio prompt 生成新语音，并回答 CSM 机制相关选择题。</p></div>
-        <div class="box"><h3>评分规则</h3><p>原作业共 12 题、10 分：10 题单选各 0.8 分，2 题多选各 1 分。提交位置是 NTU COOL，不是 Judge Boy。</p></div>
-        <div class="box"><h3>做题提醒</h3><p>Colab 里有些代码格需要主动填写或修改，其他代码格多数按顺序执行。CSM 生成带随机性，结果异常时先重复生成，再结合题目要求判断。</p></div>
-      </div>
-      <div class="grid2" style="margin-top:14px">
-        <div class="box greenbox"><h3>语音作业观察模板</h3><ol><li>Section 1 记录 token shape、层号、UMAP 聚类现象和情绪标签，不把二维图当精确分类器。</li><li>Section 2 同时记录听感、PESQ 和 Whisper transcript，分别判断音质、接近程度和文字内容。</li><li>Section 3 区分 reconstruction 与 generation：CSM 是根据 prompt 生成新语音，不是简单还原原音。</li><li>遇到异常输出时先重复生成，再检查 Hugging Face 授权、Mimi token block 和运行顺序。</li></ol><p class="checkpoint">你现在应该能做什么：把一段语音结果拆成内容、音色、情绪、音质和生成条件五个观察点。</p></div>
-        <div class="box"><h3>worked example：Whisper 正确但听感差</h3><p>如果 Whisper transcript 与原句一致，但重建音讯有明显机械声或情绪丢失，不能说“重建完全成功”。更准确的结论是：语义内容保留较好，但声学细节或副语言资讯不足，需要结合 PESQ、听感和 token 层实验继续判断。</p></div>
-      </div>
-    </section>
-
-    <section id="example">
-      <div class="head"><h2>最小例子</h2><span class="tag">EXAMPLE</span></div>
-      <p>下面的伪代码不追求和 Colab 完全同名，只用来把三个核心动作讲清：取得 Mimi token、重建音讯、用 CSM 生成新语音。</p>
-      <div class="codebar"><span class="label">示例 1：取得多层 speech tokens</span><span class="kind">python</span></div>
-      <pre><code>audio = load_audio("angry_sentence.wav", sample_rate=24000)
+      </section>
+      <section id="source">
+        <div class="head">
+          <h2>来源整理</h2>
+          <span class="tag">SOURCE</span>
+        </div>
+<p>作业目标了解 Mimi model 里的 token 如何表示语音，观察 token 中可能包含的资讯；再用 CSM 观察 speech token 怎样参与生成全新的语音内容。</p>
+<p>Section 1运行 Mimi tokenizer，观察 token 层、token embedding，以及五类情绪音档在 UMAP 上的分布。第 6 题是多选题，需要注意题目选项。</p>
+<p>Section 2用 detokenizer 重建中文、英文、笑声、音乐；用 PESQ 评估重建品质；尝试 shuffle token 排列；观察 Alice/James token 交错结果。</p>
+<p>Section 3使用 CSM 1B，需要 Hugging Face 授权与 token。通过 text + audio prompt 生成新语音，并回答 CSM 机制相关选择题。</p>
+<p>评分规则原作业共 12 题、10 分：10 题单选各 0.8 分，2 题多选各 1 分。提交位置是 NTU COOL，不是 Judge Boy。</p>
+<p>做题提醒Colab 里有些代码格需要主动填写或修改，其他代码格多数按顺序执行。CSM 生成带随机性，结果异常时先重复生成，再结合题目要求判断。</p>
+        <div class="box">
+<h3>worked example：Whisper 正确但听感差</h3>
+<p>如果 Whisper transcript 与原句一致，但重建音讯有明显机械声或情绪丢失，不能说“重建完全成功”。更准确的结论是：语义内容保留较好，但声学细节或副语言资讯不足，需要结合 PESQ、听感和 token 层实验继续判断。</p>
+        </div>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>最小例子</h2>
+          <span class="tag">EXAMPLE</span>
+        </div>
+<p>下面的伪代码不追求和 Colab 完全同名，只用来把三个核心动作讲清：取得 Mimi token、重建音讯、用 CSM 生成新语音。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-example-1">复制</button></div>
+        <pre id="code-example-1" data-export-context="代码" data-export-lang="text"><code class="language-text">audio = load_audio("angry_sentence.wav", sample_rate=24000)
 tokens = mimi_tokenizer.encode(audio, num_layers=8)
 
 # tokens shape 类似 [layers, frames]
-layer0 = tokens[0]      # VQ / coarse token
-layer7 = tokens[7]      # later RVQ / fine detail</code></pre>
-      <p class="checkpoint">读这段代码时看两件事：`sample_rate=24000` 对应 Mimi 的输入规格，`[layers, frames]` 对应语音 token 的二维结构。删掉层维度，后面的 layer 分析就没法做。</p>
-      <div class="codebar"><span class="label">示例 2：重建并用 PESQ 比较</span><span class="kind">python</span></div>
-      <pre><code>reconstructed = mimi_detokenizer.decode(tokens)
-score = pesq(reference_audio=audio, degraded_audio=reconstructed)
-
-print(score)  # 越高代表重建越接近 reference</code></pre>
-      <p class="checkpoint">这里的 reference 是 tokenizer 前的原始音讯，degraded 是 detokenizer 重建后的音讯。PESQ 高只能说明两者更接近，不能单独证明情绪、说话人和自然度都保住。</p>
-      <div class="codebar"><span class="label">示例 3：CSM speech generation</span><span class="kind">python</span></div>
-      <pre><code>audio_prompt = [
-    ("speaker_1", "unhappy", speaker1_audio),
-    ("speaker_2", "and sad", speaker2_audio),
+layer0 = tokens[0] # VQ / coarse token
+layer7 = tokens[7] # later RVQ / fine detail</code></pre>
+<p>读这段代码时看两件事：<code>sample_rate=24000</code> 对应 Mimi 的输入规格，<code>[layers, frames]</code> 对应语音 token 的二维结构。删掉层维度，后面的 layer 分析就没法做。</p>
+        </div>
+<p>示例 2：重建并用 PESQ 比较python</p>
+<p>这里的 reference 是 tokenizer 前的原始音讯，degraded 是 detokenizer 重建后的音讯。PESQ 高只能说明两者更接近，不能单独证明情绪、说话人和自然度都保住。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-example-2">复制</button></div>
+        <pre id="code-example-2" data-export-context="代码" data-export-lang="text"><code class="language-text">audio_prompt = [
+ ("speaker_1", "unhappy", speaker1_audio),
+ ("speaker_2", "and sad", speaker2_audio),
 ]
 text_prompt = "speaker_1: Are you ok?"
 
 new_audio = csm.generate(audio_prompt=audio_prompt, text_prompt=text_prompt)</code></pre>
-      <p class="checkpoint">CSM 这里不是还原 `speaker1_audio`，而是根据 speaker 条件和文字条件生成一句新语音。判断它是否成功，要同时听声音是否像、内容是否对、结果是否自然。</p>
-    </section>
-
-    <section id="viz">
-      <div class="head"><h2>交互观察</h2><span class="tag">OBSERVE</span></div>
-      <div class="viz-panel"><div class="viz-grid"><div class="viz-cell"><h3>RVQ 层数直觉</h3><div class="slider-row"><span>layers used</span><input id="layers" type="range" min="1" max="32" value="8"><b id="layersOut">8</b></div><div class="calc-card"><div><b>detail</b><strong id="detailOut">中</strong></div><div><b>tokens</b><strong id="tokenOut">8xT</strong></div><div><b>cost</b><strong id="costOut">中</strong></div></div><p id="layerText" class="checkpoint"></p></div><div class="viz-cell"><h3>观察工具切换</h3><div class="seg"><button data-check="umap" class="active">UMAP</button><button data-check="pesq">PESQ</button><button data-check="whisper">Whisper</button><button data-check="shuffle">Shuffle</button></div><p id="checkText" class="checkpoint"></p></div></div></div>
-      <p>这两个小观察只抓最容易混的点：层数越多，通常能补更多细节，但不能直接推出“后层一定更重要”；不同工具回答的问题也不同，拿错工具就会答错选择题。</p>
-    </section>
-
-    <section id="diagnosis">
-      <div class="head"><h2>误区诊断</h2><span class="tag">DIAGNOSIS</span></div>
+<p>CSM 这里根据 speaker 条件和文字条件生成一句新语音。判断它是否成功，要同时听声音是否像、内容是否对、结果是否自然。</p>
+        </div>
+      </section>
+      <section id="viz">
+        <div class="head">
+          <h2>交互观察</h2>
+          <span class="tag">OBSERVE</span>
+        </div>
+<p>RVQ 层数直觉layers used<b>8</b><b>detail</b><b>中</b><b>tokens</b><b>8xT</b><b>cost</b><b>中</b>观察工具切换UMAPPESQWhisperShuffle</p>
+      </section>
+      <section id="diagnosis">
+        <div class="head">
+          <h2>误区诊断</h2>
+          <span class="tag">DIAGNOSIS</span>
+        </div>
       <div class="grid2">
         <div class="box redsoft">
-          <h3>常见坑</h3>
-          <ol>
-            <li>把 speech token 当文字 token。错因：忽略 layer/frame 二维结构；后果：看不懂 Mimi 输出；修法：按时间 frame 和 RVQ layer 分开解释。</li>
-            <li>以为 ASR 文本保留全部语音资讯。错因：只看语义内容；后果：忽略情绪、音色、笑声等副语言信息；修法：比较 cascade 和 speech token model。</li>
-            <li>UMAP 图过度解读。错因：把二维距离当精确距离；后果：从图上读出不存在的强结论；修法：只把它当观察聚类趋势的工具。</li>
-            <li>只靠主观听感回答重建题。错因：忽略 PESQ / transcript；后果：不同人判断不一致；修法：客观指标为主，听感为辅。</li>
-            <li>第 9 题只试几个排列就下结论。错因：没意识到四层有 24 种排列；后果：可能错过正确重建；修法：系统枚举或记录每次排列。</li>
-            <li>CSM 生成一次不好就判定失败。错因：忽略随机性；后果：误选答案；修法：多生成几次，结合题目要求观察。</li>
-            <li>把 reconstruction 和 generation 混用。错因：没有看中间是否有 speech LLM 生成新 tokens；后果：把 Section 2 和 Section 3 的任务说反；修法：先判断输出是否是同一段音讯。</li>
-          </ol>
+<h3>常见坑</h3>
+<ol>
+<li>把 speech token 当文字 token。错因：忽略 layer/frame 二维结构；后果：看不懂 Mimi 输出；修法：按时间 frame 和 RVQ layer 分开解释。</li>
+<li>以为 ASR 文本保留全部语音资讯。错因：只看语义内容；后果：忽略情绪、音色、笑声等副语言信息；修法：比较 cascade 和 speech token model。</li>
+<li>UMAP 图过度解读。错因：把二维距离当精确距离；后果：从图上读出不存在的强结论；修法：只把它当观察聚类趋势的工具。</li>
+<li>只靠主观听感回答重建题。错因：忽略 PESQ / transcript；后果：不同人判断不一致；修法：客观指标为主，听感为辅。</li>
+<li>第 9 题只试几个排列就下结论。错因：没意识到四层有 24 种排列；后果：可能错过正确重建；修法：系统枚举或记录每次排列。</li>
+<li>CSM 生成一次不好就判定失败。错因：忽略随机性；后果：误选答案；修法：多生成几次，结合题目要求观察。</li>
+<li>把 reconstruction 和 generation 混用。错因：没有看中间是否有 speech LLM 生成新 tokens；后果：把 Section 2 和 Section 3 的任务说反；修法：先判断输出是否是同一段音讯。</li>
+</ol>
         </div>
         <div class="box">
-          <h3>易混概念</h3>
-          <table class="metric-table"><tr><th>概念 A</th><th>概念 B</th><th>区别</th></tr><tr><td>tokenizer</td><td>detokenizer</td><td>前者语音到 tokens；后者 tokens 到语音。</td></tr><tr><td>VQ</td><td>RVQ</td><td>VQ 找最近 token；RVQ 继续量化 residual。</td></tr><tr><td>coarse token</td><td>fine token</td><td>前层更粗，后层补细节；二者不是简单好坏关系。</td></tr><tr><td>PESQ</td><td>Whisper transcript</td><td>PESQ 看音质相似；transcript 看文字内容是否接近。</td></tr><tr><td>reconstruction</td><td>generation</td><td>重建还原输入音档；生成产生新的目标音档。</td></tr><tr><td>voice cloning</td><td>ordinary TTS</td><td>voice cloning 还要利用 audio prompt 的说话人条件，不只是读文字。</td></tr></table>
+<h3>易混概念</h3>
+<p>概念 A概念 B区别tokenizerdetokenizer前者语音到 tokens；后者 tokens 到语音。VQRVQVQ 找最近 token；RVQ 继续量化 residual。coarse tokenfine token前层更粗，后层补细节；二者不是简单好坏关系。PESQWhisper transcriptPESQ 看音质相似；transcript 看文字内容是否接近。reconstructiongeneration重建还原输入音档；生成产生新的目标音档。voice cloningordinary TTSvoice cloning 还要利用 audio prompt 的说话人条件，不只是读文字。</p>
         </div>
       </div>
-    </section>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">DRILL</span>
+        </div>
+      <div class="practice-intro">
 
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">DRILL</span></div>
-      <div class="practice-intro"><div class="review-card"><strong>作答前先抓主线</strong><p>先讲 cascade 为什么丢信息，再讲 Mimi 怎样把语音 token 化，最后讲 detokenizer 和 CSM 分别做什么。</p></div><div class="review-card"><strong>检查答案的方式</strong><p>诊断题按错因、后果、修法回答。费曼题要串起 Mimi、VQ/RVQ、UMAP、PESQ、Whisper、CSM。</p></div></div>
-      <div class="practice-group"><div class="group-head"><div><h3>一、基础概念</h3><p>确认你能说清 speech token model 的动机。</p></div><div class="quick-review"><b>作答提示</b>语音不只是文字，transcript 之外还有情绪、音色和笑声。</div></div><div class="drill-grid"><div class="q" data-role="homework" data-title="1. cascade speech model 在 ASR 阶段可能丢失情绪和音色资讯。"><div class="q-meta"><span class="pill">判断</span></div><h3>1. cascade speech model 在 ASR 阶段可能丢失情绪和音色资讯。</h3><div class="choices"><label><input type="radio" name="q1" value="对">对</label><label><input type="radio" name="q1" value="错">错</label></div></div><div class="q" data-role="homework" data-title="2. P21 作业主要提交到哪里？"><div class="q-meta"><span class="pill">选择</span></div><h3>2. P21 作业主要提交到哪里？</h3><div class="choices"><label><input type="radio" name="q2" value="NTU COOL">NTU COOL</label><label><input type="radio" name="q2" value="Judge Boy">Judge Boy</label><label><input type="radio" name="q2" value="GitHub">GitHub</label></div></div><div class="q short" data-role="homework" data-title="3. 用一句话解释 Mimi codec。"><div class="q-meta"><span class="pill">简答</span></div><h3>3. 用一句话解释 Mimi codec。</h3><textarea name="q3"></textarea></div><div class="q short" data-role="homework" data-title="4. 为什么 speech token 比 text token 更像二维结构？"><div class="q-meta"><span class="pill">解释</span></div><h3>4. 为什么 speech token 比 text token 更像二维结构？</h3><textarea name="q4"></textarea></div></div></div>
-      <div class="practice-group"><div class="group-head"><div><h3>二、Tokenizer 与 UMAP</h3><p>解释 token 层、embedding 和可视化边界。</p></div><div class="quick-review"><b>作答提示</b>UMAP 看聚类趋势，不是精确分类器。</div></div><div class="drill-grid"><div class="q short" data-role="homework" data-title="5. VQ 和 RVQ 的区别是什么？"><div class="q-meta"><span class="pill">对照</span></div><h3>5. VQ 和 RVQ 的区别是什么？</h3><textarea name="q5"></textarea></div><div class="q short" data-role="homework" data-title="6. 为什么 RVQ 层数越多，理论上重建可能越接近原 embedding？"><div class="q-meta"><span class="pill">解释</span></div><h3>6. 为什么 RVQ 层数越多，理论上重建可能越接近原 embedding？</h3><textarea name="q6"></textarea></div><div class="q short" data-role="homework" data-title="7. UMAP 图中五种情绪颜色分得开，说明什么？分不开又说明什么？"><div class="q-meta"><span class="pill">解释</span></div><h3>7. UMAP 图中五种情绪颜色分得开，说明什么？分不开又说明什么？</h3><textarea name="q7"></textarea></div><div class="q" data-role="homework" data-title="8. UMAP 降维后的二维距离可以完全等同于原始高维距离。"><div class="q-meta"><span class="pill">判断</span></div><h3>8. UMAP 降维后的二维距离可以完全等同于原始高维距离。</h3><div class="choices"><label><input type="radio" name="q8" value="对">对</label><label><input type="radio" name="q8" value="错">错</label></div></div></div></div>
-      <div class="practice-group"><div class="group-head"><div><h3>三、Detokenizer 与重建</h3><p>检查你能不能区分音质、内容和层功能。</p></div><div class="quick-review"><b>作答提示</b>听感、PESQ、transcript 各看一部分，不要互相替代。</div></div><div class="drill-grid"><div class="q short" data-role="homework" data-title="9. PESQ 在作业中用来衡量什么？"><div class="q-meta"><span class="pill">解释</span></div><h3>9. PESQ 在作业中用来衡量什么？</h3><textarea name="q9"></textarea></div><div class="q short" data-role="homework" data-title="10. 第 9 题四层 token 被打乱，最坏为什么要试 24 种？"><div class="q-meta"><span class="pill">计算</span></div><h3>10. 第 9 题四层 token 被打乱，最坏为什么要试 24 种？</h3><textarea name="q10"></textarea></div><div class="q short" data-role="homework" data-title="11. Alice/James token 交错实验可以帮助观察什么？"><div class="q-meta"><span class="pill">解释</span></div><h3>11. Alice/James token 交错实验可以帮助观察什么？</h3><textarea name="q11"></textarea></div><div class="q short" data-role="homework" data-title="12. 为什么 Whisper transcript 可辅助回答第 10 题？"><div class="q-meta"><span class="pill">解释</span></div><h3>12. 为什么 Whisper transcript 可辅助回答第 10 题？</h3><textarea name="q12"></textarea></div></div></div>
-      <div class="practice-group"><div class="group-head"><div><h3>四、错误诊断</h3><p>定位错因、说明后果，再给修法。</p></div><div class="quick-review"><b>作答提示</b>诊断题要写出观察工具：UMAP、PESQ、transcript、听感或枚举排列。</div></div><div class="drill-grid"><div class="q short" data-role="homework" data-title="13. 有人只看 ASR transcript，就说重建音讯质量很好。错因是什么、后果是什么、怎么改？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>13. 有人只看 ASR transcript，就说重建音讯质量很好。错因是什么、后果是什么、怎么改？</h3><div class="solve-note">从错因、后果、修法三点回答。</div><textarea name="q13"></textarea></div><div class="q short" data-role="homework" data-title="14. 有人把 UMAP 图当成精确分类器。问题在哪里？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>14. 有人把 UMAP 图当成精确分类器。问题在哪里？</h3><div class="solve-note">从图能说明什么、不能说明什么两面回答。</div><textarea name="q14"></textarea></div><div class="q short" data-role="homework" data-title="15. CSM 生成一次不好听，就直接选“模型不能生成”。应该如何处理？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>15. CSM 生成一次不好听，就直接选“模型不能生成”。应该如何处理？</h3><div class="solve-note">说明随机性、重复生成和观察标准。</div><textarea name="q15"></textarea></div><div class="q short" data-role="homework" data-title="16. 有人没执行 get Mimi token 的核心 block，就直接跑 section 2。会发生什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>16. 有人没执行 get Mimi token 的核心 block，就直接跑 section 2。会发生什么？</h3><div class="solve-note">说明依赖缺失、后续错误和正确运行顺序。</div><textarea name="q16"></textarea></div><div class="q short" data-role="homework" data-title="17. 有人把 reconstruction 和 generation 混用。错因是什么？" data-type="diagnostic"><div class="q-meta"><span class="pill">诊断</span></div><h3>17. 有人把 reconstruction 和 generation 混用。错因是什么？</h3><div class="solve-note">先区分 Section 2 和 Section 3，再说明中间是否有 speech LLM。</div><textarea name="q17"></textarea></div></div></div>
-      <div class="practice-group"><div class="group-head"><div><h3>五、CSM 与提交</h3><p>检查 speech LLM、voice cloning 和作业规则。</p></div><div class="quick-review"><b>作答提示</b>CSM 要 Hugging Face 授权与 token；提交位置是 NTU COOL。</div></div><div class="drill-grid"><div class="q short" data-role="homework" data-title="18. CSM 输入 text + audio prompt 后，为什么能做 voice cloning 式生成？"><div class="q-meta"><span class="pill">解释</span></div><h3>18. CSM 输入 text + audio prompt 后，为什么能做 voice cloning 式生成？</h3><textarea name="q18"></textarea></div><div class="q short" data-role="homework" data-title="19. 写出 P21 做题前的 5 条检查清单。"><div class="q-meta"><span class="pill">清单</span></div><h3>19. 写出 P21 做题前的 5 条检查清单。</h3><textarea name="q19"></textarea></div><div class="q short" data-role="homework" data-title="20. 如果想判断某层 token 是否更偏语义还是更偏音色，你会设计怎样的观察？"><div class="q-meta"><span class="pill">应用</span></div><h3>20. 如果想判断某层 token 是否更偏语义还是更偏音色，你会设计怎样的观察？</h3><textarea name="q20"></textarea></div></div></div>
-      <div class="practice-group"><div class="group-head"><div><h3>六、表达输出</h3><p>最后两题检查你能不能把本节讲顺。</p></div><div class="quick-review"><b>作答提示</b>先讲问题，再讲 token 化，最后讲观察工具和生成模型。</div></div><div class="drill-grid"><div class="q short" data-role="homework" data-title="21. 如果面试官问“P21 作业10 的核心是什么”，你会怎么答？"><div class="q-meta"><span class="pill">面试短答</span></div><h3>21. 如果面试官问“P21 作业10 的核心是什么”，你会怎么答？</h3><textarea name="q21"></textarea></div><div class="q full" data-role="homework" data-title="22. 用 6-9 句话讲清楚 P21 作业10：从 Mimi token 到 detokenizer 和 CSM speech generation。" data-type="feynman"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>22. 用 6-9 句话讲清楚 P21 作业10：从 Mimi token 到 detokenizer 和 CSM speech generation。</h3><div class="solve-note">串联 speech generation、Mimi、VQ/RVQ、UMAP、PESQ、Whisper、CSM、voice cloning。</div><textarea name="q22"></textarea></div></div></div>
-    </section>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          <div class="quick-review">作答提示 语音不只是文字，transcript 之外还有情绪、音色和笑声。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 1. cascade speech model 在 ASR 阶段可能丢失情绪和音色资讯。</h3>
 
-    <section id="export"><div class="head"><h2>练习记录</h2><span class="tag">EXPORT</span></div><p class="muted">完成练习后生成记录，留作复盘。</p><div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div><div id="quality" class="quality"></div><div id="record" class="answer">练习记录会显示在这里。</div></section>
-  </main>
-</div>
-<script src="../../../../assets/study-page.js"></script>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")],sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean),progress=document.getElementById("progress");function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?Math.min(100,scrollY/max*100)+"%":"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36) current=section.id;section.classList.toggle("in-view",Math.abs(rect.top)<innerHeight*.55);}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+current));}addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-function fallbackCopy(text,onOk,onFail){const ta=document.createElement("textarea");ta.value=text;ta.style.position="fixed";ta.style.left="-9999px";document.body.appendChild(ta);ta.focus();ta.select();try{document.execCommand("copy")?onOk():onFail();}catch(e){onFail();}finally{document.body.removeChild(ta);}}function copyText(text,onOk,onFail){if(navigator.clipboard){navigator.clipboard.writeText(text).then(onOk).catch(()=>fallbackCopy(text,onOk,onFail));}else fallbackCopy(text,onOk,onFail);}document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";copyText(code,()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);},()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});bar.appendChild(btn);});
-const layers=document.getElementById("layers");function updateLayers(){const v=Number(layers.value);document.getElementById("layersOut").textContent=v;document.getElementById("tokenOut").textContent=v+"xT";document.getElementById("detailOut").textContent=v<6?"粗":v<20?"中":"细";document.getElementById("costOut").textContent=v<6?"低":v<20?"中":"高";document.getElementById("layerText").textContent=v<6?"使用少量层时，表示更粗，可能保住主要结构，但细节容易不足。":v<20?"中等层数适合观察 coarse 到 fine 的过渡，比较不同层携带的信息。":"层数很多时可能保留更多声学细节，同时 token 表也更长，观察成本更高。";}layers.addEventListener("input",updateLayers);updateLayers();
-const checkTexts={umap:"UMAP 把高维 token embedding 投到二维，用来看情绪颜色是否形成聚类。它适合看趋势，不适合作精确分类结论。",pesq:"PESQ 比较 reference audio 和 reconstructed audio，分数越高越接近，适合辅助判断 detokenizer 重建品质。",whisper:"Whisper transcript 把音讯转文字，适合看重建后内容是否接近原句；音色和情绪还要另外听。",shuffle:"Shuffle / split 实验通过打乱或交错 token 层，观察不同层可能负责的资讯。"};document.querySelectorAll("[data-check]").forEach(btn=>btn.addEventListener("click",()=>{document.querySelectorAll("[data-check]").forEach(b=>b.classList.toggle("active",b===btn));document.getElementById("checkText").textContent=checkTexts[btn.dataset.check];}));document.getElementById("checkText").textContent=checkTexts.umap;
-function valueOfQuestion(q){const radio=q.querySelector("input[type=radio]:checked");if(radio)return radio.value;const text=q.querySelector("textarea,input[type=text],select");return text?text.value.trim():"";}function questionGroup(q){return q.closest(".practice-group")?.querySelector(".group-head h3")?.innerText.trim()||"综合练习";}
-function generateRecord(){const qs=[...document.querySelectorAll('[data-role="homework"]')],groups={},warnings=[];qs.forEach((q,i)=>{const title=q.dataset.title||q.querySelector("h3")?.innerText.trim()||"第 "+(i+1)+" 题";const hint=q.querySelector(".solve-note")?.innerText.trim()||"";const answer=valueOfQuestion(q);if(!answer)warnings.push("第 "+(i+1)+" 题未填写："+title);if(q.dataset.type==="diagnostic"&&answer&&!(/错因|原因|错在/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer)))warnings.push("第 "+(i+1)+" 题建议补齐错因、后果和修法。");if(q.dataset.type==="feynman"){const keys=(document.body.dataset.feynmanKeywords||"").split(/[、,，\s]+/).filter(Boolean);if(answer&&answer.length<120)warnings.push("第 "+(i+1)+" 题解释偏短，建议写到 6-9 句话。");const lack=answer?keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase())):[];if(lack.length)warnings.push("第 "+(i+1)+" 题可能缺少关键词："+lack.join("、")+"。");}const group=questionGroup(q);(groups[group]||=[]).push({title,hint,answer:answer||"（未填写）"});});let out="# "+document.title.replace(/\s+/g," ").trim()+"｜练习记录\n\n";Object.keys(groups).forEach(group=>{out+="## "+group+"\n\n";groups[group].forEach(item=>{out+="### "+item.title+"\n";if(item.hint)out+="作答提示："+item.hint+"\n\n";out+=item.answer+"\n\n";});});document.getElementById("record").textContent=out;const quality=document.getElementById("quality");quality.style.display="block";quality.textContent=warnings.length?warnings.join("\n"):"练习记录完整，可以复盘。";}function copyRecord(){copyText(document.getElementById("record").textContent,()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="已复制练习记录。";},()=>{const q=document.getElementById("quality");q.style.display="block";q.textContent="复制失败，可手动复制下方记录。";});}
-</script>
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 2. P21 作业主要提交到哪里？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="NTU COOL">NTU COOL</label>
+      <label><input type="radio" name="q?" value="Judge Boy">Judge Boy</label>
+      <label><input type="radio" name="q?" value="GitHub">GitHub</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">简答</span></div>
+        <h3><b>Q:</b> 3. 用一句话解释 Mimi codec。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 4. 为什么 speech token 比 text token 更像二维结构？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、Tokenizer 与 UMAP</h3></div>
+          <div class="quick-review">作答提示 UMAP 看聚类趋势，不是精确分类器。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 5. VQ 和 RVQ 的区别是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 6. 为什么 RVQ 层数越多，理论上重建可能越接近原 embedding？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 7. UMAP 图中五种情绪颜色分得开，说明什么？分不开又说明什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 8. UMAP 降维后的二维距离可以完全等同于原始高维距离。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、Detokenizer 与重建</h3></div>
+          <div class="quick-review">作答提示 听感、PESQ、transcript 各看一部分，不要互相替代。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 9. PESQ 在作业中用来衡量什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">计算</span></div>
+        <h3><b>Q:</b> 10. 第 9 题四层 token 被打乱，最坏为什么要试 24 种？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 11. Alice/James token 交错实验可以帮助观察什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 12. 为什么 Whisper transcript 可辅助回答第 10 题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、错误诊断</h3></div>
+          <div class="quick-review">作答提示 诊断题要写出观察工具：UMAP、PESQ、transcript、听感或枚举排列。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 13. 有人只看 ASR transcript，就说重建音讯质量很好。错因是什么、后果是什么、怎么改？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 14. 有人把 UMAP 图当成精确分类器。问题在哪里？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 15. CSM 生成一次不好听，就直接选“模型不能生成”。应该如何处理？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 16. 有人没执行 get Mimi token 的核心 block，就直接跑 section 2。会发生什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 17. 有人把 reconstruction 和 generation 混用。错因是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、CSM 与提交</h3></div>
+          <div class="quick-review">作答提示 CSM 要 Hugging Face 授权与 token；提交位置是 NTU COOL。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 18. CSM 输入 text + audio prompt 后，为什么能做 voice cloning 式生成？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 19. 写出 P21 做题前的 5 条检查清单。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">应用</span></div>
+        <h3><b>Q:</b> 20. 如果想判断某层 token 是否更偏语义还是更偏音色，你会设计怎样的观察？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>六、表达输出</h3></div>
+          <div class="quick-review">作答提示 先讲问题，再讲 token 化，最后讲观察工具和生成模型。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 21. 如果面试官问“P21 作业10 的核心是什么”，你会怎么答？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 22. 用 6-9 句话讲清楚 P21 作业10：从 Mimi token 到 detokenizer 和 CSM speech generation。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

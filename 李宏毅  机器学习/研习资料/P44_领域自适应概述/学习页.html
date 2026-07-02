@@ -4,541 +4,533 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P44｜领域自适应概述</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="domain adaptation,domain shift,source domain,target domain,feature extractor,label predictor,domain adversarial training,domain generalization">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>领域自适应概述</strong><span>P44。训练环境和使用环境不一样，模型就会露出真实水平。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#shift"><span class="dot"></span>Domain Shift</a>
-      <a href="#types"><span class="dot"></span>Shift 类型</a>
-      <a href="#settings"><span class="dot"></span>适应情境</a>
-      <a href="#intuition"><span class="dot"></span>核心直觉</a>
-      <a href="#parts"><span class="dot"></span>模型拆分</a>
-      <a href="#dat"><span class="dot"></span>对抗训练</a>
-      <a href="#tradeoff"><span class="dot"></span>损失权衡</a>
-      <a href="#limits"><span class="dot"></span>方法限制</a>
-      <a href="#dg"><span class="dot"></span>泛化与 TTT</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：source 上高分，只说明模型适应 source；能否用到 target，要看分布差异和可用 target 信息。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P44</div>
-        <h1>模型不是学会任务，而是学会某个领域里的任务</h1>
-        <p>在许多 benchmark 里，训练资料和测试资料来自同一分布，所以模型看起来很强。但真实部署常常不是这样：实验室里的手写数字是黑白的，用户上传的数字可能是彩色的；训练资料来自干净环境，实际输入来自噪声场景。训练和测试分布一变，准确率可能从 99% 直接掉到不及格。</p>
-        <p>领域自适应要处理的就是这个问题：我们有 source domain 的标注资料，希望模型能在 target domain 上工作。target domain 可能有少量标注资料，也可能只有大量无标注资料。P44 重点讲总览和最经典的想法：学习一个 domain-invariant feature，让 source 和 target 的表示看起来接近。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释 domain shift 为什么会让模型失效。</li>
-          <li>区分 source domain、target domain、domain adaptation。</li>
-          <li>判断 target 有无标签、资料多少时应选什么策略。</li>
-          <li>说明 feature extractor 和 label predictor 的拆分。</li>
-          <li>用直觉讲清 domain adversarial training 的目标和局限。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
-      <p>这一节不是讲一个单一算法，而是建立领域自适应的思考框架。你要先问：训练资料来自哪里？测试资料来自哪里？target 上有多少资料？有没有标签？source 和 target 的类别集合是否一致？这些问题决定后面能不能做适应，以及该用多强的假设。</p>
-      <p>课程先用黑白数字到彩色数字的例子说明：输入分布变化就足以让模型崩掉。接着引入 source / target 的术语，再讲无标注 target data 的典型路线：把模型切成 feature extractor 和 label predictor，并用 domain classifier 推动两个领域的 feature 对齐。</p>
-      <div class="map">
-        <span class="node">训练分布</span>
-        <span class="node">测试分布</span>
-        <span class="node">资料条件</span>
-        <span class="node">特征对齐</span>
-        <span class="node">分类保持</span>
-        <span class="node">边界检查</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P44</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把领域自适应理解为：不是重新发明分类器，而是让 source 学到的可迁移部分能服务 target。</p></div>
-    </section>
+      <h1 class="hero-title">P44｜领域自适应概述</h1>
+      <p class="hero-desc">在许多 benchmark 里，训练资料和测试资料来自同一分布，所以模型看起来很强。但真实部署常常不是这样：实验室里的手写数字是黑白的，用户上传的数字可能是彩色的；训练资料来自干净环境，实际输入来自噪声场景。训练和测试分布一变，准确率可能从 99% 直接掉到不及格。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P43_NLP模仿攻击与后门攻击/学习页.html">上一节</a>
+            <a href="../P45_BERT三个故事/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="shift">
-      <div class="head"><h2>Domain Shift：训练资料和测试资料不再同分布</h2><span class="tag">SHIFT</span></div>
-      <p>domain shift 指训练资料和测试资料的分布不同。最直观的例子是：训练时数字图片是黑白的，测试时变成彩色的。人类会说“数字形状没变”，但模型可能学到许多 source domain 的细节，例如背景、灰阶、笔画粗细、颜色通道统计。一旦这些统计变了，模型就可能失败。</p>
-      <p>这也是 benchmark 和真实部署之间的差距。benchmark 通常默认 train / test 来自同一分布；真实系统上线后，使用者、设备、场景、语言风格、光照、地区都会改变输入分布。模型在 source test 上高分，不代表它能处理 target。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <div class="barrow"><span>分布差异</span><div class="bar"><div class="fill red" id="shiftBar"></div></div><span id="shiftValOut">45</span></div>
-            <div class="barrow"><span>source 表现</span><div class="bar"><div class="fill green" id="srcAccBar"></div></div><span id="srcAcc">99</span></div>
-            <div class="barrow"><span>target 表现</span><div class="bar"><div class="fill" id="tgtAccBar"></div></div><span id="tgtAcc">75</span></div>
-            <p class="viz-note" id="shiftNote">调节分布差异，观察 target accuracy 如何下降。</p>
-          </div>
-          <div>
-            <div class="slider-row"><label for="shiftSlider">domain shift</label><input id="shiftSlider" type="range" min="0" max="100" value="45"><span id="shiftVal">45</span></div>
-            <p>直觉：source accuracy 只是“在原环境里做得好”。分布差异越大，直接套用到 target 的风险越高。</p>
-          </div>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#shift">Domain Shift：训练资料和测试资料不再同分布</a>
+      <a href="#types">Domain Shift 不只一种</a>
+      <a href="#settings">Target 资料有多少，决定问题难度</a>
+      <a href="#intuition">核心直觉：保留共同因素，去掉领域外观</a>
+      <a href="#parts">把分类器拆成两段：Feature Extractor + Label Predictor</a>
+      <a href="#dat">Domain Adversarial Training：让领域分类器分不出来</a>
+      <a href="#tradeoff">动手观察：对齐太强，类别结构会被压坏</a>
+      <a href="#limits">方法限制：对齐分布不等于对齐类别</a>
+      <a href="#dg">Target 资料更少时：TTT 与 Domain Generalization</a>
+      <a href="#code">最小代码：Gradient Reversal 风格训练骨架</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">MAP</span>
         </div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>看到模型部署问题时，先问 train 和 test 是否真的来自同一分布。</p>
-    </section>
-
-    <section id="types">
-      <div class="head"><h2>Domain Shift 不只一种</h2><span class="tag">TYPES</span></div>
-      <p>课程中提醒，分布变化有多种。P44 主要关注输入分布变化，也就是图片外观、文字风格、语音环境等 <code>x</code> 的分布变了。但还有其他可能：输出标签比例变了，或者输入和标签之间的关系变了。</p>
-      <p>为什么要区分？因为不同 shift 需要不同方法。若只是输入外观变了，学 domain-invariant feature 可能有帮助；若 target 的类别先验比例变了，你可能需要校准输出分布；若 <code>x → y</code> 的关系都变了，简单对齐 feature 可能反而有害。</p>
-      <table class="metric-table">
-        <tr><th>变化类型</th><th>直觉例子</th><th>风险</th></tr>
-        <tr><td>输入分布变化</td><td>黑白数字训练，彩色数字测试。</td><td>模型依赖 source 外观统计。</td></tr>
-        <tr><td>输出分布变化</td><td>训练集中 0-9 均衡，部署中某些数字更常见。</td><td>预测校准和阈值可能失准。</td></tr>
-        <tr><td>输入-标签关系变化</td><td>同样图案在两个场景中代表不同标签。</td><td>source 规则本身可能不能迁移。</td></tr>
-      </table>
-      <p><strong>现在你应该能做什么：</strong>不要把所有分布变化都叫成同一种问题；先判断变的是输入、输出，还是关系。</p>
-    </section>
-
-    <section id="settings">
-      <div class="head"><h2>Target 资料有多少，决定问题难度</h2><span class="tag">SETTINGS</span></div>
-      <p>领域自适应不是一个固定场景。关键是 target domain 上有什么资料。若 target 有很多标注资料，那最直接的做法就是用 target 资料训练，不必绕远路。若 target 只有少量标注资料，可以从 source model 出发做 fine-tuning，但要防止 overfitting。</p>
-      <p>P44 主要关注的是：target 有大量资料，但没有标签。这很符合真实系统：模型上线后可以收集用户输入，但很难为每个输入标注正确答案。于是我们不能直接用 supervised loss，却可以利用 target 输入分布来调整 feature space。</p>
-      <div class="grid3">
-        <div class="box info"><h3>很多 target 标注</h3><p>直接用 target 训练或混合训练，问题相对简单。</p></div>
-        <div class="box warn"><h3>少量 target 标注</h3><p>fine-tuning；小学习率、少轮数、正则化，避免过拟合。</p></div>
-        <div class="box soft"><h3>很多 target 无标注</h3><p>无标注领域自适应：用 target 输入分布帮助学习表示。</p></div>
-      </div>
-      <p>如果 target 无标签且资料很少，甚至只有一个样本，常规对齐方法就很难工作；这会引出 testing-time training 等方向。如果 target 资料完全未知，就更接近 domain generalization。</p>
-      <p><strong>现在你应该能做什么：</strong>拿到一个迁移问题时，先用“target 有多少资料、有没有标签”给它分类。</p>
-    </section>
-
-    <section id="intuition">
-      <div class="head"><h2>核心直觉：保留共同因素，去掉领域外观</h2><span class="tag">INVARIANT FEATURE</span></div>
-      <p>在黑白数字到彩色数字的例子里，我们希望模型忽略颜色，只保留数字形状。更一般地，feature extractor 应该把 source 和 target 的表面差异过滤掉，抽取任务真正需要的共同因素。</p>
-      <p>如果 source image 和 target image 经过 feature extractor 后落在相似分布里，那么 source 上训练出的 label predictor 就更有机会应用到 target。注意这里说的是“更有机会”，不是保证。因为 feature 对齐还必须保留类别结构：0 还是要像 0，1 还是要像 1，不能为了对齐而把类别信息洗掉。</p>
-      <div class="domain-canvas" id="domainCanvas">
-        <div class="boundary"></div>
-      </div>
-      <div class="legend"><span><i class="swatch"></i>source feature</span><span><i class="swatch t"></i>target feature</span><span>黑线代表分类边界示意</span></div>
-      <p><strong>现在你应该能做什么：</strong>解释 domain-invariant feature 的目标：让领域不可分，但类别仍可分。</p>
-    </section>
-
-    <section id="parts">
-      <div class="head"><h2>把分类器拆成两段：Feature Extractor + Label Predictor</h2><span class="tag">MODEL PARTS</span></div>
-      <p>一个普通分类器可以拆成前半段和后半段。前半段叫 feature extractor，把输入图片或文本转成 feature vector；后半段叫 label predictor，把 feature vector 转成类别预测。CNN 里前几层输出可能是 feature map，拉平或池化后也可以看作 feature。</p>
-      <p>拆在哪里是超参数。你可以把浅层当 feature，也可以把更深层当 feature。浅层通常更接近边缘、颜色、纹理等低阶统计；深层更接近语义类别。领域自适应选择哪一层对齐，会影响最终效果。</p>
-      <div class="stage">
-        <div><strong>输入 x</strong><p>source 有标签，target 可能无标签。</p></div>
-        <div><strong>Feature extractor</strong><p>输出 feature vector 或 feature map。</p></div>
-        <div><strong>Label predictor</strong><p>用 source label 训练分类。</p></div>
-        <div><strong>Domain classifier</strong><p>判断 feature 来自 source 还是 target。</p></div>
-      </div>
-      <p>source data 可以训练整条分类链，因为它有标签。target data 没有标签，不能算分类 loss，但可以送过 feature extractor，再让 domain classifier 判断它来自哪个领域。这个二元分类任务就给了 target data 使用价值。</p>
-      <p><strong>现在你应该能做什么：</strong>读懂领域对抗训练图时，知道每个模块吃什么、输出什么、用哪种资料训练。</p>
-    </section>
-
-    <section id="dat">
-      <div class="head"><h2>Domain Adversarial Training：让领域分类器分不出来</h2><span class="tag">DAT</span></div>
-      <p>domain adversarial training 的想法很像一个小型对抗游戏。domain classifier 想分辨 feature 来自 source 还是 target；feature extractor 则想骗过 domain classifier，让两个领域的 feature 混在一起。与此同时，label predictor 仍要在 source 上把类别分对。</p>
-      <p>如果只让 feature extractor 骗 domain classifier，它可以输出全零向量，让任何领域都不可分。但这样 label predictor 也无法分类。所以 source classification loss 是必要约束：feature 必须既能服务分类，又能消除领域差异。</p>
-      <div class="formula">
-        <span class="big">min<sub>F,P</sub> L<sub>cls</sub>(P(F(x<sub>s</sub>)), y<sub>s</sub>)  +  adversarial alignment</span>
-        <small><code>F</code> 是 feature extractor，<code>P</code> 是 label predictor。source 有标签，用来训练分类；source 和 target 都可用于领域对齐。</small>
-      </div>
-      <div class="formula">
-        <span class="big">domain classifier: min L<sub>d</sub>, &nbsp; feature extractor: make domain hard to predict</span>
-        <small>实际实现常用 gradient reversal layer：前向不变，反向把 domain loss 的梯度乘上负系数。</small>
-      </div>
-      <p>这里容易误解的一点是：不是让 source 变成 target，也不是让 target 变成 source，而是让提取出的表示不再携带明显领域信息。理想状态下，domain classifier 只能瞎猜，但 label predictor 仍能正确分辨类别。</p>
-      <p><strong>现在你应该能做什么：</strong>用“领域不可分、类别仍可分”概括 domain adversarial training。</p>
-    </section>
-
-    <section id="tradeoff">
-      <div class="head"><h2>动手观察：对齐太强，类别结构会被压坏</h2><span class="tag">TRADEOFF</span></div>
-      <p>领域对齐不是越强越好。如果 alignment 权重太弱，target feature 仍和 source 分开，target 表现不好；如果权重太强，模型可能为了骗过 domain classifier，牺牲 label predictor 需要的类别结构。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <div class="loss-row"><span>领域不可分</span><div class="loss-bar"><div class="loss-fill" id="alignFill"></div></div><span id="alignText">0</span></div>
-            <div class="loss-row"><span>类别可分</span><div class="loss-bar"><div class="loss-fill" id="classFill"></div></div><span id="classText">0</span></div>
-            <div class="loss-row"><span>target 表现</span><div class="loss-bar"><div class="loss-fill bad" id="targetFill"></div></div><span id="targetText">0</span></div>
-            <p class="viz-note" id="tradeNote">调节对齐权重，观察三者如何相互牵制。</p>
-          </div>
-          <div>
-            <div class="slider-row"><label for="alignSlider">对齐权重</label><input id="alignSlider" type="range" min="0" max="100" value="48"><span id="alignVal">48</span></div>
-            <p>直觉：适中时能减少领域差异；过大时可能把有用特征也抹掉。</p>
-          </div>
+<p>这一节建立领域自适应的思考框架。你要先问：训练资料来自哪里？测试资料来自哪里？target 上有多少资料？有没有标签？source 和 target 的类别集合是否一致？这些问题决定后面能不能做适应，以及该用多强的假设。</p>
+<p>训练分布</p>
+<p>测试分布</p>
+<p>资料条件</p>
+<p>特征对齐</p>
+<p>分类保持</p>
+<p>边界检查</p>
+      </section>
+      <section id="shift">
+        <div class="head">
+          <h2>Domain Shift：训练资料和测试资料不再同分布</h2>
+          <span class="tag">SHIFT</span>
         </div>
-      </div>
-      <p>这也是课程中同学提问的重点：feature map 或 latent embedding 被硬拉在一起，会不会破坏原本空间结构？答案是有可能。因此实际训练要调 loss 权重、对齐层位置、模型容量，还要观察 target 表现，而不是只看 domain classifier 是否被成功骗过。</p>
-      <p><strong>现在你应该能做什么：</strong>解释为什么 domain classifier 分不出来只是中间目标，不是最终成功标准。</p>
-    </section>
+<p>domain shift 指训练资料和测试资料的分布不同。最直观的例子是：训练时数字图片是黑白的，测试时变成彩色的。人类会说“数字形状没变”，但模型可能学到许多 source domain 的细节，例如背景、灰阶、笔画粗细、颜色通道统计。一旦这些统计变了，模型就可能失败。</p>
+<p>分布差异45</p>
+<p>source 表现99</p>
+<p>target 表现75</p>
+<p>调节分布差异，观察 target accuracy 如何下降。</p>
+<p><b>现在你应该能做什么：</b>看到模型部署问题时，先问 train 和 test 是否真的来自同一分布。</p>
+      </section>
+      <section id="types">
+        <div class="head">
+          <h2>Domain Shift 不只一种</h2>
+          <span class="tag">TYPES</span>
+        </div>
+<p>课程中提醒，分布变化有多种。P44 主要关注输入分布变化，也就是图片外观、文字风格、语音环境等 <code>x</code> 的分布变了。但还有其他可能：输出标签比例变了，或者输入和标签之间的关系变了。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>变化类型</th><th>直觉例子</th><th>风险</th></tr>
+<tr><td>输入分布变化</td><td>黑白数字训练，彩色数字测试。</td><td>模型依赖 source 外观统计。</td></tr><tr><td>输出分布变化</td><td>训练集中 0-9 均衡，部署中某些数字更常见。</td><td>预测校准和阈值可能失准。</td></tr><tr><td>输入-标签关系变化</td><td>同样图案在两个场景中代表不同标签。</td><td>source 规则本身可能不能迁移。</td></tr>
+        </table></div>
+<p><b>现在你应该能做什么：</b>不要把所有分布变化都叫成同一种问题；先判断变的是输入、输出，还是关系。</p>
+      </section>
+      <section id="settings">
+        <div class="head">
+          <h2>Target 资料有多少，决定问题难度</h2>
+          <span class="tag">SETTINGS</span>
+        </div>
+<p>领域自适应不是一个固定场景。关键是 target domain 上有什么资料。若 target 有很多标注资料，那最直接的做法就是用 target 资料训练，不必绕远路。若 target 只有少量标注资料，可以从 source model 出发做 fine-tuning，但要防止 overfitting。</p>
+<p>很多 target 标注直接用 target 训练或混合训练，问题相对简单。</p>
+<p>少量 target 标注fine-tuning；小学习率、少轮数、正则化，避免过拟合。</p>
+<p>很多 target 无标注无标注领域自适应：用 target 输入分布帮助学习表示。</p>
+<p><b>现在你应该能做什么：</b>拿到一个迁移问题时，先用“target 有多少资料、有没有标签”给它分类。</p>
+      </section>
+      <section id="intuition">
+        <div class="head">
+          <h2>核心直觉：保留共同因素，去掉领域外观</h2>
+          <span class="tag">INVARIANT</span>
+        </div>
+<p>在黑白数字到彩色数字的例子里，我们希望模型忽略颜色，只保留数字形状。更一般地，feature extractor 应该把 source 和 target 的表面差异过滤掉，抽取任务真正需要的共同因素。</p>
+<p><b>source feature</b>target feature黑线代表分类边界示意</p>
+      </section>
+      <section id="parts">
+        <div class="head">
+          <h2>把分类器拆成两段：Feature Extractor + Label Predictor</h2>
+          <span class="tag">MODEL</span>
+        </div>
+<p>一个普通分类器可以拆成前半段和后半段。前半段叫 feature extractor，把输入图片或文本转成 feature vector；后半段叫 label predictor，把 feature vector 转成类别预测。CNN 里前几层输出可能是 feature map，拉平或池化后也可以看作 feature。</p>
+<p><b>输入 x</b>source 有标签，target 可能无标签。</p>
+<p><b>Feature extractor</b>输出 feature vector 或 feature map。</p>
+<p><b>Label predictor</b>用 source label 训练分类。</p>
+<p><b>Domain classifier</b>判断 feature 来自 source 还是 target。</p>
+<p><b>现在你应该能做什么：</b>读懂领域对抗训练图时，知道每个模块吃什么、输出什么、用哪种资料训练。</p>
+      </section>
+      <section id="dat">
+        <div class="head">
+          <h2>Domain Adversarial Training：让领域分类器分不出来</h2>
+          <span class="tag">DAT</span>
+        </div>
+<p>domain adversarial training 的想法很像一个小型对抗游戏。domain classifier 想分辨 feature 来自 source 还是 target；feature extractor 则想骗过 domain classifier，让两个领域的 feature 混在一起。与此同时，label predictor 仍要在 source 上把类别分对。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+minF,P Lcls(P(F(xs)), ys) + adversarial alignment
+F 是 feature extractor，P 是 label predictor。source 有标签，用来训练分类；source 和 target 都可用于领域对齐。
+$$
+        </div>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+domain classifier: min Ld,   feature extractor: make domain hard to predict
+实际实现常用 gradient reversal layer：前向不变，反向把 domain loss 的梯度乘上负系数。
+$$
+        </div>
+<p>这里容易误解的一点是：不是让 source 变成 target，也让提取出的表示不再携带明显领域信息。理想状态下，domain classifier 只能瞎猜，但 label predictor 仍能正确分辨类别。</p>
+      </section>
+      <section id="tradeoff">
+        <div class="head">
+          <h2>动手观察：对齐太强，类别结构会被压坏</h2>
+          <span class="tag">TRADEOFF</span>
+        </div>
+<p>领域对齐不是越强越好。如果 alignment 权重太弱，target feature 仍和 source 分开，target 表现不好；如果权重太强，模型可能为了骗过 domain classifier，牺牲 label predictor 需要的类别结构。</p>
+<p>对齐权重48</p>
+<p>直觉：适中时能减少领域差异；过大时可能把有用特征也抹掉。</p>
+<p><b>现在你应该能做什么：</b>解释为什么 domain classifier 分不出来只是中间目标，不是最终成功标准。</p>
+      </section>
+      <section id="limits">
+        <div class="head">
+          <h2>方法限制：对齐分布不等于对齐类别</h2>
+          <span class="tag">LIMITS</span>
+        </div>
+<p>无标注 target data 的困难在于：我们知道它来自 target，但不知道每个点属于什么类别。若只要求 source feature 和 target feature 的整体分布接近，可能出现错误对齐。比如 target 的 1 被拉到 source 的 7 附近，整体看起来混合了，但分类会错。</p>
+<p>另一个限制是类别集合未必一致。source 可能有老虎、狮子、狗，target 可能只有狗和猫，或者两边各有独特类别。若强行把所有分布完全对齐，就可能把不同类别揉在一起。这会引出 universal domain adaptation 等更复杂设定。</p>
+        <div class="box info">
+<h3>更稳的检查</h3>
+<p>观察 target pseudo-label、预测熵、少量人工标注验证、类别覆盖假设和不同对齐层的效果。</p>
+<p><b>现在你应该能做什么：</b>指出“分布对齐”与“分类正确”不是一回事。</p>
+        </div>
+      </section>
+      <section id="dg">
+        <div class="head">
+          <h2>Target 资料更少时：TTT 与 Domain Generalization</h2>
+          <span class="tag">BEYOND</span>
+        </div>
+<p>如果 target 有大量无标注资料，可以估计 target 分布并做对齐。但如果 target 资料很少，甚至测试时只看到一个样本，就很难靠分布对齐工作。testing-time training 试图在测试时利用单个或少量样本上的自监督目标，让模型临时适应当前输入。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>设定</th><th>target 信息</th><th>代表思路</th></tr>
+<tr><td>Domain adaptation</td><td>训练时知道 target，有资料。</td><td>fine-tuning、feature alignment、对抗训练。</td></tr><tr><td>Testing-time training</td><td>测试时才看到少量 target 样本。</td><td>用自监督任务临时更新或调整。</td></tr><tr><td>Domain generalization</td><td>训练时不知道具体 target。</td><td>多领域训练、增强、学习领域无关表示。</td></tr>
+        </table></div>
+<p><b>现在你应该能做什么：</b>区分“已知 target 后适应”和“未知 target 前泛化”。</p>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：Gradient Reversal 风格训练骨架</h2>
+          <span class="tag">CODE</span>
+        </div>
+<p>下面的伪代码展示 domain adversarial training 的核心。source batch 有标签，可以算分类 loss；source 和 target 都有领域标签，可以算 domain loss。feature extractor 在分类 loss 上正常下降，在 domain loss 上反向更新，让 domain classifier 更难分辨。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">def train_step(source_x, source_y, target_x, lamb):
+ xs = concat(source_x, target_x)
+ domain_y = concat(zeros(len(source_x)), ones(len(target_x)))
 
-    <section id="limits">
-      <div class="head"><h2>方法限制：对齐分布不等于对齐类别</h2><span class="tag">LIMITS</span></div>
-      <p>无标注 target data 的困难在于：我们知道它来自 target，但不知道每个点属于什么类别。若只要求 source feature 和 target feature 的整体分布接近，可能出现错误对齐。比如 target 的 1 被拉到 source 的 7 附近，整体看起来混合了，但分类会错。</p>
-      <p>一个常见补充想法是让 target 样本远离分类边界。虽然不知道 target label，但希望 label predictor 输出足够集中，不要每一类概率都差不多。这类思想和 entropy minimization、DIRT-T、maximum classifier discrepancy 等方法有关。P44 只做概述，后续可以再深入。</p>
-      <p>另一个限制是类别集合未必一致。source 可能有老虎、狮子、狗，target 可能只有狗和猫，或者两边各有独特类别。若强行把所有分布完全对齐，就可能把不同类别揉在一起。这会引出 universal domain adaptation 等更复杂设定。</p>
-      <div class="grid2">
-        <div class="box redsoft"><h3>错误示例</h3><p>只看 source / target 的 feature 是否混合，就宣布适应成功。这样可能忽略 target 类别被错配到 source 类别的问题。</p></div>
-        <div class="box info"><h3>更稳的检查</h3><p>观察 target pseudo-label、预测熵、少量人工标注验证、类别覆盖假设和不同对齐层的效果。</p></div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>指出“分布对齐”与“分类正确”不是一回事。</p>
-    </section>
+ feat_source = feature_extractor(source_x)
+ cls_logits = label_predictor(feat_source)
+ cls_loss = cross_entropy(cls_logits, source_y)
 
-    <section id="dg">
-      <div class="head"><h2>Target 资料更少时：TTT 与 Domain Generalization</h2><span class="tag">BEYOND DA</span></div>
-      <p>如果 target 有大量无标注资料，可以估计 target 分布并做对齐。但如果 target 资料很少，甚至测试时只看到一个样本，就很难靠分布对齐工作。testing-time training 试图在测试时利用单个或少量样本上的自监督目标，让模型临时适应当前输入。</p>
-      <p>如果训练时完全不知道 target domain，就不再是适应某个已知 target，而是 domain generalization。它希望模型训练完后，面对未知领域也能表现稳定。若训练资料包含多个领域，可以学习跨领域共同结构；若训练资料只有一个领域，常见思路是用 data augmentation 人造多种变化，让模型提前见过更多可能性。</p>
-      <table class="metric-table">
-        <tr><th>设定</th><th>target 信息</th><th>代表思路</th></tr>
-        <tr><td>Domain adaptation</td><td>训练时知道 target，有资料。</td><td>fine-tuning、feature alignment、对抗训练。</td></tr>
-        <tr><td>Testing-time training</td><td>测试时才看到少量 target 样本。</td><td>用自监督任务临时更新或调整。</td></tr>
-        <tr><td>Domain generalization</td><td>训练时不知道具体 target。</td><td>多领域训练、增强、学习领域无关表示。</td></tr>
-      </table>
-      <p><strong>现在你应该能做什么：</strong>区分“已知 target 后适应”和“未知 target 前泛化”。</p>
-    </section>
+ feat_all = feature_extractor(xs)
+ reversed_feat = gradient_reversal(feat_all, lamb)
+ domain_logits = domain_classifier(reversed_feat)
+ domain_loss = binary_cross_entropy(domain_logits, domain_y)
 
-    <section id="code">
-      <div class="head"><h2>最小代码：Gradient Reversal 风格训练骨架</h2><span class="tag">CODE</span></div>
-      <p>下面的伪代码展示 domain adversarial training 的核心。source batch 有标签，可以算分类 loss；source 和 target 都有领域标签，可以算 domain loss。feature extractor 在分类 loss 上正常下降，在 domain loss 上反向更新，让 domain classifier 更难分辨。</p>
-      <div class="codebar"><span class="label">正确示例：source 分类 + domain 对齐</span><span class="kind">Python-like</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">train_step</span>(source_x, source_y, target_x, lamb):
-    xs = concat(source_x, target_x)
-    domain_y = concat(zeros(len(source_x)), ones(len(target_x)))
-
-    feat_source = feature_extractor(source_x)
-    cls_logits = label_predictor(feat_source)
-    cls_loss = cross_entropy(cls_logits, source_y)
-
-    feat_all = feature_extractor(xs)
-    reversed_feat = gradient_reversal(feat_all, lamb)
-    domain_logits = domain_classifier(reversed_feat)
-    domain_loss = binary_cross_entropy(domain_logits, domain_y)
-
-    loss = cls_loss + domain_loss
-    loss.backward()
-    update_all_modules()</code></pre>
-      <p><code>gradient_reversal</code> 前向传播时像 identity，反向传播时把梯度乘上 <code>-λ</code>。这样 domain classifier 自己学会分 source / target，而 feature extractor 收到相反信号，学习隐藏领域信息。</p>
-      <div class="codebar error"><span class="label">错误示例：只优化领域不可分</span><span class="kind">Representation bug</span></div>
-      <pre><code><span class="cmt"># 错误示例：没有分类约束，feature 可以坍缩成常数。</span>
-feat_all = feature_extractor(concat(source_x, target_x))
-domain_loss = confuse_domain_classifier(feat_all)
-domain_loss.backward()
-
-<span class="cmt"># 缺少 source classification loss，label predictor 无法保证类别仍可分。</span></code></pre>
-      <p><strong>现在你应该能做什么：</strong>读懂领域对抗训练的训练步骤，并能指出分类 loss 和领域 loss 分别保护什么。</p>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+ loss = cls_loss + domain_loss
+ loss.backward()
+ update_all_modules()</code></pre>
+<p><code>gradient_reversal</code> 前向传播时像 identity，反向传播时把梯度乘上 <code>-λ</code>。这样 domain classifier 自己学会分 source / target，而 feature extractor 收到相反信号，学习隐藏领域信息。</p>
+        </div>
+<p>错误示例：只优化领域不可分Representation bug</p>
+<p><b>现在你应该能做什么：</b>读懂领域对抗训练的训练步骤，并能指出分类 loss 和领域 loss 分别保护什么。</p>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答建议</strong><p>每题先判断 source、target、标签条件，再说方法；不要上来就套算法名。</p></div>
-        <div class="review-card"><strong>自检标准</strong><p>你能说清“领域不可分”和“类别可分”必须同时成立，就掌握了本节主线。</p></div>
-      </div>
 
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>一、Domain Shift 基础</h3><p>确认问题定义和场景。</p></div>
-          <div class="quick-review"><b>快速回顾</b>source 是训练领域，target 是希望部署或测试的领域。</div>
+          <div><h3>一、Domain Shift 基础</h3></div>
+          <div class="quick-review">快速回顾 source 是训练领域，target 是希望部署或测试的领域。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q01" data-title="domain shift">
-            <div class="q-meta"><span class="pill">Q01</span><span class="pill">解释</span></div>
-            <h3>什么是 domain shift？为什么黑白数字训练、彩色数字测试会让模型准确率下降？</h3>
-            <textarea placeholder="从训练/测试分布不同、模型依赖 source 统计回答。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q02" data-title="source target">
-            <div class="q-meta"><span class="pill">Q02</span><span class="pill">概念</span></div>
-            <h3>source domain 和 target domain 分别指什么？在真实部署中如何识别它们？</h3>
-            <input type="text" data-label="source domain" placeholder="训练资料来自的领域或环境。">
-            <input type="text" data-label="target domain" placeholder="实际部署、测试或希望适应的领域。">
-            <input type="text" data-label="识别方式" placeholder="看资料来源、采集设备、用户群、时间和使用场景。">
-          </div>
-          <div class="q" data-role="homework" data-qid="q03" data-title="shift 类型">
-            <div class="q-meta"><span class="pill">Q03</span><span class="pill">对照</span></div>
-            <h3>输入分布变化、输出分布变化、输入-标签关系变化有什么区别？</h3>
-            <textarea placeholder="分别说明 x、y、p(y|x) 变化。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q04" data-title="benchmark 风险">
-            <div class="q-meta"><span class="pill">Q04</span><span class="pill">推理</span></div>
-            <h3>为什么 benchmark 上的高准确率容易让人低估真实部署风险？</h3>
-            <textarea placeholder="benchmark 常假设 train/test 同分布。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q01</span></div>
+        <h3><b>Q:</b> 什么是 domain shift？为什么黑白数字训练、彩色数字测试会让模型准确率下降？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q02</span></div>
+        <h3><b>Q:</b> source domain 和 target domain 分别指什么？在真实部署中如何识别它们？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q03</span></div>
+        <h3><b>Q:</b> 输入分布变化、输出分布变化、输入-标签关系变化有什么区别？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q04</span></div>
+        <h3><b>Q:</b> 为什么 benchmark 上的高准确率容易让人低估真实部署风险？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>二、适应情境</h3><p>根据 target 资料条件选择策略。</p></div>
-          <div class="quick-review"><b>快速回顾</b>target 有无标签、资料多少，决定是直接训练、微调、对齐还是泛化。</div>
+          <div><h3>二、适应情境</h3></div>
+          <div class="quick-review">快速回顾 target 有无标签、资料多少，决定是直接训练、微调、对齐还是泛化。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q05" data-title="大量 target 标注">
-            <div class="q-meta"><span class="pill">Q05</span><span class="pill">判断</span></div>
-            <h3>如果 target domain 有大量标注资料，为什么通常不需要复杂的领域自适应？</h3>
-            <div class="choices">
-              <label><input type="radio" name="p44q05" value="可以直接用 target 标注资料训练或微调，问题退化成监督学习。">可以直接用 target 标注资料训练或微调，问题退化成监督学习。</label>
-              <label><input type="radio" name="p44q05" value="因为 target 标注越多，越应该完全忽略 target 标签。">因为 target 标注越多，越应该完全忽略 target 标签。</label>
-              <label><input type="radio" name="p44q05" value="因为领域自适应只适用于没有 source 资料的情况。">因为领域自适应只适用于没有 source 资料的情况。</label>
-            </div>
-          </div>
-          <div class="q" data-role="homework" data-qid="q06" data-title="少量 target 标注">
-            <div class="q-meta"><span class="pill">Q06</span><span class="pill">应用</span></div>
-            <h3>target 只有少量标注资料时，fine-tuning 要注意哪些过拟合风险？</h3>
-            <textarea placeholder="轮数少、学习率小、正则化、参数变化不要太大。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q07" data-title="无标注 target">
-            <div class="q-meta"><span class="pill">Q07</span><span class="pill">解释</span></div>
-            <h3>target 有大量无标注资料时，这些资料虽然没有 label，仍然能提供什么信息？</h3>
-            <textarea placeholder="提供 target 输入分布，可用于 feature 对齐。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q08" data-title="TTT vs DG">
-            <div class="q-meta"><span class="pill">Q08</span><span class="pill">对照</span></div>
-            <h3>testing-time training 和 domain generalization 分别处理什么更困难的场景？</h3>
-            <textarea placeholder="TTT：测试时少量 target；DG：训练时不知道 target。"></textarea>
-          </div>
-        </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q05</span></div>
+        <h3><b>Q:</b> 如果 target domain 有大量标注资料，为什么通常不需要复杂的领域自适应？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="可以直接用 target 标注资料训练或微调，问题退化成监督学习。">可以直接用 target 标注资料训练或微调，问题退化成监督学习。</label>
+      <label><input type="radio" name="q?" value="因为 target 标注越多，越应该完全忽略 target 标签。">因为 target 标注越多，越应该完全忽略 target 标签。</label>
+      <label><input type="radio" name="q?" value="因为领域自适应只适用于没有 source 资料的情况。">因为领域自适应只适用于没有 source 资料的情况。</label>
       </div>
 
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q06</span></div>
+        <h3><b>Q:</b> target 只有少量标注资料时，fine-tuning 要注意哪些过拟合风险？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q07</span></div>
+        <h3><b>Q:</b> target 有大量无标注资料时，这些资料虽然没有 label，仍然能提供什么信息？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q08</span></div>
+        <h3><b>Q:</b> testing-time training 和 domain generalization 分别处理什么更困难的场景？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>三、Feature 对齐</h3><p>理解模型拆分和领域对抗训练。</p></div>
-          <div class="quick-review"><b>快速回顾</b>feature extractor 要让领域不可分，label predictor 要让类别可分。</div>
+          <div><h3>三、Feature 对齐</h3></div>
+          <div class="quick-review">快速回顾 feature extractor 要让领域不可分，label predictor 要让类别可分。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q09" data-title="feature extractor">
-            <div class="q-meta"><span class="pill">Q09</span><span class="pill">概念</span></div>
-            <h3>为什么可以把分类器拆成 feature extractor 和 label predictor？拆分位置有什么影响？</h3>
-            <textarea placeholder="前半抽特征，后半分类；浅层/深层对齐含义不同。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q10" data-title="domain classifier">
-            <div class="q-meta"><span class="pill">Q10</span><span class="pill">解释</span></div>
-            <h3>domain classifier 的输入和输出是什么？它为什么是二元分类器？</h3>
-            <input type="text" data-label="输入" placeholder="feature extractor 产出的 feature。">
-            <input type="text" data-label="输出" placeholder="source 或 target。">
-            <input type="text" data-label="为什么二元" placeholder="这里只判断样本来自两个领域中的哪一个。">
-          </div>
-          <div class="q" data-role="homework" data-qid="q11" data-title="对抗目标">
-            <div class="q-meta"><span class="pill">Q11</span><span class="pill">流程</span></div>
-            <h3>domain adversarial training 中，domain classifier 和 feature extractor 的目标为什么相反？</h3>
-            <textarea placeholder="一个想分辨领域，一个想隐藏领域信息。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q12" data-title="全零坍缩">
-            <div class="q-meta"><span class="pill">Q12</span><span class="pill">错误示例</span></div>
-            <h3>错误示例：feature extractor 为了骗过 domain classifier，对所有输入都输出 zero vector。为什么这不是有效解？</h3>
-            <textarea placeholder="label predictor 无法分类，类别信息丢失。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q13" data-title="gradient reversal">
-            <div class="q-meta"><span class="pill">Q13</span><span class="pill">代码</span></div>
-            <h3>gradient reversal layer 的前向和反向分别做什么？它如何实现领域对抗目标？</h3>
-            <textarea placeholder="前向恒等；反向梯度乘负系数。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q09</span></div>
+        <h3><b>Q:</b> 为什么可以把分类器拆成 feature extractor 和 label predictor？拆分位置有什么影响？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q10</span></div>
+        <h3><b>Q:</b> domain classifier 的输入和输出是什么？它为什么是二元分类器？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q11</span></div>
+        <h3><b>Q:</b> domain adversarial training 中，domain classifier 和 feature extractor 的目标为什么相反？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q12</span></div>
+        <h3><b>Q:</b> 错误示例：feature extractor 为了骗过 domain classifier，对所有输入都输出 zero vector。为什么这不是有效解？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q13</span></div>
+        <h3><b>Q:</b> gradient reversal layer 的前向和反向分别做什么？它如何实现领域对抗目标？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>四、限制与评估</h3><p>避免把分布混合误认为适应成功。</p></div>
-          <div class="quick-review"><b>快速回顾</b>分布对齐不是类别对齐；target 类别集合也可能不同。</div>
+          <div><h3>四、限制与评估</h3></div>
+          <div class="quick-review">快速回顾 分布对齐不是类别对齐；target 类别集合也可能不同。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q14" data-title="对齐不等于正确">
-            <div class="q-meta"><span class="pill">Q14</span><span class="pill">诊断</span></div>
-            <h3>为什么 source / target feature 看起来混合在一起，不一定代表 target 分类正确？</h3>
-            <textarea placeholder="可能类别错配，target 点落到错误 source 类别附近。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q15" data-title="远离边界">
-            <div class="q-meta"><span class="pill">Q15</span><span class="pill">推理</span></div>
-            <h3>为什么有人希望无标注 target 样本远离分类边界？用预测分布的集中程度解释。</h3>
-            <textarea placeholder="低熵代表模型更确定，离边界更远。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q16" data-title="类别集合不同">
-            <div class="q-meta"><span class="pill">Q16</span><span class="pill">错误示例</span></div>
-            <h3>错误示例：source 有老虎、狮子、狗，target 有狗、猫，却强行把整体分布完全对齐。可能造成什么问题？</h3>
-            <textarea placeholder="不同类别被揉在一起，猫/老虎等类别关系出错。"></textarea>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q17" data-title="费曼题">
-            <div class="q-meta"><span class="pill">Q17</span><span class="pill">费曼题</span></div>
-            <h3>请用 8-12 句话向同学讲清楚：领域自适应为什么要同时做到“领域不可分”和“类别可分”？</h3>
-            <textarea placeholder="要求串起：domain shift、source/target、feature extractor、domain classifier、label predictor、坍缩风险。"></textarea>
-            <div class="solve-note">提示：用黑白数字到彩色数字的例子开头。</div>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q18" data-title="完整方案">
-            <div class="q-meta"><span class="pill">Q18</span><span class="pill">综合</span></div>
-            <h3>你要把实验室训练的图像分类器部署到真实用户环境。请设计一个领域自适应评估方案，包含资料收集、是否标注、训练策略、验证指标和失败检查。</h3>
-            <textarea placeholder="写成工程计划。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q14</span></div>
+        <h3><b>Q:</b> 为什么 source / target feature 看起来混合在一起，不一定代表 target 分类正确？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q15</span></div>
+        <h3><b>Q:</b> 为什么有人希望无标注 target 样本远离分类边界？用预测分布的集中程度解释。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q16</span></div>
+        <h3><b>Q:</b> 错误示例：source 有老虎、狮子、狗，target 有狗、猫，却强行把整体分布完全对齐。可能造成什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q17</span></div>
+        <h3><b>Q:</b> 请用 8-12 句话向同学讲清楚：领域自适应为什么要同时做到“领域不可分”和“类别可分”？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q18</span></div>
+        <h3><b>Q:</b> 你要把实验室训练的图像分类器部署到真实用户环境。请设计一个领域自适应评估方案，包含资料收集、是否标注、训练策略、验证指标和失败检查。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
-
+      </section>
     <section id="export">
-      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
-      <p>完成练习后，生成一份 Markdown 记录。它会保留完整题干和你的回答，方便自学检查或分享给读者参考。</p>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" onclick="generateRecord()">生成记录</button>
-        <button type="button" class="ghost" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
-      <div class="quality" id="qualityBox"></div>
-      <pre class="answer" id="recordOutput">还没有生成记录。</pre>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-  const $ = (id) => document.getElementById(id);
+      </ul>
+    </section>
+  </article>
 
-  function updateProgress(){
-    const doc = document.documentElement;
-    const max = doc.scrollHeight - doc.clientHeight;
-    const pct = max > 0 ? (doc.scrollTop / max) * 100 : 0;
-    $('readProgress').style.width = pct + '%';
-  }
-  document.addEventListener('scroll', updateProgress);
-  updateProgress();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-  const navLinks = Array.from(document.querySelectorAll('nav a'));
-  const sections = navLinks.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
-  const observer = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if(entry.isIntersecting){
-        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id));
-      }
-    });
-  }, {rootMargin:'-30% 0px -65% 0px'});
-  sections.forEach(sec => observer.observe(sec));
-
-  function setWidth(id, value){
-    $(id).style.width = Math.max(0, Math.min(100, value)).toFixed(0) + '%';
-  }
-
-  function updateShift(){
-    const shift = parseInt($('shiftSlider').value, 10);
-    $('shiftVal').textContent = shift;
-    $('shiftValOut').textContent = shift;
-    const source = 99;
-    const target = Math.max(25, Math.round(99 - shift * 0.72 - Math.max(0, shift - 60) * 0.22));
-    $('srcAcc').textContent = source;
-    $('tgtAcc').textContent = target;
-    setWidth('shiftBar', shift);
-    setWidth('srcAccBar', source);
-    setWidth('tgtAccBar', target);
-    $('shiftNote').textContent = shift < 25
-      ? '差异较小时，直接迁移可能还能工作，但仍需验证。'
-      : shift > 70
-        ? '差异很大时，source 上高分几乎不能说明 target 表现。'
-        : '中等差异也足以让 target 表现明显下降。';
-  }
-  $('shiftSlider').addEventListener('input', updateShift);
-  updateShift();
-
-  function drawDomains(){
-    const canvas = $('domainCanvas');
-    const existing = Array.from(canvas.querySelectorAll('.blob'));
-    existing.forEach(el => el.remove());
-    const points = [
-      ['src',18,28],['src',24,44],['src',34,35],['src',64,28],['src',72,43],['src',80,32],
-      ['tgt',27,58],['tgt',36,68],['tgt',45,61],['tgt',58,58],['tgt',69,68],['tgt',76,57]
-    ];
-    points.forEach(([type,left,top], i) => {
-      const dot = document.createElement('div');
-      dot.className = 'blob ' + type;
-      dot.style.left = left + '%';
-      dot.style.top = top + '%';
-      dot.style.width = (18 + (i % 3) * 2) + 'px';
-      dot.style.height = dot.style.width;
-      canvas.appendChild(dot);
-    });
-  }
-  drawDomains();
-
-  function updateTradeoff(){
-    const w = parseInt($('alignSlider').value, 10);
-    $('alignVal').textContent = w;
-    const align = Math.min(96, 18 + w * 0.85);
-    const classSep = Math.max(28, 96 - Math.max(0, w - 45) * 0.95);
-    const target = Math.max(22, Math.min(92, 35 + align * 0.45 + classSep * 0.35 - Math.abs(w - 52) * 0.45));
-    $('alignText').textContent = align.toFixed(0);
-    $('classText').textContent = classSep.toFixed(0);
-    $('targetText').textContent = target.toFixed(0);
-    setWidth('alignFill', align);
-    setWidth('classFill', classSep);
-    setWidth('targetFill', target);
-    $('tradeNote').textContent = w < 25
-      ? '对齐太弱：target feature 仍保留明显领域差异。'
-      : w > 76
-        ? '对齐太强：类别结构开始被压坏，target 表现反而下降。'
-        : '当前比较接近折中：领域差异被削弱，类别结构仍保留。';
-  }
-  $('alignSlider').addEventListener('input', updateTradeoff);
-  updateTradeoff();
-
-  function collectAnswer(card){
-    const parts = [];
-    const checked = Array.from(card.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(input => {
-      const label = input.closest('label');
-      return label ? label.innerText.trim() : input.value;
-    });
-    if(checked.length) parts.push('选择：' + checked.join('；'));
-    const selects = Array.from(card.querySelectorAll('select')).map(select => {
-      const option = select.options[select.selectedIndex];
-      const value = option && option.value ? option.textContent.trim() : '';
-      const label = select.dataset.label || select.getAttribute('aria-label') || '下拉选择';
-      return value ? label + '：' + value : '';
-    }).filter(Boolean);
-    if(selects.length) parts.push(selects.join('\n'));
-    const texts = Array.from(card.querySelectorAll('textarea,input[type="text"]')).map(el => {
-      const value = el.value.trim();
-      const label = el.dataset.label || el.getAttribute('aria-label') || '';
-      return value ? (label ? label + '：' + value : value) : '';
-    }).filter(Boolean);
-    if(texts.length) parts.push(texts.join('\n'));
-    return parts.join('\n').trim();
-  }
-
-  function generateRecord(){
-    const cards = Array.from(document.querySelectorAll(".q[data-role='homework']"));
-    const lines = [];
-    let answered = 0;
-    lines.push('# P44 领域自适应概述 - 练习记录');
-    lines.push('');
-    lines.push('## 完成情况');
-    cards.forEach((card, idx) => {
-      const title = card.dataset.title || ('题目 ' + (idx + 1));
-      const question = card.querySelector('h3')?.innerText.trim() || title;
-      const answer = collectAnswer(card);
-      if(answer) answered += 1;
-      lines.push('');
-      lines.push('### Q' + String(idx + 1).padStart(2, '0') + ' ' + title);
-      lines.push('');
-      lines.push('题目：' + question);
-      lines.push('');
-      lines.push(answer ? answer : '（未作答）');
-    });
-    const missing = cards.length - answered;
-    const quality = [];
-    quality.push('已作答：' + answered + ' / ' + cards.length);
-    if(missing > 0) quality.push('还有 ' + missing + ' 题未作答。');
-    if(!$('qualityBox').style.display || $('qualityBox').style.display === 'none') $('qualityBox').style.display = 'block';
-    $('qualityBox').textContent = quality.join('\n');
-    $('recordOutput').textContent = lines.join('\n');
-  }
-
-  async function copyRecord(){
-    const text = $('recordOutput').textContent;
-    if(!text || text === '还没有生成记录。') generateRecord();
-    try{
-      await navigator.clipboard.writeText($('recordOutput').textContent);
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '已复制练习记录。';
-    }catch(err){
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '复制失败，请手动选中下方记录。';
-    }
-  }
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

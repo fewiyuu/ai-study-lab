@@ -4,281 +4,449 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>04 多工具分发与专用工具｜Claude Code 工作流</title>
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body>
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Claude Code 工作流</strong><span>04｜多工具分发与专用工具</span></div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>目标与主线</a>
-      <a href="#compare"><span class="dot"></span>S01 到 S02</a>
-      <a href="#dispatch"><span class="dot"></span>handler 映射</a>
-      <a href="#read-file"><span class="dot"></span>read_file</a>
-      <a href="#safe-path"><span class="dot"></span>路径安全</a>
-      <a href="#why"><span class="dot"></span>为什么不用全 Bash</a>
-      <a href="#public-guide"><span class="dot"></span>讲义补强</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>导出练习记录</a>
-    </nav>
-    <div class="side-note">工具越多，关键不是堆函数，而是让模型请求的工具名能稳定路由到本地 handler。</div>
-  </aside>
-  <main>
-    <header class="hero" id="goal">
-      <div>
-        <div class="kicker">Tool dispatch</div>
-        <h1>多工具分发与专用工具</h1>
-        <p class="muted">S01 只有 Bash，代码可以硬编码 `run_bash`。S02 有多个工具，就需要一个分发映射：模型返回工具名，本地程序根据工具名找到对应函数，再把 input 参数交给它。</p>
-        <div class="map">
-          <span class="node">block.type</span><span class="arrow">→</span>
-          <span class="node">block.name</span><span class="arrow">→</span>
-          <span class="node">handlers.get</span><span class="arrow">→</span>
-          <span class="node">run_read_file</span><span class="arrow">→</span>
-          <span class="node">tool_result</span>
+<body data-course="Claude Code 工作流" data-unit="04">
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">Claude Code 工作流</a>
+        <span class="sep">/</span>
+        <span>04</span>
+      </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Tool dispatch</div>
+      <div class="hero-meta">
+        <span class="hero-badge">04</span>
+      </div>
+      <h1 class="hero-title">04 多工具分发与专用工具｜Claude Code 工作流</h1>
+      <p class="hero-desc">S01 只有 Bash，代码可以硬编码 `run_bash`。S02 有多个工具，就需要一个分发映射：模型返回工具名，本地程序根据工具名找到对应函数，再把 input 参数交给它。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../03_工具调用让Agent做事/学习页.html">上一节</a>
+            <a href="../05_行动之前先规划/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#compare">1. S01 到 S02 的核心变化</a>
+      <a href="#dispatch">2. handler map 怎么选函数</a>
+      <a href="#read-file">3. read_file 为什么是专用工具</a>
+      <a href="#safe-path">4. safe_path 防的是什么</a>
+      <a href="#why">5. 为什么不用 Bash 包打天下</a>
+      <a href="#public-guide">6. 公开讲义补强：新增一个专用工具要改哪里</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="compare">
+        <div class="head">
+          <h2>1. S01 到 S02 的核心变化</h2>
+          <span class="tag">hardcode</span>
         </div>
-        <p>学完本页，你应该能解释 `type=tool_use` 和 `name=read_file` 的分工，能读懂 handler map，也能说出为什么专用工具比一把 Bash 更安全、更可控。</p>
-      </div>
-      <div class="box soft">
-        <h3>来源材料</h3>
-        <p>视频：《Learn Claude Code 源码详解》工具越多，Agent 会做的越多，开发实战分享屋，2026-03-09。</p>
-        <p>本页以 `read_file(requirements.txt)` 为主例，讲工具分发和路径安全。</p>
-      </div>
-    </header>
-
-    <section id="compare">
-      <div class="head"><h2>1. S01 到 S02 的核心变化</h2><span class="tag">hardcode → dispatch</span></div>
-      <p>S01 只有一个 Bash 工具，所以代码看到 `tool_use` 后，可以直接调用 `run_bash`。这在最小 demo 里够用，但一旦有多个工具，硬编码就会失控。模型可能请求 `read_file`、`write_file`、`bash` 或其他工具，本地程序必须先看工具名，再决定调用哪个函数。</p>
-      <p>S02 的核心变化可以压缩成一句话：从“所有工具调用都走 Bash”改成“用 `block.name` 查 handler 映射”。这让新增工具变得清晰：你给模型暴露工具 schema，再在本地 handlers 字典里注册同名函数。</p>
-      <div class="codebar"><span class="label">错误示例：只有 Bash 时的硬编码思路</span><span>S01</span></div>
-      <pre><code>if block.type == "tool_use":
-    output = run_bash(block.input["command"])</code></pre>
-      <div class="codebar"><span class="label">正确示例：多工具分发思路</span><span>S02</span></div>
-      <pre><code>handlers = {
-    "bash": run_bash,
-    "read_file": run_read_file,
-    "write_file": run_write_file,
-}
-
-if block.type == "tool_use":
-    handler = handlers.get(block.name)
-    output = handler(**block.input)</code></pre>
-      <p>判断句：`block.type` 只告诉你“这是工具调用请求”，`block.name` 才告诉你“请求的是哪个工具”。</p>
-    </section>
-
-    <section id="dispatch">
-      <div class="head"><h2>2. handler map 怎么选函数</h2><span class="tag">name lookup</span></div>
-      <p>handler map 本质上是 Python 字典。键是模型会返回的工具名，值是本地函数。模型返回 `name="read_file"` 时，本地程序用 `handlers.get("read_file")` 找到 `run_read_file`。如果找不到，就应该返回明确错误，而不是默默忽略。</p>
-      <p>工具名必须统一。工具 schema 里叫 `read_file`，handler 字典也要有 `read_file`。如果 schema 暴露的是 `read_file`，本地却注册成 `readFile`，模型请求就会找不到 handler。命名一致是多工具系统最基础的契约。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <h3>选择模型返回的工具名</h3>
-            <div class="viz-actions">
-              <button data-tool="bash" class="active">bash</button>
-              <button data-tool="read_file">read_file</button>
-              <button data-tool="unknown_tool">unknown_tool</button>
-            </div>
-            <div class="dispatch-card" id="dispatchCard"></div>
-          </div>
-          <div class="viz-cell">
-            <h3 id="dispatchTitle">命中 run_bash</h3>
-            <p id="dispatchText">工具名是 bash，handler map 能找到本地的 run_bash 函数。下一步要检查 input 里是否有 command。</p>
-            <div class="viz-note" id="dispatchHint">观察点：命中 handler 只是开始，参数校验和安全检查仍然要做。</div>
-          </div>
+<p>S01 只有一个 Bash 工具，所以代码看到 <code>tool_use</code> 后，可以直接调用 <code>run_bash</code>。这在最小 demo 里够用，但一旦有多个工具，硬编码就会失控。模型可能请求 <code>read_file</code>、<code>write_file</code>、<code>bash</code> 或其他工具，本地程序必须先看工具名，再决定调用哪个函数。</p>
+<p>错误示例：只有 Bash 时的硬编码思路S01</p>
+<p>正确示例：多工具分发思路S02</p>
+<p>判断句：<code>block.type</code> 只告诉你“这是工具调用请求”，<code>block.name</code> 才告诉你“请求的是哪个工具”。</p>
+      </section>
+      <section id="dispatch">
+        <div class="head">
+          <h2>2. handler map 怎么选函数</h2>
+          <span class="tag">name</span>
         </div>
-      </div>
-      <div class="codebar error"><span class="label">错误示例：没有处理未知工具</span><span>分发漏洞</span></div>
-      <pre><code>handler = handlers.get(block.name)
+<p>handler map 本质上是 Python 字典。键是模型会返回的工具名，值是本地函数。模型返回 <code>name="read_file"</code> 时，本地程序用 <code>handlers.get("read_file")</code> 找到 <code>run_read_file</code>。如果找不到，就应该返回明确错误，而不是默默忽略。</p>
+<p>选择模型返回的工具名</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-dispatch-1">复制</button></div>
+        <pre id="code-dispatch-1" data-export-context="代码" data-export-lang="text"><code class="language-text">handler = handlers.get(block.name)
 output = handler(**block.input)
 
 # 如果 block.name 不存在，handler 是 None。
 # 这会在运行时抛错，而且错误信息不一定对模型有帮助。</code></pre>
-      <p>更稳的写法是：找不到 handler 时，返回一个明确的 tool_result，告诉模型“这个工具不可用”。这样模型可以改用别的工具，或者向用户说明限制。</p>
-    </section>
-
-    <section id="read-file">
-      <div class="head"><h2>3. read_file 为什么是专用工具</h2><span class="tag">specific tool</span></div>
-      <p>`read_file` 是一个专用工具。它只负责读取文件，不负责执行任意命令。模型返回 `name="read_file"`，同时在 input 里提供 `path`，本地程序把 path 传给 `run_read_file`。函数内部先做路径安全检查，再用 Python API 读取文本。</p>
-      <p>这比让模型通过 Bash 执行 `cat requirements.txt` 更可控。Bash 能做的事太多，既能读文件，也能删除文件、发网络请求、执行脚本。专用工具把能力收窄，让本地程序更容易检查参数、限制目录、返回稳定格式。</p>
-      <div class="codebar"><span class="label">正确示例：read_file 的最小执行链</span><span>Python</span></div>
-      <pre><code>def run_read_file(path: str) -&gt; str:
-    safe = safe_path(path)
-    return safe.read_text(encoding="utf-8")
-
-block = ToolUseBlock(
-    type="tool_use",
-    name="read_file",
-    input={"path": "requirements.txt"},
-)
-
-handler = handlers.get(block.name)
-output = handler(**block.input)</code></pre>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>对象</th><th>负责什么</th><th>不负责什么</th></tr></thead>
-          <tbody>
-            <tr><td>模型</td><td>选择 `read_file`，给出 path。</td><td>不直接读取磁盘。</td></tr>
-            <tr><td>handler map</td><td>把 `read_file` 映射到 `run_read_file`。</td><td>不做业务逻辑。</td></tr>
-            <tr><td>`run_read_file`</td><td>校验路径并读取文件。</td><td>不执行任意 shell 命令。</td></tr>
-            <tr><td>tool_result</td><td>把文件内容或错误反馈给模型。</td><td>不替模型做最终总结。</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section id="safe-path">
-      <div class="head"><h2>4. safe_path 防的是什么</h2><span class="tag">path traversal</span></div>
-      <p>路径参数不能完全相信模型。即使模型不是恶意的，它也可能生成 `../` 这样的路径，试图访问工作目录外的文件。`safe_path` 的目的就是把路径限制在允许的工作区里，防止路径穿越。</p>
-      <p>路径穿越的典型形式是 `../../secret.txt`。如果程序直接读取这个路径，就可能访问到项目外的敏感文件。稳妥做法是把用户提供的相对路径解析成绝对路径，再确认它仍然位于工作目录下。</p>
-      <div class="codebar"><span class="label">正确示例：路径限制的思路</span><span>Python</span></div>
-      <pre><code>from pathlib import Path
-
-WORKSPACE = Path.cwd().resolve()
-
-def safe_path(path: str) -&gt; Path:
-    candidate = (WORKSPACE / path).resolve()
-    if not str(candidate).startswith(str(WORKSPACE)):
-        raise ValueError("Path is outside workspace")
-    return candidate</code></pre>
-      <div class="codebar error"><span class="label">错误示例：直接信任 path</span><span>路径穿越</span></div>
-      <pre><code>def run_read_file(path: str) -&gt; str:
-    return Path(path).read_text()
-
-# 如果 path 是 "../../secret.txt"，程序可能读到工作区外的文件。</code></pre>
-      <p>判断句：工具 schema 只能告诉模型 path 字段应该存在，不能保证 path 安全。安全判断必须在本地函数里做。</p>
-    </section>
-
-    <section id="why">
-      <div class="head"><h2>5. 为什么不用 Bash 包打天下</h2><span class="tag">safe and controllable</span></div>
-      <p>Bash 的优点是通用，缺点也是通用。它几乎什么都能做，所以很难精确限制。专用工具把能力拆小：读文件就只读文件，写文件就只写文件，列目录就只列目录。能力越窄，参数越清楚，安全边界越容易检查。</p>
-      <div class="grid2">
-        <div class="box warn">
-          <h3>全 Bash 的问题</h3>
-          <ul>
-            <li>命令字符串难校验。</li>
-            <li>不同系统命令差异大。</li>
-            <li>容易混入危险操作。</li>
-            <li>返回格式不稳定。</li>
-          </ul>
+<p>更稳的写法是：找不到 handler 时，返回一个明确的 tool_result，告诉模型“这个工具不可用”。这样模型可以改用别的工具，或者向用户说明限制。</p>
         </div>
-        <div class="box ok">
-          <h3>专用工具的好处</h3>
-          <ul>
-            <li>输入字段明确。</li>
-            <li>能限制工作目录。</li>
-            <li>返回结构更稳定。</li>
-            <li>新增能力更容易审计。</li>
-          </ul>
+      </section>
+      <section id="read-file">
+        <div class="head">
+          <h2>3. read_file 为什么是专用工具</h2>
+          <span class="tag">specific</span>
         </div>
-      </div>
-      <p>这不是说 Bash 不能用，而是不能把所有能力都压到 Bash 里。最小 Agent 可以先用 Bash 解释工具调用原理；真正扩展时，要逐步增加专用工具。</p>
-    </section>
-
-    <section id="public-guide">
-      <div class="head"><h2>6. 公开讲义补强：新增一个专用工具要改哪里</h2><span class="tag">extend safely</span></div>
-      <p>把这一页压缩成一句话：多工具 Agent 的核心不是“写很多函数”，而是让模型看到的工具声明、模型返回的工具名、本地 handler 注册表和结果回写保持一致。任何一处名字或参数错位，工具链就会断。</p>
-      <div class="grid3">
-        <div class="route"><h3>工具 schema</h3><p>告诉模型工具名、用途和 input 字段。例如 `list_dir` 需要 `path`。</p></div>
-        <div class="route"><h3>handler map</h3><p>把工具名映射到本地函数。例如 `handlers["list_dir"] = run_list_dir`。</p></div>
-        <div class="route"><h3>安全边界</h3><p>在本地函数里校验路径、权限、大小和返回格式，不能只依赖 schema。</p></div>
-      </div>
-      <div class="codebar"><span class="label">新增 list_dir 的最小形状</span><span>Python</span></div>
-      <pre><code>tools.append({
-    "name": "list_dir",
-    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}
-})
-
-handlers["list_dir"] = run_list_dir
-
-def run_list_dir(path: str) -> str:
-    target = safe_path(path)
-    return "\n".join(sorted(p.name for p in target.iterdir()))</code></pre>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>检查点</th><th>好实现</th><th>坏信号</th></tr></thead>
-          <tbody>
-            <tr><td>命名一致</td><td>schema、`block.name`、handlers 使用同一个名字。</td><td>`read_file` / `readFile` 混用。</td></tr>
-            <tr><td>参数明确</td><td>每个字段有类型和用途。</td><td>把所有参数塞进一段自由文本。</td></tr>
-            <tr><td>路径收束</td><td>解析后确认仍在允许工作区内。</td><td>允许 `..` 直接越过边界。</td></tr>
-            <tr><td>错误可反馈</td><td>未知工具、非法路径、读取失败都返回清晰 tool_result。</td><td>异常直接崩溃或静默吞掉。</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p>你现在应该能做什么：给一个新工具写出“schema、handler 注册、本地函数、安全检查、结果回写”五项改动清单，并判断它是否比 Bash 更可控。</p>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
+<p><code>read_file</code> 是一个专用工具。它只负责读取文件，不负责执行任意命令。模型返回 <code>name="read_file"</code>，同时在 input 里提供 <code>path</code>，本地程序把 path 传给 <code>run_read_file</code>。函数内部先做路径安全检查，再用 Python API 读取文本。</p>
+<p>正确示例：read_file 的最小执行链Python</p>
+<p>对象负责什么不负责什么</p>
+      </section>
+      <section id="safe-path">
+        <div class="head">
+          <h2>4. safe_path 防的是什么</h2>
+          <span class="tag">path</span>
+        </div>
+<p>路径参数不能完全相信模型。即使模型不是恶意的，它也可能生成 <code>../</code> 这样的路径，试图访问工作目录外的文件。<code>safe_path</code> 的目的就是把路径限制在允许的工作区里，防止路径穿越。</p>
+<p>正确示例：路径限制的思路Python</p>
+<p>错误示例：直接信任 path路径穿越</p>
+<p>判断句：工具 schema 只能告诉模型 path 字段应该存在，不能保证 path 安全。安全判断必须在本地函数里做。</p>
+      </section>
+      <section id="why">
+        <div class="head">
+          <h2>5. 为什么不用 Bash 包打天下</h2>
+          <span class="tag">safe</span>
+        </div>
+<p>Bash 的优点是通用，缺点也是通用。它几乎什么都能做，所以很难精确限制。专用工具把能力拆小：读文件就只读文件，写文件就只写文件，列目录就只列目录。能力越窄，参数越清楚，安全边界越容易检查。</p>
+        <div class="box">
+<h3>专用工具的好处</h3>
+<ul>
+<li>输入字段明确。</li>
+<li>能限制工作目录。</li>
+<li>返回结构更稳定。</li>
+<li>新增能力更容易审计。</li>
+</ul>
+<p>这不能把所有能力都压到 Bash 里。最小 Agent 可以先用 Bash 解释工具调用原理；真正扩展时，要逐步增加专用工具。</p>
+        </div>
+      </section>
+      <section id="public-guide">
+        <div class="head">
+          <h2>6. 公开讲义补强：新增一个专用工具要改哪里</h2>
+          <span class="tag">extend</span>
+        </div>
+<p>把这一页压缩成一句话：多工具 Agent 的核心让模型看到的工具声明、模型返回的工具名、本地 handler 注册表和结果回写保持一致。任何一处名字或参数错位，工具链就会断。</p>
+<p>新增 list_dir 的最小形状Python</p>
+<p>检查点好实现坏信号</p>
+<p>你现在应该能做什么：给一个新工具写出“schema、handler 注册、本地函数、安全检查、结果回写”五项改动清单，并判断它是否比 Bash 更可控。</p>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">检查理解</span>
+        </div>
       <div class="practice-group">
-        <div class="group-head"><div><h3>一、基础概念</h3><p>先分清工具分发里的几个对象。</p></div><div class="box soft">复习一下：`type` 判断是不是工具调用，`name` 决定调用哪个工具，`input` 提供参数。</div></div>
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          
+        </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-title="1. type 和 name"><div class="q-meta"><span class="pill">选择</span></div><h3>1. 真正决定调用哪个工具的是哪个字段？</h3><label><input type="radio" name="q1" value="A">A. block.type</label><label><input type="radio" name="q1" value="B">B. block.name</label><label><input type="radio" name="q1" value="C">C. stop_reason</label></div>
-          <div class="q" data-role="homework" data-title="2. handler map"><div class="q-meta"><span class="pill">填空</span></div><h3>2. handler map 的键是 ______，值是 ______。</h3><input type="text" name="q2"></div>
-          <div class="q" data-role="homework" data-title="3. 硬编码"><div class="q-meta"><span class="pill">判断</span></div><h3>3. 多工具系统里，所有 tool_use 都直接调用 `run_bash` 是稳妥设计。</h3><label><input type="radio" name="q3" value="对">对</label><label><input type="radio" name="q3" value="错">错</label></div>
-          <div class="q" data-role="homework" data-title="4. read_file"><div class="q-meta"><span class="pill">短答</span></div><h3>4. `read_file` 的 input 里为什么应该有 path？</h3><textarea name="q4"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. 真正决定调用哪个工具的是哪个字段？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="block.type">block.type</label>
+      <label><input type="radio" name="q?" value="block.name">block.name</label>
+      <label><input type="radio" name="q?" value="stop_reason">stop_reason</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 2. handler map 的键是 ______，值是 ______。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 3. 多工具系统里，所有 tool_use 都直接调用 <code>run_bash</code> 是稳妥设计。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 4. <code>read_file</code> 的 input 里为什么应该有 path？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、分发流程</h3><p>这一组检查你能不能把工具名路由到函数。</p></div><div class="box soft">从 `tool_use` block 开始：看 name，查 handlers，校验 input，调用函数，返回结果。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-title="5. 顺序排序"><div class="q-meta"><span class="pill">排序</span></div><h3>5. 排序：读取 block.name、确认 block.type、查 handlers、校验 input、调用本地函数、写回 tool_result。</h3><input type="text" name="q5"></div>
-          <div class="q" data-role="homework" data-title="6. 未知工具"><div class="q-meta"><span class="pill">诊断</span></div><h3>6. 模型返回 `unknown_tool`，handlers 里没有它。应该怎么处理？</h3><textarea name="q6"></textarea></div>
-          <div class="q" data-role="homework" data-title="7. 命名一致"><div class="q-meta"><span class="pill">诊断</span></div><h3>7. schema 里叫 `read_file`，handler 里注册成 `readFile`，会有什么问题？</h3><textarea name="q7"></textarea></div>
-          <div class="q" data-role="homework" data-title="8. 参数传递"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>8. `handler(**block.input)` 这句在做什么？</h3><textarea name="q8"></textarea></div>
+        <div class="group-head">
+          <div><h3>二、分发流程</h3></div>
+          
         </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、路径与安全</h3><p>按错因、后果、修法回答。</p></div><div class="box warn">工具 schema 不负责安全，安全检查在本地 handler。</div></div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-title="9. 路径穿越"><div class="q-meta"><span class="pill">诊断</span></div><h3>9. `../../secret.txt` 这类路径为什么危险？</h3><textarea name="q9"></textarea></div>
-          <div class="q" data-role="homework" data-title="10. safe_path"><div class="q-meta"><span class="pill">短答</span></div><h3>10. `safe_path` 至少应该检查什么？</h3><textarea name="q10"></textarea></div>
-          <div class="q" data-role="homework" data-title="11. Bash 对比"><div class="q-meta"><span class="pill">对比</span></div><h3>11. 用 Bash 读文件和用 `read_file` 读文件，安全边界有什么不同？</h3><textarea name="q11"></textarea></div>
-          <div class="q" data-role="homework" data-title="12. 返回格式"><div class="q-meta"><span class="pill">诊断</span></div><h3>12. 为什么专用工具的返回格式通常比 Bash 更稳定？</h3><textarea name="q12"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、迁移与表达</h3><p>把这套分发方式迁移到新增工具。</p></div><div class="box soft">新增工具不是只写函数，还要同步 schema、handler map 和结果回写。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-title="13. 新增工具"><div class="q-meta"><span class="pill">设计</span></div><h3>13. 如果新增 `list_dir` 工具，需要改哪三处？</h3><textarea name="q13"></textarea></div>
-          <div class="q" data-role="homework" data-title="14. 专用工具边界"><div class="q-meta"><span class="pill">边界</span></div><h3>14. 专用工具是不是越多越好？什么时候会变成负担？</h3><textarea name="q14"></textarea></div>
-          <div class="q" data-role="homework" data-title="15. 面试短答"><div class="q-meta"><span class="pill">表达</span></div><h3>15. 用 2-3 句话解释工具分发映射。</h3><textarea name="q15"></textarea></div>
-          <div class="q" data-role="homework" data-title="16. 检查清单"><div class="q-meta"><span class="pill">清单</span></div><h3>16. 处理一个未知工具名时，写出 4 项检查。</h3><textarea name="q16"></textarea></div>
-          <div class="q full" data-role="homework" data-title="17. 流程图"><div class="q-meta"><span class="pill">流程图</span></div><h3>17. 用文字画出 `read_file(requirements.txt)` 的分发流程。</h3><textarea name="q17"></textarea></div>
-          <div class="q full" data-role="homework" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：为什么多工具 Agent 需要 handler map。</h3><div class="solve-note">请串联 S01 硬编码、block.name、handlers、read_file、safe_path、tool_result。</div><textarea name="q18"></textarea></div>
-        </div>
-      </div>
-    </section>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">排序</span></div>
+        <h3><b>Q:</b> 5. 排序：读取 block.name、确认 block.type、查 handlers、校验 input、调用本地函数、写回 tool_result。</h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 6. 模型返回 <code>unknown_tool</code>，handlers 里没有它。应该怎么处理？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 7. schema 里叫 <code>read_file</code>，handler 里注册成 <code>readFile</code>，会有什么问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">代码阅读</span></div>
+        <h3><b>Q:</b> 8. <code>handler(**block.input)</code> 这句在做什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、路径与安全</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 9. <code>../../secret.txt</code> 这类路径为什么危险？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 10. <code>safe_path</code> 至少应该检查什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对比</span></div>
+        <h3><b>Q:</b> 11. 用 Bash 读文件和用 <code>read_file</code> 读文件，安全边界有什么不同？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 12. 为什么专用工具的返回格式通常比 Bash 更稳定？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、迁移与表达</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b> 13. 如果新增 <code>list_dir</code> 工具，需要改哪三处？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">边界</span></div>
+        <h3><b>Q:</b> 14. 专用工具是不是越多越好？什么时候会变成负担？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">表达</span></div>
+        <h3><b>Q:</b> 15. 用 2-3 句话解释工具分发映射。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 16. 处理一个未知工具名时，写出 4 项检查。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">流程图</span></div>
+        <h3><b>Q:</b> 17. 用文字画出 <code>read_file(requirements.txt)</code> 的分发流程。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 18. 用 6-9 句话讲清楚：为什么多工具 Agent 需要 handler map。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>保存练习记录</h2><span class="tag">自测用</span></div>
-      <p class="muted">完成练习后生成本页记录，便于检查理解和复制留存。</p>
-      <div class="actions"><button onclick="generateRecord()">生成练习记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-const dispatch={
-  bash:["命中 run_bash","工具名是 bash，handler map 能找到本地的 run_bash 函数。下一步要检查 input 里是否有 command。","观察点：命中 handler 只是开始，参数校验和安全检查仍然要做。","block.name = 'bash'\nhandler = handlers.get('bash')\nhandler -> run_bash\nrequired input: command"],
-  read_file:["命中 run_read_file","工具名是 read_file，handler map 会路由到 run_read_file。下一步要检查 path 并通过 safe_path 限制目录。","观察点：专用工具把能力收窄，参数也更明确。","block.name = 'read_file'\nhandler = handlers.get('read_file')\nhandler -> run_read_file\nrequired input: path"],
-  unknown_tool:["没有可用 handler","工具名不在 handlers 里。程序应该返回明确错误，而不是直接调用 None。","观察点：未知工具也要生成反馈，让模型知道这个能力不可用。","block.name = 'unknown_tool'\nhandler = handlers.get('unknown_tool')\nhandler -> None\nreturn tool_result: unavailable"]
-};
-function renderDispatch(name){const d=dispatch[name]||dispatch.bash;document.querySelectorAll("[data-tool]").forEach(b=>b.classList.toggle("active",b.dataset.tool===name));document.getElementById("dispatchTitle").textContent=d[0];document.getElementById("dispatchText").textContent=d[1];document.getElementById("dispatchHint").textContent=d[2];document.getElementById("dispatchCard").textContent=d[3]}
-document.querySelectorAll("[data-tool]").forEach(btn=>btn.addEventListener("click",()=>renderDispatch(btn.dataset.tool)));renderDispatch("bash");
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
-const questionNodes=[...document.querySelectorAll('[data-role="homework"]')];
-const questions=questionNodes.map((node,idx)=>["综合练习",node.dataset.title||node.querySelector("h3")?.innerText||`第 ${idx+1} 题`,`q${idx+1}`,"dom"]);
-function answerOf(node){const checked=[...node.querySelectorAll('input[type=radio]:checked,input[type=checkbox]:checked')].map(i=>i.value);const text=[...node.querySelectorAll('textarea,input[type=text]')].map(i=>i.value.trim()).filter(Boolean);return [...checked,...text].join('；')}
-function generateRecord(){const missing=[],lines=['# 04 多工具分发与专用工具｜练习记录',''];questionNodes.forEach((node,idx)=>{const title=node.dataset.title||node.querySelector('h3')?.innerText||`第 ${idx+1} 题`;const answer=answerOf(node);if(!answer)missing.push(title);lines.push(`## ${idx+1}. ${title}`,answer||'（未填写）','')});document.getElementById('record').textContent=lines.join('\n');const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=answerOf(questionNodes[questionNodes.length-1]||document.createElement('div'));const keys=['S01','block.name','handlers','read_file','safe_path','tool_result'];const lack=keys.filter(k=>f&&!f.includes(k));if(f&&f.length<120)warnings.push('费曼解释偏短，建议讲成 6-9 句话。');if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join('、')}。`);const q=document.getElementById('quality');q.style.display='block';q.textContent=warnings.length?warnings.join('\n'):'练习记录完整，可以用于自测检查。'}
-function copyRecord(){navigator.clipboard.writeText(document.getElementById('record').textContent).catch(()=>alert('复制失败，请手动复制。'))}
-</script>
-<script src="../assets/study-page.js"></script>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

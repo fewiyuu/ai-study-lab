@@ -4,183 +4,187 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>实验设计与结果解读｜学习页</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="LoRA 论文精读" data-unit="04_实验设计与结果解读">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand"><strong>LoRA 论文精读</strong><span>实验设计与结果解读</span></div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#baselines"><span class="dot"></span>先认清基线</a>
-        <a href="#nlu"><span class="dot"></span>RoBERTa / DeBERTa</a>
-        <a href="#nlg"><span class="dot"></span>GPT-2 生成任务</a>
-        <a href="#gpt3"><span class="dot"></span>GPT-3 压力测试</a>
-        <a href="#fairness"><span class="dot"></span>读实验的四个问题</a>
-        <a href="#examples"><span class="dot"></span>试一试</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">实验表不是为了背数字。读表时要问：谁和谁比、参数量多少、任务是什么、结论能推到哪里。</div>
-    </aside>
-    <main>
-      <div class="hero" id="goals">
-        <div>
-          <div class="kicker">第 4 块 · 实验读表</div>
-          <h1>实验设计与结果解读</h1>
-          <p>读懂 LoRA 论文里的基线、指标、参数量和结论边界</p>
-          <div class="course-links"><a href="../index.html">课程地图</a><a href="../课程拆解.md">课程拆解</a></div>
-        </div>
-        <div class="box soft"><h3>学完你应该能做什么</h3><ol><li>区分论文中的 FT、BitFit、PreEmbed、PreLayer、Adapter 和 LoRA 基线。</li>
-<li>读懂 RoBERTa/DeBERTa、GPT-2、GPT-3 三组实验各自想回答的问题。</li>
-<li>根据参数量和指标判断 LoRA 的优势是否成立。</li>
-<li>说明实验结论的边界：任务、模型、指标和统计波动。</li></ol></div>
-      </div>
-      <section id="baselines"><div class="head"><h2>1. 先认清基线：每个方法到底训练什么</h2><span class="tag">baselines</span></div>
-<p>论文的实验表里名字很多，先别急着看谁加粗。第一步是认清每个 baseline 的训练对象。Fine-tuning 更新全部参数；BitFit 只训练 bias；PreEmbed 训练输入端特殊 token 的 embedding；PreLayer 训练每层里的特殊 token 激活；Adapter 在模型内部插入小层；LoRA 训练并联到已有权重上的低秩矩阵。</p>
-<p>这一步很重要，因为参数量接近不代表机制接近。Adapter 和 LoRA 都可能只有几十万或几百万参数，但 adapter 是顺序插入模块，LoRA 是并联低秩更新。PreEmbed 参数少，但它用的是上下文位置。BitFit 便宜，但表达能力受限。读表时要把“训练对象”和“推理路径”放在一起看。</p>
-<p>论文有些数字来自作者复现实验，有些带星号的是引用前人结果，有些带 dagger 的是为了公平比较而采用受限设置。表里这些符号不只是脚注，它们影响可比性。你现在应该能先看实验设置，再看指标高低。</p>
-<div class="grid2"><div class="card"><strong>FT</strong>更新全部预训练参数，表达强，但每任务参数和原模型同量级。</div>
-<div class="card"><strong>BitFit</strong>只训练 bias，参数很少，通常作为极轻量基线。</div>
-<div class="card"><strong>PreEmbed</strong>训练特殊 prefix/infix token 的 embedding，占用序列长度。</div>
-<div class="card"><strong>PreLayer</strong>训练每层特殊 token 激活，参数比 PreEmbed 多。</div>
-<div class="card"><strong>Adapter</strong>插入瓶颈模块，参数少但推理可能增加顺序计算。</div>
-<div class="card"><strong>LoRA</strong>训练低秩矩阵 A/B，merge 后推理走原线性层。</div></div><p>判断句：表格里的方法名如果不能翻译成“训练什么”，就还没开始读实验。你现在应该能把每个 baseline 放回训练路径里。</p></section>
-<section id="trace-lab">
-  <div class="head"><h2>实验读表检查链</h2><span class="tag">inspection</span></div>
-  <p>这一段把本页的判断流程变成可检查对象：先看公式或规则，再沿着 trace 走一遍，最后用失败输出确认自己知道哪里会错。</p>
-  <div class="math-block" data-export-context="实验设计与结果解读核心公式" data-export-lang="math">
-    $$\text{有效比较}=\text{任务指标}+\text{可训练参数量}+\text{推理路径}+\text{设置边界}$$
-    <p>读 LoRA 实验表时，分数、参数量、推理延迟和脚注设置必须一起出现；只看其中一个维度，结论会偏。</p>
-  </div>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines"><button class="trace-line active" data-trace-step="step-1"><code>读方法名</code><span>FT / BitFit / Adapter / LoRA</span></button><button class="trace-line" data-trace-step="step-2"><code>看参数量</code><span>125M vs 0.3M</span></button><button class="trace-line" data-trace-step="step-3"><code>看任务指标</code><span>GLUE / E2E / GPT-3</span></button><button class="trace-line" data-trace-step="step-4"><code>看脚注</code><span>* / dagger / 波动</span></button></div>
-    <div class="trace-canvas"><div class="tensor-card active" data-trace-target="step-1"><b>读方法名</b><span>FT / BitFit / Adapter / LoRA</span><p>先翻译成训练对象。</p></div><div class="tensor-card" data-trace-target="step-2"><b>看参数量</b><span>125M vs 0.3M</span><p>确认效率主张来自多大的差距。</p></div><div class="tensor-card" data-trace-target="step-3"><b>看任务指标</b><span>GLUE / E2E / GPT-3</span><p>确认质量没有被明显牺牲。</p></div><div class="tensor-card" data-trace-target="step-4"><b>看脚注</b><span>* / dagger / 波动</span><p>确认比较是否公平。</p></div></div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="实验设计与结果解读检查表" data-export-lang="table">
-      <thead><tr><th>检查对象</th><th>观察值</th><th>判断</th></tr></thead>
-      <tbody><tr><td>FT</td><td>全部权重</td><td>质量强，但每任务 checkpoint 大</td></tr>
-<tr><td>Adapter</td><td>额外瓶颈层</td><td>参数少，但可能增加顺序推理路径</td></tr>
-<tr><td>LoRA</td><td>低秩 A/B</td><td>参数少，merge 后走原线性层</td></tr></tbody>
-    </table>
-  </div>
-  <div class="codebar"><span>实验结论检查伪代码</span><button class="copy" data-copy="code-04">复制</button></div>
-  <pre id="code-04" data-export-context="实验结论检查伪代码" data-export-lang="python"><code class="language-python">def judge_result(method, params_m, score, baseline_score, latency_note):
-    quality_ok = score &gt;= baseline_score - 0.2
-    efficient = params_m &lt; 0.01 * 355
-    deploy_ok = &quot;no extra latency&quot; in latency_note
-    return quality_ok and efficient and deploy_ok
-</code></pre>
-  <div class="terminal-lab" data-terminal-lab>
-    <div class="terminal-controls"><button class="ghost active" data-terminal-case="case-1">只看最高分</button><button class="ghost" data-terminal-case="case-2">参数+指标</button><button class="ghost" data-terminal-case="case-3">带脚注复核</button></div>
-    <pre class="terminal-output" data-export-context="实验设计与结果解读失败诊断输出" data-export-lang="text" aria-live="polite">FAIL: 缺少参数量、方差和设置边界，不能直接下结论。</pre>
-    <template data-terminal-output="case-1">FAIL: 缺少参数量、方差和设置边界，不能直接下结论。</template><template data-terminal-output="case-2">OK: 0.8M vs 355M 且平均分接近，支持参数高效。</template><template data-terminal-output="case-3">OK: 记录 batch、序列长度、引用结果和任务波动。</template>
-  </div>
-</section><section id="nlu"><div class="head"><h2>2. RoBERTa / DeBERTa：自然语言理解任务</h2><span class="tag">glue</span></div>
-<p>第一组主要看 NLU，也就是自然语言理解任务。RoBERTa base/large 和 DeBERTa XXL 在 GLUE benchmark 上测试，指标包括 MNLI、SST-2、MRPC、CoLA、QNLI、QQP、RTE、STS-B 等。这里的核心问题是：LoRA 用远少于全量微调的参数，能否接近或超过全量微调和 adapter 类方法。</p>
-<p>论文表格显示，RoBERTa base 的 LoRA 只训练约 0.3M 参数，平均分 87.2，高于全量微调表中 86.4；RoBERTa large 的 LoRA 约 0.8M 参数，平均分 89.0，和全量微调 88.9 接近并略高；DeBERTa XXL 的 LoRA 约 4.7M 参数，平均分 91.3，也达到全量微调水平。这里不是说 LoRA 永远更准，而是说在这些任务上，它没有因为参数少而明显牺牲质量。</p>
-<p>读这组实验要注意公平性。论文为了和 adapter 更公平比较，还做了受限设置，例如相同 batch size、序列长度 128，并避免某些任务从已经适配 MNLI 的模型起步。带 dagger 的行就是这种设置下的结果。你现在应该能解释为什么实验设置会影响基线比较。</p>
-<div class="card"><div class="head"><span>数值对比</span><span class="tag">scale</span></div><div class="card"><div class="bar-row"><b>RoBERTa base FT 参数</b><div class="bar"><span style="width:100%"></span></div><span>125.0M</span></div>
-<div class="bar-row"><b>RoBERTa base LoRA 参数</b><div class="bar"><span style="width:1%"></span></div><span>0.3M</span></div>
-<div class="bar-row"><b>RoBERTa large FT 参数</b><div class="bar"><span style="width:100%"></span></div><span>355.0M</span></div>
-<div class="bar-row"><b>RoBERTa large LoRA 参数</b><div class="bar"><span style="width:1%"></span></div><span>0.8M</span></div>
-<div class="bar-row"><b>DeBERTa XXL FT 参数</b><div class="bar"><span style="width:100%"></span></div><span>1500M</span></div>
-<div class="bar-row"><b>DeBERTa XXL LoRA 参数</b><div class="bar"><span style="width:1%"></span></div><span>4.7M</span></div></div></div><p>判断句：当参数量相差几百到几千倍而指标接近，实验才真正支持“参数高效”。你现在应该能用参数量和指标一起读结论。</p></section><section id="nlg"><div class="head"><h2>3. GPT-2：生成任务不是只看准确率</h2><span class="tag">generation</span></div>
-<p>GPT-2 实验看的是 E2E NLG Challenge，属于生成任务。生成任务常用 BLEU、NIST、METEOR、ROUGE-L、CIDEr 这类指标，不像分类任务只有 accuracy。论文把 GPT-2 medium 和 large 都拿来比较，重点看 LoRA 在 NLG 模型上是否仍然有优势。</p>
-<p>表中 GPT-2 medium 的 LoRA 只训练 0.35M 参数，但 BLEU、NIST、METEOR、ROUGE-L、CIDEr 都达到或超过列出的基线。GPT-2 large 的 LoRA 训练 0.77M 参数，也在多数指标上表现很强。这里说明 LoRA 不只在理解任务有效，在生成任务上也能作为强基线。</p>
-<p>不过生成指标本身有噪声和局限。BLEU 高不一定代表所有生成质量都好，ROUGE 更偏重重叠，CIDEr 来自图像描述评估传统。读这组实验时，重点不是背每个指标，而是看到作者覆盖了不同任务类型，并用多个指标避免单一评价偏差。</p>
-<div class="grid"><div class="box blue"><h3>BLEU / NIST</h3><p>偏 n-gram 重叠和信息量，常用于生成质量比较。</p></div>
-<div class="box blue"><h3>METEOR / ROUGE-L</h3><p>关注匹配、召回或最长公共子序列，能补充 BLEU。</p></div>
-<div class="box blue"><h3>CIDEr</h3><p>衡量候选文本和参考文本的相似性，E2E 表中也作为一个生成指标。</p></div></div><p>判断句：生成任务不能只说“准确率提升”。你现在应该能识别论文在不同任务类型上用了不同指标。</p></section><section id="gpt3"><div class="head"><h2>4. GPT-3：大模型压力测试</h2><span class="tag">gpt-3</span></div>
-<p>GPT-3 175B 是论文最有代表性的压力测试。这里比较 WikiSQL、MultiNLI-matched 和 SAMSum 三类任务：自然语言到 SQL、自然语言推理、对话摘要。全量微调要训练约 175,255.8M 参数；LoRA 有 4.7M 和 37.7M 两个参数预算。这个对比直接服务论文动机：大模型多任务适配不能每次都复制完整模型。</p>
-<p>表格显示，LoRA 在 WikiSQL、MNLI-m、SAMSum 上达到或超过全量微调与其他 PEFT 基线。比如 4.7M 参数的 LoRA 在 MNLI-m 上是 91.7，在 SAMSum 的 ROUGE-1/2/L 是 53.8/29.8/45.9；37.7M 参数的 LoRA 在 WikiSQL 上达到 74.0。论文还标注了任务上的典型波动：WikiSQL 约 ±0.5%，MNLI-m 约 ±0.1%，SAMSum 约 ±0.2/±0.2/±0.1。</p>
-<p>这里有一个读表细节：更多可训练参数不总是更好。prefix 方法在参数变多时可能反而下降，论文怀疑特殊 token 太多会让输入分布远离预训练分布。LoRA 的结果相对稳定，但也不能推出“参数越多越强”。</p>
 
-<div class="card">
-  <div class="head"><span>交互观察</span><span class="tag">interactive</span></div>
-  <div class="grid2">
-    <div class="card"><div class="flow"><button class="ghost" data-title="GPT-3 全量微调" data-note="参数最多，是质量基线，但每任务保存和训练成本极高。" data-rows="训练参数=175,255.8M|WikiSQL=73.8|MNLI-m=89.5|SAMSum=52.0/28.0/44.5">FT</button>
-<button class="ghost" data-title="GPT-3 AdapterH" data-note="参数远少于 FT，部分任务表现接近，但仍有 adapter 推理路径问题。" data-rows="训练参数=40.1M|WikiSQL=73.2|MNLI-m=91.5|SAMSum=53.2/29.0/45.1">Adapter</button>
-<button class="ghost" data-title="GPT-3 LoRA 4.7M" data-note="极小参数预算下，在 MNLI 和 SAMSum 上很强。" data-rows="训练参数=4.7M|WikiSQL=73.4|MNLI-m=91.7|SAMSum=53.8/29.8/45.9">LoRA small</button>
-<button class="ghost" data-title="GPT-3 LoRA 37.7M" data-note="更高参数预算下 WikiSQL 更好，但不是所有指标都单调增加。" data-rows="训练参数=37.7M|WikiSQL=74.0|MNLI-m=91.6|SAMSum=53.4/29.2/45.1">LoRA large</button></div></div>
-    <div class="card">
-      <div class="card"><b class="viz-state-title">选择一个场景</b><span class="viz-note-text">这里会显示判断结果。</span></div>
-      <table ><thead><tr><th>项目</th><th>观察</th></tr></thead><tbody class="metric-body"></tbody></table>
-      <div class="inline-note">判断提示：把参数量和任务指标一起看。LoRA 的论点是“少很多参数仍能保持质量”，不是“每个指标都无条件第一”。</div>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">LoRA 论文精读</a>
+        <span class="sep">/</span>
+        <span>04_实验设计与结果解读</span>
+      </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">第 4 块 · 实验读表</div>
+      <div class="hero-meta">
+        <span class="hero-badge">04_实验设计与结果解读</span>
+      </div>
+      <h1 class="hero-title">实验设计与结果解读｜学习页</h1>
+      <p class="hero-desc">读懂 LoRA 论文里的基线、指标、参数量和结论边界</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../课程拆解.md">课程拆解</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#baselines">1. 先认清基线：每个方法到底训练什么</a>
+      <a href="#trace-lab">实验读表检查链</a>
+      <a href="#nlu">2. RoBERTa / DeBERTa：自然语言理解任务</a>
+      <a href="#nlg">3. GPT-2：生成任务不是只看准确率</a>
+      <a href="#gpt3">4. GPT-3：大模型压力测试</a>
+      <a href="#fairness">5. 读实验的四个检查问题</a>
+      <a href="#examples">6. 试一试：把表格读成结论</a>
+      <a href="#audit-chain">补充案例：把一张实验表审成可信结论</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
     </div>
   </div>
-</div>
-</section><section id="fairness"><div class="head"><h2>5. 读实验的四个检查问题</h2><span class="tag">fairness</span></div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="baselines">
+        <div class="head">
+          <h2>1. 先认清基线：每个方法到底训练什么</h2>
+          <span class="tag">baselines</span>
+        </div>
+<p>论文的实验表里名字很多，先别急着看谁加粗。第一步是认清每个 baseline 的训练对象。Fine-tuning 更新全部参数；BitFit 只训练 bias；PreEmbed 训练输入端特殊 token 的 embedding；PreLayer 训练每层里的特殊 token 激活；Adapter 在模型内部插入小层；LoRA 训练并联到已有权重上的低秩矩阵。</p>
+<p>论文有些数字来自作者复现实验，有些带星号的是引用前人结果，有些带 dagger 的是为了公平比较而采用受限设置。表里这些符号不只是脚注，它们影响可比性。你现在应该能先看实验设置，再看指标高低。</p>
+<p><b>BitFit</b>只训练 bias，参数很少，通常作为极轻量基线。</p>
+<p><b>PreLayer</b>训练每层特殊 token 激活，参数比 PreEmbed 多。</p>
+<p><b>LoRA</b>训练低秩矩阵 A/B，merge 后推理走原线性层。</p>
+      </section>
+      <section id="trace-lab">
+        <div class="head">
+          <h2>实验读表检查链</h2>
+          <span class="tag">inspection</span>
+        </div>
+<p>这一段把本页的判断流程变成可检查对象：先看公式或规则，再沿着 trace 走一遍，最后用失败输出确认自己知道哪里会错。</p>
+<p>读 LoRA 实验表时，分数、参数量、推理延迟和脚注设置必须一起出现；只看其中一个维度，结论会偏。</p>
+<p>实验结论检查伪代码复制</p>
+      </section>
+      <section id="nlu">
+        <div class="head">
+          <h2>2. RoBERTa / DeBERTa：自然语言理解任务</h2>
+          <span class="tag">glue</span>
+        </div>
+<p>第一组主要看 NLU，也就是自然语言理解任务。RoBERTa base/large 和 DeBERTa XXL 在 GLUE benchmark 上测试，指标包括 MNLI、SST-2、MRPC、CoLA、QNLI、QQP、RTE、STS-B 等。这里的核心问题是：LoRA 用远少于全量微调的参数，能否接近或超过全量微调和 adapter 类方法。</p>
+<p>读这组实验要注意公平性。论文为了和 adapter 更公平比较，还做了受限设置，例如相同 batch size、序列长度 128，并避免某些任务从已经适配 MNLI 的模型起步。带 dagger 的行就是这种设置下的结果。你现在应该能解释为什么实验设置会影响基线比较。</p>
+<p>判断句：当参数量相差几百到几千倍而指标接近，实验才真正支持“参数高效”。你现在应该能用参数量和指标一起读结论。</p>
+      </section>
+      <section id="nlg">
+        <div class="head">
+          <h2>3. GPT-2：生成任务不是只看准确率</h2>
+          <span class="tag">generation</span>
+        </div>
+<p>GPT-2 实验看的是 E2E NLG Challenge，属于生成任务。生成任务常用 BLEU、NIST、METEOR、ROUGE-L、CIDEr 这类指标，不像分类任务只有 accuracy。论文把 GPT-2 medium 和 large 都拿来比较，重点看 LoRA 在 NLG 模型上是否仍然有优势。</p>
+<p>不过生成指标本身有噪声和局限。BLEU 高不一定代表所有生成质量都好，ROUGE 更偏重重叠，CIDEr 来自图像描述评估传统。读这组实验时，重点看到作者覆盖了不同任务类型，并用多个指标避免单一评价偏差。</p>
+        <div class="box">
+<h3>METEOR / ROUGE-L</h3>
+<p>关注匹配、召回或最长公共子序列，能补充 BLEU。</p>
+        </div>
+        <div class="box">
+<h3>CIDEr</h3>
+<p>衡量候选文本和参考文本的相似性，E2E 表中也作为一个生成指标。</p>
+<p>判断句：生成任务不能只说“准确率提升”。你现在应该能识别论文在不同任务类型上用了不同指标。</p>
+        </div>
+      </section>
+      <section id="gpt3">
+        <div class="head">
+          <h2>4. GPT-3：大模型压力测试</h2>
+          <span class="tag">gpt-3</span>
+        </div>
+<p>GPT-3 175B 是论文最有代表性的压力测试。这里比较 WikiSQL、MultiNLI-matched 和 SAMSum 三类任务：自然语言到 SQL、自然语言推理、对话摘要。全量微调要训练约 175,255.8M 参数；LoRA 有 4.7M 和 37.7M 两个参数预算。这个对比直接服务论文动机：大模型多任务适配不能每次都复制完整模型。</p>
+<p>这里有一个读表细节：更多可训练参数不总是更好。prefix 方法在参数变多时可能反而下降，论文怀疑特殊 token 太多会让输入分布远离预训练分布。LoRA 的结果相对稳定，但也不能推出“参数越多越强”。</p>
+<p>FT</p>
+<p>Adapter</p>
+<p>LoRA small</p>
+<p>LoRA large</p>
+      </section>
+      <section id="fairness">
+        <div class="head">
+          <h2>5. 读实验的四个检查问题</h2>
+          <span class="tag">fairness</span>
+        </div>
 <p>第一，比较对象是否合理？如果一个方法训练 0.3M 参数，另一个训练 355M 参数，你要同时看质量和成本。只说“谁分高”是不完整的。</p>
-<p>第二，设置是否公平？序列长度、batch size、初始化、是否引用前人结果、是否调参充分，都会影响表格。论文用星号和 dagger 标注部分设置，这些脚注要读。</p>
 <p>第三，指标是否支持主张？LoRA 的主张有几部分：任务质量、可训练参数量、训练吞吐、显存、推理延迟、checkpoint 大小。单个 GLUE 平均分不能支持所有主张，必须结合方法设计和工程数字。</p>
-<p>第四，结论能否外推？论文覆盖了 RoBERTa、DeBERTa、GPT-2、GPT-3 和多个 NLP 任务，但没有覆盖所有模型和所有领域。你可以把 LoRA 当强基线，不能把表格数字当成新任务的保证。</p>
-<div class="grid"><div class="box bad"><h3>只看加粗</h3><p>会忽略参数量、方差和设置差异。读表不能只追最高分。</p></div>
-<div class="box warn"><h3>忽略脚注</h3><p>星号和 dagger 影响可比性。脚注常常比表头更关键。</p></div>
-<div class="box warn"><h3>过度外推</h3><p>论文实验支持论文范围内结论，不自动覆盖所有现代模型和任务。</p></div></div></section><section id="examples"><div class="head"><h2>6. 试一试：把表格读成结论</h2><span class="tag">examples</span></div>
-<div class="grid">
-  <div class="card"><h3>例题 1</h3><p>RoBERTa large 上 LoRA 0.8M 参数、FT 355M 参数且平均分接近，这支持什么结论？</p><p class="hint">支持“少量任务参数也能达到相近质量”，不是证明 LoRA 永远更准。</p></div>
-  <div class="card"><h3>例题 2</h3><p>GPT-3 表里 LoRA 4.7M 在某些指标超过 37.7M，说明什么？</p><p class="hint">更多参数不保证单调提升，任务和配置会影响结果。</p></div>
-  <div class="card"><h3>例题 3</h3><p>为什么要同时看 adapter latency 实验和任务指标表？</p><p class="hint">任务指标说明质量，latency 实验说明部署路径。两者回答不同问题。</p></div>
-</div>
-</section>
-<section id="audit-chain"><div class="head"><h2>补充案例：把一张实验表审成可信结论</h2><span class="tag">audit</span></div>
-<p>读 LoRA 的实验结果时，最容易犯的错误是把表格当排行榜：哪一行分数最高，就说哪种方法最好。论文真正想证明的不是单点最高分，而是一个组合命题：在冻结大模型主体参数的前提下，低秩更新能用很少的可训练参数接近或超过全量微调，并且保存、切换和部署成本明显更低。这个命题比“分数高一点”复杂，所以读表时必须把实验对象、参数预算、任务类型、指标和工程代价连起来。</p>
-<p>先看一个具体场景：你要给一个客户支持分类模型选微调方案。全量微调可能在验证集上比 LoRA 高 0.2 分，但它需要保存完整模型副本，训练时优化器状态也跟着膨胀；LoRA 只保存 adapter，checkpoint 只有几十 MB，多个客户或多个任务可以共享同一个底座。此时 0.2 分不是唯一答案，你要问这 0.2 分是否稳定、是否超过方差、是否值得多出的存储和部署复杂度。实验表里的平均分只能回答“质量是否接近”，不能替你回答“生产系统是否划算”。</p>
+        <div class="box">
+<h3>只看加粗</h3>
+<p>会忽略参数量、方差和设置差异。读表不能只追最高分。</p>
+        </div>
+        <div class="box warn">
+<h3>忽略脚注</h3>
+<p>星号和 dagger 影响可比性。脚注常常比表头更关键。</p>
+        </div>
+        <div class="box warn">
+<h3>过度外推</h3>
+<p>论文实验支持论文范围内结论，不自动覆盖所有现代模型和任务。</p>
+        </div>
+      </section>
+      <section id="examples">
+        <div class="head">
+          <h2>6. 试一试：把表格读成结论</h2>
+          <span class="tag">examples</span>
+        </div>
+      <div class="grid">
+<p>例题 1RoBERTa large 上 LoRA 0.8M 参数、FT 355M 参数且平均分接近，这支持什么结论？支持“少量任务参数也能达到相近质量”，不是证明 LoRA 永远更准。</p>
+<p>例题 3为什么要同时看 adapter latency 实验和任务指标表？任务指标说明质量，latency 实验说明部署路径。两者回答不同问题。</p>
+      </div>
+      </section>
+      <section id="audit-chain">
+        <div class="head">
+          <h2>补充案例：把一张实验表审成可信结论</h2>
+          <span class="tag">audit</span>
+        </div>
+<p>读 LoRA 的实验结果时，最容易犯的错误是把表格当排行榜：哪一行分数最高，就说哪种方法最好。论文真正想证明的一个组合命题：在冻结大模型主体参数的前提下，低秩更新能用很少的可训练参数接近或超过全量微调，并且保存、切换和部署成本明显更低。这个命题比“分数高一点”复杂，所以读表时必须把实验对象、参数预算、任务类型、指标和工程代价连起来。</p>
 <p>论文里的 RoBERTa、DeBERTa、GPT-2、GPT-3 表格分别承担不同证据功能。RoBERTa 和 DeBERTa 主要说明在经典 NLU 任务上，LoRA 与全量微调接近；GPT-2 的生成实验说明 LoRA 不只适用于分类；GPT-3 的实验说明当底座变大时，少量 adapter 参数仍可能有效。把这些表合在一起，才能形成“跨模型、跨任务的参数高效证据”。如果只摘一张最高分表，结论会变窄；如果把所有表都说成“LoRA 普遍最优”，结论又会过宽。</p>
-<div class="grid">
-  <div class="card"><h3>读表第一步：确认训练对象</h3><p>FT 训练全部参数，Adapter 增加旁路模块，Prefix 训练输入侧连续提示，BitFit 只训练 bias，LoRA 训练低秩矩阵。方法名相似，但预算和部署路径不同。你现在应该能先问“这行到底训练了什么”。</p></div>
-  <div class="card"><h3>读表第二步：确认成本口径</h3><p>参数量、显存、checkpoint、吞吐和延迟不是同一个指标。LoRA 的核心优势常常体现在保存和切换任务，而不是每张表都拿最高分。你现在应该能把质量指标和成本指标分开读。</p></div>
-  <div class="card"><h3>读表第三步：确认任务边界</h3><p>GLUE、E2E、WebNLG、WikiSQL 等任务的评价指标不同，数据分布也不同。某个任务上的提升不能自动外推到所有生成任务、所有领域任务或所有现代模型。</p></div>
-</div>
-<p>下面这张“审表清单”可以直接拿来检查论文表格。它不是为了挑刺，而是为了避免把实验读成口号。</p>
-<table data-export-context="04 补充审表清单：把实验结果拆成主张、证据、风险、下一步复核。" data-export-lang="table">
-  <thead><tr><th>检查问题</th><th>你要在表里找什么</th><th>如果漏看会怎样</th></tr></thead>
-  <tbody>
-    <tr><td>质量是否接近</td><td>平均分、单任务分、方差或多次运行标注</td><td>把噪声当成真实提升，或者低估一个稳定但略低的方法</td></tr>
-    <tr><td>预算是否公平</td><td>可训练参数、底座大小、是否使用同一预训练模型</td><td>拿不同容量的模型直接比较，结论偏向大预算方法</td></tr>
-    <tr><td>设置是否一致</td><td>batch、学习率、序列长度、调参次数、脚注说明</td><td>忽略实现差异，把工程设置误读为方法本身差异</td></tr>
-    <tr><td>部署是否成立</td><td>是否能 merge、是否增加推理延迟、是否需要多套模型副本</td><td>只在训练表里赢，部署时成本反而不可接受</td></tr>
-  </tbody>
-</table>
+<p>读表第二步：确认成本口径参数量、显存、checkpoint、吞吐和延迟不是同一个指标。LoRA 的核心优势常常体现在保存和切换任务，而不是每张表都拿最高分。你现在应该能把质量指标和成本指标分开读。</p>
+<p>下面这张“审表清单”可以直接拿来检查论文表格。它为了避免把实验读成口号。</p>
 <p>在复述论文时，可以把一行实验结果翻译成三句话。第一句说事实：在某个模型和任务集合上，LoRA 用多少可训练参数取得了什么指标。第二句说解释：这说明任务相关更新可能能由低秩矩阵表达，因此不必更新全部权重。第三句说边界：这个结论依赖论文覆盖的模型、任务、超参和评估方式，不能直接保证新领域。三句话都说完整，才是合格的论文复述。</p>
-<pre data-export-context="04 实验读表伪代码：先查可比性，再查主张覆盖，最后输出带边界的结论。" data-export-lang="python"><code class="language-python">def read_lora_result(row, baseline):
-    same_base = row.base_model == baseline.base_model
-    quality_close = row.score >= baseline.score - row.expected_noise
-    much_smaller = row.trainable_params &lt; baseline.trainable_params / 100
-    deploy_gain = row.checkpoint_mb &lt;&lt; baseline.checkpoint_mb
-    if same_base and quality_close and much_smaller and deploy_gain:
-        return "supports parameter-efficient adaptation, within this task setup"
-    return "needs more checks before claiming LoRA wins"</code></pre>
-<p>失败后果也要讲清楚。假设你只看 GLUE 平均分，忽略了参数量和 checkpoint，就会把全量微调、Adapter、Prefix、LoRA 混成同一类方法；假设你只看 LoRA 参数少，忽略质量表，就会把“省钱”误读成“有效”；假设你只看最高分，忽略脚注，就可能把不完全同设定的结果拿来并排比较。论文精读训练的不是背表格，而是把一张表拆成可验证的主张。</p>
-<p>再做一次手工演练。看到 “LoRA 在 RoBERTa large 上用 0.8M 参数接近全量微调 355M 参数” 这类句子时，不要立刻写进笔记。先把它拆成四栏：对象是 RoBERTa large，不是所有 Transformer；任务是 GLUE 类理解任务，不是任意生成任务；指标是论文表里的任务分数和平均值，不是线上业务收益；成本是可训练参数和保存 adapter 的成本，不等于总推理成本为零。拆完以后，这句话才会变成一个可用结论：在这些 NLU 设置中，LoRA 用极小的任务参数达到了接近全量微调的质量，说明低秩适配是强基线。</p>
+<p>失败后果也要讲清楚。假设你只看 GLUE 平均分，忽略了参数量和 checkpoint，就会把全量微调、Adapter、Prefix、LoRA 混成同一类方法；假设你只看 LoRA 参数少，忽略质量表，就会把“省钱”误读成“有效”；假设你只看最高分，忽略脚注，就可能把不完全同设定的结果拿来并排比较。论文精读训练的把一张表拆成可验证的主张。</p>
 <p>如果你要把这张表用于项目决策，还要补一个“缺失证据”列表。论文表格通常不会直接告诉你自己的数据分布、标签噪声、线上延迟预算、模型切换频率和回滚流程。比如内部有 30 个客户、每个客户一个 adapter，LoRA 的 checkpoint 优势会非常明显；如果只有一个长期模型且对质量极敏感，全量微调也可能值得比较。实验表支持的是方法能力，项目决策还要接上业务约束。能分清这两层，读论文就不会被表格牵着跑。</p>
-<div class="grid">
-  <div class="box blue"><h3>可以直接说</h3><p>在论文覆盖的若干 NLP 任务中，LoRA 用远少于全量微调的可训练参数取得了相近质量。这个说法有模型、任务和指标边界。</p></div>
-  <div class="box warn"><h3>需要补证据再说</h3><p>LoRA 在我们的业务上一定更省。还要看线上延迟、adapter 管理、评估集代表性、服务端是否允许动态加载或提前 merge。</p></div>
-  <div class="box bad"><h3>不要这样说</h3><p>LoRA 全面超过全量微调。这个说法把部分表格结果扩大成全局结论，也忽略了不同任务和设置的差异。</p></div>
-</div>
+        <div class="box warn">
+<h3>需要补证据再说</h3>
+<p>LoRA 在我们的业务上一定更省。还要看线上延迟、adapter 管理、评估集代表性、服务端是否允许动态加载或提前 merge。</p>
+        </div>
+        <div class="box">
+<h3>不要这样说</h3>
+<p>LoRA 全面超过全量微调。这个说法把部分表格结果扩大成全局结论，也忽略了不同任务和设置的差异。</p>
 <p>还有一个经常被忽略的点：论文里的表格是结果，不是实验设计本身。你复现或迁移时要反推设计：基线要有全量微调或强 PEFT 方法，数据切分要固定，调参预算要可说明，训练成本要记录，结果要有至少一次 sanity check。若只拿 LoRA 跑一遍，然后说“分数还行”，它只能证明你跑通了代码，不能证明 LoRA 是合理选择。好的实验解读会逼你补齐对照组，而不是只复述作者的最终表格。</p>
 <p>把它落成笔记时，推荐用“结论卡片”而不是流水账。卡片第一行写主张：LoRA 在该表中支持参数高效适配。第二行写证据：模型、任务、指标、参数量差异。第三行写限制：脚注、设置差异、任务范围、是否只是一组 seed。第四行写行动：如果迁移到新任务，先跑小 rank LoRA、全量或强基线、保存加载检查，再讨论是否扩大 rank 或 target modules。这样的笔记以后能直接指导实验，而不是只留下“表 2 很强”。</p>
-<table data-export-context="04 结论卡片模板：主张、证据、限制、行动四行把实验表转成可复用判断。" data-export-lang="table">
-  <thead><tr><th>卡片行</th><th>写什么</th><th>示例</th></tr></thead>
-  <tbody>
-    <tr><td>主张</td><td>这张表最多支持什么</td><td>LoRA 是强参数高效基线</td></tr>
-    <tr><td>证据</td><td>模型、任务、指标、参数量</td><td>RoBERTa large / GLUE / 接近 FT / 0.8M vs 355M</td></tr>
-    <tr><td>限制</td><td>哪里不能外推</td><td>不自动覆盖长文本生成、领域迁移或线上延迟</td></tr>
-    <tr><td>行动</td><td>下一步怎么验证</td><td>同设定基线、小 rank sweep、保存加载与 merge 检查</td></tr>
-  </tbody>
+<table class="metric-table">
+<tr><th>卡片行</th><th>写什么</th><th>示例</th></tr>
+<tr><td>主张</td><td>这张表最多支持什么</td><td>LoRA 是强参数高效基线</td></tr>
+<tr><td>证据</td><td>模型、任务、指标、参数量</td><td>RoBERTa large / GLUE / 接近 FT / 0.8M vs 355M</td></tr>
+<tr><td>限制</td><td>哪里不能外推</td><td>不自动覆盖长文本生成、领域迁移或线上延迟</td></tr>
+<tr><td>行动</td><td>下一步怎么验证</td><td>同设定基线、小 rank sweep、保存加载与 merge 检查</td></tr>
 </table>
-<p>最后看一个容易误判的例子：某同学读到 GPT-3 表里 LoRA 用 4.7M 参数在部分指标上超过更大参数的方案，于是写下“参数越少反而越好”。这句话的问题不是方向全错，而是把一个局部观察改写成了单调规律。更稳妥的改法是：在论文的 GPT-3 任务设置里，LoRA 的小参数 adapter 取得了有竞争力的结果，说明更大的任务参数量并不自动带来更好指标；但具体方法仍要看 target、rank、数据和评估指标。这个改写保留了表格给出的惊喜，也没有把它讲成普适定律。</p>
+<p>最后看一个容易误判的例子：某同学读到 GPT-3 表里 LoRA 用 4.7M 参数在部分指标上超过更大参数的方案，于是写下“参数越少反而越好”。这句话的问题把一个局部观察改写成了单调规律。更稳妥的改法是：在论文的 GPT-3 任务设置里，LoRA 的小参数 adapter 取得了有竞争力的结果，说明更大的任务参数量并不自动带来更好指标；但具体方法仍要看 target、rank、数据和评估指标。这个改写保留了表格给出的惊喜，也没有把它讲成普适定律。</p>
 <p>如果你在自己的笔记里发现“证明”“总是”“全面优于”“只要”等词，要停下来重读表头和脚注。实验论文的语言应该先给范围，再给强度。范围包括模型、任务、指标、基线和设置；强度包括接近、超过、显著降低成本、没有增加延迟等。先写范围，再写强度，结论就会自然收住。你现在应该能把一句夸大的实验解读改成可复核的论文语言。</p>
 <p>最后给自己一个三分钟检查动作：任选一行 LoRA 结果，先遮住方法名，只根据参数量、指标和脚注猜它能支持什么主张；再把方法名露出来，检查自己的主张是否因为“LoRA”这个名字而变得更夸张；最后写下如果要在自己任务上复验，还缺哪一个对照组、哪一个成本指标、哪一个部署检查。这个动作能把读表从“看作者怎么说”变成“我能不能独立判断”。</p>
 <p>如果时间只够做一个动作，就做“反向读表”：先写你希望这张表证明什么，再逐项确认表里是否真的给了证据。没有给出的部分要写成待验证，而不是藏在结论里。这样做会让你的论文复述天然带边界，也能帮你在组会里回答别人追问：这个结论来自哪一列，缺的证据准备怎么补。</p>
@@ -190,178 +194,339 @@
 <p>这就是读实验的底线。</p>
 <p>也是复述的底线。</p>
 <p>练习时可以用一个固定句式逼自己读完整：“在某模型、某任务和某设置下，LoRA 用某个量级的可训练参数，达到了接近或超过某基线的某指标；因此它支持某个有限主张，但还需要检查某个边界。”这个句式听起来笨，但很管用，因为它会自动阻止两种极端：一是只说“LoRA 更好”，二是只说“论文表明低秩有效”却不给证据。你现在应该能把任意一行实验表改写成带范围、带依据、带风险的结论。</p>
-<div class="callout"><b>练习钩子：</b>等会做题时，不要先写“LoRA 好”。先写比较对象、指标、参数量和边界，再判断这张表支持哪一个主张。</div>
-</section>
-      <section id="practice"><div class="head"><h2>练习</h2><span class="tag">diagnostic</span></div><div class="practice-intro">
-  <div class="card"><strong>作答方式</strong><p>先做可检查题，再写诊断和复述。导出记录会把答案和核心复盘上下文放在一起。</p></div>
-  <div class="card"><strong>自查重点</strong><p>短答题要写判断依据；诊断题写错因、后果、修法；复述题要覆盖本页核心术语。</p></div>
-</div>
-<div class="practice-group"><div class="group-head"><div><h3>一、基线识别</h3><p>先确认你能读懂实验表里的方法名。</p></div><div class="quick-review"><b>检查点</b><span>每个方法都要说出训练对象。</span></div></div><div class="drill-grid">
-<div class="q" data-question="q04_01" data-group="一、基线识别" data-title="FT" data-answer="全部模型参数" data-explain="对照本页正文里的训练对象、任务边界或部署状态。">
-<div class="q-meta"><span class="pill">单选</span><span class="pill">一、基线识别</span></div>
-<h3>Full fine-tuning 训练什么？</h3>
-<label><input type="radio" name="q04_01" value="全部模型参数"> 全部模型参数</label>
-<label><input type="radio" name="q04_01" value="只训练 bias"> 只训练 bias</label>
-<label><input type="radio" name="q04_01" value="只训练 prefix token"> 只训练 prefix token</label>
-<button class="check" type="button">检查</button>
-<div class="feedback"></div>
-</div>
-<div class="q" data-question="q04_02" data-group="一、基线识别" data-title="BitFit" data-answer="bias" data-explain="对照本页正文里的训练对象、任务边界或部署状态。">
-<div class="q-meta"><span class="pill">单选</span><span class="pill">一、基线识别</span></div>
-<h3>BitFit 训练什么？</h3>
-<label><input type="radio" name="q04_02" value="bias"> bias</label>
-<label><input type="radio" name="q04_02" value="Wq 和 Wv"> Wq 和 Wv</label>
-<label><input type="radio" name="q04_02" value="adapter bottleneck"> adapter bottleneck</label>
-<button class="check" type="button">检查</button>
-<div class="feedback"></div>
-</div>
-<div class="q" data-question="q04_03" data-group="一、基线识别" data-title="PreEmbed">
-<div class="q-meta"><span class="pill">短答</span><span class="pill">一、基线识别</span></div>
-<h3>PreEmbed 和 PreLayer 的训练对象有什么不同？</h3>
-<textarea name="q04_03" placeholder=""></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>PreEmbed 训练词嵌入层，PreLayer 训练词嵌入和额外前馈层。PreEmbed 只调整 token 表示，PreLayer 还能调整 token 之间的交互方式。所以 PreLayer 表达能力更强，但参数量和延迟也更高。LoRA 不训练词嵌入，而是训练注意力层的低秩分支，与这两者都不同。</p></details>
-</div>
-<div class="q" data-question="q04_04" data-group="一、基线识别" data-title="Adapter">
-<div class="q-meta"><span class="pill">短答</span><span class="pill">一、基线识别</span></div>
-<h3>Adapter 和 LoRA 都参数少，为什么推理路径不同？</h3>
-<textarea name="q04_04" placeholder=""></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>Adapter 在 Transformer 层内插入额外的前馈子层，推理时必须经过这些新增层，增加了延迟。LoRA 通过低秩矩阵直接修改权重，推理时可以把 B A 合并回 W，不增加额外层，因此延迟和原模型几乎相同。</p></details>
-</div>
-<div class="q" data-question="q04_05" data-group="一、基线识别" data-title="星号含义">
-<div class="q-meta"><span class="pill">短答</span><span class="pill">一、基线识别</span></div>
-<h3>实验表里有些结果来自前人报告。读结论时为什么要注意这一点？</h3>
-<textarea name="q04_05" placeholder=""></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>前人报告的结果可能来自不同的训练设置、数据版本或评估协议。直接比较可能不公平。应该检查：是否使用相同底座、相同数据集划分、相同训练步数和相同评估指标。如果不一致，结论的可比性就会下降。</p></details>
-</div>
-<div class="q" data-question="q04_06" data-group="一、基线识别" data-title="dagger 设置">
-<div class="q-meta"><span class="pill">短答</span><span class="pill">一、基线识别</span></div>
-<h3>为什么论文要用受限设置和 adapter 做公平比较？</h3>
-<textarea name="q04_06" placeholder=""></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>受限设置（如只训练少量参数）排除了"参数多所以效果好"的干扰。和 adapter 比较是因为 adapter 也是参数高效方法，可以控制参数量相近的情况下比较哪种结构更有效。公平比较能说明 LoRA 的结构优势，而不只是参数效率。</p></details>
-</div>
-</div></div>
-<div class="practice-group"><div class="group-head"><div><h3>二、读表判断</h3><p>这一组要求你从参数量和指标得出稳妥结论。</p></div><div class="quick-review"><b>检查点</b><span>不要只看分数最高，也不要只看参数最少。</span></div></div><div class="drill-grid">
-<div class="q" data-question="q04_07" data-group="二、读表判断" data-title="RoBERTa 结论">
-<div class="q-meta"><span class="pill">短答</span><span class="pill">二、读表判断</span></div>
-<h3>RoBERTa large 中 LoRA 0.8M 参数达到接近 FT 的平均分，这能说明什么？</h3>
-<textarea name="q04_07" placeholder=""></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>说明在 RoBERTa 这类中等规模模型上，极少量参数（0.8M）就能接近全量微调（330M）的效果。这意味着预训练模型已经编码了丰富的任务知识，只需要低秩更新就能调动这些知识，而不是重新训练大量参数。</p></details>
-</div>
-<div class="q" data-question="q04_08" data-group="二、读表判断" data-title="DeBERTa 结论">
-<div class="q-meta"><span class="pill">短答</span><span class="pill">二、读表判断</span></div>
-<h3>DeBERTa XXL 上 LoRA 4.7M 与 FT 1500M 参数对比，重点应该看什么？</h3>
-<textarea name="q04_08" placeholder=""></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>重点看参数量效率：LoRA 只训练 4.7M 参数就达到 FT 1500M 的效果，参数效率提升约 300 倍。同时要看推理延迟：LoRA merge 后没有额外层，而 FT 和 Adapter 都有额外计算。这说明 LoRA 在超大规模模型上依然保持高效。</p></details>
-</div>
-<div class="q" data-question="q04_09" data-group="二、读表判断" data-title="GPT-2 指标">
-<div class="q-meta"><span class="pill">多选</span><span class="pill">二、读表判断</span></div>
-<h3>GPT-2 生成任务表里出现了哪些指标？</h3>
-<label><input type="checkbox" name="q04_09" value="BLEU"> BLEU</label>
-<label><input type="checkbox" name="q04_09" value="ROUGE-L"> ROUGE-L</label>
-<label><input type="checkbox" name="q04_09" value="CIDEr"> CIDEr</label>
-<label><input type="checkbox" name="q04_09" value="GPU 温度"> GPU 温度</label>
-<details><summary>展开反馈</summary><p>按本组复盘提示自查：答案需要能回到训练对象、参数量、指标、状态或边界，而不是只给一个词。</p></details>
-</div>
-<div class="q" data-question="q04_10" data-group="二、读表判断" data-title="GPT-3 任务">
-<div class="q-meta"><span class="pill">多选</span><span class="pill">二、读表判断</span></div>
-<h3>GPT-3 实验覆盖了哪些任务？</h3>
-<label><input type="checkbox" name="q04_10" value="WikiSQL"> WikiSQL</label>
-<label><input type="checkbox" name="q04_10" value="MultiNLI-m"> MultiNLI-m</label>
-<label><input type="checkbox" name="q04_10" value="SAMSum"> SAMSum</label>
-<label><input type="checkbox" name="q04_10" value="ImageNet"> ImageNet</label>
-<details><summary>展开反馈</summary><p>按本组复盘提示自查：答案需要能回到训练对象、参数量、指标、状态或边界，而不是只给一个词。</p></details>
-</div>
-<div class="q" data-question="q04_11" data-group="二、读表判断" data-title="波动范围">
-<div class="q-meta"><span class="pill">短答</span><span class="pill">二、读表判断</span></div>
-<h3>为什么论文要说明 WikiSQL、MNLI、SAMSum 的典型波动？</h3>
-<textarea name="q04_11" placeholder=""></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>不同任务和数据集的随机波动不同。说明波动范围能告诉读者：某个分数差异是真实的提升还是随机噪声。如果不说明波动，读者可能会把统计不显著的差异当作方法优势。</p></details>
-</div>
-<div class="q" data-question="q04_12" data-group="二、读表判断" data-title="更多参数" data-answer="错误" data-explain="对照本页正文里的训练对象、任务边界或部署状态。">
-<div class="q-meta"><span class="pill">判断</span><span class="pill">二、读表判断</span></div>
-<h3>论文实验说明所有 PEFT 方法参数越多指标一定越高。</h3>
-<label><input type="radio" name="q04_12" value="正确"> 正确</label>
-<label><input type="radio" name="q04_12" value="错误"> 错误</label>
-<button class="check" type="button">检查</button>
-<div class="feedback"></div>
-</div>
-</div></div>
-<div class="practice-group"><div class="group-head"><div><h3>三、诊断和表达</h3><p>这一组练习把实验读法转成批判性表达。</p></div><div class="quick-review"><b>检查点</b><span>诊断题按错因、后果、修法写。</span></div></div><div class="drill-grid">
-<div class="q" data-question="q04_13" data-group="三、诊断和表达" data-title="错误诊断：只看加粗">
-<div class="q-meta"><span class="pill">诊断</span><span class="pill">三、诊断和表达</span></div>
-<h3>诊断：有人只看表格加粗项就说 LoRA 全面碾压所有方法。按错因、后果、修法回答。</h3>
-<textarea name="q04_13" placeholder="错因：
-后果：
-修法："></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>错因：忽略了表格中未加粗的数据和统计显著性。后果：高估 LoRA 的适用范围，低估其他方法在特定任务上的优势。修法：看所有任务的表现分布，检查统计显著性，注意每个方法的最佳任务类型和失败模式。</p></details>
-</div>
-<div class="q" data-question="q04_14" data-group="三、诊断和表达" data-title="错误诊断：忽略成本">
-<div class="q-meta"><span class="pill">诊断</span><span class="pill">三、诊断和表达</span></div>
-<h3>诊断：有人只比较分数，不比较可训练参数量和推理延迟。按错因、后果、修法回答。</h3>
-<textarea name="q04_14" placeholder="错因：
-后果：
-修法："></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>错因：把分数当作唯一指标，忽略了工程约束。后果：选择了分数略高但参数量大、延迟高、部署困难的方法。修法：在固定参数预算和延迟约束下比较分数，或者画出帕累托前沿（分数 vs 参数量 vs 延迟）。</p></details>
-</div>
-<div class="q" data-question="q04_15" data-group="三、诊断和表达" data-title="错误诊断：过度外推">
-<div class="q-meta"><span class="pill">诊断</span><span class="pill">三、诊断和表达</span></div>
-<h3>诊断：有人把 2021 年论文表格直接当作所有 2026 年模型的默认结论。按错因、后果、修法回答。</h3>
-<textarea name="q04_15" placeholder="错因：
-后果：
-修法："></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>错因：忽略了模型规模、架构、训练数据和任务类型的变化。后果：把 2021 年 GPT-2 的结论直接套用到 2026 年的大模型，导致方法选择错误。修法：在目标模型和任务上重新验证，关注论文的适用范围和边界条件。</p></details>
-</div>
-<div class="q" data-question="q04_16" data-group="三、诊断和表达" data-title="面试追问">
-<div class="q-meta"><span class="pill">面试追问</span><span class="pill">三、诊断和表达</span></div>
-<h3>用 1-3 句话解释 LoRA 论文的实验为什么有说服力。</h3>
-<textarea name="q04_16" placeholder=""></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>实验覆盖了不同模型规模（RoBERTa 到 DeBERTa XXL）、不同任务类型（NLI、SQL、摘要）和不同基线方法（FT、Adapter、Prefix），在控制参数预算的情况下展示了 LoRA 的分数、延迟和参数量优势，结论有跨模型和跨任务的证据支撑。</p></details>
-</div>
-<div class="q" data-question="q04_17" data-group="三、诊断和表达" data-title="复现实验">
-<div class="q-meta"><span class="pill">场景</span><span class="pill">三、诊断和表达</span></div>
-<h3>如果你要在自己任务上验证 LoRA，至少要记录哪 6 个实验条件？</h3>
-<textarea name="q04_17" placeholder=""></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>1. 底座模型名称和版本。2. 数据集名称、划分方式和样本量。3. 训练步数和批次大小。4. 学习率和调度策略。5. LoRA 的 rank、alpha、target modules。6. 评估指标和随机种子。至少这 6 项才能复现和比较。</p></details>
-</div>
-<div class="q full" data-question="q04_18" data-group="三、诊断和表达" data-title="费曼解释">
-<div class="q-meta"><span class="pill">费曼解释</span><span class="pill">三、诊断和表达</span></div>
-<h3>用 6-9 句话解释 LoRA 论文的实验设计和主要结论。</h3>
-<p class="hint">请串联：基线、参数量、RoBERTa、GPT-2、GPT-3、任务指标、边界。</p>
-<textarea name="q04_18" placeholder=""></textarea>
-<button class="reveal" type="button">展开反馈</button>
-<details><summary>参考答案 / 评分要点</summary><p>LoRA 论文的实验设计覆盖了多个模型规模（从 RoBERTa 到 DeBERTa XXL）和任务类型（NLI、SQL、摘要），在控制参数预算的前提下比较了 LoRA 与全量微调、Adapter、Prefix 等方法。主要结论是：LoRA 用极少量参数就能接近全量微调的效果，且推理延迟不增加，因为低秩更新可以合并回原始权重。论文还通过 SVD 分析解释了为什么小 rank 有效：预训练权重 W 的奇异方向已经编码了丰富的任务知识，Delta W 只需要在 W 的顶部奇异方向上做小幅调整即可调动这些知识。</p></details>
-</div>
-</div></div></section>
-      <section id="export"><div class="head"><h2>导出练习记录</h2><span class="tag">markdown</span></div><div id="quality" class="quality"></div><div id="record" class="export">还没有生成练习记录。</div><div class="actions"><button class="action" onclick="generateRecord()">生成记录</button><button class="ghost" onclick="copyRecord()">复制 Markdown</button></div></section>
-      <section id="sources"><div class="head"><h2>参考资料</h2><span class="tag">source</span></div>
-<ul class="source-list">
-  <li><strong>LoRA: Low-Rank Adaptation of Large Language Models</strong>：本页关于 实验设计与结果解读 的主要论文依据。</li>
-  <li><strong><a href="../课程拆解.md">课程拆解.md</a></strong>：提供本课程的单元边界、术语表和练习范围。</li>
-  <li><strong><a href="../index.html">LoRA 论文精读课程地图</a></strong>：提供本单元在整门课中的位置和相邻页面入口。</li>
+<p>> [!NOTE]</p>
+<p>> <b>练习钩子：</b></p>
+<p>> 等会做题时，不要先写“LoRA 好”。先写比较对象、指标、参数量和边界，再判断这张表支持哪一个主张。</p>
+        </div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>练习</h2>
+          <span class="tag">diagnostic</span>
+        </div>
+      <div class="practice-intro">
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基线识别</h3></div>
+          <div class="quick-review">检查点 每个方法都要说出训练对象。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q04_01" data-group="" data-title="" data-answer="全部模型参数">
+        <div class="q-meta"><span class="pill">04_01</span><span class="pill">单选</span></div>
+        <h3><b>Q:</b> Full fine-tuning 训练什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q04_01" value="全部模型参数">全部模型参数</label>
+      <label><input type="radio" name="q04_01" value="只训练 bias">只训练 bias</label>
+      <label><input type="radio" name="q04_01" value="只训练 prefix token">只训练 prefix token</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>全部模型参数。对照本页正文里的训练对象、任务边界或部署状态。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_02" data-group="" data-title="" data-answer="bias">
+        <div class="q-meta"><span class="pill">04_02</span><span class="pill">单选</span></div>
+        <h3><b>Q:</b> BitFit 训练什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q04_02" value="bias">bias</label>
+      <label><input type="radio" name="q04_02" value="Wq 和 Wv">Wq 和 Wv</label>
+      <label><input type="radio" name="q04_02" value="adapter bottleneck">adapter bottleneck</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>bias。对照本页正文里的训练对象、任务边界或部署状态。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_03" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_03</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> PreEmbed 和 PreLayer 的训练对象有什么不同？</h3>
+
+
+      <textarea name="q04_03"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。PreEmbed 训练词嵌入层，PreLayer 训练词嵌入和额外前馈层。PreEmbed 只调整 token 表示，PreLayer 还能调整 token 之间的交互方式。所以 PreLayer 表达能力更强，但参数量和延迟也更高。LoRA 不训练词嵌入，而是训练注意力层的低秩分支，与这两者都不同。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_04" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_04</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> Adapter 和 LoRA 都参数少，为什么推理路径不同？</h3>
+
+
+      <textarea name="q04_04"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。Adapter 在 Transformer 层内插入额外的前馈子层，推理时必须经过这些新增层，增加了延迟。LoRA 通过低秩矩阵直接修改权重，推理时可以把 B A 合并回 W，不增加额外层，因此延迟和原模型几乎相同。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_05" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_05</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 实验表里有些结果来自前人报告。读结论时为什么要注意这一点？</h3>
+
+
+      <textarea name="q04_05"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。前人报告的结果可能来自不同的训练设置、数据版本或评估协议。直接比较可能不公平。应该检查：是否使用相同底座、相同数据集划分、相同训练步数和相同评估指标。如果不一致，结论的可比性就会下降。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_06" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_06</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 为什么论文要用受限设置和 adapter 做公平比较？</h3>
+
+
+      <textarea name="q04_06"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。受限设置（如只训练少量参数）排除了"参数多所以效果好"的干扰。和 adapter 比较是因为 adapter 也是参数高效方法，可以控制参数量相近的情况下比较哪种结构更有效。公平比较能说明 LoRA 的结构优势，而不只是参数效率。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、读表判断</h3></div>
+          <div class="quick-review">检查点 不要只看分数最高，也不要只看参数最少。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q04_07" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_07</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> RoBERTa large 中 LoRA 0.8M 参数达到接近 FT 的平均分，这能说明什么？</h3>
+
+
+      <textarea name="q04_07"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。说明在 RoBERTa 这类中等规模模型上，极少量参数（0.8M）就能接近全量微调（330M）的效果。这意味着预训练模型已经编码了丰富的任务知识，只需要低秩更新就能调动这些知识，而不是重新训练大量参数。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_08" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_08</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> DeBERTa XXL 上 LoRA 4.7M 与 FT 1500M 参数对比，重点应该看什么？</h3>
+
+
+      <textarea name="q04_08"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。重点看参数量效率：LoRA 只训练 4.7M 参数就达到 FT 1500M 的效果，参数效率提升约 300 倍。同时要看推理延迟：LoRA merge 后没有额外层，而 FT 和 Adapter 都有额外计算。这说明 LoRA 在超大规模模型上依然保持高效。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_09" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_09</span><span class="pill">多选</span></div>
+        <h3><b>Q:</b> GPT-2 生成任务表里出现了哪些指标？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q04_09" value="BLEU">BLEU</label>
+      <label><input type="radio" name="q04_09" value="ROUGE-L">ROUGE-L</label>
+      <label><input type="radio" name="q04_09" value="CIDEr">CIDEr</label>
+      <label><input type="radio" name="q04_09" value="GPU 温度">GPU 温度</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。按本组复盘提示自查：答案需要能回到训练对象、参数量、指标、状态或边界，而不是只给一个词。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_10" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_10</span><span class="pill">多选</span></div>
+        <h3><b>Q:</b> GPT-3 实验覆盖了哪些任务？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q04_10" value="WikiSQL">WikiSQL</label>
+      <label><input type="radio" name="q04_10" value="MultiNLI-m">MultiNLI-m</label>
+      <label><input type="radio" name="q04_10" value="SAMSum">SAMSum</label>
+      <label><input type="radio" name="q04_10" value="ImageNet">ImageNet</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。按本组复盘提示自查：答案需要能回到训练对象、参数量、指标、状态或边界，而不是只给一个词。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_11" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_11</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 为什么论文要说明 WikiSQL、MNLI、SAMSum 的典型波动？</h3>
+
+
+      <textarea name="q04_11"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。不同任务和数据集的随机波动不同。说明波动范围能告诉读者：某个分数差异是真实的提升还是随机噪声。如果不说明波动，读者可能会把统计不显著的差异当作方法优势。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_12" data-group="" data-title="" data-answer="错误">
+        <div class="q-meta"><span class="pill">04_12</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 论文实验说明所有 PEFT 方法参数越多指标一定越高。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q04_12" value="正确">正确</label>
+      <label><input type="radio" name="q04_12" value="错误">错误</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>错误。对照本页正文里的训练对象、任务边界或部署状态。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、诊断和表达</h3></div>
+          <div class="quick-review">检查点 诊断题按错因、后果、修法写。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q04_13" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_13</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 诊断：有人只看表格加粗项就说 LoRA 全面碾压所有方法。按错因、后果、修法回答。</h3>
+
+
+      <textarea name="q04_13"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。错因：忽略了表格中未加粗的数据和统计显著性。后果：高估 LoRA 的适用范围，低估其他方法在特定任务上的优势。修法：看所有任务的表现分布，检查统计显著性，注意每个方法的最佳任务类型和失败模式。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_14" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_14</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 诊断：有人只比较分数，不比较可训练参数量和推理延迟。按错因、后果、修法回答。</h3>
+
+
+      <textarea name="q04_14"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。错因：把分数当作唯一指标，忽略了工程约束。后果：选择了分数略高但参数量大、延迟高、部署困难的方法。修法：在固定参数预算和延迟约束下比较分数，或者画出帕累托前沿（分数 vs 参数量 vs 延迟）。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_15" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_15</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 诊断：有人把 2021 年论文表格直接当作所有 2026 年模型的默认结论。按错因、后果、修法回答。</h3>
+
+
+      <textarea name="q04_15"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。错因：忽略了模型规模、架构、训练数据和任务类型的变化。后果：把 2021 年 GPT-2 的结论直接套用到 2026 年的大模型，导致方法选择错误。修法：在目标模型和任务上重新验证，关注论文的适用范围和边界条件。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_16" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_16</span><span class="pill">面试追问</span></div>
+        <h3><b>Q:</b> 用 1-3 句话解释 LoRA 论文的实验为什么有说服力。</h3>
+
+
+      <textarea name="q04_16"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。实验覆盖了不同模型规模（RoBERTa 到 DeBERTa XXL）、不同任务类型（NLI、SQL、摘要）和不同基线方法（FT、Adapter、Prefix），在控制参数预算的情况下展示了 LoRA 的分数、延迟和参数量优势，结论有跨模型和跨任务的证据支撑。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_17" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_17</span><span class="pill">场景</span></div>
+        <h3><b>Q:</b> 如果你要在自己任务上验证 LoRA，至少要记录哪 6 个实验条件？</h3>
+
+
+      <textarea name="q04_17"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。1. 底座模型名称和版本。2. 数据集名称、划分方式和样本量。3. 训练步数和批次大小。4. 学习率和调度策略。5. LoRA 的 rank、alpha、target modules。6. 评估指标和随机种子。至少这 6 项才能复现和比较。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q04_18" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">04_18</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 用 6-9 句话解释 LoRA 论文的实验设计和主要结论。</h3>
+
+
+      <textarea name="q04_18"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。LoRA 论文的实验设计覆盖了多个模型规模（从 RoBERTa 到 DeBERTa XXL）和任务类型（NLI、SQL、摘要），在控制参数预算的前提下比较了 LoRA 与全量微调、Adapter、Prefix 等方法。主要结论是：LoRA 用极少量参数就能接近全量微调的效果，且推理延迟不增加，因为低秩更新可以合并回原始权重。论文还通过 SVD 分析解释了为什么小 rank 有效：预训练权重 W 的奇异方向已经编码了丰富的任务知识，Delta W 只需要在 W 的顶部奇异方向上做小幅调整即可调动这些知识。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
+        <div class="head">
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
+        </div>
+<ul>
+<li><b>LoRA: Low-Rank Adaptation of Large Language Models</b>：本页关于 实验设计与结果解读 的主要论文依据。</li>
+<li><b><a href="../课程拆解.md">课程拆解.md</a></b>：提供本课程的单元边界、术语表和练习范围。</li>
+<li><b><a href="../index.html">LoRA 论文精读课程地图</a></b>：提供本单元在整门课中的位置和相邻页面入口。</li>
 </ul>
-<p class="muted">本页沿用课程本地材料，不引入新的外部网页来源。</p></section>
-    </main>
+      </section>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

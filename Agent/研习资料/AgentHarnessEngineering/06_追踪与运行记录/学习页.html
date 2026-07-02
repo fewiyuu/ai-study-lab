@@ -4,638 +4,98 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>06 追踪与运行记录｜智能体运行承载工程</title>
-  <meta name="description" content="学习智能体运行中的 trace、span、事件、检查点、恢复记录与排查方法。">
-    <link rel="stylesheet" href="../assets/study-page.css">
-  <link rel="stylesheet" href="./学习页.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="智能体运行承载工程" data-unit="06 追踪与运行记录">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="badge">06</div>
-      <h1>追踪与运行记录</h1>
-      <p class="subtitle">把一次智能体运行拆成可读、可对齐、可恢复排查的证据链。</p>
-      <span class="side-label">导航</span>
-      <nav class="nav" aria-label="页面导航">
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#map"><span class="dot"></span>概念图</a>
-        <a href="#misunderstanding"><span class="dot"></span>术语误区</a>
-        <a href="#lesson"><span class="dot"></span>核心讲解</a>
-        <a href="#case"><span class="dot"></span>Tracing 案例</a>
-        <a href="#errors"><span class="dot"></span>常见错误</a>
-        <a href="#practice"><span class="dot"></span>练习与记录</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="source-note">
-        资料边界：本页只基于 OpenAI Agents SDK tracing 与 LangGraph Durable Execution / Persistence 相关公开文档整理（访问日期：2026-06-21）。
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">智能体运行承载工程</a>
+        <span class="sep">/</span>
+        <span>06 追踪与运行记录</span>
       </div>
-    </aside>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <main>
-      <section class="hero" id="hero">
-        <div>
-          <div class="kicker">Agent Harness Engineering</div>
-          <h2>追踪不是日志，是运行结构。</h2>
-          <div class="chips">
-            <span class="chip strong">第 06 单元</span>
-            <span class="chip">Trace</span>
-            <span class="chip">Span</span>
-            <span class="chip">Checkpoint</span>
-            <span class="chip">Replay</span>
-          </div>
-        </div>
-        <div class="hero-copy">
-          <p>一个智能体失败时，最终回答通常只告诉你“坏了”；运行记录要回答的是：哪一步坏、由谁触发、用了什么上下文、调用了哪个工具、失败前状态保存到哪里、恢复后会不会重复副作用。</p>
-          <p>本节的位置在“状态、会话与恢复”和“版本更新与迁移策略”之间：先能恢复，再要能解释每次恢复前后发生了什么。</p>
-        </div>
-      </section>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Agent Harness Engineering</div>
+      <div class="hero-meta">
+        <span class="hero-badge">06 追踪与运行记录</span>
+      </div>
+      <h1 class="hero-title">06 追踪与运行记录｜智能体运行承载工程</h1>
+      <p class="hero-desc">一个智能体失败时，最终回答通常只告诉你“坏了”；运行记录要回答的是：哪一步坏、由谁触发、用了什么上下文、调用了哪个工具、失败前状态保存到哪里、恢复后会不会重复副作用。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../05_外部协议与连接器/学习页.html">上一节</a>
+            <a href="../07_版本更新与迁移策略/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-      <section class="panel" id="goals">
-        <div class="panel-head">
-          <div>
-            <h2>目标与位置</h2>
-            <p>学完本节，你要能从运行证据判断问题来源，而不是只读最后一段输出。</p>
-          </div>
-          <span class="tag">Goals</span>
-        </div>
-        <div class="grid-3">
-          <div class="cell"><b>学习目标</b><p>能说清 trace、span、事件、日志、指标、checkpoint、thread_id、replay 的差异和连接方式。</p></div>
-          <div class="cell"><b>工程目标</b><p>能设计一个最小运行记录格式，覆盖模型调用、工具调用、护栏、人类确认、错误、重试和恢复边界。</p></div>
-          <div class="cell"><b>排查目标</b><p>能沿着父子 span、错误状态、耗时、输入输出摘要与 checkpoint id，定位失败发生在模型、工具、权限、上下文、网络还是恢复逻辑。</p></div>
-        </div>
-        <div class="grid-3">
-          <div class="cell"><b>上一单元</b><p>外部协议与连接器：重点是工具、资源、授权和传输边界。</p></div>
-          <div class="cell"><b>本单元</b><p>追踪与运行记录：重点是把运行边界记录成可读证据。</p></div>
-          <div class="cell"><b>下一单元</b><p>版本更新与迁移策略：重点是用记录发现行为变化，并支持回归验证。</p></div>
-        </div>
-      </section>
+        </ul>
+      </div>
+    </div>
+  </header>
 
-      <section class="panel" id="map">
-        <div class="panel-head">
-          <div>
-            <h2>概念图</h2>
-            <p>直觉：trace 像一次完整任务的目录，span 是目录下每个有起止时间的动作。</p>
-          </div>
-          <span class="tag">Map</span>
-        </div>
-        <div class="map" data-export-context="追踪层概念图" data-export-lang="text">
-          <div class="map-grid">
-            <div class="trace-tree" aria-label="trace span 层级示意">
-              <div class="node"><strong>Trace：一次端到端工作流</strong><small>workflow_name + trace_id + group_id + metadata</small></div>
-              <div class="node child"><strong>Agent Span：某个智能体开始工作</strong><small>智能体名、可用工具、交接对象、输出类型</small></div>
-              <div class="node child alt"><strong>Generation Span：模型生成</strong><small>输入摘要、输出摘要、用量、模型相关信息</small></div>
-              <div class="node child alt"><strong>Function Span：工具调用</strong><small>工具名、参数摘要、返回摘要、错误</small></div>
-              <div class="node child"><strong>Guardrail / Handoff Span</strong><small>护栏结果、是否交接、交给谁</small></div>
-              <div class="node child err"><strong>Custom Span：业务边界</strong><small>checkpoint_id、thread_id、恢复点、外部写入 id</small></div>
-            </div>
-            <div class="legend">
-              <div class="legend-item"><b>Trace 解决“整件事是什么”。</b><br>它把多次模型调用、工具调用和人工步骤归到同一个工作流里。</div>
-              <div class="legend-item"><b>Span 解决“哪一步做了什么”。</b><br>它有开始时间、结束时间、父级关系和结构化数据，能形成调用树。</div>
-              <div class="legend-item"><b>Checkpoint 解决“状态保存到哪里”。</b><br>它不是调试文本，而是恢复执行所需的图状态快照。</div>
-              <div class="legend-item"><b>运行记录要把两者接起来。</b><br>同一个任务里，trace_id 用于看过程，thread_id / checkpoint_id 用于看恢复状态。</div>
-            </div>
-          </div>
-        </div>
-        <div class="shape-tracer" data-shape-tracer>
-          <div class="trace-lines">
-            <button class="trace-line active" type="button" data-trace-step="trace"><code>Trace</code><span>整件事</span></button>
-            <button class="trace-line" type="button" data-trace-step="span"><code>Span</code><span>哪一步</span></button>
-            <button class="trace-line" type="button" data-trace-step="checkpoint"><code>Checkpoint</code><span>状态在哪</span></button>
-            <button class="trace-line" type="button" data-trace-step="replay"><code>Replay</code><span>恢复怎么走</span></button>
-          </div>
-          <div class="trace-canvas">
-            <div class="tensor-card active" data-trace-target="trace">
-              <b>Trace</b>
-              <span>同一工作流下的完整运行树。</span>
-              <p>它回答“这次任务整体发生了什么”。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="span">
-              <b>Span</b>
-              <span>带边界、父子关系和结构化数据的动作。</span>
-              <p>它回答“哪一步触发了后续错误”。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="checkpoint">
-              <b>Checkpoint</b>
-              <span>保存恢复所需状态，不保存故事。</span>
-              <p>它回答“失败后要从哪里继续”。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="replay">
-              <b>Replay</b>
-              <span>从保存点继续执行后续步骤。</span>
-              <p>它回答“恢复后会不会重复副作用”。</p>
-            </div>
-          </div>
-        </div>
-        <div class="math-block" data-export-context="恢复坐标公式" data-export-lang="math">
-          <p><code>trace_id + thread_id + checkpoint_id → 可恢复运行</code></p>
-          <p>少一个字段，过程、状态或恢复点就会断开，排查只能靠猜。</p>
-        </div>
-      </section>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
 
-      <section class="panel" id="misunderstanding">
-        <div class="panel-head">
-          <div>
-            <h2>术语误区</h2>
-            <p>这些词常被混用；混用会直接导致记录不可查、恢复不可控。</p>
-          </div>
-          <span class="tag">Terms</span>
-        </div>
-        <div class="table-wrap">
-          <table data-export-context="术语误区对照表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>容易混淆</th>
-                <th>正确直觉</th>
-                <th>工程判断</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><b>日志 = 追踪</b></td>
-                <td>日志是事件文本或结构化消息；追踪是有父子关系和时间范围的运行树。</td>
-                <td>只有日志时，你能搜索关键词；有 trace 时，你能沿调用树定位哪个步骤触发了后续错误。</td>
-              </tr>
-              <tr>
-                <td><b>Trace = 一次 HTTP 请求</b></td>
-                <td>在智能体系统里，一次 trace 更适合代表一个逻辑工作流，可能包含多次模型调用和工具调用。</td>
-                <td>如果一次用户任务跨多个 Runner.run，要用更高层 trace 把它们包在一起。</td>
-              </tr>
-              <tr>
-                <td><b>Span = 普通函数日志</b></td>
-                <td>span 有开始、结束、父级和结构化 span_data；它应该表示一个有边界的动作。</td>
-                <td>不要把每一行调试信息都变成 span；用 span 表示模型调用、工具调用、护栏、交接和关键业务步骤。</td>
-              </tr>
-              <tr>
-                <td><b>Checkpoint = Trace</b></td>
-                <td>checkpoint 保存状态，trace 展示过程。一个负责恢复，一个负责解释。</td>
-                <td>排查恢复失败时，需要同时记录 trace_id、thread_id、checkpoint_id。</td>
-              </tr>
-              <tr>
-                <td><b>Replay = 重放日志</b></td>
-                <td>replay 是从保存的检查点重新执行后续步骤；未保存的模型调用、API 请求或人工中断可能再次触发。</td>
-                <td>会产生副作用的步骤必须有任务边界和幂等策略，否则恢复或回放会重复写入。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel" id="lesson">
-        <div class="panel-head">
-          <div>
-            <h2>讲解段</h2>
-            <p>按“为什么记录、记录什么、怎么排查、怎么和恢复对齐”的顺序学习。</p>
-          </div>
-          <span class="tag">8 Parts</span>
-        </div>
-        <div class="lesson-list">
-          <article class="lesson">
-            <div class="lesson-num">1</div>
-            <div>
-              <h3>为什么智能体不能只看最终输出</h3>
-              <p>智能体的输出是运行链条的最后一环。真正的错误可能发生在模型看错上下文、工具参数生成错误、工具返回被截断、权限被拒绝、护栏拦截、网络超时、恢复时重复执行，或者人工确认之后状态没有写回。只看最终输出，相当于只看事故后的结论，不看事故过程。</p>
-              <p>运行记录的目标不是“多留点日志”，而是让每个关键动作都有身份、时间、父级、输入摘要、输出摘要、错误状态和可关联的恢复点。</p>
-              <div class="ability">你现在应该能做什么：看到一个智能体失败案例时，先追问“失败发生在哪个运行步骤”，而不是马上改提示词。</div>
-            </div>
-          </article>
-          <article class="lesson">
-            <div class="lesson-num">2</div>
-            <div>
-              <h3>Trace 与 Span 的基础读法</h3>
-              <p>trace 是一次端到端工作流的外壳。OpenAI Agents SDK 的 trace 可带 workflow_name、trace_id、group_id 和 metadata。span 是 trace 里的一个动作，通常有 started_at、ended_at、trace_id、parent_id 和 span_data。</p>
-              <p>读 trace 时先看根节点：这次工作流是什么、属于哪个会话或任务组；再看子节点：哪个智能体运行、哪次模型生成、哪个函数工具调用、是否触发护栏、是否交接给其他智能体。父子关系比时间顺序更重要，因为它告诉你“是谁导致了谁”。</p>
-              <div class="ability">你现在应该能做什么：拿到一棵 span 树后，能分辨根工作流、智能体步骤、模型步骤、工具步骤和自定义业务步骤。</div>
-            </div>
-          </article>
-          <article class="lesson">
-            <div class="lesson-num">3</div>
-            <div>
-              <h3>OpenAI Agents SDK 默认记录了什么</h3>
-              <p>Agents SDK 默认启用 tracing。默认情况下，Runner.run、Runner.run_sync、Runner.run_streamed 会被包进 trace；每次智能体运行、模型生成、函数工具调用、护栏、交接，以及语音相关输入输出都会形成对应 span。也就是说，框架已经给了基础运行树。</p>
-              <p>你可以用更高层的 trace 把多次 Runner.run 合成一个逻辑工作流；也可以用 custom_span 标记自己的业务边界，例如“写入结果”“生成下载文件”“保存审批记录”。长运行 worker 中，默认批量导出可能不是即时可见；如果一个任务结束后需要立刻看到记录，可以在 trace 结束后调用 flush_traces。</p>
-              <div class="ability">你现在应该能做什么：知道哪些记录 SDK 已经自动生成，哪些业务边界需要自己补 custom_span。</div>
-            </div>
-          </article>
-          <article class="lesson">
-            <div class="lesson-num">4</div>
-            <div>
-              <h3>记录字段要服务于排查，而不是堆满所有内容</h3>
-              <p>一个有用的 span 至少要能回答：它做什么、何时开始结束、父级是谁、输入是什么类型、输出是否成功、失败是什么错误、是否重试、关联了哪个状态或外部写入。对模型生成与工具调用，输入输出很有价值，但也可能包含敏感数据。</p>
-              <p>OpenAI Agents SDK 的 generation_span 和 function_span 可能记录模型输入输出、工具输入输出；默认敏感数据采集是开启的，可以通过配置关闭。实践中不要把原始隐私内容、密钥、完整客户数据直接放入 metadata；更稳妥的是记录摘要、数量、哈希、外部记录 id 和脱敏后的错误类别。</p>
-              <div class="ability">你现在应该能做什么：设计 span_data 时能区分“排查必需字段”和“不该进入追踪系统的敏感原文”。</div>
-            </div>
-          </article>
-          <article class="lesson">
-            <div class="lesson-num">5</div>
-            <div>
-              <h3>Durable Execution 让运行记录有了恢复坐标</h3>
-              <p>LangGraph 的持久化层会把图状态保存为 checkpoints，并按 threads 组织。启用 checkpointer 后，每个 super-step 边界会形成状态快照；如果某一步失败，可以从最后成功的步骤恢复。它还支持查看状态历史、time travel、pending writes 等能力。</p>
-              <p>这里要分清：trace 记录“过程”，checkpoint 记录“状态”。一个排查页面最好能从 trace span 跳到对应 thread_id 和 checkpoint_id，也能从某个 checkpoint 找到当时执行的 trace。这样你既能看“当时为什么这么走”，也能看“恢复时会从哪里继续”。</p>
-              <div class="ability">你现在应该能做什么：解释为什么 trace_id 不能替代 checkpoint_id，也能说明两者需要用相关 id 连接起来。</div>
-            </div>
-          </article>
-          <article class="lesson">
-            <div class="lesson-num">6</div>
-            <div>
-              <h3>回放不是从断掉的代码行继续</h3>
-              <p>持久执行的关键点是：恢复时通常不是从原来崩溃的那一行继续，而是从合适的保存点重新执行后续步骤。LangGraph Durable Execution 要求工作流具备确定性；随机数、模型调用、文件写入、API 请求这类非确定性或带副作用的操作，应当放入任务或节点边界中。</p>
-              <p>如果一个节点里连着做了三件外部写入，恢复时很难知道哪件已经完成。更好的做法是把每个副作用拆成独立任务，并使用幂等键或“先查是否已写入”的策略。幂等的意思是：同一操作重复执行，也不会产生第二份不该有的结果。</p>
-              <div class="ability">你现在应该能做什么：看到会写文件、发请求、创建记录的步骤时，能判断它是否需要任务边界和幂等键。</div>
-            </div>
-          </article>
-          <article class="lesson">
-            <div class="lesson-num">7</div>
-            <div>
-              <h3>排查 trace 的实用顺序</h3>
-              <p>第一步看根 trace：workflow_name 是否正确，group_id 是否把同一会话串起来。第二步看错误 span：错误是模型、工具、护栏、交接还是自定义业务步骤。第三步看上游 span：错误前模型是否生成了错误工具参数，工具是否返回了异常或空结果，护栏是否修改了路径。</p>
-              <p>第四步看耗时：最长 span 可能暴露网络、外部 API、模型延迟或重试。第五步看恢复坐标：当前 checkpoint 是否已经包含成功节点的写入，replay 会从哪个边界开始，后续步骤是否会再次触发外部副作用。第六步把失败 trace 与成功 trace 对比，找结构差异，而不是只比文本。</p>
-              <div class="ability">你现在应该能做什么：按固定顺序阅读 trace，定位错误来源，并决定是修工具契约、上下文、权限、网络重试还是恢复逻辑。</div>
-            </div>
-          </article>
-          <article class="lesson">
-            <div class="lesson-num">8</div>
-            <div>
-              <h3>运行记录最终要进入运营闭环</h3>
-              <p>开发阶段的 trace 用来调试；生产阶段的运行记录还要支撑监控、告警、审计、成本分析和回归验证。常见指标包括成功率、工具错误率、护栏触发率、平均耗时、长尾耗时、重试次数、模型用量、恢复次数和重复副作用拦截次数。</p>
-              <p>记录策略要有保留期限和脱敏规则。高价值字段应结构化保存，方便聚合；高风险原文要少存或不存。版本升级时，用历史 trace 选择回归样本，比较 span 结构、工具调用参数、错误率和恢复路径，比只比较最终回答更可靠。</p>
-              <div class="ability">你现在应该能做什么：把单次追踪扩展成可持续运营的记录方案，并知道哪些字段适合做指标。</div>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section class="panel" id="case">
-        <div class="panel-head">
-          <div>
-            <h2>Tracing 案例</h2>
-            <p>用一个“资料整理助手”示例，看 trace 与 checkpoint 如何协同定位问题。</p>
-          </div>
-          <span class="tag">Case</span>
-        </div>
-        <div class="case-layout">
-          <div class="case-block">
-            <h3>场景</h3>
-            <p>用户要求助手读取一组公开资料，生成摘要，保存一份报告，并在失败后继续。一次失败发生在“保存报告”之后、“发送完成通知”之前。我们希望知道报告是否已经写入，恢复时会不会重复写入。</p>
-            <div class="timeline">
-              <div class="step"><span>A</span><p><b>根 trace</b>：workflow_name = research_report，group_id = conversation_42。</p></div>
-              <div class="step"><span>B</span><p><b>模型 span</b>：生成计划，决定调用 read_sources 与 write_report。</p></div>
-              <div class="step"><span>C</span><p><b>工具 span</b>：read_sources 成功，返回 6 条来源摘要。</p></div>
-              <div class="step"><span>D</span><p><b>自定义 span</b>：write_report 记录 report_id、idempotency_key、checkpoint_id。</p></div>
-              <div class="step"><span>E</span><p><b>错误 span</b>：notify_user 网络超时；检查 checkpoint，确认 write_report 的任务写入已保存。</p></div>
-            </div>
-          </div>
-          <div class="case-block">
-            <h3>OpenAI Agents SDK 示例</h3>
-            <div class="codebar">
-              <span class="label">trace_workflow.py</span>
-              <span class="kind">Python</span>
-            </div>
-            <pre data-export-context="代码示例 1" data-export-lang="text"><code>from agents import Agent, Runner, RunConfig, custom_span, flush_traces, trace
-
-async def run_report_workflow(user_input: str, conversation_id: str):
-    agent = Agent(
-        name="report_agent",
-        instructions="读取资料，生成摘要，并返回保存建议。"
-    )
-
-    run_config = RunConfig(
-        trace_include_sensitive_data=False
-    )
-
-    try:
-        with trace(
-            "research_report",
-            group_id=conversation_id,
-            metadata={"workflow_version": "2026-06", "record_policy": "redacted"}
-        ):
-            result = await Runner.run(agent, user_input, run_config=run_config)
-
-            with custom_span(
-                "persist_report",
-                data={
-                    "report_id": "report_20260609_001",
-                    "idempotency_key": "report_20260609_001",
-                    "checkpoint_id": "ckpt_after_report_write"
-                }
-            ):
-                save_report_once(result.final_output)
-
-            return result.final_output
-    finally:
-        flush_traces()</code></pre>
-            <p class="code-note">要点：高层 trace 包住完整工作流；自动 span 记录智能体、模型和工具；custom_span 记录业务写入边界；关闭敏感原文采集；任务结束后刷新导出。</p>
-          </div>
-        </div>
-        <div class="case-layout">
-          <div class="case-block">
-            <h3>LangGraph 对应记录</h3>
-            <div class="codebar">
-              <span class="label">graph_checkpoint.py</span>
-              <span class="kind">Python</span>
-            </div>
-            <pre data-export-context="代码示例 2" data-export-lang="text"><code>config = {"configurable": {"thread_id": "conversation_42"}}
-
-# 图编译时启用 checkpointer。
-# 执行时每个 super-step 形成可恢复的状态边界。
-graph.invoke(
-    {"request": "生成公开资料摘要"},
-    config,
-    durability="sync"
-)
-
-latest = graph.get_state(config)
-history = list(graph.get_state_history(config))</code></pre>
-            <p class="code-note">要点：thread_id 让检查点能归属于同一执行序列；durability="sync" 更重但能在下一步开始前写入 checkpoint；状态历史用于判断恢复点。</p>
-          </div>
-          <div class="case-block">
-            <h3>如何判断是否重复写入</h3>
-            <div class="timeline">
-              <div class="step"><span>1</span><p>查 trace 中 persist_report span 是否成功结束，并记录了 report_id。</p></div>
-              <div class="step"><span>2</span><p>查 state history 中对应 checkpoint 是否包含报告写入后的状态。</p></div>
-              <div class="step"><span>3</span><p>恢复前先用 idempotency_key 查询外部系统是否已有同一报告。</p></div>
-              <div class="step"><span>4</span><p>如果已有报告，恢复流程跳过写入，只继续通知或后续步骤。</p></div>
-              <div class="step"><span>5</span><p>如果没有报告，重新执行写入任务，并保留同一个幂等键。</p></div>
-            </div>
-          </div>
-        </div>
-        <div class="box info" data-export-context="追踪排查工作法" data-export-lang="text">
-          <h3>追踪排查工作法</h3>
-          <p>真正排查一个失败运行时，顺序很重要。先看根 trace，确认这次工作流是不是你要找的那一条；再看最晚失败的 span，判断问题是出在模型、工具、护栏还是人工确认；接着把失败 span 往上游回溯，核对工具参数和返回摘要；最后再回到 checkpoint，看当前状态是否已经包含某一步成功写入的结果。这样做的好处，是你不会把“恢复后又执行了一次”的问题误判成“模型又想了一次”。</p>
-          <p>如果你把这一步做扎实，后面的修法会明显更稳定：trace 负责告诉你哪一步坏了，checkpoint 负责告诉你恢复时会从哪里继续，幂等键负责告诉你外部系统是不是已经做过这件事。三者如果缺一个，排查就会变成猜测。对于写入型动作，最小闭环应该是“先记录 intent，再执行副作用，再写入 checkpoint，再导出 trace”。</p>
-          <table data-export-context="追踪排查表" data-export-lang="table">
-            <thead>
-              <tr><th>证据</th><th>重点看什么</th><th>错位症状</th><th>下一步</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>根 trace</td><td>workflow_name、group_id</td><td>找错了运行线</td><td>先校正任务边界</td></tr>
-              <tr><td>错误 span</td><td>错误类型、父级、工具名</td><td>只看见失败文本</td><td>回溯上游输入</td></tr>
-              <tr><td>checkpoint</td><td>state、thread_id、恢复点</td><td>恢复后重复执行</td><td>核对幂等和写入记录</td></tr>
-              <tr><td>trace diff</td><td>工具顺序、耗时、用量</td><td>升级后行为改变</td><td>对比 golden run</td></tr>
-            </tbody>
-          </table>
-          <p>如果你已经把排查顺序固定下来，下一次看到“工具返回空结果”就不需要先改提示词。你会先问：模型为什么会生成这个参数、工具为什么只返回空、空结果是不是被上游过滤掉、恢复时是否把成功的写入又触发了一次。这个顺序能把很多看似复杂的事故，拆成几步非常确定的检查动作。</p>
-          <p>再往前走一步，你就会发现追踪记录本身也应该服务于组织协作。值班同学需要的是“这一步失败了没有、失败前最后一个成功动作是什么、恢复后会不会重复执行”，产品或运营需要的是“用户有没有拿到结果、多久能恢复、是否需要人工介入”，研发则需要的是“哪一层 span 缺字段、哪一个 checkpoint 没有写入、哪一个副作用没有幂等”。如果记录只满足一种人，它就会在别的环节失效；如果记录能同时回答这三类问题，trace 才算真的进入可运营状态。</p>
-          <div class="grid2" data-export-context="追踪恢复三问" data-export-lang="text">
-            <div class="box">
-              <h3>恢复前先问</h3>
-              <ul>
-                <li>失败是否已经影响外部系统，还是只停在内部状态。</li>
-                <li>当前 checkpoint 是否足够还原到安全的继续点。</li>
-                <li>这次恢复会不会触发重复通知、重复写文件或重复扣费。</li>
-              </ul>
-            </div>
-            <div class="box info">
-              <h3>复盘后再写</h3>
-              <p>把结论写成固定句式：哪条 trace 出了问题，哪一个 span 是最后成功点，哪一个 checkpoint 是恢复起点，哪一类副作用需要幂等保护。这个句式的价值不在于好看，而在于它能直接转成值班交接、事故复盘和回归测试的输入。以后每次遇到同类故障，你就不必重新发明排查方法，只需要替换其中的运行 id、工具名和错误类型。</p>
-            </div>
-          </div>
-          <p>如果你想把这套方法真正用起来，建议再加一层“记录模板”和“恢复模板”。记录模板负责把一次运行固定成同样的字段集合，比如 trace_id、group_id、thread_id、checkpoint_id、最后一个成功 span、失败类型和外部副作用 id。恢复模板则负责把这些字段变成明确动作：先判断副作用是否已经落地，再判断 checkpoint 是否可继续，再判断是否需要人工确认，最后才决定重新执行哪一步。这样一来，排查不再是看见错误就临时拼判断，而是从记录直接走向恢复。</p>
-          <p>这里最容易漏掉的一点，是 trace 和 checkpoint 的时间顺序。trace 记录的是“发生了什么”，checkpoint 记录的是“系统现在在哪儿”。如果恢复模板没有先看这两个时间点的关系，就会出现一种很典型的误判：日志上看任务已经“完成”，但其实写入动作只是部分完成；或者 checkpoint 已经写下来了，但外部系统的副作用还没来得及提交。真正靠谱的做法，是把失败前的最后一个成功 span 和 checkpoint 的状态一起读，确认系统和外部世界对同一件事是不是达成了一致。</p>
-          <table data-export-context="追踪恢复模板" data-export-lang="table">
-            <thead>
-              <tr><th>模板字段</th><th>用途</th><th>恢复动作</th><th>风险</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>trace_id / group_id</td><td>找到同一运行线</td><td>锁定故障上下文</td><td>串错会话</td></tr>
-              <tr><td>thread_id / checkpoint_id</td><td>定位恢复点</td><td>判断从哪里继续</td><td>重复执行已完成动作</td></tr>
-              <tr><td>最后成功 span</td><td>确认边界</td><td>找出最后可确认的输出</td><td>把失败前动作当成失败动作</td></tr>
-              <tr><td>副作用 id</td><td>确认外部系统状态</td><td>决定跳过还是重做</td><td>重复通知、重复写入</td></tr>
-            </tbody>
-          </table>
-          <p>练习时你可以把一个真实任务拆成三句话写出来：这次运行是谁发起的，失败停在哪一步，恢复时为什么不会重复做事。只要这三句话能写顺，说明你已经把可观测性和可恢复性连成了一条线。你现在应该能做什么：拿到一条失败 trace，就按固定顺序判断它该重试、该跳过，还是该人工介入。</p>
-          <p>如果再往日常工作里落一步，最有用的做法是把这套模板直接塞进值班记录。每次故障只填四个空：根 trace、最后成功 span、checkpoint 位置、外部副作用 id。填完后马上写下一步动作，不要让记录停在“看过了”这种状态。这样做的好处很现实：下次同类故障出现时，你可以先比对字段，再比对现象，最后才看代码，排查时间会短很多，复盘结论也更容易被别人复用。</p>
-          <p>如果你想把它教给新人，最简单的说法就是：先找线，再找点，最后找状态。线是 trace，点是 span，状态是 checkpoint；三者连起来以后，故障就不再是模糊的一团，而是能被顺着读出来的一段过程。</p>
-          <p>把这三步固定下来，你就能把一次事故压缩成一张小卡片，卡片上只保留关键 id、最后成功点和恢复动作。这样写出来的记录，可以直接进入交接、复盘和回归，不会在下一轮排查时重新丢失上下文，下一班只看四个字段就能接手。</p>
-        </div>
-      </section>
-
-      <section class="panel" id="errors">
-        <div class="panel-head">
-          <div>
-            <h2>常见错误</h2>
-            <p>多数可观测性失败，不是因为没有记录，而是记录没有工程边界。</p>
-          </div>
-          <span class="tag">Pitfalls</span>
-        </div>
-        <div class="errors">
-          <div class="error-card"><b>只记录自然语言日志</b><p>日志里写“开始执行工具”“执行完成”，但没有工具名、参数摘要、返回状态、父级 span 和错误类型。结果是能读故事，不能定位。</p></div>
-          <div class="error-card"><b>把敏感原文塞进 trace</b><p>为了排查方便保存完整提示词、客户数据、密钥或文件内容。短期好查，长期会制造合规和泄露风险。优先记录脱敏摘要和外部 id。</p></div>
-          <div class="error-card"><b>没有 group_id / thread_id</b><p>每次运行都是孤立记录，无法把同一会话、多次恢复和多个 trace 串起来。后续排查只能靠时间猜。</p></div>
-          <div class="error-card"><b>业务副作用没有 custom_span</b><p>框架自动记录模型和工具，但保存数据库、写文件、发通知这类业务边界没有记录。事故通常就发生在这些地方。</p></div>
-          <div class="error-card"><b>把 checkpoint 当作审计日志</b><p>checkpoint 是恢复状态，不一定适合直接阅读或长期审计。审计需要结构化事件；恢复需要状态快照；两者要关联但不能混成一个东西。</p></div>
-          <div class="error-card"><b>恢复时重复执行副作用</b><p>回放从保存点后重新执行，未被任务边界和幂等策略保护的外部写入可能重复发生。每个写操作都要能回答“重复执行会怎样”。</p></div>
-        </div>
-      </section>
-
-      <section class="panel" id="practice">
-        <div class="panel-head">
-          <div>
-            <h2>练习区</h2>
-            <p>完成后生成 Markdown 练习记录，可复制或下载。</p>
-          </div>
-          <span class="tag">Practice</span>
-        </div>
-        <div class="practice">
-          <div class="quality" id="quality"></div>
-          <div class="answer" id="record">还没有生成练习记录。</div>
-          <div class="drill-grid">
-            <div class="q" data-question="q1" data-group="概念辨认" data-title="trace 最适合表示什么？" data-answer="B">
-              <div class="q-meta"><span class="pill">选择</span><span class="pill">概念</span></div>
-              <h3>trace 最适合表示什么？</h3>
-              <label><input type="radio" name="q1" value="A">A. 单次 SQL 查询的结果集</label>
-              <label><input type="radio" name="q1" value="B">B. 一次端到端工作流的运行树</label>
-              <label><input type="radio" name="q1" value="C">C. 一段纯文本日志</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-            <div class="q" data-question="q2" data-group="概念辨认" data-title="span 的边界" data-answer="A">
-              <div class="q-meta"><span class="pill">选择</span><span class="pill">边界</span></div>
-              <h3>span 应该表示什么？</h3>
-              <label><input type="radio" name="q2" value="A">A. 一个有开始、结束和父级关系的动作</label>
-              <label><input type="radio" name="q2" value="B">B. 所有自然语言解释</label>
-              <label><input type="radio" name="q2" value="C">C. 任意调试输出</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-            <div class="q short" data-question="q3" data-group="概念辨认" data-title="填空：恢复坐标最关键的一个字段是什么？">
-              <div class="q-meta"><span class="pill">填空</span><span class="pill">恢复</span></div>
-              <h3>填空：恢复同一条执行线时，最关键的稳定指针通常是 ____。</h3>
-              <input type="text" name="q3" data-answer="thread_id" placeholder="填写字段名">
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-            <div class="q full" data-question="q4" data-group="概念辨认" data-title="解释 trace 与 checkpoint 的区别">
-              <div class="q-meta"><span class="pill">解释</span><span class="pill">对比</span></div>
-              <h3>解释：trace 和 checkpoint 为什么不能互相替代？</h3>
-              <textarea name="q4" placeholder="从过程、状态、恢复和审计四个角度回答。"></textarea>
-              <button type="button" class="reveal">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>trace 解释过程，checkpoint 保存状态；一个用于排查，一个用于恢复；审计时两者要关联，但不能混成一个东西。</p>
-              </details>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-            <div class="q" data-question="q5" data-group="概念辨认" data-title="checkpoint 最适合表示什么？" data-answer="A">
-              <div class="q-meta"><span class="pill">选择</span><span class="pill">恢复</span></div>
-              <h3>checkpoint 最适合表示什么？</h3>
-              <label><input type="radio" name="q5" value="A">A. 恢复执行所需的状态快照</label>
-              <label><input type="radio" name="q5" value="B">B. 全量聊天日志</label>
-              <label><input type="radio" name="q5" value="C">C. 只给人看的自然语言摘要</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-            <div class="q short" data-question="q6" data-group="概念辨认" data-title="填空：同一工作流串线的常用字段是什么？">
-              <div class="q-meta"><span class="pill">填空</span><span class="pill">串线</span></div>
-              <h3>填空：同一工作流串线的常用字段是 ____。</h3>
-              <input type="text" name="q6" data-answer="group_id" placeholder="填写字段名">
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-            <div class="q full" data-question="q7" data-group="概念辨认" data-title="解释为什么 trace 要和 checkpoint 一起看">
-              <div class="q-meta"><span class="pill">解释</span><span class="pill">对比</span></div>
-              <h3>解释：为什么 trace 要和 checkpoint 一起看？</h3>
-              <textarea name="q7" placeholder="从排查、恢复、幂等和重试四个角度回答。"></textarea>
-              <button type="button" class="reveal">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>trace 告诉你哪一步坏了，checkpoint 告诉你恢复从哪里继续；没有 checkpoint 就会不知道副作用是否已写入，没有 trace 就会不知道为什么走到这一步。</p>
-              </details>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-            <div class="q" data-question="q8" data-group="概念辨认" data-title="选择：group_id 的作用" data-answer="A">
-              <div class="q-meta"><span class="pill">选择</span><span class="pill">串线</span></div>
-              <h3>group_id 的作用是什么？</h3>
-              <label><input type="radio" name="q8" value="A">A. 把同一工作流或会话相关的 trace 串起来</label>
-              <label><input type="radio" name="q8" value="B">B. 记录单个函数内部变量</label>
-              <label><input type="radio" name="q8" value="C">C. 替代 checkpoint</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-            <div class="q short" data-question="q9" data-group="概念辨认" data-title="填空：要恢复到哪一步，最常看什么字段？">
-              <div class="q-meta"><span class="pill">填空</span><span class="pill">恢复</span></div>
-              <h3>填空：要恢复到哪一步，最常看 ____。</h3>
-              <input type="text" name="q9" data-answer="checkpoint_id" placeholder="填写字段名">
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-            <div class="q full" data-question="q10" data-group="概念辨认" data-title="解释：为什么恢复时要检查副作用是否已写入">
-              <div class="q-meta"><span class="pill">解释</span><span class="pill">副作用</span></div>
-              <h3>解释：为什么恢复时要检查副作用是否已写入？</h3>
-              <textarea name="q10" placeholder="从重复写入、幂等键、外部系统状态三个角度回答。"></textarea>
-              <button type="button" class="reveal">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>恢复会重跑部分步骤；如果外部动作已经成功却没有记录，重新执行就会重复写入。幂等键和写入记录就是用来判断“这件事是否已经做过”。</p>
-              </details>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-          </div>
-          <div class="practice-grid">
-            <label>1. 选一个你熟悉的智能体任务，写出它的根 trace 应该代表什么。
-              <textarea id="answerTrace" placeholder="例如：一次资料整理工作流，从接收请求到保存摘要和返回结果。"></textarea>
-              <button type="button" class="reveal">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>根 trace 代表一次完整的用户请求生命周期。例如："用户提交资料整理请求 → 接收请求 → 规划步骤 → 读取资料 → 生成摘要 → 保存结果 → 返回用户"。它应该包含请求 ID、起始时间、用户标识、最终状态，以及所有子 span 的引用。根 trace 不记录具体业务内容，只记录骨架和耗时，便于从整体视角排查性能瓶颈和错误链路。</p>
-              </details>
-            </label>
-            <label>2. 列出至少 5 个应该成为 span 的动作。
-              <textarea id="answerSpan" placeholder="例如：模型规划、读取资料、调用搜索工具、保存报告、发送通知。"></textarea>
-              <button type="button" class="reveal">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>模型规划（决定下一步做什么）、工具调用（读取文件、搜索、发送通知等）、函数执行（业务逻辑处理）、外部 API 调用（数据库、第三方服务）、用户交互（等待确认、收集输入）、状态转换（从一个节点切换到下一个节点）、错误处理（重试、降级、通知）。每个 span 应该有名称、开始/结束时间、输入输出摘要和错误信息。</p>
-              </details>
-            </label>
-            <label>3. 哪些字段可以记录，哪些字段必须脱敏或不记录？
-              <textarea id="answerPrivacy" placeholder="例如：记录工具名、耗时、错误类别；不记录密钥、完整隐私原文。"></textarea>
-              <button type="button" class="reveal">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>可以记录：工具名、耗时、错误类别、状态码、trace_id、模型响应摘要。必须脱敏或不记录：用户隐私原文（身份证号、手机号、地址）、密钥和 token、完整聊天记录、业务敏感数据。脱敏方式：哈希化、截断、用占位符替换。原则是：足够排查问题，但不暴露敏感信息。</p>
-              </details>
-            </label>
-            <label>4. 如果执行中断，哪个 checkpoint 能证明已经完成了什么？
-              <textarea id="answerCheckpoint" placeholder="例如：报告写入后 checkpoint，包含 report_id 与下一步 notify_user。"></textarea>
-              <button type="button" class="reveal">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>保存了最近完成节点状态的 checkpoint 能证明已完成什么。例如："报告写入后 checkpoint" 包含 report_id 和下一步 notify_user。恢复时加载这个 checkpoint，就知道报告已经生成，只需要继续执行 notify_user。checkpoint 应该记录：当前节点、已完成的子任务、关键输出 ID、待执行的后继任务。</p>
-              </details>
-            </label>
-            <label>5. 找一个可能重复执行的副作用，设计幂等策略。
-              <textarea id="answerIdempotency" placeholder="例如：保存报告前用 idempotency_key 查询是否已有同一 report_id。"></textarea>
-              <button type="button" class="reveal">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>例如：保存报告前用 idempotency_key 查询是否已有同一 report_id。策略：1. 生成唯一幂等键（如 trace_id + 操作名）。2. 执行写操作前，查询外部系统是否已有该键的记录。3. 若有记录，直接返回已有结果，不重复执行。4. 若无记录，执行写操作并把幂等键和结果一起记录。5. 所有写操作都走这个检查流程。</p>
-              </details>
-            </label>
-            <label>6. 写出你会如何排查一次“工具返回空结果”的失败。
-              <textarea id="answerDebug" placeholder="例如：先看模型生成的工具参数，再看 function_span 返回摘要和错误，再对比成功 trace。"></textarea>
-              <button type="button" class="reveal">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>1. 先看模型生成的工具参数是否正确（prompt 是否清晰）。2. 再看 function_span 的返回摘要和错误信息。3. 对比成功 trace 的同一工具调用，看参数差异。4. 检查外部 API 是否可用（网络、权限、限流）。5. 检查工具实现是否有 bug（空值处理、异常捕获）。6. 如果模型没调用工具，检查 prompt 和上下文是否足够引导工具使用。</p>
-              </details>
-            </label>
-          </div>
-
-          <div class="checklist" aria-label="自检清单">
-            <label class="checkline"><input type="checkbox" id="checkTrace"> 我的 trace 有清晰 workflow_name、trace_id 或 group_id。</label>
-            <label class="checkline"><input type="checkbox" id="checkSpan"> 我的 span 表示有边界的动作，而不是零散调试文本。</label>
-            <label class="checkline"><input type="checkbox" id="checkSensitive"> 我已经说明哪些输入输出不应进入追踪系统。</label>
-            <label class="checkline"><input type="checkbox" id="checkCheckpoint"> 我能把 trace_id 与 thread_id / checkpoint_id 关联起来。</label>
-            <label class="checkline"><input type="checkbox" id="checkReplay"> 我已经为可重复副作用设计任务边界或幂等键。</label>
-          </div>
-
-          <div class="actions">
-            <button type="button" id="copyRecord">复制 Markdown</button>
-            <button type="button" id="downloadRecord" class="secondary">下载 Markdown</button>
-            <button type="button" id="refreshRecord" class="secondary">刷新预览</button>
-          </div>
-          <div class="toast" id="toast" role="status" aria-live="polite"></div>
-          <pre class="record" id="recordPreview"></pre>
-        </div>
-      </section>
-      <section id="export">
-        <div class="head">
-          <h2>Markdown 导出</h2>
-          <span class="tag">Export</span>
-        </div>
-        <p>导出记录已在练习区生成。这个区域保留给后续的导出格式、字段对照和复盘校验。</p>
-      </section>
-      <section id="sources">
+  <!-- Content -->
+  <article class="content">
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
-          <span class="tag">Sources</span>
+          <span class="tag">source</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>本页参考的公开资料</h3>
-            <ul>
-              <li><a class="text-link" href="https://openai.github.io/openai-agents-python/tracing/">OpenAI Agents SDK Tracing</a></li>
-              <li><a class="text-link" href="https://docs.langchain.com/oss/python/langgraph/durable-execution">LangGraph Durable Execution / Persistence</a></li>
-            </ul>
-          </div>
-          <div class="box info">
-            <h3>推导边界</h3>
-            <p>本页把 tracing、span、checkpoint 与恢复排查整理成工程读法（访问日期：2026-06-21）。这些结构来自公开文档的交叉整理，具体字段和默认行为仍要回到对应官方文档核对。</p>
-          </div>
-        </div>
+
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <!-- learning-kit-progress -->
-  <script src="../assets/study-page.js"></script>
-  <script src="./学习页.js" defer></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

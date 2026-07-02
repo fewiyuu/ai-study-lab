@@ -4,802 +4,766 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CUDA 线程层级与内核边界</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="GPU 性能工程" data-unit="02｜CUDA 线程层级与内核边界">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>GPU 性能工程</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">GPU 性能工程</a>
+        <span class="sep">/</span>
         <span>02｜CUDA 线程层级与内核边界</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#overview"><span class="dot"></span>先看全局</a>
-        <a href="#trace"><span class="dot"></span>坐标追踪</a>
-        <a href="#launch"><span class="dot"></span>启动与边界</a>
-        <a href="#sync"><span class="dot"></span>同步边界</a>
-        <a href="#lab"><span class="dot"></span>失败实验室</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">先把 grid、block、thread 这三个坐标系看清，再问索引、边界和同步。读到 2D 矩阵时，还要把 row-major、宽高和最后一列的 guard 一起看，不然很容易把转置错误当成性能问题。最后一个 tile 往往最容易漏 guard，这一页会把它单独拆出来。</div>
-    </aside>
-
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">GPU 性能工程｜第 02 单元</div>
-          <h1>CUDA 线程层级与内核边界</h1>
-          <p class="lead">这页只盯一件事：CUDA 线程怎么被切块、怎么被编号、怎么在 kernel 边界内外各自做事。把这件事看明白，后面的访存、带宽和 Triton tile 才有共同语言。</p><p class="lead">你会沿着一个向量加法 kernel 追踪到 2D 索引、向上取整的 launch、最后一个 block 的边界 guard，以及为什么 block 内同步和全局同步不是一回事。再往下走一步，你会看到同样的坐标逻辑怎样变成矩阵的 row 和 col，以及什么时候该用 1D launch、什么时候该用 2D launch，最后一块 tile 为什么要单独看。</p>
-
-          <div class="course-links">
-            <a href="../index.html">课程地图</a><a href="../01_GPU执行模型与性能语言/学习页.html">上一单元</a><a href="../03_内存层次访存合并与带宽/学习页.html">下一单元</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>读完本页应该能做什么</h3>
-          <ul>
-  <li>把 grid、block、thread、blockDim、blockIdx、threadIdx 组成一张可手算的坐标表。</li>
-  <li>用一个最小 kernel 解释全局下标、越界 guard 和 block 级同步分别守住什么边界。</li>
-  <li>看到 launch 配置或同步代码时，能先判断它是在分工、在防错，还是在假设不存在的全局同步。</li>
-</ul>
-
-        </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
+    </div>
+  </nav>
 
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">GPU 性能工程｜第 02 单元</div>
+      <div class="hero-meta">
+        <span class="hero-badge">02｜CUDA 线程层级与内核边界</span>
+      </div>
+      <h1 class="hero-title">CUDA 线程层级与内核边界</h1>
+      <p class="hero-desc">这页只盯一件事：CUDA 线程怎么被切块、怎么被编号、怎么在 kernel 边界内外各自做事。把这件事看明白，后面的访存、带宽和 Triton tile 才有共同语言。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../01_GPU执行模型与性能语言/学习页.html">上一单元</a>
+            <a href="../03_内存层次访存合并与带宽/学习页.html">下一单元</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>把 grid、block、thread、blockDim、blockIdx、threadIdx 组成一张可手算的坐标表。</li>
+            <li>用一个最小 kernel 解释全局下标、越界 guard 和 block 级同步分别守住什么边界。</li>
+            <li>看到 launch 配置或同步代码时，能先判断它是在分工、在防错，还是在假设不存在的全局同步。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#overview">先看全局：一段代码怎样被切成很多份</a>
+      <a href="#trace">坐标追踪：从局部编号到全局编号</a>
+      <a href="#matrix">二维映射：矩阵里的 row 和 col 怎么来</a>
+      <a href="#shape-choice">形状选择：什么时候用 1D，什么时候用 2D</a>
+      <a href="#block-shape">块形状和最后一块：最容易漏的边界在这里</a>
+      <a href="#launch">启动与边界：为什么要向上取整</a>
+      <a href="#host-boundary">主机发起和设备执行：kernel 边界到底在哪</a>
+      <a href="#sync">同步边界：block 内能同步，block 间不要假设</a>
+      <a href="#ownership">数据所有权：谁写缓冲区，谁才能在下一步读</a>
+      <a href="#lab">失败实验室：三种常见错误怎么分</a>
+      <a href="#diagnose">排错顺序：先问三个问题，再看结果</a>
+      <a href="#bridge">和下一节怎么接</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
-  <div class="head"><h2>学习目标</h2><span class="tag">goal</span></div>
-  <div class="grid">
-    <div class="card"><b>先看坐标</b><p>知道一次 kernel launch 会产生一个 grid，grid 由 block 组成，block 里再分 thread。看代码时先找这三个层级，而不是先背 API 名字。</p></div>
-    <div class="card"><b>再看边界</b><p>会算出全局下标，知道为什么要写 <code>if (i &lt; n)</code>，也知道这个 guard 防的是“多出来的线程”。</p></div>
-    <div class="card"><b>最后看同步</b><p>能区分 block 内同步和 kernel 级阶段边界，不会把 <code>__syncthreads()</code> 当成全局屏障。</p></div>
-  </div>
-</section>
-
-<section id="overview">
-  <div class="head"><h2>先看全局：一段代码怎样被切成很多份</h2><span class="tag">overview</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>最小直觉</h3>
-      <p>CUDA kernel 不是“一个函数跑一次”，而是“同一段函数由很多线程同时跑”。这些线程会先被分成 block，再被安排进 grid。每个线程拿到自己的坐标，去处理自己那一份数据。</p>
-      <p>这意味着读 kernel 代码时，第一步先问“这段逻辑是给哪一层坐标用的”，再问它具体做什么。</p>
-    </div>
-    <div class="box info">
-      <h3>这里先别追</h3>
-      <p>先别钻 warp 调度、occupancy、寄存器压力和共享内存优化。它们会在后面的单元再回来。当前只要把坐标、边界和同步三件事看清就够了。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="CUDA 线程层级与内核边界｜执行对象账本" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>对象</th>
-          <th>你在代码里看到的东西</th>
-          <th>它主要负责什么</th>
-          <th>最常见的误判</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>grid</td><td>一次 launch 的全部 block</td><td>承载整批工作</td><td>把 block 顺序当成固定执行顺序</td></tr>
-        <tr><td>block</td><td>一组可局部协作的线程</td><td>负责局部协作和 block 内同步</td><td>把 block 当成全局同步域</td></tr>
-        <tr><td>thread</td><td>真正执行代码的最小单位</td><td>处理一个元素或一个小片段</td><td>忘了把局部编号抬成全局编号</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="trace">
-  <div class="head"><h2>坐标追踪：从局部编号到全局编号</h2><span class="tag">trace</span></div>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button class="trace-line active" data-trace-step="step-1"><code>threadIdx.x</code><span>block 内局部编号</span></button>
-      <button class="trace-line" data-trace-step="step-2"><code>blockIdx.x</code><span>grid 内 block 编号</span></button>
-      <button class="trace-line" data-trace-step="step-3"><code>blockDim.x</code><span>每个 block 的线程数</span></button>
-      <button class="trace-line" data-trace-step="step-4"><code>i = blockIdx.x * blockDim.x + threadIdx.x</code><span>全局下标</span></button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="step-1">
-        <b>局部编号</b><span>block 内第几个线程</span><p>它只知道自己在当前 block 里的位置，还不能直接代表整个 grid 的位置。</p>
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">goal</span>
+        </div>
+      <div class="grid">
+<p><b>先看坐标</b>知道一次 kernel launch 会产生一个 grid，grid 由 block 组成，block 里再分 thread。看代码时先找这三个层级，而不是先背 API 名字。</p>
+<p><b>最后看同步</b>能区分 block 内同步和 kernel 级阶段边界，不会把 <code>__syncthreads()</code> 当成全局屏障。</p>
       </div>
-      <div class="tensor-card" data-trace-target="step-2">
-        <b>block 编号</b><span>当前 block 在 grid 里的位置</span><p>它告诉你这个线程属于第几个 block。</p>
+      </section>
+      <section id="overview">
+        <div class="head">
+          <h2>先看全局：一段代码怎样被切成很多份</h2>
+          <span class="tag">overview</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>最小直觉</h3>
+<p>CUDA kernel “同一段函数由很多线程同时跑”。这些线程会先被分成 block，再被安排进 grid。每个线程拿到自己的坐标，去处理自己那一份数据。</p>
+<p>这意味着读 kernel 代码时，第一步先问“这段逻辑是给哪一层坐标用的”，再问它具体做什么。</p>
+        </div>
+        <div class="box info">
+<h3>这里先别追</h3>
+<p>先别钻 warp 调度、occupancy、寄存器压力和共享内存优化。它们会在后面的单元再回来。当前只要把坐标、边界和同步三件事看清就够了。</p>
+<p>对象</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>你在代码里看到的东西</th><th>它主要负责什么</th><th>最常见的误判</th></tr>
+<tr><td>grid一次 launch 的全部 block承载整批工作把 block 顺序当成固定执行顺序</td><td>block一组可局部协作的线程负责局部协作和 block 内同步把 block 当成全局同步域</td><td>thread真正执行代码的最小单位处理一个元素或一个小片段忘了把局部编号抬成全局编号</td></tr>
+</table></div>
+        </div>
       </div>
-      <div class="tensor-card" data-trace-target="step-3">
-        <b>block 尺寸</b><span>每个 block 有多少个线程</span><p>这是把“第几个 block”换成“前面已经覆盖了多少线程”的换算因子。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-4">
-        <b>全局编号</b><span>这条线程该处理的元素位置</span><p>把 block 的偏移和线程在 block 内的位置加起来，才得到真正的全局下标。</p>
-      </div>
-    </div>
-  </div>
-  <div class="grid2">
-    <div class="box">
-      <h3>一维向量加法</h3>
-      <div class="codebar"><span>vec_add</span><button class="copy" data-copy="vec-add">复制</button></div>
-      <pre id="vec-add" data-export-context="CUDA 线程层级与内核边界｜一维向量加法" data-export-lang="python"><code class="language-python">__global__ void vec_add(const float* a, const float* b, float* c, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i &lt; n) {
-        c[i] = a[i] + b[i];
-    }
+      </section>
+      <section id="trace">
+        <div class="head">
+          <h2>坐标追踪：从局部编号到全局编号</h2>
+          <span class="tag">trace</span>
+        </div>
+        <div class="box">
+<h3>一维向量加法</h3>
+<p>vec_add复制</p>
+<pre><code class="language-python">__global__ void vec_add(const float* a, const float* b, float* c, int n) {
+ int i = blockIdx.x * blockDim.x + threadIdx.x;
+ if (i &lt; n) {
+ c[i] = a[i] + b[i];
+ }
 }</code></pre>
-      <p>这一段代码的关键在于先把 <code>i</code> 算对，再决定要不要做加法。如果少了前半句，每个 block 都会从 0 重新开始算，结果就是重复处理同一段数据。</p>
-    </div>
-    <div class="box info">
-      <h3>状态/读写表</h3>
-      <table data-export-context="CUDA 线程层级与内核边界｜状态读写表" data-export-lang="table">
-        <thead>
-          <tr>
-            <th>代码点</th>
-            <th>进入前</th>
-            <th>出来后</th>
-            <th>读什么</th>
-            <th>写什么</th>
-            <th>错了会怎样</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td><code>threadIdx.x</code></td><td>block 内局部编号未展开</td><td>仍只是局部编号</td><td>当前线程在 block 内的位置</td><td>不写状态</td><td>误把局部编号当全局编号，所有 block 重复处理同一段数据</td></tr>
-          <tr><td><code>blockIdx.x * blockDim.x</code></td><td>知道 block 编号和 block 尺寸</td><td>得到 block 偏移量</td><td>block 编号、block 尺寸</td><td>全局偏移量</td><td>少了这一步，后面的线程坐标无法跨 block 合并</td></tr>
-          <tr><td><code>if (i &lt; n)</code></td><td>线程已经有全局编号</td><td>只让真实数据线程继续</td><td>真实元素数量</td><td>无效线程的控制流被挡住</td><td>最后一个 block 的多余线程越界访问</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
-
-<section id="matrix">
-  <div class="head"><h2>二维映射：矩阵里的 row 和 col 怎么来</h2><span class="tag">matrix</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>从向量到矩阵</h3>
-      <p>很多 kernel 不是处理一条向量，而是处理矩阵或 tile。此时 threadIdx 也会从一维扩成二维：x 方向通常对应列，y 方向通常对应行。真正的下标不再只是“第几个元素”，而是“第几行、第几列”。</p>
-      <p>这一步很重要，因为很多越界和性能问题都不是在单个 index 上出现的，而是出在 row/col 组合后是否和内存布局一致。</p>
-    </div>
-    <div class="box">
-      <h3>二维公式</h3>
-      <div class="codebar"><span>2D index</span><button class="copy" data-copy="matrix-index">复制</button></div>
-      <pre id="matrix-index" data-export-context="CUDA 线程层级与内核边界｜二维索引公式" data-export-lang="text"><code class="language-text">int col = blockIdx.x * blockDim.x + threadIdx.x;
+<p>这一段代码的关键在于先把 <code>i</code> 算对，再决定要不要做加法。如果少了前半句，每个 block 都会从 0 重新开始算，结果就是重复处理同一段数据。</p>
+        </div>
+        <div class="box info">
+<h3>状态/读写表</h3>
+<p>代码点</p>
+<p>进入前</p>
+<p>出来后</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>读什么</th><th>写什么</th><th>错了会怎样</th></tr>
+<tr><td><code>threadIdx.x</code>block 内局部编号未展开仍只是局部编号当前线程在 block 内的位置不写状态误把局部编号当全局编号，所有 block 重复处理同一段数据</td><td><code>blockIdx.x * blockDim.x</code>知道 block 编号和 block 尺寸得到 block 偏移量block 编号、block 尺寸全局偏移量少了这一步，后面的线程坐标无法跨 block 合并</td><td><code>if (i < n)</code>线程已经有全局编号只让真实数据线程继续真实元素数量无效线程的控制流被挡住最后一个 block 的多余线程越界访问</td></tr>
+</table></div>
+        </div>
+      </section>
+      <section id="matrix">
+        <div class="head">
+          <h2>二维映射：矩阵里的 row 和 col 怎么来</h2>
+          <span class="tag">matrix</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>从向量到矩阵</h3>
+<p>很多 kernel 处理矩阵或 tile。此时 threadIdx 也会从一维扩成二维：x 方向通常对应列，y 方向通常对应行。真正的下标不再只是“第几个元素”，而是“第几行、第几列”。</p>
+<p>这一步很重要，因为很多越界和性能问题都出在 row/col 组合后是否和内存布局一致。</p>
+        </div>
+        <div class="box">
+<h3>二维公式</h3>
+<p>2D index复制</p>
+<pre><code class="language-text">int col = blockIdx.x * blockDim.x + threadIdx.x;
 int row = blockIdx.y * blockDim.y + threadIdx.y;
 int offset = row * width + col;</code></pre>
-      <p>这三行里，前两行负责把线程坐标变成 row 和 col，最后一行负责把二维坐标压回线性地址。只要 width 写错，或者把 row 和 col 反过来，结果就会读写到完全不同的位置。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="CUDA 线程层级与内核边界｜二维映射对照表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>坐标</th>
-          <th>来源</th>
-          <th>进入前</th>
-          <th>进入后</th>
-          <th>写到哪里</th>
-          <th>错了会怎样</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>col</td><td><code>blockIdx.x</code> + <code>threadIdx.x</code></td><td>只有 block 内横向位置</td><td>成为矩阵列号</td><td>线性地址中的列方向偏移</td><td>列错位，常见症状是每一行像被整体平移</td></tr>
-        <tr><td>row</td><td><code>blockIdx.y</code> + <code>threadIdx.y</code></td><td>只有 block 内纵向位置</td><td>成为矩阵行号</td><td>线性地址中的行方向偏移</td><td>行错位，常见症状是块状数据被写到别的行</td></tr>
-        <tr><td>offset</td><td><code>row * width + col</code></td><td>二维坐标还没有压平</td><td>得到线性内存位置</td><td>真正的读写地址</td><td>width 一错，整块数据都会写歪</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="note">你现在应该能做什么：给你一块矩阵 tile，你能先说出 row、col 和 offset 分别来自哪里，再判断是否和 row-major 布局一致。</div>
-</section>
-
-<section id="shape-choice">
-  <div class="head"><h2>形状选择：什么时候用 1D，什么时候用 2D</h2><span class="tag">choice</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>很多问题不必硬塞成一维</h3>
-      <p>很多初学者会默认把所有数据都压成一维下标来算，因为这样公式看起来更短。但一旦工作天然有行和列，或者一个 tile 本身就是二维块，继续压成一维会让你更难看见边界和布局。</p>
-      <p>更稳的办法是先问：这个 kernel 的真实工作单位是什么？如果是向量，1D launch 很自然；如果是矩阵 tile，2D launch 通常更直观。这里追求的是读出来就能判断哪条边界会出错。</p>
-    </div>
-    <div class="box info">
-      <h3>决定前先看三件事</h3>
-      <ul>
-        <li>数据本身是不是有行列结构。</li>
-        <li>线程是否需要按 row 和 col 分工。</li>
-        <li>边界是否更容易在二维坐标里表达。</li>
-      </ul>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="CUDA 线程层级与内核边界｜1D 与 2D 形状选择表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>场景</th>
-          <th>优先形状</th>
-          <th>为什么</th>
-          <th>常见错法</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>向量加法</td><td>1D</td><td>每个线程处理一个元素，坐标关系最简单</td><td>强行加上 y 维，反而让 guard 更绕</td></tr>
-        <tr><td>矩阵逐元素处理</td><td>2D</td><td>row 和 col 直接对应输入结构</td><td>压成 1D 后忘了宽度，导致 offset 计算混乱</td></tr>
-        <tr><td>矩阵 tile 协作</td><td>2D</td><td>块级协作和边界通常按二维切分更清楚</td><td>只看 thread 数，不看 tile 的行列边界</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar"><span>2D launch</span><button class="copy" data-copy="shape-choice-code">复制</button></div>
-  <pre id="shape-choice-code" data-export-context="CUDA 线程层级与内核边界｜二维启动示例" data-export-lang="python"><code class="language-python">dim3 block(16, 16);
+<p>这三行里，前两行负责把线程坐标变成 row 和 col，最后一行负责把二维坐标压回线性地址。只要 width 写错，或者把 row 和 col 反过来，结果就会读写到完全不同的位置。</p>
+<p>坐标</p>
+<p>来源</p>
+<p>进入前</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>进入后</th><th>写到哪里</th><th>错了会怎样</th></tr>
+<tr><td>col<code>blockIdx.x</code> + <code>threadIdx.x</code>只有 block 内横向位置成为矩阵列号线性地址中的列方向偏移列错位，常见症状是每一行像被整体平移</td><td>row<code>blockIdx.y</code> + <code>threadIdx.y</code>只有 block 内纵向位置成为矩阵行号线性地址中的行方向偏移行错位，常见症状是块状数据被写到别的行</td><td>offset<code>row * width + col</code>二维坐标还没有压平得到线性内存位置真正的读写地址width 一错，整块数据都会写歪</td></tr>
+</table></div>
+<p>你现在应该能做什么：给你一块矩阵 tile，你能先说出 row、col 和 offset 分别来自哪里，再判断是否和 row-major 布局一致。</p>
+        </div>
+      </div>
+      </section>
+      <section id="shape-choice">
+        <div class="head">
+          <h2>形状选择：什么时候用 1D，什么时候用 2D</h2>
+          <span class="tag">choice</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>很多问题不必硬塞成一维</h3>
+<p>很多初学者会默认把所有数据都压成一维下标来算，因为这样公式看起来更短。但一旦工作天然有行和列，或者一个 tile 本身就是二维块，继续压成一维会让你更难看见边界和布局。</p>
+<p>更稳的办法是先问：这个 kernel 的真实工作单位是什么？如果是向量，1D launch 很自然；如果是矩阵 tile，2D launch 通常更直观。这里追求的是读出来就能判断哪条边界会出错。</p>
+        </div>
+        <div class="box info">
+<h3>决定前先看三件事</h3>
+<ul>
+<li>数据本身是不是有行列结构。</li>
+<li>线程是否需要按 row 和 col 分工。</li>
+<li>边界是否更容易在二维坐标里表达。</li>
+</ul>
+<p>场景</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>优先形状</th><th>为什么</th><th>常见错法</th></tr>
+<tr><td>向量加法1D每个线程处理一个元素，坐标关系最简单强行加上 y 维，反而让 guard 更绕</td><td>矩阵逐元素处理2Drow 和 col 直接对应输入结构压成 1D 后忘了宽度，导致 offset 计算混乱</td><td>矩阵 tile 协作2D块级协作和边界通常按二维切分更清楚只看 thread 数，不看 tile 的行列边界</td></tr>
+</table></div>
+<p>2D launch复制</p>
+<pre><code class="language-python">dim3 block(16, 16);
 dim3 grid((width + block.x - 1) / block.x,
-          (height + block.y - 1) / block.y);
+ (height + block.y - 1) / block.y);
 
 matrix_kernel&lt;&lt;&lt;grid, block&gt;&gt;&gt;(input, output, width, height);</code></pre>
-  <p>这里最重要的是你先决定行和列各自怎么分配，再让 launch 去表达这个决定。这样一来，最后一列和最后一行的 guard 也会自然分开，不会挤在一条长公式里。</p>
-  <div class="table-wrap">
-    <table data-export-context="CUDA 线程层级与内核边界｜形状失配症状表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>失配</th>
-          <th>表面症状</th>
-          <th>真正原因</th>
-          <th>下一步检查</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>把 2D 数据硬写成 1D</td><td>代码短了，但调试更慢</td><td>行列信息消失，offset 只能靠心算</td><td>先把 row 和 col 重新写出来</td></tr>
-        <tr><td>把 1D 向量硬拆成 2D</td><td>guard 变复杂</td><td>问题本来没有二维结构</td><td>退回 1D，先把全局编号看清</td></tr>
-        <tr><td>用 2D launch 处理 1D 问题</td><td>block 变得稀疏</td><td>线程分布和工作形状不匹配</td><td>检查是否多加了不必要的维度</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="note">你现在应该能做什么：给你一个新 kernel，你能先判断它应该用 1D 还是 2D launch，而不是默认把所有问题都压成一维。</div>
-</section>
-
-<section id="block-shape">
-  <div class="head"><h2>块形状和最后一块：最容易漏的边界在这里</h2><span class="tag">boundary</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>最后一个 tile 往往不满</h3>
-      <p>不管你用 1D 还是 2D launch，最后一个 block 或 tile 都常常不是满的。你算出来的 grid 只是覆盖完整工作范围的外壳，真正有效的数据只占其中一部分。</p>
-      <p>这意味着最后一块既要能覆盖真实数据，又要让多出来的线程停在 guard 外面。很多新手会在这里犯两个相反的错误：要么把 guard 写得太严，漏掉最后几个元素；要么把 guard 写得太松，放进越界访问。</p>
-    </div>
-    <div class="box">
-      <h3>一个更完整的矩阵例子</h3>
-      <div class="codebar"><span>partial tile</span><button class="copy" data-copy="partial-tile">复制</button></div>
-      <pre id="partial-tile" data-export-context="CUDA 线程层级与内核边界｜不满 tile 示例" data-export-lang="python"><code class="language-python">__global__ void row_major_copy(const float* in, float* out, int width, int height) {
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    if (row &lt; height && col &lt; width) {
-        int offset = row * width + col;
-        out[offset] = in[offset];
-    }
+<p>这里最重要的是你先决定行和列各自怎么分配，再让 launch 去表达这个决定。这样一来，最后一列和最后一行的 guard 也会自然分开，不会挤在一条长公式里。</p>
+<p>失配</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>表面症状</th><th>真正原因</th><th>下一步检查</th></tr>
+<tr><td>把 2D 数据硬写成 1D代码短了，但调试更慢行列信息消失，offset 只能靠心算先把 row 和 col 重新写出来</td><td>把 1D 向量硬拆成 2Dguard 变复杂问题本来没有二维结构退回 1D，先把全局编号看清</td><td>用 2D launch 处理 1D 问题block 变得稀疏线程分布和工作形状不匹配检查是否多加了不必要的维度</td></tr>
+</table></div>
+<p>你现在应该能做什么：给你一个新 kernel，你能先判断它应该用 1D 还是 2D launch，而不是默认把所有问题都压成一维。</p>
+        </div>
+      </div>
+      </section>
+      <section id="block-shape">
+        <div class="head">
+          <h2>块形状和最后一块：最容易漏的边界在这里</h2>
+          <span class="tag">boundary</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>最后一个 tile 往往不满</h3>
+<p>不管你用 1D 还是 2D launch，最后一个 block 或 tile 都常常不是满的。你算出来的 grid 只是覆盖完整工作范围的外壳，真正有效的数据只占其中一部分。</p>
+<p>这意味着最后一块既要能覆盖真实数据，又要让多出来的线程停在 guard 外面。很多新手会在这里犯两个相反的错误：要么把 guard 写得太严，漏掉最后几个元素；要么把 guard 写得太松，放进越界访问。</p>
+        </div>
+        <div class="box">
+<h3>一个更完整的矩阵例子</h3>
+<p>partial tile复制</p>
+<pre><code class="language-python">__global__ void row_major_copy(const float* in, float* out, int width, int height) {
+ int col = blockIdx.x * blockDim.x + threadIdx.x;
+ int row = blockIdx.y * blockDim.y + threadIdx.y;
+ if (row &lt; height &amp;&amp; col &lt; width) {
+ int offset = row * width + col;
+ out[offset] = in[offset];
+ }
 }</code></pre>
-      <p>这段代码把二维 guard 拆开写。这样做的好处是：当最后一列不满时，<code>col &lt; width</code> 能单独挡住列越界；当最后一行不满时，<code>row &lt; height</code> 能单独挡住行越界。两个条件任何一个漏了，最后一块都可能写坏数据。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="CUDA 线程层级与内核边界｜最后一块诊断表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>观察</th>
-          <th>正常情况</th>
-          <th>出错症状</th>
-          <th>要先查什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>最后一列</td><td>多出来的线程被 <code>col &lt; width</code> 挡住</td><td>右边界数据被写歪或越界</td><td>列 guard 是否存在</td></tr>
-        <tr><td>最后一行</td><td>多出来的线程被 <code>row &lt; height</code> 挡住</td><td>底边数据缺失或重复</td><td>行 guard 是否存在</td></tr>
-        <tr><td>二维 tile</td><td>行列各自按自己的边界收口</td><td>边界一侧好，一侧坏</td><td>guard 是不是只写了一半</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="note">你现在应该能做什么：看到一个不满的矩阵 tile 时，能先判断哪一维会越界、哪一维会缺数据，而不是只说“最后一块要特别处理”。</div>
-</section>
-
-<section id="launch">
-  <div class="head"><h2>启动与边界：为什么要向上取整</h2><span class="tag">launch</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>先选线程数，再补 block 数</h3>
-      <p>实际写 kernel 时，经常先定每个 block 的线程数，再用元素总数去算需要多少个 block。因为总元素数不一定正好被 block 大小整除，所以 block 数通常要向上取整。</p>
-      <p>要点在于把边界外那部分线程交给 guard 处理。guard 不只是保险，它也是 launch 方式的一部分。</p>
-    </div>
-    <div class="box warn">
-      <h3>别把 launch 当成自动补洞</h3>
-      <p>GPU 会帮你启动更多线程，但不会帮你决定这些线程该写到哪里。边界外的线程如果没有 guard，就会把写入带到非法地址；如果 guard 写错，就会把最后一段真实数据漏掉。</p>
-    </div>
-  </div>
-  <div class="codebar"><span>blocks 计算</span><button class="copy" data-copy="launch-code">复制</button></div>
-  <pre id="launch-code" data-export-context="CUDA 线程层级与内核边界｜启动配置" data-export-lang="python"><code class="language-python">int n = 1000;
+<p>这段代码把二维 guard 拆开写。这样做的好处是：当最后一列不满时，<code>col < width</code> 能单独挡住列越界；当最后一行不满时，<code>row < height</code> 能单独挡住行越界。两个条件任何一个漏了，最后一块都可能写坏数据。</p>
+<p>观察</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>正常情况</th><th>出错症状</th><th>要先查什么</th></tr>
+<tr><td>最后一列多出来的线程被 <code>col < width</code> 挡住右边界数据被写歪或越界列 guard 是否存在</td><td>最后一行多出来的线程被 <code>row < height</code> 挡住底边数据缺失或重复行 guard 是否存在</td><td>二维 tile行列各自按自己的边界收尾边界一侧好，一侧坏guard 是不是只写了一半</td></tr>
+</table></div>
+<p>你现在应该能做什么：看到一个不满的矩阵 tile 时，能先判断哪一维会越界、哪一维会缺数据，而不是只说“最后一块要特别处理”。</p>
+        </div>
+      </div>
+      </section>
+      <section id="launch">
+        <div class="head">
+          <h2>启动与边界：为什么要向上取整</h2>
+          <span class="tag">launch</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>先选线程数，再补 block 数</h3>
+<p>实际写 kernel 时，经常先定每个 block 的线程数，再用元素总数去算需要多少个 block。因为总元素数不一定正好被 block 大小整除，所以 block 数通常要向上取整。</p>
+<p>要点在于把边界外那部分线程交给 guard 处理。guard 不只是保险，它也是 launch 方式的一部分。</p>
+        </div>
+        <div class="box warn">
+<h3>别把 launch 当成自动补洞</h3>
+<p>GPU 会帮你启动更多线程，但不会帮你决定这些线程该写到哪里。边界外的线程如果没有 guard，就会把写入带到非法地址；如果 guard 写错，就会把最后一段真实数据漏掉。</p>
+<p>blocks 计算复制</p>
+<pre><code class="language-python">int n = 1000;
 int threads_per_block = 256;
 int blocks = (n + threads_per_block - 1) / threads_per_block;
 
 vec_add&lt;&lt;&lt;blocks, threads_per_block&gt;&gt;&gt;(a, b, c, n);</code></pre>
-  <div class="table-wrap">
-    <table data-export-context="CUDA 线程层级与内核边界｜向上取整账本" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>n</th>
-          <th>threads_per_block</th>
-          <th>blocks</th>
-          <th>启动线程数</th>
-          <th>多余线程</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>1000</td><td>256</td><td>4</td><td>1024</td><td>24</td></tr>
-        <tr><td>37</td><td>16</td><td>3</td><td>48</td><td>11</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="note">你现在应该能做什么：看到一个 launch 配置，就能先算出 block 数、启动线程数和最后会多出多少线程。</div>
-</section>
-
-<section id="host-boundary">
-  <div class="head"><h2>主机发起和设备执行：kernel 边界到底在哪</h2><span class="tag">boundary</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>边界不是抽象词，是一条可见的交接线</h3>
-      <p>CUDA 代码常常让人误会：既然 kernel 里有很多线程，它们会不会像普通函数调用一样，沿着同一个调用栈往下跑？实际过程不同。主机端先发起 launch，再把参数、grid 和 block 送到设备端；设备端只负责按这个配置执行。你在 host 里能写的，是“什么时候启动、启动几次、启动哪些阶段”；你在 device 里能写的，是“每个线程在自己的坐标下处理什么”。</p>
-      <p>这层边界如果没看清，后面很多错误会被误判。比如，程序卡住时，你可能以为是线程内部死循环；但真正原因可能是 host 没有等到前一个 kernel 完成，就去读还没写好的输出。反过来，设备端的 block 间也没有天然全局同步，所以 host/ device 两边各自的边界都要分清。</p>
-    </div>
-    <div class="box">
-      <h3>最小阶段链</h3>
-      <div class="codebar"><span>two-kernel stage</span><button class="copy" data-copy="two-kernel-stage">复制</button></div>
-      <pre id="two-kernel-stage" data-export-context="CUDA 线程层级与内核边界｜两阶段执行链" data-export-lang="python"><code class="language-python">stage1&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(input, mid, n);
+<p>n</p>
+<p>threads_per_block</p>
+<p>blocks</p>
+<p>启动线程数</p>
+<p>多余线程</p>
+<p>10002564102424</p>
+<p>371634811</p>
+<p>你现在应该能做什么：看到一个 launch 配置，就能先算出 block 数、启动线程数和最后会多出多少线程。</p>
+        </div>
+      </div>
+      </section>
+      <section id="host-boundary">
+        <div class="head">
+          <h2>主机发起和设备执行：kernel 边界到底在哪</h2>
+          <span class="tag">boundary</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>边界不是抽象词，是一条可见的交接线</h3>
+<p>CUDA 代码常常让人误会：既然 kernel 里有很多线程，它们会不会像普通函数调用一样，沿着同一个调用栈往下跑？实际过程不同。主机端先发起 launch，再把参数、grid 和 block 送到设备端；设备端只负责按这个配置执行。你在 host 里能写的，是“什么时候启动、启动几次、启动哪些阶段”；你在 device 里能写的，是“每个线程在自己的坐标下处理什么”。</p>
+<p>这层边界如果没看清，后面很多错误会被误判。比如，程序卡住时，你可能以为是线程内部死循环；但真正原因可能是 host 没有等到前一个 kernel 完成，就去读还没写好的输出。反过来，设备端的 block 间也没有天然全局同步，所以 host/ device 两边各自的边界都要分清。</p>
+        </div>
+        <div class="box">
+<h3>最小阶段链</h3>
+<p>two-kernel stage复制</p>
+<pre><code class="language-python">stage1&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(input, mid, n);
 cudaDeviceSynchronize();
 stage2&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(mid, output, n);</code></pre>
-      <p>这三行不只是“写法”。它们表达的是：先在一个阶段里把中间结果写出来，再明确等它完成，最后再启动下一阶段。这样做的好处是，把原来容易混淆的“kernel 内同步”换成了更清楚的“kernel 之间的阶段边界”。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="CUDA 线程层级与内核边界｜主机与设备边界表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>位置</th>
-          <th>读什么</th>
-          <th>写什么</th>
-          <th>状态何时有效</th>
-          <th>错了会有什么症状</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>host launch</td><td>参数、grid、block、stream</td><td>发起设备端执行</td><td>launch 之后、kernel 真正完成之前</td><td>阶段读写顺序混乱，看到旧数据或半成品</td></tr>
-        <tr><td>device kernel</td><td>输入缓冲区和当前坐标</td><td>输出缓冲区或中间结果</td><td>当前 kernel 执行期间</td><td>把未完成的中间结果当成最终结果</td></tr>
-        <tr><td>stage boundary</td><td>前一阶段输出</td><td>下一阶段输入</td><td>前一 kernel 完成之后</td><td>如果没等完成，后面会读到未写完的数据</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="note">你现在应该能做什么：拿到一段多阶段 CUDA 代码时，能先说出哪个同步是 host 级边界，哪个只是 block 级对齐，避免把两个边界混为一谈。</div>
-</section>
-
-<section id="sync">
-  <div class="head"><h2>同步边界：block 内能同步，block 间不要假设</h2><span class="tag">sync</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>block 内</h3>
-      <p><code>__syncthreads()</code> 的边界只覆盖同一个 block。它的意思是这个 block 里的线程先在这里对齐，再往下执行。</p>
-    </div>
-    <div class="box info">
-      <h3>block 间</h3>
-      <p>不同 block 之间没有默认的全局同步关系。不要把“看上去都在同一个 kernel 里”误读成“它们会按你写的顺序一起到达某个点”。如果真需要阶段边界，通常要拆 kernel，或者使用更明确的协作机制。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="CUDA 线程层级与内核边界｜同步边界表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>边界</th>
-          <th>能读到什么</th>
-          <th>能写到哪里</th>
-          <th>适合做什么</th>
-          <th>典型误判</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>thread</td><td>自己的局部坐标和输入数据</td><td>自己的输出位置</td><td>元素级工作</td><td>以为它能直接代表整个 block</td></tr>
-        <tr><td>block</td><td>同一 block 内共享的数据</td><td>shared memory 或 block 内协作结果</td><td>局部归约、tile 协作</td><td>把 <code>__syncthreads()</code> 当全局屏障</td></tr>
-        <tr><td>kernel</td><td>启动时传入的参数和全局输入</td><td>全局输出缓冲区</td><td>阶段切分、批量执行</td><td>假设 block 执行顺序固定</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="ownership">
-  <div class="head"><h2>数据所有权：谁写缓冲区，谁才能在下一步读</h2><span class="tag">ownership</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>把缓冲区当成有主人的资源</h3>
-      <p>CUDA 里很多错误不是算错，而是读早了。你可以把输出缓冲区、中间缓冲区、下一阶段输入都看成有“所有权”的资源：当前阶段负责写，下一阶段才负责读。只要读写顺序错了，结果就可能看起来像随机坏掉，但本质上只是拿了还没写完的数据。</p>
-      <p>这也是为什么 host 端的同步并不是可有可无。<code>cudaDeviceSynchronize()</code> 的意义不是“让程序慢一点”，而是让你知道前一个阶段真的写完了。没有这个边界，host 可能提前拿到旧值；有了这个边界，后续读写顺序才可控。</p>
-    </div>
-    <div class="box">
-      <h3>一个最小所有权链</h3>
-      <div class="codebar"><span>ownership chain</span><button class="copy" data-copy="ownership-chain">复制</button></div>
-      <pre id="ownership-chain" data-export-context="CUDA 线程层级与内核边界｜数据所有权链" data-export-lang="python"><code class="language-python">fill_intermediate&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(input, mid, n);
+<p>这三行不只是“写法”。它们表达的是：先在一个阶段里把中间结果写出来，再明确等它完成，最后再启动下一阶段。这样做的好处是，把原来容易混淆的“kernel 内同步”换成了更清楚的“kernel 之间的阶段边界”。</p>
+<p>位置</p>
+<p>读什么</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>写什么</th><th>状态何时有效</th><th>错了会有什么症状</th></tr>
+<tr><td>host launch参数、grid、block、stream发起设备端执行launch 之后、kernel 真正完成之前阶段读写顺序混乱，看到旧数据或半成品</td><td>device kernel输入缓冲区和当前坐标输出缓冲区或中间结果当前 kernel 执行期间把未完成的中间结果当成最终结果</td><td>stage boundary前一阶段输出下一阶段输入前一 kernel 完成之后如果没等完成，后面会读到未写完的数据</td></tr>
+</table></div>
+<p>你现在应该能做什么：拿到一段多阶段 CUDA 代码时，能先说出哪个同步是 host 级边界，哪个只是 block 级对齐，避免把两个边界混为一谈。</p>
+        </div>
+      </div>
+      </section>
+      <section id="sync">
+        <div class="head">
+          <h2>同步边界：block 内能同步，block 间不要假设</h2>
+          <span class="tag">sync</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>block 内</h3>
+<p><code>__syncthreads()</code> 的边界只覆盖同一个 block。它的意思是这个 block 里的线程先在这里对齐，再往下执行。</p>
+        </div>
+        <div class="box info">
+<h3>block 间</h3>
+<p>不同 block 之间没有默认的全局同步关系。不要把“看上去都在同一个 kernel 里”误读成“它们会按你写的顺序一起到达某个点”。如果真需要阶段边界，通常要拆 kernel，或者使用更明确的协作机制。</p>
+<p>边界</p>
+<p>能读到什么</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>能写到哪里</th><th>适合做什么</th><th>典型误判</th></tr>
+<tr><td>thread自己的局部坐标和输入数据自己的输出位置元素级工作以为它能直接代表整个 block</td><td>block同一 block 内共享的数据shared memory 或 block 内协作结果局部归约、tile 协作把 <code>__syncthreads()</code> 当全局屏障</td><td>kernel启动时传入的参数和全局输入全局输出缓冲区阶段切分、批量执行假设 block 执行顺序固定</td></tr>
+</table></div>
+        </div>
+      </div>
+      </section>
+      <section id="ownership">
+        <div class="head">
+          <h2>数据所有权：谁写缓冲区，谁才能在下一步读</h2>
+          <span class="tag">ownership</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>把缓冲区当成有主人的资源</h3>
+<p>CUDA 里很多错误不是算错，而是读早了。你可以把输出缓冲区、中间缓冲区、下一阶段输入都看成有“所有权”的资源：当前阶段负责写，下一阶段才负责读。只要读写顺序错了，结果就可能看起来像随机坏掉，但本质上只是拿了还没写完的数据。</p>
+<p>这也是为什么 host 端的同步并不是可有可无。<code>cudaDeviceSynchronize()</code> 的意义让你知道前一个阶段真的写完了。没有这个边界，host 可能提前拿到旧值；有了这个边界，后续读写顺序才可控。</p>
+        </div>
+        <div class="box">
+<h3>一个最小所有权链</h3>
+<p>ownership chain复制</p>
+<pre><code class="language-python">fill_intermediate&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(input, mid, n);
 cudaDeviceSynchronize();
 consume_intermediate&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(mid, output, n);</code></pre>
-      <p>这段链路里，<code>mid</code> 先是前一阶段的写入目标，随后变成下一阶段的读入来源。只有当中间阶段真的完成，<code>mid</code> 才算“从写转到读”。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="CUDA 线程层级与内核边界｜数据所有权表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>资源</th>
-          <th>当前阶段</th>
-          <th>下一阶段</th>
-          <th>什么时候读安全</th>
-          <th>读早了的症状</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>input</td><td>只读</td><td>仍是只读来源</td><td>launch 之前就可读</td><td>一般不是这里出错，除非输入本身没准备好</td></tr>
-        <tr><td>mid</td><td>写入目标</td><td>读入来源</td><td>前一 kernel 完成之后</td><td>读到旧值、半成品或未初始化内容</td></tr>
-        <tr><td>output</td><td>当前阶段写出</td><td>后续步骤消费</td><td>写入完成并且后续同步结束之后</td><td>看似随机的错值，常被误认成计算错误</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="note">你现在应该能做什么：拿到一个两阶段 CUDA 流程时，能指出中间缓冲什么时候是“写完可读”，而不是把它当成随时可读的数据桶。</div>
-</section>
-
-<section id="lab">
-  <div class="head"><h2>失败实验室：三种常见错误怎么分</h2><span class="tag">diagnosis</span></div>
-  <div class="terminal-lab" data-terminal-lab>
-    <div class="terminal-controls">
-      <button class="ghost active" data-terminal-case="case-1">缺少全局编号</button>
-      <button class="ghost" data-terminal-case="case-2">缺少边界 guard</button>
-      <button class="ghost" data-terminal-case="case-3">误把 block 内同步当全局同步</button>
-    </div>
-    <div class="codebar"><span>默认输出</span><button class="copy" data-copy="terminal-default">复制</button></div>
-    <pre id="terminal-default" class="terminal-output" data-export-context="CUDA 线程层级与内核边界｜默认失败输出" data-export-lang="text" aria-live="polite">输出会在这里显示。</pre>
-    <template data-terminal-output="case-1">症状：每个 block 都在写同一段索引。
-常见原因：把 `threadIdx.x` 当成了全局下标。
-下一步：检查是否少了 `blockIdx.x * blockDim.x`。</template>
-    <template data-terminal-output="case-2">症状：最后一个 block 偶发越界，或者写入多出一段垃圾值。
-常见原因：launch 向上取整后没有写 `if (i &lt; n)`。
-下一步：核对 guard 是否和真实元素数一致。</template>
-    <template data-terminal-output="case-3">症状：程序在单 block 上看起来正常，多 block 时结果不稳定。
-常见原因：把 `__syncthreads()` 当成全局屏障，或假设 block 之间按顺序推进。
-下一步：把需要全局阶段边界的逻辑拆成多个 kernel。</template>
-  </div>
-  <div class="grid2">
-    <div class="box warn">
-      <h3>调试顺序</h3>
-      <p>先查坐标，再查 guard，最后查同步。顺序反过来很容易把“编号错了”误看成“同步错了”，或者把“边界没挡住”误看成“GPU 执行乱序”。</p>
-    </div>
-    <div class="box soft">
-      <h3>你现在应该能做什么</h3>
-      <p>拿到一段最小 CUDA kernel，能先分辨它是坐标错误、边界错误，还是同步边界想错了，而不是只说“结果不对”。</p>
-    </div>
-  </div>
-</section>
-
-<section id="diagnose">
-  <div class="head"><h2>排错顺序：先问三个问题，再看结果</h2><span class="tag">checklist</span></div>
-  <div class="grid">
-    <div class="card"><b>第一问：编号对吗</b><p>先确认是不是把局部编号当成了全局编号。这个错误最常见，也最容易把所有 block 的输出写重。</p></div>
-    <div class="card"><b>第二问：边界挡住了吗</b><p>再看 launch 是否向上取整后补了 guard。没有 guard，最后一个 block 的多余线程就会访问不存在的数据。</p></div>
-    <div class="card"><b>第三问：同步边界对吗</b><p>最后看是不是把 block 内同步当成了全局屏障，或者把需要阶段边界的逻辑塞进了同一个 kernel。</p></div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="CUDA 线程层级与内核边界｜排错顺序表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>先查什么</th>
-          <th>典型症状</th>
-          <th>下一步动作</th>
-          <th>不要立刻做什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>编号</td><td>每个 block 都在写同一段输出</td><td>检查 <code>blockIdx.x * blockDim.x</code></td><td>先不要调 block 大小</td></tr>
-        <tr><td>边界</td><td>最后一块偶发越界</td><td>检查 <code>if (i &lt; n)</code></td><td>先不要怀疑显存坏了</td></tr>
-        <tr><td>同步</td><td>单 block 正常，多 block 不稳</td><td>检查是否存在隐式顺序依赖</td><td>先不要把 <code>__syncthreads()</code> 当全局同步</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="bridge">
-  <div class="head"><h2>和下一节怎么接</h2><span class="tag">bridge</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>下一步会看到什么</h3>
-      <p>下一节开始看内存层次、访存合并和带宽。那时坐标不再只是“线程编号”，还会变成“这些线程写到的是连续地址还是分散地址”。如果这一页没把全局编号和边界 guard 看稳，后面的访存问题会很难读。</p>
-    </div>
-    <div class="box info">
-      <h3>先保留的词</h3>
-      <p>先记住 grid、block、thread、threadIdx、blockIdx、blockDim、<code>__syncthreads()</code>，以及“向上取整的 launch 需要 guard”。warp、occupancy、shared memory 的优化细节留到后面。</p>
-    </div>
-  </div>
-</section>
-
-
+<p>这段链路里，<code>mid</code> 先是前一阶段的写入目标，随后变成下一阶段的读入来源。只有当中间阶段真的完成，<code>mid</code> 才算“从写转到读”。</p>
+<p>资源</p>
+<p>当前阶段</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>下一阶段</th><th>什么时候读安全</th><th>读早了的症状</th></tr>
+<tr><td>input只读仍是只读来源launch 之前就可读一般不是这里出错，除非输入本身没准备好</td><td>mid写入目标读入来源前一 kernel 完成之后读到旧值、半成品或未初始化内容</td><td>output当前阶段写出后续步骤消费写入完成并且后续同步结束之后看似随机的错值，常被误认成计算错误</td></tr>
+</table></div>
+<p>你现在应该能做什么：拿到一个两阶段 CUDA 流程时，能指出中间缓冲什么时候是“写完可读”，而不是把它当成随时可读的数据桶。</p>
+        </div>
+      </div>
+      </section>
+      <section id="lab">
+        <div class="head">
+          <h2>失败实验室：三种常见错误怎么分</h2>
+          <span class="tag">diagnosis</span>
+        </div>
+        <div class="box warn">
+<h3>调试顺序</h3>
+<p>先查坐标，再查 guard，最后查同步。顺序反过来很容易把“编号错了”误看成“同步错了”，或者把“边界没挡住”误看成“GPU 执行乱序”。</p>
+        </div>
+        <div class="box soft">
+<h3>你现在应该能做什么</h3>
+<p>拿到一段最小 CUDA kernel，能先分辨它是坐标错误、边界错误，还是同步边界想错了，而不是只说“结果不对”。</p>
+        </div>
+      </section>
+      <section id="diagnose">
+        <div class="head">
+          <h2>排错顺序：先问三个问题，再看结果</h2>
+          <span class="tag">checklist</span>
+        </div>
+      <div class="grid">
+<p><b>第一问：编号对吗</b>先确认是不是把局部编号当成了全局编号。这个错误最常见，也最容易把所有 block 的输出写重。</p>
+<p><b>第三问：同步边界对吗</b>最后看是不是把 block 内同步当成了全局屏障，或者把需要阶段边界的逻辑塞进了同一个 kernel。</p>
+<p>编号每个 block 都在写同一段输出检查 <code>blockIdx.x * blockDim.x</code>先不要调 block 大小</p>
+<p>边界最后一块偶发越界检查 <code>if (i < n)</code>先不要怀疑显存坏了</p>
+<p>同步单 block 正常，多 block 不稳检查是否存在隐式顺序依赖先不要把 <code>__syncthreads()</code> 当全局同步</p>
+      </div>
+      </section>
+      <section id="bridge">
+        <div class="head">
+          <h2>和下一节怎么接</h2>
+          <span class="tag">bridge</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>下一步会看到什么</h3>
+<p>下一节开始看内存层次、访存合并和带宽。那时坐标不再只是“线程编号”，还会变成“这些线程写到的是连续地址还是分散地址”。如果这一页没把全局编号和边界 guard 看稳，后面的访存问题会很难读。</p>
+        </div>
+        <div class="box info">
+<h3>先保留的词</h3>
+<p>先记住 grid、block、thread、threadIdx、blockIdx、blockDim、<code>__syncthreads()</code>，以及“向上取整的 launch 需要 guard”。warp、occupancy、shared memory 的优化细节留到后面。</p>
+        </div>
+      </div>
+      </section>
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-intro">
-  <div class="box soft">
-    <h3>怎么答才算会</h3>
-      <p>这页的练习重点是把坐标、边界和同步边界说清。能算、能判错、能指出下一步检查项，才算真的读懂。</p>
-  </div>
-  <div class="box info">
-    <h3>检查重点</h3>
-    <p>优先看三件事：线程编号有没有抬成全局编号，launch 是否向上取整后补了 guard，同步边界有没有被当成全局屏障。</p>
-  </div>
-</div>
+      <div class="practice-intro">
+      <div class="box soft">
+<h3>怎么答才算会</h3>
+<p>这页的练习重点是把坐标、边界和同步边界说清。能算、能判错、能指出下一步检查项，才算真的读懂。</p>
+      </div>
+      <div class="box info">
+<h3>检查重点</h3>
+<p>优先看三件事：线程编号有没有抬成全局编号，launch 是否向上取整后补了 guard，同步边界有没有被当成全局屏障。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、坐标和下标</h3></div>
+          <div class="quick-review">答题提示 先分局部编号和全局编号，再回答对不对。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="B. blockIdx.x * blockDim.x + threadIdx.x">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q1. 一维向量加法中，全局下标更接近哪种写法？</h3>
 
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>一、坐标和下标</h3>
-      <p>先确认你能把 thread、block、grid 说成可手算的关系。</p>
-    </div>
-    <div class="quick-review">
-      <b>答题提示</b>
-      <span>先分局部编号和全局编号，再回答对不对。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q1" data-group="一、坐标和下标" data-title="Q1. 一维向量加法中，全局下标更接近哪种写法？" data-answer="B. blockIdx.x * blockDim.x + threadIdx.x" data-explain="全局下标要先算 block 偏移，再加 block 内局部编号。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">index</span></div>
-      <h3>Q1. 一维向量加法中，全局下标更接近哪种写法？</h3>
-      <label><input type="radio" name="q1" value="A. threadIdx.x">A. <code>threadIdx.x</code></label>
-      <label><input type="radio" name="q1" value="B. blockIdx.x * blockDim.x + threadIdx.x">B. <code>blockIdx.x * blockDim.x + threadIdx.x</code></label>
-      <label><input type="radio" name="q1" value="C. blockIdx.x + threadIdx.x">C. <code>blockIdx.x + threadIdx.x</code></label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q2" data-group="一、坐标和下标" data-title="Q2. 判断：`threadIdx.x` 已经是整个 grid 的全局编号。">
-      <div class="q-meta"><span class="pill">true/false</span><span class="pill">局部编号</span></div>
-      <h3>Q2. 判断：<code>threadIdx.x</code> 已经是整个 grid 的全局编号。</h3>
-      <label><input type="radio" name="q2" value="true">对</label>
-      <label><input type="radio" name="q2" value="false">错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">想一想 block 变了以后，这个值会不会重新从 0 开始。</p>
-    </div>
-    <div class="q" data-question="q3" data-group="一、坐标和下标" data-title="Q3. 填空：如果 n=37, blockDim.x=16，那么 blocks 应该是多少？">
-      <div class="q-meta"><span class="pill">fill</span><span class="pill">向上取整</span></div>
-      <h3>Q3. 填空：如果 <code>n=37</code>、<code>blockDim.x=16</code>，那么 <code>blocks</code> 应该是多少？</h3>
-      <input type="text" name="q3" data-answer="3" data-explain="(37 + 16 - 1) / 16 = 3。">
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">只写数字。</p>
-    </div>
-    <div class="q full" data-question="q4" data-group="一、坐标和下标" data-title="Q4. 解释为什么最后一个 block 一定要配合边界 guard。">
-      <div class="q-meta"><span class="pill">explain</span><span class="pill">boundary</span></div>
-      <h3>Q4. 解释为什么最后一个 block 一定要配合边界 guard。</h3>
-      <textarea name="q4" placeholder="先说向上取整，再说多出来的线程，最后说没有 guard 会发生什么。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>要点：launch 往往向上取整，所以最后一个 block 里会有多出来的线程；这些线程没有真实数据可处理，必须被 <code>if (i &lt; n)</code> 挡住。答题时要说出“多出来的线程”和“越界风险”这两个点。</p></details>
-    </div>
-  </div>
-</div>
+      <div class="choices">
+      <label><input type="radio" name="q1" value="A. threadIdx.x">A. threadIdx.x</label>
+      <label><input type="radio" name="q1" value="B. blockIdx.x * blockDim.x + threadIdx.x">B. blockIdx.x * blockDim.x + threadIdx.x</label>
+      <label><input type="radio" name="q1" value="C. blockIdx.x + threadIdx.x">C. blockIdx.x + threadIdx.x</label>
+      </div>
 
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>二、启动、guard 和同步</h3>
-      <p>把 launch 配置和同步边界读成能执行的规则。</p>
-    </div>
-    <div class="quick-review">
-      <b>答题提示</b>
-      <span>区分“防越界”和“对齐线程”。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q5" data-group="二、启动、guard 和同步" data-title="Q5. 选择：`__syncthreads()` 的作用范围更接近哪一项？" data-answer="B. 同一个 block 内" data-explain="它只同步同一个 block 内的线程。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">sync</span></div>
-      <h3>Q5. 选择：<code>__syncthreads()</code> 的作用范围更接近哪一项？</h3>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. blockIdx.x * blockDim.x + threadIdx.x。全局下标要先算 block 偏移，再加 block 内局部编号。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> Q2. 判断：<code>threadIdx.x</code> 已经是整个 grid 的全局编号。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> Q3. 填空：如果 <code>n=37</code>、<code>blockDim.x=16</code>，那么 <code>blocks</code> 应该是多少？</h3>
+
+
+      <textarea name="q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">explain</span></div>
+        <h3><b>Q:</b> Q4. 解释为什么最后一个 block 一定要配合边界 guard。</h3>
+
+
+      <textarea name="q4"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。要点：launch 往往向上取整，所以最后一个 block 里会有多出来的线程；这些线程没有真实数据可处理，必须被 if (i < n) 挡住。答题时要说出“多出来的线程”和“越界风险”这两个点。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、启动、guard 和同步</h3></div>
+          <div class="quick-review">答题提示 区分“防越界”和“对齐线程”。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="B. 同一个 block 内">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q5. 选择：<code>__syncthreads()</code> 的作用范围更接近哪一项？</h3>
+
+      <div class="choices">
       <label><input type="radio" name="q5" value="A. 整个 grid">A. 整个 grid</label>
       <label><input type="radio" name="q5" value="B. 同一个 block 内">B. 同一个 block 内</label>
       <label><input type="radio" name="q5" value="C. 单个 thread">C. 单个 thread</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q6" data-group="二、启动、guard 和同步" data-title="Q6. 判断：block 之间可以依赖 launch 顺序来做隐式同步。">
-      <div class="q-meta"><span class="pill">true/false</span><span class="pill">block</span></div>
-      <h3>Q6. 判断：block 之间可以依赖 launch 顺序来做隐式同步。</h3>
-      <label><input type="radio" name="q6" value="true">对</label>
-      <label><input type="radio" name="q6" value="false">错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">想想 block 的调度顺序是不是程序能稳定控制的。</p>
-    </div>
-    <div class="q" data-question="q7" data-group="二、启动、guard 和同步" data-title="Q7. 下面哪个说法更准确地描述了 launch 向上取整？" >
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">launch</span></div>
-      <h3>Q7. 下面哪个说法更准确地描述了 launch 向上取整？</h3>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. 同一个 block 内。它只同步同一个 block 内的线程。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> Q6. 判断：block 之间可以依赖 launch 顺序来做隐式同步。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q6" value="对">对</label>
+      <label><input type="radio" name="q6" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q7. 下面哪个说法更准确地描述了 launch 向上取整？</h3>
+
+      <div class="choices">
       <label><input type="radio" name="q7" value="A. 它会自动删除多出来的线程">A. 它会自动删除多出来的线程</label>
       <label><input type="radio" name="q7" value="B. 它会先多启动一些线程，再靠 guard 过滤">B. 它会先多启动一些线程，再靠 guard 过滤</label>
       <label><input type="radio" name="q7" value="C. 它会让最后一个 block 变成空的">C. 它会让最后一个 block 变成空的</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q full" data-question="q8" data-group="二、启动、guard 和同步" data-title="Q8. 诊断：程序在单 block 上正常，多 block 时结果不稳定。你先怀疑什么？">
-      <div class="q-meta"><span class="pill">diagnosis</span><span class="pill">sync boundary</span></div>
-      <h3>Q8. 诊断：程序在单 block 上正常，多 block 时结果不稳定。你先怀疑什么？</h3>
-      <textarea name="q8" placeholder="至少写出一个坐标问题、一个同步边界问题、一个验证动作。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>优先怀疑 block 之间有隐式顺序依赖，或者把 <code>__syncthreads()</code> 当成了全局屏障。好的答案会先建议检查全局下标、guard 和需要阶段边界的逻辑是否被放进了一个 kernel。</p></details>
-    </div>
-  </div>
-</div>
+      </div>
 
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>三、代码阅读和错误分型</h3>
-      <p>把“结果不对”拆成具体可查的错误类型。</p>
-    </div>
-    <div class="quick-review">
-      <b>答题提示</b>
-      <span>先判断是编号错、guard 错，还是同步边界错。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q9" data-group="三、代码阅读和错误分型" data-title="Q9. 读下面的 kernel，指出最主要的问题。">
-      <div class="q-meta"><span class="pill">code reading</span><span class="pill">bug</span></div>
-      <h3>Q9. 读下面的 kernel，指出最主要的问题。</h3>
-      <div class="codebar"><span>buggy kernel</span><button class="copy" data-copy="buggy-kernel">复制</button></div>
-      <pre id="buggy-kernel" data-export-context="CUDA 线程层级与内核边界｜错误代码" data-export-lang="python"><code class="language-python">__global__ void vec_add(float* c, const float* a, const float* b, int n) {
-    int i = threadIdx.x;
-    if (i &lt; n) {
-        c[i] = a[i] + b[i];
-    }
-}</code></pre>
-      <textarea name="q9" placeholder="先说问题类型，再说为什么会出错。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>主要问题是把局部线程编号当成了全局编号。结果是每个 block 都从 0 开始写，导致重复处理同一段数据。这个题如果只说“少了 blockIdx.x * blockDim.x”还不够，要说出重复覆盖的后果。</p></details>
-    </div>
-    <div class="q" data-question="q10" data-group="三、代码阅读和错误分型" data-title="Q10. 选择：下面哪个修复最直接？" data-answer="B. i = blockIdx.x * blockDim.x + threadIdx.x" data-explain="先把全局下标补回来，再保留 guard。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">fix</span></div>
-      <h3>Q10. 选择：下面哪个修复最直接？</h3>
-      <label><input type="radio" name="q10" value="A. 去掉 if (i < n)">A. 去掉 <code>if (i &lt; n)</code></label>
-      <label><input type="radio" name="q10" value="B. i = blockIdx.x * blockDim.x + threadIdx.x">B. <code>i = blockIdx.x * blockDim.x + threadIdx.x</code></label>
-      <label><input type="radio" name="q10" value="C. 把 blockDim.x 改成 1">C. 把 <code>blockDim.x</code> 改成 1</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q11" data-group="三、代码阅读和错误分型" data-title="Q11. 判断：如果 launch 向上取整了，最后一个 block 多出来的线程不参与任何运算。">
-      <div class="q-meta"><span class="pill">true/false</span><span class="pill">guard</span></div>
-      <h3>Q11. 判断：如果 launch 向上取整了，最后一个 block 多出来的线程不参与任何运算。</h3>
-      <label><input type="radio" name="q11" value="true">对</label>
-      <label><input type="radio" name="q11" value="false">错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">注意：不参与运算，不等于不存在。</p>
-    </div>
-    <div class="q full" data-question="q12" data-group="三、代码阅读和错误分型" data-title="Q12. 解释为什么把 kernel 拆成多个阶段，常常比在一个 kernel 里硬塞全局同步更稳。">
-      <div class="q-meta"><span class="pill">explain</span><span class="pill">phase boundary</span></div>
-      <h3>Q12. 解释为什么把 kernel 拆成多个阶段，常常比在一个 kernel 里硬塞全局同步更稳。</h3>
-      <textarea name="q12" placeholder="从执行边界、可验证性和 block 调度三个角度回答。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>拆成多个 kernel 可以把阶段边界显式化，减少对 block 调度顺序的隐式依赖，也更容易检查每一阶段的输入输出。优秀答案会提到：单 kernel 里的 block 间没有默认全局同步，所以把阶段做成 kernel 边界更清楚。</p></details>
-    </div>
-  </div>
-</div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> Q8. 诊断：程序在单 block 上正常，多 block 时结果不稳定。你先怀疑什么？</h3>
 
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>四、二维边界和最后一块</h3>
-      <p>专门检查你能不能把行、列、guard 和最后一块分开判断。</p>
-    </div>
-    <div class="quick-review">
-      <b>答题提示</b>
-      <span>别把“最后一块不满”只说成一句空话，要说出哪一维会出问题。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q13" data-group="四、二维边界和最后一块" data-title="Q13. 选择：二维矩阵 copy 中，哪一对 guard 最合理？" data-answer="B. row &lt; height && col &lt; width" data-explain="二维边界通常要分别挡住行和列。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">2D guard</span></div>
-      <h3>Q13. 选择：二维矩阵 copy 中，哪一对 guard 最合理？</h3>
-      <label><input type="radio" name="q13" value="A. i < n">A. <code>i &lt; n</code></label>
-      <label><input type="radio" name="q13" value="B. row &lt; height && col &lt; width">B. <code>row &lt; height && col &lt; width</code></label>
-      <label><input type="radio" name="q13" value="C. row < width && col < height">C. <code>row &lt; width && col &lt; height</code></label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q14" data-group="四、二维边界和最后一块" data-title="Q14. 判断：最后一块不满，只会影响性能，不会影响正确性。">
-      <div class="q-meta"><span class="pill">true/false</span><span class="pill">partial tile</span></div>
-      <h3>Q14. 判断：最后一块不满，只会影响性能，不会影响正确性。</h3>
-      <label><input type="radio" name="q14" value="true">对</label>
-      <label><input type="radio" name="q14" value="false">错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">想一想 guard 少一维时会发生什么。</p>
-    </div>
-    <div class="q" data-question="q15" data-group="四、二维边界和最后一块" data-title="Q15. 填空：二维 tile 的线性偏移通常是 row * ______ + col。">
-      <div class="q-meta"><span class="pill">fill</span><span class="pill">row-major</span></div>
-      <h3>Q15. 填空：二维 tile 的线性偏移通常是 <code>row * ______ + col</code>。</h3>
-      <input type="text" name="q15" data-answer="width" data-explain="row-major 布局下用宽度把行压平。">
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q full" data-question="q16" data-group="四、二维边界和最后一块" data-title="Q16. 诊断：一个 2D kernel 的右边界总是错，但下面的边界正常。你先查什么？">
-      <div class="q-meta"><span class="pill">diagnosis</span><span class="pill">boundary</span></div>
-      <h3>Q16. 诊断：一个 2D kernel 的右边界总是错，但下面的边界正常。你先查什么？</h3>
-      <textarea name="q16" placeholder="先说哪一维的 guard，后说 offset，再说验证动作。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>先查 <code>col &lt; width</code> 是否存在，再看 <code>offset = row * width + col</code> 是否把宽度写对。右边界错而下边界正常，通常说明列方向 guard 或 width 出了问题。好的答案会把“先查列 guard”说在前面。</p></details>
-    </div>
-  </div>
-</div>
 
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>五、迁移和口头解释</h3>
-      <p>把这一页讲给另一个工程师听，说明你是否真的理解边界。</p>
-    </div>
-    <div class="quick-review">
-      <b>目标</b>
-      <span>能把坐标、guard、同步三件事串成一个判断流程。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q full" data-question="q17" data-group="五、迁移和口头解释" data-title="Q17. 你拿到一个 slow kernel，第一轮应该怎么排查？">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">debug plan</span></div>
-      <h3>Q17. 你拿到一个 slow kernel，第一轮应该怎么排查？</h3>
-      <textarea name="q17" placeholder="按“坐标 -> guard -> 同步 -> 再看性能”来写。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>先确认全局编号是否正确，再确认是否因为向上取整多出了线程却没有 guard，然后再看 block 间有没有不该有的同步假设。最后才把问题交给后面的带宽、occupancy 或测量单元。</p></details>
-    </div>
-    <div class="q full" data-question="q18" data-group="五、迁移和口头解释" data-title="Q18. 用 200 字以内解释 grid、block、thread、guard 和 __syncthreads() 的关系。">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">oral explanation</span></div>
-      <h3>Q18. 用 200 字以内解释 grid、block、thread、guard 和 <code>__syncthreads()</code> 的关系。</h3>
-      <textarea name="q18" placeholder="要求说出：谁负责分工，谁负责边界，谁负责同步。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>一个合格答案要说明：grid 承载全部 block，block 里有多个 thread，thread 用全局编号处理自己的那份数据；guard 负责挡住多出来的线程；<code>__syncthreads()</code> 只让同一 block 内的线程对齐，不是全局屏障。写到这里就够了，不要再去展开 warp 或性能优化。</p></details>
-    </div>
-  </div>
-</div>
-
-      </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
+      <textarea name="q8"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。优先怀疑 block 之间有隐式顺序依赖，或者把 __syncthreads() 当成了全局屏障。好的答案会先建议检查全局下标、guard 和需要阶段边界的逻辑是否被放进了一个 kernel。</p>
+        </details>
+      </article>
         </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、代码阅读和错误分型</h3></div>
+          <div class="quick-review">答题提示 先判断是编号错、guard 错，还是同步边界错。 --></div>
         </div>
-      </section>
+        <div class="drill-grid">
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">code reading</span></div>
+        <h3><b>Q:</b> Q9. 读下面的 kernel，指出最主要的问题。</h3>
 
-      <section id="sources">
+
+      <textarea name="q9"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。主要问题是把局部线程编号当成了全局编号。结果是每个 block 都从 0 开始写，导致重复处理同一段数据。这个题如果只说“少了 blockIdx.x * blockDim.x”还不够，要说出重复覆盖的后果。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="B. i = blockIdx.x * blockDim.x + threadIdx.x">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q10. 选择：下面哪个修复最直接？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q10" value="A. 去掉 if (i &lt; n)">A. 去掉 if (i < n)</label>
+      <label><input type="radio" name="q10" value="B. i = blockIdx.x * blockDim.x + threadIdx.x">B. i = blockIdx.x * blockDim.x + threadIdx.x</label>
+      <label><input type="radio" name="q10" value="C. 把 blockDim.x 改成 1">C. 把 blockDim.x 改成 1</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. i = blockIdx.x * blockDim.x + threadIdx.x。先把全局下标补回来，再保留 guard。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> Q11. 判断：如果 launch 向上取整了，最后一个 block 多出来的线程不参与任何运算。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q11" value="对">对</label>
+      <label><input type="radio" name="q11" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">explain</span></div>
+        <h3><b>Q:</b> Q12. 解释为什么把 kernel 拆成多个阶段，常常比在一个 kernel 里硬塞全局同步更稳。</h3>
+
+
+      <textarea name="q12"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。拆成多个 kernel 可以把阶段边界显式化，减少对 block 调度顺序的隐式依赖，也更容易检查每一阶段的输入输出。优秀答案会提到：单 kernel 里的 block 间没有默认全局同步，所以把阶段做成 kernel 边界更清楚。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、二维边界和最后一块</h3></div>
+          <div class="quick-review">答题提示 别把“最后一块不满”只说成一句空话，要说出哪一维会出问题。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q13" data-group="" data-title="" data-answer="B. row &lt; height &amp;&amp; col &lt; width">
+        <div class="q-meta"><span class="pill">13</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q13. 选择：二维矩阵 copy 中，哪一对 guard 最合理？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q13" value="A. i &lt; n">A. i < n</label>
+      <label><input type="radio" name="q13" value="B. row &lt; height &amp;&amp; col &lt; width">B. row < height && col < width</label>
+      <label><input type="radio" name="q13" value="C. row &lt; width &amp;&amp; col &lt; height">C. row < width && col < height</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. row < height && col < width。二维边界通常要分别挡住行和列。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q14" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">14</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> Q14. 判断：最后一块不满，只会影响性能，不会影响正确性。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q14" value="对">对</label>
+      <label><input type="radio" name="q14" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q15" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">15</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> Q15. 填空：二维 tile 的线性偏移通常是 <code>row * ______ + col</code>。</h3>
+
+
+      <textarea name="q15"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q16" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">16</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> Q16. 诊断：一个 2D kernel 的右边界总是错，但下面的边界正常。你先查什么？</h3>
+
+
+      <textarea name="q16"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先查 col < width 是否存在，再看 offset = row * width + col 是否把宽度写对。右边界错而下边界正常，通常说明列方向 guard 或 width 出了问题。好的答案会把“先查列 guard”说在前面。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、迁移和口头解释</h3></div>
+          <div class="quick-review">目标 能把坐标、guard、同步三件事串成一个判断流程。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q17" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">17</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> Q17. 你拿到一个 slow kernel，第一轮应该怎么排查？</h3>
+
+
+      <textarea name="q17"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先确认全局编号是否正确，再确认是否因为向上取整多出了线程却没有 guard，然后再看 block 间有没有不该有的同步假设。最后才把问题交给后面的带宽、occupancy 或测量单元。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q18" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">18</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> Q18. 用 200 字以内解释 grid、block、thread、guard 和 <code>__syncthreads()</code> 的关系。</h3>
+
+
+      <textarea name="q18"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。一个合格答案要说明：grid 承载全部 block，block 里有多个 thread，thread 用全局编号处理自己的那份数据；guard 负责挡住多出来的线程； __syncthreads() 只让同一 block 内的线程对齐，不是全局屏障。写到这里就够了，不要再去展开 warp 或性能优化。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-  <li><strong>NVIDIA CUDA C++ Programming Guide</strong><br><a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/">https://docs.nvidia.com/cuda/cuda-c-programming-guide/</a><br>用于核对 grid、block、thread、内置坐标、launch 与同步边界的公开术语。</li>
-  <li><strong>NVIDIA CUDA Runtime API</strong><br><a href="https://docs.nvidia.com/cuda/cuda-runtime-api/">https://docs.nvidia.com/cuda/cuda-runtime-api/</a><br>用于核对 kernel 启动、同步和运行时边界的公开术语。</li>
-  <li><strong>GPU 性能工程｜GPU 执行模型与性能语言</strong><br><a href="../01_GPU执行模型与性能语言/学习页.html">../01_GPU执行模型与性能语言/学习页.html</a><br>用于承接前一单元的执行模型、warp、SM、occupancy 和性能语言。</li>
-  <li><strong>GPU 性能工程｜内存层次、访存合并与带宽</strong><br><a href="../03_内存层次访存合并与带宽/学习页.html">../03_内存层次访存合并与带宽/学习页.html</a><br>用于说明这一页之后会如何把坐标和边界问题接到访存模式和带宽诊断上。</li>
+<ul>
+<li><b>NVIDIA CUDA C++ Programming Guide</b></li>
 </ul>
-
+<p><a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/">https://docs.nvidia.com/cuda/cuda-c-programming-guide/</a></p>
+<p>用于核对 grid、block、thread、内置坐标、launch 与同步边界的公开术语。</p>
+<ul>
+<li><b>NVIDIA CUDA Runtime API</b></li>
+</ul>
+<p><a href="https://docs.nvidia.com/cuda/cuda-runtime-api/">https://docs.nvidia.com/cuda/cuda-runtime-api/</a></p>
+<p>用于核对 kernel 启动、同步和运行时边界的公开术语。</p>
+<ul>
+<li><b>GPU 性能工程｜GPU 执行模型与性能语言</b></li>
+</ul>
+<p><a href="../01_GPU执行模型与性能语言/学习页.html">../01_GPU执行模型与性能语言/学习页.html</a></p>
+<p>用于承接前一单元的执行模型、warp、SM、occupancy 和性能语言。</p>
+<ul>
+<li><b>GPU 性能工程｜内存层次、访存合并与带宽</b></li>
+</ul>
+<p><a href="../03_内存层次访存合并与带宽/学习页.html">../03_内存层次访存合并与带宽/学习页.html</a></p>
+<p>用于说明这一页之后会如何把坐标和边界问题接到访存模式和带宽诊断上。</p>
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

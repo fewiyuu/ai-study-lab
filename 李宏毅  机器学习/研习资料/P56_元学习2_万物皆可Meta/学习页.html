@@ -4,468 +4,525 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P56｜元学习 2：万物皆可 Meta</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="MAML,Reptile,ANIL,feature reuse,learned optimizer,NAS,DARTS,data augmentation,learning to compare,N-way K-shot,Omniglot">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>万物皆可 Meta</strong><span>P56。初始化、优化器、架构、资料处理都能学。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#gd"><span class="dot"></span>GD 里可学什么</a>
-      <a href="#init"><span class="dot"></span>学初始化</a>
-      <a href="#pretrain"><span class="dot"></span>预训练对照</a>
-      <a href="#mamlwhy"><span class="dot"></span>MAML 为什么好</a>
-      <a href="#optimizer"><span class="dot"></span>学优化器</a>
-      <a href="#nas"><span class="dot"></span>学架构</a>
-      <a href="#data"><span class="dot"></span>学资料处理</a>
-      <a href="#compare"><span class="dot"></span>Learning to Compare</a>
-      <a href="#fewshot"><span class="dot"></span>N-way K-shot</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：只要是学习算法里的选择，就可能成为元学习里的 φ。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P56</div>
-        <h1>元学习不是一种算法，而是一种改造视角</h1>
-        <p>P55 建立了框架：元学习要学习 <code>F_φ</code>，也就是学习算法里的可学习组件。P56 展示“万物皆可 Meta”：可以学初始化、学优化器、学网络架构、学 data augmentation、学 sample weight，甚至直接用一个 network 吃下 support 和 query，省掉显式的梯度下降。</p>
-        <p>这一节的关键是分类能力：看到一个方法时，先问它把学习算法里的哪一块当成 <code>φ</code>。如果 <code>φ</code> 是初始化，就是 MAML / Reptile 这类；如果是架构，就是 NAS；如果是比较函数，就是 metric-based / learning to compare。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>列出 gradient descent 流程中哪些组件可以被 meta-learn。</li>
-          <li>解释 MAML 学初始化，和 self-supervised pretraining 的差异。</li>
-          <li>区分 rapid learning 与 feature reuse 两种解释。</li>
-          <li>说明 learned optimizer、NAS、data augmentation 如何进入元学习框架。</li>
-          <li>解释 N-way K-shot 与 Omniglot 任务构造。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
-      <p>Meta Learning 的共同框架是学习 <code>F_φ</code>。不同方法的差别，是 <code>φ</code> 具体代表什么。传统 gradient descent 里有很多人为决定的组件：初始化参数、学习率、optimizer、网络架构、数据增强策略、样本权重。只要它影响学习过程，就可以尝试用任务经验把它学出来。</p>
-      <p>这一节还强调一个更激进的方向：不一定要把 gradient descent 当核心。Learning to compare / metric-based 方法会让一个模型直接读 support set 和 query example，输出 query 的类别；训练和测试被放进同一个 episode，由模型内部学会如何比较。</p>
-      <div class="map">
-        <span class="node">Initialization</span>
-        <span class="node">Optimizer</span>
-        <span class="node">Architecture</span>
-        <span class="node">Augmentation</span>
-        <span class="node">Sample Weight</span>
-        <span class="node">Compare</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P56</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>看到任意 meta 方法时，先找出它学的是学习算法里的哪一个组件。</p></div>
-    </section>
-
-    <section id="gd">
-      <div class="head"><h2>Gradient Descent 里哪些东西可以学</h2><span class="tag">GD COMPONENTS</span></div>
-      <p>普通 gradient descent 流程里，先给定网络架构和初始化参数 <code>θ0</code>，从训练资料抽 batch，算 gradient，用学习率和 optimizer 更新参数，重复很多次，最后输出 <code>θ*</code>。这看起来是固定流程，但其中很多选择原本都由人决定。</p>
-      <p>Meta Learning 可以学习这些选择。学 <code>θ0</code> 就是 learning to initialize；学 update rule 就是 learned optimizer；学网络结构就是 NAS；学数据增强策略就是 meta data augmentation；学 sample weight 就是让算法自己判断哪些样本更该重视。</p>
-      <table class="metric-table">
-        <tr><th>可学习组件 φ</th><th>对应方法</th><th>想解决什么</th></tr>
-        <tr><td>初始化参数</td><td>MAML、Reptile</td><td>让新任务少量更新就好。</td></tr>
-        <tr><td>优化器 / 学习率</td><td>Learned optimizer</td><td>减少手工调 optimizer。</td></tr>
-        <tr><td>网络架构</td><td>NAS、DARTS</td><td>自动搜索模型结构。</td></tr>
-        <tr><td>资料处理</td><td>AutoAugment 等</td><td>自动找到数据增强策略。</td></tr>
-      </table>
-      <p><strong>现在你应该能做什么：</strong>把一个元学习方法归类到“学初始化、学优化器、学架构、学数据策略”等组件上。</p>
-    </section>
-
-    <section id="init">
-      <div class="head"><h2>Learning to Initialize：MAML 的位置</h2><span class="tag">MAML</span></div>
-      <p>MAML，也就是 Model-Agnostic Meta-Learning，是 learning to initialize 的代表。它要学的是一个好的初始参数 <code>θ0</code>。这个初始点不是为某一个任务最终最优，而是希望对很多新任务都“离好解很近”，只要用少量 support set 做几步 gradient descent，就能得到该任务的好模型。</p>
-      <p>Reptile 是相关变形；ANIL 则来自对 MAML 机制的进一步分析。课程没有展开公式细节，但你要记住 MAML 的角色：它把 <code>φ</code> 设成初始化参数。meta training 用很多任务学习这个初始化，meta testing 时把它拿到新任务上快速适应。</p>
-      <div class="formula">
-        <span class="big">θ<sub>task</sub> = θ<sub>0</sub> - α ∇<sub>θ</sub>L<sub>support</sub>(θ<sub>0</sub>)</span>
-        <small>MAML 学的是 θ0，让少数几步更新后的 θ_task 在 query set 上表现好。</small>
+      <h1 class="hero-title">P56｜元学习 2：万物皆可 Meta</h1>
+      <p class="hero-desc">P55 建立了框架：元学习要学习 F_φ ，也就是学习算法里的可学习组件。P56 展示“万物皆可 Meta”：可以学初始化、学优化器、学网络架构、学 data augmentation、学 sample weight，甚至直接用一个 network 吃下 support 和 query，省掉显式的梯度下降。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P55_元学习1_三步骤框架/学习页.html">上一节</a>
+            <a href="../P57_奇葩元学习用法/学习页.html">下一节</a>
       </div>
-      <p><strong>现在你应该能做什么：</strong>解释 MAML 不是直接学某个任务的最终参数，而是学适合快速适应的初始化。</p>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="pretrain">
-      <div class="head"><h2>和 Self-supervised Pretraining 有什么像、有什么不同</h2><span class="tag">PRETRAIN</span></div>
-      <p>MAML 和 self-supervised pretraining 都会产出“好的初始化”。区别在资料和目标。MAML 通常有很多带标注的训练任务，每个任务都有 support/query，通过跨任务 query loss 学初始化。Self-supervised learning 则用大量无标注资料，通过预设任务学习表示，例如填空、对比学习等。</p>
-      <p>还有一种 baseline 是 multi-task training：把多个任务资料混在一起训练一个模型，再拿它当初始化。它和 MAML 使用的资料可能相同，但组织方式不同。MAML 保留任务结构，用“少量 support 后 query 表现”训练初始化；multi-task training 把任务结构弱化成一个大任务。</p>
-      <div class="grid3">
-        <div class="box info"><h3>MAML</h3><p>用带标注任务，学快速适应初始化。</p></div>
-        <div class="box warn"><h3>Self-supervised</h3><p>用无标注资料，学通用表示初始化。</p></div>
-        <div class="box redsoft"><h3>Multi-task</h3><p>把多任务资料混合训练，常作 baseline。</p></div>
+        </ul>
       </div>
-      <p><strong>现在你应该能做什么：</strong>说明“都是好初始化”不代表训练目标和资料结构相同。</p>
-    </section>
+    </div>
+  </header>
 
-    <section id="mamlwhy">
-      <div class="head"><h2>MAML 为什么好：快速学习还是特征复用</h2><span class="tag">RAPID VS REUSE</span></div>
-      <p>关于 MAML 为什么有效，有两种解释。Rapid learning 认为 MAML 找到的初始化特别适合 gradient descent，可以让每个任务快速走到好参数。Feature reuse 认为 MAML 学到的是一组已经很有用的特征，新任务只需要轻微调整最后部分就好。</p>
-      <p>课程提到一篇研究认为 feature reuse 才是 MAML 好的关键，并提出 ANIL，也就是 almost no inner loop。直觉是：如果大部分表现来自可复用特征，而不是内层快速学习，那么我们不必在所有参数上做复杂 inner loop。</p>
-      <div class="compare">
-        <div><h3>Rapid Learning</h3><p>初始化让梯度下降特别快，少数几步就到好解。</p></div>
-        <div><h3>Feature Reuse</h3><p>初始化本身已经学到通用特征，新任务主要复用它。</p></div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>用两种假说解释 MAML 的成功，并知道 ANIL 更偏向特征复用解释。</p>
-    </section>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#gd">Gradient Descent 里哪些东西可以学</a>
+      <a href="#init">Learning to Initialize：MAML 的位置</a>
+      <a href="#pretrain">和 Self-supervised Pretraining 有什么像、有什么不同</a>
+      <a href="#mamlwhy">MAML 为什么好：快速学习还是特征复用</a>
+      <a href="#optimizer">Learning to Optimize：优化器也可以学</a>
+      <a href="#nas">Network Architecture Search：学网络架构</a>
+      <a href="#data">Data Processing 也能 Meta</a>
+      <a href="#compare">Learning to Compare：训练和测试也能合在一个网络里</a>
+      <a href="#fewshot">N-way K-shot 与 Omniglot</a>
+      <a href="#code">最小代码：按组件选择 Meta 方法</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
 
-    <section id="optimizer">
-      <div class="head"><h2>Learning to Optimize：优化器也可以学</h2><span class="tag">OPTIMIZER</span></div>
-      <p>优化器本来也是人设计的，例如 SGD、RMSProp、Adam。Meta Learning 可以把 update rule 当成要学习的东西。经典方向是 learning to learn by gradient descent by gradient descent：用很多任务训练一个 learned optimizer，让它根据梯度、历史状态等信息输出更新方式。</p>
-      <p>这种方法的挑战是泛化。一个 learned optimizer 在 MNIST 上、某个网络架构上训练得很好，不代表换激活函数、换网络深度、换数据集还稳。P56 提到早期实验中，训练和测试任务太像会显得有点作弊；真正有价值的是跨架构、跨任务仍然有效。</p>
-      <p><strong>错误示例：</strong>“在同一个任务、同一个架构上训练和测试 learned optimizer，就证明它泛化很好”。错因是训练任务和测试任务几乎相同；修法是测试在不同架构、不同数据、不同任务上。</p>
-      <p><strong>现在你应该能做什么：</strong>说明 learned optimizer 学的是 update rule，但必须检查跨任务泛化。</p>
-    </section>
-
-    <section id="nas">
-      <div class="head"><h2>Network Architecture Search：学网络架构</h2><span class="tag">NAS</span></div>
-      <p>如果 <code>φ</code> 是网络架构，我们就在做 NAS。架构可能包含层数、filter 大小、stride、通道数、连接方式。很多架构选择是离散的，无法直接对层数做普通微分，因此早期 NAS 常用强化学习或演化算法：agent 输出一个架构，训练这个架构，拿验证表现当 reward，再更新 agent。</p>
-      <p>也有方法把架构搜索改造成可微问题，例如 DARTS，试图用 gradient descent 直接优化架构参数。无论方法如何，放回 P55 框架看，NAS 是 meta learning 的一种特例：它学习的是产生好模型结构的策略或参数。</p>
-      <div class="stage">
-        <div><strong>Agent</strong><p>输出架构超参数。</p></div>
-        <div><strong>Build</strong><p>按架构建立网络。</p></div>
-        <div><strong>Train</strong><p>训练该网络。</p></div>
-        <div><strong>Reward</strong><p>用验证表现更新架构策略。</p></div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>解释 NAS 为什么可以被看成“把网络架构当成 φ 的 meta learning”。</p>
-    </section>
-
-    <section id="data">
-      <div class="head"><h2>Data Processing 也能 Meta</h2><span class="tag">DATA</span></div>
-      <p>训练前的数据处理也可以学习。Data augmentation 本来是人手试策略：翻转、裁切、颜色扰动、旋转等。Meta Learning 可以学习增强策略，让模型根据任务经验决定怎么变换数据更有利。</p>
-      <p>Sample weight 也可以学。某些策略认为难样本、靠近 decision boundary 的样本更该重视；另一些策略认为它们可能是 noisy label，应该降权。到底该升权还是降权，取决于数据分布和任务目标，因此也可以把 sample weighting strategy 当成 <code>φ</code> 来学。</p>
-      <div class="grid2">
-        <div class="box info"><h3>Data Augmentation</h3><p>学习哪些变换能提升泛化。</p></div>
-        <div class="box warn"><h3>Sample Weight</h3><p>学习哪些样本更该影响训练。</p></div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>解释为什么“资料怎么喂给模型”也是学习算法的一部分。</p>
-    </section>
-
-    <section id="compare">
-      <div class="head"><h2>Learning to Compare：训练和测试也能合在一个网络里</h2><span class="tag">COMPARE</span></div>
-      <p>前面的方法大多还是围绕 gradient descent 改造某个组件。更激进的方向是直接让一个 network 读 support set 和 query example，输出 query 的类别。模型内部如何“学习”不再显式写成梯度下降，也许它学会了比较、匹配或注意力机制。</p>
-      <p>这类方法常叫 learning to compare 或 metric-based approach。它把一次 episode 里的训练资料和测试资料都作为输入，让模型直接学会根据 support 判断 query 属于哪个 class。此时训练和测试的边界变得不那么显式，但 support/query 的概念仍然存在。</p>
-      <div class="formula">
-        <span class="big">model(Support Set, Query Example) → Query Label</span>
-        <small>它不一定显式输出一个 classifier，而是直接输出 query 的分类结果。</small>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>说明 metric-based 方法为什么像是把 within-task training 和 testing 合在一个 episode network 中。</p>
-    </section>
-
-    <section id="fewshot">
-      <div class="head"><h2>N-way K-shot 与 Omniglot</h2><span class="tag">FEW SHOT</span></div>
-      <p>Few-shot image classification 常用 N-way K-shot 设定。N-way 表示每个任务里有 N 个类别；K-shot 表示每个类别在 support set 中只有 K 个 example。例如 3-way 2-shot，就是每个任务有 3 个类，每类 2 张 support 图片。</p>
-      <p>Omniglot 是常见 benchmark。它有很多 character，每个 character 有少量书写样本。构造一个 N-way K-shot 任务时，从一组 character 中抽 N 个类别，每类抽 K 个样本作 support，再抽 query 样本让模型判断属于哪一类。训练任务和测试任务通常来自不重叠的 character 集合。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="compare">
-            <div><h3>Support 样本数</h3><p class="score" id="supportCount">0</p></div>
-            <div><h3>任务难度直觉</h3><p class="score" id="difficulty">中等</p></div>
-          </div>
-          <div>
-            <div class="slider-row"><label for="waySlider">N-way</label><input id="waySlider" type="range" min="2" max="20" step="1" value="5"><span id="wayVal">5</span></div>
-            <div class="slider-row"><label for="shotSlider">K-shot</label><input id="shotSlider" type="range" min="1" max="10" step="1" value="1"><span id="shotVal">1</span></div>
-            <p class="viz-note" id="fewNote">N 越大类别越多，K 越小每类证据越少。</p>
-          </div>
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">MAP</span>
         </div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>给定 N 和 K，说明一个 few-shot task 的 support set 怎么构造。</p>
-    </section>
-
-    <section id="code">
-      <div class="head"><h2>最小代码：按组件选择 Meta 方法</h2><span class="tag">CODE</span></div>
-      <p>下面用伪代码展示“万物皆可 Meta”的共同抽象：先决定 <code>φ</code> 是什么，再用任务级 loss 优化它。</p>
-      <div class="codebar"><span class="label">正确示例：通用 Meta 组件训练</span><span class="kind">Python-like</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">meta_train_component</span>(component_phi, tasks):
-    meta_loss = <span class="num">0.0</span>
-    <span class="kw">for</span> task <span class="kw">in</span> tasks:
-        learner = build_learning_algorithm(component_phi)
-        model = learner.adapt(task.support)
-        meta_loss += loss(model, task.query)
-    meta_loss.backward()
-    update(component_phi)</code></pre>
-      <p>Metric-based 方法则可以直接把 support 和 query 输入一个比较模型。</p>
-      <div class="codebar"><span class="label">正确示例：Learning to Compare</span><span class="kind">Python-like</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">classify_query</span>(compare_model, support_set, query_x):
-    scores = []
-    <span class="kw">for</span> class_id, examples <span class="kw">in</span> support_set.items():
-        score = compare_model(examples, query_x)
-        scores.append((class_id, score))
-    <span class="kw">return</span> argmax(scores)</code></pre>
-      <div class="codebar error"><span class="label">错误示例：训练任务和测试任务完全相同</span><span class="kind">Evaluation bug</span></div>
-      <pre><code><span class="cmt"># 错误示例：在 CIFAR-10 上搜索架构，又直接用同一个任务报告最终能力。</span>
-architecture = search_on(cifar10_train, cifar10_valid)
-score = report_on(cifar10_valid)
-
-<span class="cmt"># 这不能证明架构搜索策略能泛化到新任务。</span></code></pre>
-      <p><strong>现在你应该能做什么：</strong>读懂 meta 方法的共同骨架：组件 φ、support 适应、query 评价。</p>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+<p>Meta Learning 的共同框架是学习 <code>F_φ</code>。不同方法的差别，是 <code>φ</code> 具体代表什么。传统 gradient descent 里有很多人为决定的组件：初始化参数、学习率、optimizer、网络架构、数据增强策略、样本权重。只要它影响学习过程，就可以尝试用任务经验把它学出来。</p>
+<p>Initialization</p>
+<p>Optimizer</p>
+<p>Architecture</p>
+<p>Augmentation</p>
+<p>Sample Weight</p>
+<p>Compare</p>
+      </section>
+      <section id="gd">
+        <div class="head">
+          <h2>Gradient Descent 里哪些东西可以学</h2>
+          <span class="tag">GD</span>
+        </div>
+<p>普通 gradient descent 流程里，先给定网络架构和初始化参数 <code>θ0</code>，从训练资料抽 batch，算 gradient，用学习率和 optimizer 更新参数，重复很多次，最后输出 <code>θ*</code>。这看起来是固定流程，但其中很多选择原本都由人决定。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>可学习组件 φ</th><th>对应方法</th><th>想解决什么</th></tr>
+<tr><td>初始化参数</td><td>MAML、Reptile</td><td>让新任务少量更新就好。</td></tr><tr><td>优化器 / 学习率</td><td>Learned optimizer</td><td>减少手工调 optimizer。</td></tr><tr><td>网络架构</td><td>NAS、DARTS</td><td>自动搜索模型结构。</td></tr><tr><td>资料处理</td><td>AutoAugment 等</td><td>自动找到数据增强策略。</td></tr>
+        </table></div>
+<p><b>现在你应该能做什么：</b>把一个元学习方法归类到“学初始化、学优化器、学架构、学数据策略”等组件上。</p>
+      </section>
+      <section id="init">
+        <div class="head">
+          <h2>Learning to Initialize：MAML 的位置</h2>
+          <span class="tag">MAML</span>
+        </div>
+<p>MAML，也就是 Model-Agnostic Meta-Learning，是 learning to initialize 的代表。它要学的是一个好的初始参数 <code>θ0</code>。这个初始点希望对很多新任务都“离好解很近”，只要用少量 support set 做几步 gradient descent，就能得到该任务的好模型。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+θtask = θ0 - α ∇θLsupport(θ0)
+MAML 学的是 θ0，让少数几步更新后的 θ_task 在 query set 上表现好。
+$$
+        </div>
+<p><b>现在你应该能做什么：</b>解释 MAML 学适合快速适应的初始化。</p>
+      </section>
+      <section id="pretrain">
+        <div class="head">
+          <h2>和 Self-supervised Pretraining 有什么像、有什么不同</h2>
+          <span class="tag">PRETRAIN</span>
+        </div>
+<p>MAML 和 self-supervised pretraining 都会产出“好的初始化”。区别在资料和目标。MAML 通常有很多带标注的训练任务，每个任务都有 support/query，通过跨任务 query loss 学初始化。Self-supervised learning 则用大量无标注资料，通过预设任务学习表示，例如填空、对比学习等。</p>
+<p>MAML用带标注任务，学快速适应初始化。</p>
+<p>Self-supervised用无标注资料，学通用表示初始化。</p>
+<p>Multi-task把多任务资料混合训练，常作 baseline。</p>
+      </section>
+      <section id="mamlwhy">
+        <div class="head">
+          <h2>MAML 为什么好：快速学习还是特征复用</h2>
+          <span class="tag">RAPID</span>
+        </div>
+<p>关于 MAML 为什么有效，有两种解释。Rapid learning 认为 MAML 找到的初始化特别适合 gradient descent，可以让每个任务快速走到好参数。Feature reuse 认为 MAML 学到的是一组已经很有用的特征，新任务只需要轻微调整最后部分就好。</p>
+<p>Rapid Learning初始化让梯度下降特别快，少数几步就到好解。</p>
+<p>Feature Reuse初始化本身已经学到通用特征，新任务主要复用它。</p>
+      </section>
+      <section id="optimizer">
+        <div class="head">
+          <h2>Learning to Optimize：优化器也可以学</h2>
+          <span class="tag">OPTIMIZER</span>
+        </div>
+<p>优化器本来也是人设计的，例如 SGD、RMSProp、Adam。Meta Learning 可以把 update rule 当成要学习的东西。经典方向是 learning to learn by gradient descent by gradient descent：用很多任务训练一个 learned optimizer，让它根据梯度、历史状态等信息输出更新方式。</p>
+<p><b>错误示例：</b>“在同一个任务、同一个架构上训练和测试 learned optimizer，就证明它泛化很好”。错因是训练任务和测试任务几乎相同；修法是测试在不同架构、不同数据、不同任务上。</p>
+      </section>
+      <section id="nas">
+        <div class="head">
+          <h2>Network Architecture Search：学网络架构</h2>
+          <span class="tag">NAS</span>
+        </div>
+<p>如果 <code>φ</code> 是网络架构，我们就在做 NAS。架构可能包含层数、filter 大小、stride、通道数、连接方式。很多架构选择是离散的，无法直接对层数做普通微分，因此早期 NAS 常用强化学习或演化算法：agent 输出一个架构，训练这个架构，拿验证表现当 reward，再更新 agent。</p>
+<p><b>Agent</b>输出架构超参数。</p>
+<p><b>Build</b>按架构建立网络。</p>
+<p><b>Train</b>训练该网络。</p>
+<p><b>Reward</b>用验证表现更新架构策略。</p>
+      </section>
+      <section id="data">
+        <div class="head">
+          <h2>Data Processing 也能 Meta</h2>
+          <span class="tag">DATA</span>
+        </div>
+<p>训练前的数据处理也可以学习。Data augmentation 本来是人手试策略：翻转、裁切、颜色扰动、旋转等。Meta Learning 可以学习增强策略，让模型根据任务经验决定怎么变换数据更有利。</p>
+        <div class="box info">
+<h3>Data Augmentation</h3>
+<p>学习哪些变换能提升泛化。</p>
+        </div>
+        <div class="box warn">
+<h3>Sample Weight</h3>
+<p>学习哪些样本更该影响训练。</p>
+<p><b>现在你应该能做什么：</b>解释为什么“资料怎么喂给模型”也是学习算法的一部分。</p>
+        </div>
+      </section>
+      <section id="compare">
+        <div class="head">
+          <h2>Learning to Compare：训练和测试也能合在一个网络里</h2>
+          <span class="tag">COMPARE</span>
+        </div>
+<p>前面的方法大多还是围绕 gradient descent 改造某个组件。更激进的方向是直接让一个 network 读 support set 和 query example，输出 query 的类别。模型内部如何“学习”不再显式写成梯度下降，也许它学会了比较、匹配或注意力机制。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+model(Support Set, Query Example) → Query Label
+它不一定显式输出一个 classifier，而是直接输出 query 的分类结果。
+$$
+        </div>
+<p><b>现在你应该能做什么：</b>说明 metric-based 方法为什么像是把 within-task training 和 testing 合在一个 episode network 中。</p>
+      </section>
+      <section id="fewshot">
+        <div class="head">
+          <h2>N-way K-shot 与 Omniglot</h2>
+          <span class="tag">FEW</span>
+        </div>
+<p>Few-shot image classification 常用 N-way K-shot 设定。N-way 表示每个任务里有 N 个类别；K-shot 表示每个类别在 support set 中只有 K 个 example。例如 3-way 2-shot，就是每个任务有 3 个类，每类 2 张 support 图片。</p>
+<p>Support 样本数0</p>
+<p>任务难度直觉中等</p>
+<p><b>现在你应该能做什么：</b>给定 N 和 K，说明一个 few-shot task 的 support set 怎么构造。</p>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：按组件选择 Meta 方法</h2>
+          <span class="tag">CODE</span>
+        </div>
+<p>下面用伪代码展示“万物皆可 Meta”的共同抽象：先决定 <code>φ</code> 是什么，再用任务级 loss 优化它。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">def meta_train_component(component_phi, tasks):
+ meta_loss = 0.0
+ for task in tasks:
+ learner = build_learning_algorithm(component_phi)
+ model = learner.adapt(task.support)
+ meta_loss += loss(model, task.query)
+ meta_loss.backward()
+ update(component_phi)</code></pre>
+<p>Metric-based 方法则可以直接把 support 和 query 输入一个比较模型。</p>
+        </div>
+<p>正确示例：Learning to ComparePython-like</p>
+<p>错误示例：训练任务和测试任务完全相同Evaluation bug</p>
+<p><b>现在你应该能做什么：</b>读懂 meta 方法的共同骨架：组件 φ、support 适应、query 评价。</p>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答建议</strong><p>每题先说 <code>φ</code> 是什么，再说它如何被跨任务 loss 训练。</p></div>
-        <div class="review-card"><strong>自检标准</strong><p>你能把 MAML、NAS、Learning to Compare 放进同一个 <code>F_φ</code> 框架，就掌握了本节。</p></div>
-      </div>
 
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>一、可 Meta 的组件</h3><p>识别学习算法里的 φ。</p></div>
-          <div class="quick-review"><b>快速回顾</b>φ 可以是初始化、优化器、架构或资料处理策略。</div>
+          <div><h3>一、可 Meta 的组件</h3></div>
+          <div class="quick-review">快速回顾 φ 可以是初始化、优化器、架构或资料处理策略。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q01" data-title="组件地图">
-            <div class="q-meta"><span class="pill">Q01</span><span class="pill">解释</span></div>
-            <h3>Gradient descent 训练流程中，至少列出四个可以被 meta-learn 的组件。</h3>
-            <textarea placeholder="初始化、学习率/优化器、网络架构、augmentation、sample weight。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q02" data-title="MAML">
-            <div class="q-meta"><span class="pill">Q02</span><span class="pill">概念</span></div>
-            <h3>MAML 学的 <code>φ</code> 是什么？它希望这个 <code>φ</code> 在新任务上有什么性质？</h3>
-            <select>
-              <option value="">选择最贴近的解释</option>
-              <option value="学习初始化，少量更新后表现好">MAML 学初始化；希望它在新任务上用少量 support 更新后 query 表现好。</option>
-              <option value="学习最终测试标签">MAML 学最终测试标签；新任务不需要 support set。</option>
-              <option value="学习固定网络输出">MAML 学固定输出模板；不需要梯度更新。</option>
-            </select>
-          </div>
-          <div class="q" data-role="homework" data-qid="q03" data-title="MAML 调参">
-            <div class="q-meta"><span class="pill">Q03</span><span class="pill">辨析</span></div>
-            <h3>为什么说 MAML 虽然学初始化，但训练 MAML 本身仍然要调超参数？</h3>
-            <textarea placeholder="outer loop 也有学习率、随机种子、训练设置。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q04" data-title="预训练对照">
-            <div class="q-meta"><span class="pill">Q04</span><span class="pill">对照</span></div>
-            <h3>MAML、self-supervised pretraining、multi-task pretraining 都能得到初始化，它们的资料和目标有什么不同？</h3>
-            <textarea placeholder="MAML 用任务结构和 query loss；SSL 用无标注预设任务；multi-task 混合任务资料。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q01</span></div>
+        <h3><b>Q:</b> Gradient descent 训练流程中，至少列出四个可以被 meta-learn 的组件。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q02</span></div>
+        <h3><b>Q:</b> MAML 学的 <code>φ</code> 是什么？它希望这个 <code>φ</code> 在新任务上有什么性质？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q03</span></div>
+        <h3><b>Q:</b> 为什么说 MAML 虽然学初始化，但训练 MAML 本身仍然要调超参数？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q04</span></div>
+        <h3><b>Q:</b> MAML、self-supervised pretraining、multi-task pretraining 都能得到初始化，它们的资料和目标有什么不同？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>二、MAML 解释与扩展</h3><p>理解 rapid learning、feature reuse 和 optimizer。</p></div>
-          <div class="quick-review"><b>快速回顾</b>MAML 的有效性可能来自特征复用。</div>
+          <div><h3>二、MAML 解释与扩展</h3></div>
+          <div class="quick-review">快速回顾 MAML 的有效性可能来自特征复用。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q05" data-title="rapid vs reuse">
-            <div class="q-meta"><span class="pill">Q05</span><span class="pill">解释</span></div>
-            <h3>Rapid learning 和 feature reuse 分别如何解释 MAML 为什么有效？</h3>
-            <textarea placeholder="前者说梯度下降快；后者说特征本来就通用。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q06" data-title="ANIL">
-            <div class="q-meta"><span class="pill">Q06</span><span class="pill">概念</span></div>
-            <h3>ANIL / almost no inner loop 更支持哪一种解释？为什么？</h3>
-            <textarea placeholder="更支持 feature reuse，因为大部分参数不需要内层更新。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q07" data-title="learned optimizer">
-            <div class="q-meta"><span class="pill">Q07</span><span class="pill">应用</span></div>
-            <h3>Learned optimizer 学的是什么？为什么只在同一个数据集和架构上测试会有问题？</h3>
-            <textarea placeholder="学 update rule；训练测试太像不能证明泛化。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q08" data-title="泛化检查">
-            <div class="q-meta"><span class="pill">Q08</span><span class="pill">诊断</span></div>
-            <h3>如果一个 learned optimizer 换激活函数就坏掉，这说明它的什么能力不足？</h3>
-            <textarea placeholder="跨架构/跨任务泛化不足。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q05</span></div>
+        <h3><b>Q:</b> Rapid learning 和 feature reuse 分别如何解释 MAML 为什么有效？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q06</span></div>
+        <h3><b>Q:</b> ANIL / almost no inner loop 更支持哪一种解释？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q07</span></div>
+        <h3><b>Q:</b> Learned optimizer 学的是什么？为什么只在同一个数据集和架构上测试会有问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q08</span></div>
+        <h3><b>Q:</b> 如果一个 learned optimizer 换激活函数就坏掉，这说明它的什么能力不足？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>三、NAS 与资料处理</h3><p>把架构和数据策略放进 meta 框架。</p></div>
-          <div class="quick-review"><b>快速回顾</b>NAS 是把网络架构当成 φ。</div>
+          <div><h3>三、NAS 与资料处理</h3></div>
+          <div class="quick-review">快速回顾 NAS 是把网络架构当成 φ。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q09" data-title="NAS">
-            <div class="q-meta"><span class="pill">Q09</span><span class="pill">解释</span></div>
-            <h3>为什么 Network Architecture Search 可以看成 meta learning？这里的 <code>φ</code> 是什么？</h3>
-            <div class="choice-list">
-              <label><input type="radio" name="p56q09" value="phi 是架构选择或架构策略">因为 φ 可以表示架构选择或架构搜索策略，并由任务表现来训练。</label>
-              <label><input type="radio" name="p56q09" value="phi 是单个样本标签">因为 φ 是单个训练样本的标签。</label>
-              <label><input type="radio" name="p56q09" value="NAS 不涉及学习算法组件">NAS 不涉及学习算法组件，所以不能放进 meta learning。</label>
-            </div>
-          </div>
-          <div class="q" data-role="homework" data-qid="q10" data-title="RL 做 NAS">
-            <div class="q-meta"><span class="pill">Q10</span><span class="pill">流程</span></div>
-            <h3>用强化学习做 NAS 时，agent 输出什么？reward 通常来自什么？</h3>
-            <textarea placeholder="输出架构超参数；reward 来自验证准确率或负 loss。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q11" data-title="DARTS">
-            <div class="q-meta"><span class="pill">Q11</span><span class="pill">辨析</span></div>
-            <h3>DARTS 这类方法试图把 NAS 变成可微问题，这和 RL / evolutionary NAS 有什么不同？</h3>
-            <textarea placeholder="把离散架构放松成可微参数，用 gradient descent 优化。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q12" data-title="data augmentation">
-            <div class="q-meta"><span class="pill">Q12</span><span class="pill">应用</span></div>
-            <h3>为什么 data augmentation 策略也可以被 meta-learn？它学的是学习算法里的哪一部分？</h3>
-            <textarea placeholder="学资料变换策略，决定训练数据如何生成。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q13" data-title="sample weight">
-            <div class="q-meta"><span class="pill">Q13</span><span class="pill">推理</span></div>
-            <h3>为什么难样本有时应该升权，有时又可能应该降权？Meta-learning sample weight 想解决什么矛盾？</h3>
-            <textarea placeholder="难样本可能有信息，也可能是噪声/错标；让策略从数据学。"></textarea>
-          </div>
-        </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q09</span></div>
+        <h3><b>Q:</b> 为什么 Network Architecture Search 可以看成 meta learning？这里的 <code>φ</code> 是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="因为 φ 可以表示架构选择或架构搜索策略，并由任务表现来训练。">因为 φ 可以表示架构选择或架构搜索策略，并由任务表现来训练。</label>
+      <label><input type="radio" name="q?" value="因为 φ 是单个训练样本的标签。">因为 φ 是单个训练样本的标签。</label>
+      <label><input type="radio" name="q?" value="，所以不能放进 meta learning。">，所以不能放进 meta learning。</label>
       </div>
 
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q10</span></div>
+        <h3><b>Q:</b> 用强化学习做 NAS 时，agent 输出什么？reward 通常来自什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q11</span></div>
+        <h3><b>Q:</b> DARTS 这类方法试图把 NAS 变成可微问题，这和 RL / evolutionary NAS 有什么不同？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q12</span></div>
+        <h3><b>Q:</b> 为什么 data augmentation 策略也可以被 meta-learn？它学的是学习算法里的哪一部分？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q13</span></div>
+        <h3><b>Q:</b> 为什么难样本有时应该升权，有时又可能应该降权？Meta-learning sample weight 想解决什么矛盾？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>四、Learning to Compare 与 Few-shot</h3><p>理解 N-way K-shot benchmark。</p></div>
-          <div class="quick-review"><b>快速回顾</b>Metric-based 方法直接比较 support 和 query。</div>
+          <div><h3>四、Learning to Compare 与 Few-shot</h3></div>
+          <div class="quick-review">快速回顾 Metric-based 方法直接比较 support 和 query。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q14" data-title="learning to compare">
-            <div class="q-meta"><span class="pill">Q14</span><span class="pill">概念</span></div>
-            <h3>Learning to Compare / metric-based 方法为什么可以说弱化了训练和测试的分界？</h3>
-            <textarea placeholder="模型直接读 support 和 query，输出 query label。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q15" data-title="N-way K-shot">
-            <div class="q-meta"><span class="pill">Q15</span><span class="pill">计算</span></div>
-            <h3>什么是 N-way K-shot classification？5-way 3-shot 的 support set 有多少张图片？</h3>
-            <input type="text" placeholder="N 个类别，每类 K 个 support；5-way 3-shot = 15 张 support 图片。">
-          </div>
-          <div class="q" data-role="homework" data-qid="q16" data-title="Omniglot">
-            <div class="q-meta"><span class="pill">Q16</span><span class="pill">流程</span></div>
-            <h3>用 Omniglot 构造 N-way K-shot training task 时，如何抽 character 和 example？测试任务为什么要用不同 character？</h3>
-            <div class="choice-list">
-              <label><input type="checkbox" value="先抽 N 个 character">先抽 N 个 character 组成一个 task。</label>
-              <label><input type="checkbox" value="每个 character 抽 K 个 support">每个 character 抽 K 个 support example。</label>
-              <label><input type="checkbox" value="测试用未见 character 检查跨任务泛化">测试任务用未见 character 检查跨任务泛化。</label>
-              <label><input type="checkbox" value="训练和测试必须用同一批 character">训练和测试必须用同一批 character。</label>
-            </div>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q17" data-title="费曼题">
-            <div class="q-meta"><span class="pill">Q17</span><span class="pill">费曼题</span></div>
-            <h3>请用 8-12 句话向同学讲清楚：“万物皆可 Meta”是什么意思，并举出至少五个可被 meta-learn 的组件。</h3>
-            <textarea placeholder="要求串起：初始化、优化器、NAS、augmentation、sample weight、learning to compare、N-way K-shot。"></textarea>
-            <div class="solve-note">提示：每个例子都说清 φ 是什么。</div>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q18" data-title="完整方案">
-            <div class="q-meta"><span class="pill">Q18</span><span class="pill">综合</span></div>
-            <h3>设计一个 few-shot image classification 的 meta-learning 实验。请说明选择 MAML、NAS 或 metric-based 哪类方法，φ 是什么，任务如何采样，如何评估，以及怎样避免训练任务和测试任务太像。</h3>
-            <textarea placeholder="写成实验计划。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q14</span></div>
+        <h3><b>Q:</b> Learning to Compare / metric-based 方法为什么可以说弱化了训练和测试的分界？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q15</span></div>
+        <h3><b>Q:</b> 什么是 N-way K-shot classification？5-way 3-shot 的 support set 有多少张图片？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q16</span></div>
+        <h3><b>Q:</b> 用 Omniglot 构造 N-way K-shot training task 时，如何抽 character 和 example？测试任务为什么要用不同 character？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="组成一个 task。">组成一个 task。</label>
+      <label><input type="radio" name="q?" value="example。">example。</label>
+      <label><input type="radio" name="q?" value="测试任务用未见 character 检查跨任务泛化。">测试任务用未见 character 检查跨任务泛化。</label>
+      <label><input type="radio" name="q?" value="。">。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q17</span></div>
+        <h3><b>Q:</b> 请用 8-12 句话向同学讲清楚：“万物皆可 Meta”是什么意思，并举出至少五个可被 meta-learn 的组件。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q18</span></div>
+        <h3><b>Q:</b> 设计一个 few-shot image classification 的 meta-learning 实验。请说明选择 MAML、NAS 或 metric-based 哪类方法，φ 是什么，任务如何采样，如何评估，以及怎样避免训练任务和测试任务太像。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
-
+      </section>
     <section id="export">
-      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
-      <p>完成练习后，生成一份 Markdown 记录。它会保留完整题目和你的回答，方便之后回顾。</p>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" onclick="generateRecord()">生成记录</button>
-        <button type="button" class="ghost" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
-      <div class="quality" id="qualityBox"></div>
-      <pre class="answer" id="recordOutput">还没有生成记录。</pre>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-  const $ = (id) => document.getElementById(id);
+      </ul>
+    </section>
+  </article>
 
-  function updateProgress(){
-    const doc = document.documentElement;
-    const max = doc.scrollHeight - doc.clientHeight;
-    const pct = max > 0 ? (doc.scrollTop / max) * 100 : 0;
-    $('readProgress').style.width = pct + '%';
-  }
-  document.addEventListener('scroll', updateProgress);
-  updateProgress();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-  const navLinks = Array.from(document.querySelectorAll('nav a'));
-  const sections = navLinks.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
-  const observer = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if(entry.isIntersecting){
-        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id));
-      }
-    });
-  }, {rootMargin:'-30% 0px -65% 0px'});
-  sections.forEach(sec => observer.observe(sec));
-
-  function updateFewShot(){
-    const n = parseInt($('waySlider').value, 10);
-    const k = parseInt($('shotSlider').value, 10);
-    $('wayVal').textContent = n;
-    $('shotVal').textContent = k;
-    $('supportCount').textContent = String(n * k);
-    const hard = n / Math.max(k,1);
-    $('difficulty').textContent = hard > 8 ? '偏难' : hard > 3 ? '中等' : '偏易';
-    $('difficulty').className = 'score ' + (hard > 8 ? 'neg' : hard <= 3 ? 'pos' : '');
-    $('fewNote').textContent = n + '-way ' + k + '-shot：support set 共有 ' + (n*k) + ' 个样本。N 越大类别越多，K 越小每类证据越少。';
-  }
-  ['waySlider','shotSlider'].forEach(id => $(id).addEventListener('input', updateFewShot));
-  updateFewShot();
-
-  function collectAnswer(card){
-    const parts = [];
-    const checked = Array.from(card.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(input => {
-      const label = input.closest('label');
-      return (label ? label.innerText : input.value).trim();
-    }).filter(Boolean);
-    const selected = Array.from(card.querySelectorAll('select')).map(select => {
-      const option = select.selectedOptions[0];
-      return option && option.value ? option.textContent.trim() : '';
-    }).filter(Boolean);
-    if(checked.length) parts.push('选择：' + checked.join('；'));
-    if(selected.length) parts.push('下拉选择：' + selected.join('；'));
-    const texts = Array.from(card.querySelectorAll('textarea,input[type="text"],input[type="number"]')).map(el => el.value.trim()).filter(Boolean);
-    if(texts.length) parts.push(texts.join('\n'));
-    return parts.join('\n').trim();
-  }
-
-  function generateRecord(){
-    const cards = Array.from(document.querySelectorAll(".q[data-role='homework']"));
-    const lines = [];
-    let answered = 0;
-    lines.push('# P56 元学习 2：万物皆可 Meta - 练习记录');
-    lines.push('');
-    lines.push('## 完成情况');
-    cards.forEach((card, idx) => {
-      const title = card.dataset.title || ('题目 ' + (idx + 1));
-      const question = card.querySelector('h3')?.innerText.trim() || title;
-      const answer = collectAnswer(card);
-      if(answer) answered += 1;
-      lines.push('');
-      lines.push('### Q' + String(idx + 1).padStart(2, '0') + ' ' + title);
-      lines.push('');
-      lines.push('题目：' + question);
-      lines.push('');
-      lines.push('回答：');
-      lines.push(answer ? answer : '（未作答）');
-    });
-    const missing = cards.length - answered;
-    const quality = [];
-    quality.push('已作答：' + answered + ' / ' + cards.length);
-    if(missing > 0) quality.push('还有 ' + missing + ' 题未作答。');
-    if(answered === cards.length) quality.push('已完成全部题目。请重点复查：每个方法的 φ 是什么。');
-    $('qualityBox').style.display = 'block';
-    $('qualityBox').textContent = quality.join('\n');
-    $('recordOutput').textContent = lines.join('\n');
-  }
-
-  async function copyRecord(){
-    const text = $('recordOutput').textContent;
-    if(!text || text.includes('还没有生成记录')) generateRecord();
-    const finalText = $('recordOutput').textContent;
-    try{
-      await navigator.clipboard.writeText(finalText);
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '已复制练习记录。';
-    }catch(err){
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '复制失败，请手动选择下方记录。';
-    }
-  }
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

@@ -4,499 +4,687 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P26｜有效使用自督导式模型</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="prompt tuning,template,verbalizer,LM head,LM-BFF,PET,Adapter,LoRA,prefix tuning,soft prompt,early exit">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>有效使用自督导式模型</strong><span>P26。从少标注数据到少任务参数，学会让预训练模型更省地适配任务。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#problem"><span class="dot"></span>两个现实问题</a>
-      <a href="#prompt"><span class="dot"></span>Prompt 用法</a>
-      <a href="#data"><span class="dot"></span>少数据路线</a>
-      <a href="#parameter"><span class="dot"></span>少参数直觉</a>
-      <a href="#methods"><span class="dot"></span>四种做法</a>
-      <a href="#exit"><span class="dot"></span>Early Exit</a>
-      <a href="#share"><span class="dot"></span>速查例题</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：少数据时，尽量把任务改写成预训练模型原本会做的形式；模型太大时，只训练少量任务专属参数。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P26</div>
-        <h1>少一点标注，少一点参数，也能用好大模型</h1>
-        <p>预训练语言模型已经有大量语言知识，但现实任务经常卡在两件事上。第一，某个下游任务的有标注资料很少，直接接分类器再微调容易过拟合。第二，模型本身太大，如果每个任务都完整保存一份微调后的模型，空间和推理成本都会很高。</p>
-        <p>本节把解决思路分成两条线。Data-efficient tuning 关心“标注少怎么办”，代表做法是把任务改写成 prompt，再配合 verbalizer、demonstration、半监督伪标签或多任务指令训练。Parameter-efficient tuning 关心“任务多、模型大怎么办”，代表做法是 Adapter、LoRA、prefix tuning、soft prompt 和 early exit。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>区分 standard fine-tuning 和 prompt tuning。</li>
-          <li>解释 template、LM head、verbalizer 各自做什么。</li>
-          <li>说明 LM-BFF、PET、zero-shot prompt 想解决哪类少数据问题。</li>
-          <li>解释 Adapter、LoRA、prefix tuning、soft prompt 如何只训练少量参数。</li>
-          <li>判断 early exit 为什么减少推理时间，而不是减少模型层数本身。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
-      <p>把预训练模型用于下游任务时，最朴素的方法是 standard fine-tuning：拿掉原本的 language model head，接一个新的 classifier head，然后把整颗模型一起微调。这个方法简单，但在有标注资料很少时，新分类头需要从很少的样本里学映射；在任务很多时，每个任务都要保存一份完整参数。</p>
-      <p>prompt tuning 的想法是不要把任务改造成“新分类器问题”，而是把任务改写成语言模型熟悉的形式。例如自然语言推理可以写成“前提句。[MASK]，假设句”，再让模型填 yes、maybe、no。这个设计让下游任务更贴近预训练时的填空任务，也把人的任务理解放进 template 和 verbalizer 里。</p>
-      <p>参数高效微调继续往前走：如果整颗模型已经会很多东西，我们是否只训练一小块任务专属组件，让它改变 hidden representation 的方向，而不更新原始模型的大量参数？Adapter、LoRA、prefix tuning 和 soft prompt 都是在做这件事，只是插入位置和可训练对象不同。</p>
-      <div class="map">
-        <span class="node">pretrained LM</span>
-        <span class="node">prompt form</span>
-        <span class="node">少数据适配</span>
-        <span class="node">少参数适配</span>
-        <span class="node">多任务部署</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P26</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>看到一个下游任务时，先判断它卡在“标注少”还是“每个任务参数太多”。</p></div>
-    </section>
-
-    <section id="problem">
-      <div class="head"><h2>两个现实问题：资料少，模型大</h2><span class="tag">MOTIVATION</span></div>
-      <div class="grid2">
-        <div class="box soft">
-          <h3>问题一：有标注资料太少</h3>
-          <p>预训练阶段可以用海量未标注文本，但下游任务往往只有几十、几百或几千笔有标注资料。若直接训练一个新的分类头，分类头参数虽然看起来不大，却可能已经多过可用样本提供的信息量。模型容易记住训练样本，而不是学到稳健规则。</p>
-          <p>少数据路线的核心做法是降低任务和预训练任务之间的差距。与其让模型从零学“这个新分类头的输出 0/1/2 是什么”，不如把任务写成自然语言提示，让模型继续做它熟悉的词表预测。</p>
-        </div>
-        <div class="box warn">
-          <h3>问题二：每个任务保存一整颗模型</h3>
-          <p>假设一个 BERT/RoBERTa 模型被微调用到四个任务上。standard fine-tuning 会得到四份完整模型参数。任务越多，存储成本越高；如果服务端要同时支持多个任务，加载和切换也会变麻烦。</p>
-          <p>少参数路线的核心做法是冻结共用预训练模型，只为每个任务保存很小的专属参数。这样部署多个任务时，可以共享同一个基础模型，再按任务切换 Adapter、LoRA 权重、prefix 或 soft prompt。</p>
-        </div>
+      <h1 class="hero-title">P26｜有效使用自督导式模型</h1>
+      <p class="hero-desc">预训练语言模型已经有大量语言知识，但现实任务经常卡在两件事上。第一，某个下游任务的有标注资料很少，直接接分类器再微调容易过拟合。第二，模型本身太大，如果每个任务都完整保存一份微调后的模型，空间和推理成本都会很高。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P25_GPT的野望/学习页.html">上一节</a>
+            <a href="../P27_语音与影像自督导式学习模型/学习页.html">下一节</a>
       </div>
-      <div class="formula">
-        共同问题：不要让下游任务重新学习已经存在的语言知识。<br>
-        少数据：减少任务形式差距；少参数：减少每个任务新增参数。
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么“模型已经预训练过”不代表下游使用就没有成本。</p></div>
-    </section>
-
-    <section id="prompt">
-      <div class="head"><h2>Prompt Tuning：保留 LM Head，用词表词表达标签</h2><span class="tag">PROMPT</span></div>
-      <p>standard fine-tuning 会丢掉原本的 LM head，接上一个任务分类器。prompt tuning 不这么做。它保留 LM head，让模型继续预测词表里的 token；我们再用 verbalizer 把 token 映射回标签。比如 NLI 任务中，entailment、neutral、contradiction 可以映射成 yes、maybe、no。</p>
-      <p>这套做法需要三件东西。第一是 prompt template，也就是输入如何被改写成填空形式。第二是 pretrained LM，它负责根据上下文预测 mask 位置的词。第三是 verbalizer，它规定哪些词代表哪些标签。template 不是装饰，它把人的任务假设写进输入格式；verbalizer 也不是随便选词，因为不同词可能让模型调用到不同的预训练知识。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：template 与 verbalizer 如何决定标签</h3>
-            <div class="tabs">
-              <button type="button" data-case="nli" class="active">NLI</button>
-              <button type="button" data-case="review">影评</button>
-              <button type="button" data-case="topic">主题分类</button>
-            </div>
-            <div class="prompt" id="promptBox"></div>
-            <div class="slider-row"><label for="verbNo">负向词分数</label><input id="verbNo" type="range" min="0" max="100" value="18"><strong id="verbNoOut">18</strong></div>
-            <div class="slider-row"><label for="verbMaybe">中性词分数</label><input id="verbMaybe" type="range" min="0" max="100" value="31"><strong id="verbMaybeOut">31</strong></div>
-            <div class="slider-row"><label for="verbYes">正向词分数</label><input id="verbYes" type="range" min="0" max="100" value="82"><strong id="verbYesOut">82</strong></div>
-          </div>
-          <div class="viz-note">
-            <h3 id="promptTitle">预测结果：entailment</h3>
-            <p id="promptText">当前 verbalizer 中，正向词分数最高，因此标签会落到“蕴含/肯定”一侧。观察重点不是分数本身，而是标签来自词表词，而不是新接的分类器。</p>
-          </div>
-        </div>
-      </div>
-      <table class="metric-table">
-        <tr><th>做法</th><th>保留 LM head 吗</th><th>新增分类器吗</th><th>适合观察什么</th></tr>
-        <tr><td>standard fine-tuning</td><td>通常不保留</td><td>会新增</td><td>任务数据足够时很直接</td></tr>
-        <tr><td>prompt tuning</td><td>保留</td><td>通常不新增</td><td>标注少时，借用预训练填空能力</td></tr>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>看到一个 prompt 方法时，指出 template、LM head 和 verbalizer 分别在哪里。</p></div>
-    </section>
-
-    <section id="data">
-      <div class="head"><h2>少数据路线：从 few-shot 到 zero-shot</h2><span class="tag">DATA EFFICIENT</span></div>
-      <p>少数据路线不是一个单独算法，而是一组围绕 prompt 的使用策略。few-shot 场景下，资料可能只有十几笔。LM-BFF 这类方法会在 prompt tuning 之外加入 demonstration，也就是把少量示范例子放进输入，让模型看到“这个任务的输入和输出应该长什么样”。这和 GPT 的 in-context learning 形式相似，但这里可以配合较小的 RoBERTa 类模型做微调。</p>
-      <p>semi-supervised learning 场景下，我们有少量有标注资料和大量未标注资料。PET 的思路是设计多组 template 和 verbalizer，训练出多个 prompt-based 模型，再让这些模型给未标注资料产生伪标签。最后用原始标签和伪标签一起训练一个标准分类模型。这里的关键不是“伪标签一定正确”，而是用多个 prompt 视角把预训练知识转成更多监督信号。</p>
-      <p>zero-shot 场景下，甚至没有目标任务的有标注样本。GPT-3 展示过只靠任务说明做推断的能力。一种解释是：预训练文本里本来就混着 FAQ、摘要、翻译、问答等任务形态，模型在预测下一个 token 时隐约学到多任务模式。更主动的做法是把 T5 等模型用多任务 prompt 形式训练，让它显式练习很多任务，再测试未见过的任务。</p>
-      <div class="mini-flow">
-        <div>few-shot<small>少量标签 + demonstration</small></div>
-        <div>PET<small>多种模板产生伪标签</small></div>
-        <div>semi-supervised<small>少量标签 + 大量未标注</small></div>
-        <div>zero-shot<small>只给任务说明</small></div>
-        <div>multi-task prompt<small>显式训练跨任务能力</small></div>
-      </div>
-      <div class="grid3">
-        <div class="box info"><h3>LM-BFF</h3><p>给模型看 demonstration，让少量例子提供任务格式。它强调小一些的预训练模型也可以在 few-shot 上做得不错。</p></div>
-        <div class="box soft"><h3>PET</h3><p>用多组 prompt 模型给未标注资料产出伪标签，再训练一个标准分类模型。它把未标注资料转成可用信号。</p></div>
-        <div class="box warn"><h3>Zero-shot</h3><p>没有目标标签时，只能依赖模型在预训练或多任务训练中学到的任务理解能力。效果和任务、说明、模型规模都有关。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把 LM-BFF、PET、zero-shot prompt 放在“标签数量逐渐减少”的同一条轴上解释。</p></div>
-    </section>
-
-    <section id="parameter">
-      <div class="head"><h2>少参数直觉：只学一个小的 Δh</h2><span class="tag">PARAMETER EFFICIENT</span></div>
-      <p>standard fine-tuning 更新整颗模型，本质上是在改变模型内部产生的 hidden representation。设原本预训练模型给出表示 <code>h</code>，下游任务想要的是更适合分类器或生成目标的 <code>h'</code>。如果可以让一个很小的任务模块产生变化量 <code>Δh</code>，使 <code>h' = h + Δh</code>，就不一定需要动到整颗模型。</p>
-      <p>这就是参数高效微调的共同直觉。原始 Transformer、embedding、attention 和 feed-forward 大多冻结；每个任务只训练插入的小模块或小向量。部署时，共用基础模型只存一份，任务 A 存自己的小参数，任务 B 存自己的小参数。任务切换时换小参数，而不是换整颗模型。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：多个任务的存储量对比</h3>
-            <div class="slider-row"><label for="paramTasks">任务数量</label><input id="paramTasks" type="range" min="1" max="12" value="4"><strong id="paramTasksOut">4</strong></div>
-            <div class="slider-row"><label for="paramRank">小模块比例</label><input id="paramRank" type="range" min="1" max="10" value="2"><strong id="paramRankOut">2%</strong></div>
-            <table class="metric-table" id="storageTable">
-              <tr><th>方案</th><th>需要保存的相对参数</th><th>说明</th></tr>
-              <tr><td>整颗模型各存一份</td><td id="fullStore">400%</td><td>每个任务都保存完整模型</td></tr>
-              <tr><td>共用模型 + 小参数</td><td id="adapterStore">108%</td><td>一份基础模型加每任务小组件</td></tr>
-            </table>
-          </div>
-          <div class="viz-note">
-            <h3>观察重点</h3>
-            <p>任务越多，整颗模型各存一份会线性膨胀；小参数方案也会增长，但增长的是每个任务的小组件。这里的数字是相对直觉演示，用来理解成本差异。</p>
-          </div>
-        </div>
-      </div>
-      <div class="formula">
-        h' = h + Δh<br>
-        大模型负责通用语言知识；小模块负责把表示推向当前任务需要的方向。
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>用 <code>h</code>、<code>Δh</code>、<code>h'</code> 解释为什么冻结基础模型也能适配任务。</p></div>
-    </section>
-
-    <section id="methods">
-      <div class="head"><h2>四种参数高效做法：插在哪里，训练什么</h2><span class="tag">METHODS</span></div>
-      <p>Adapter、LoRA、prefix tuning、soft prompt 都在减少任务专属参数，但它们插入的位置不同。Adapter 是在 Transformer layer 内部串接一个小模块，通常放在 attention 或 feed-forward 后面。这个小模块先降维、非线性转换、再升维，然后用残差方式给原表示加一个变化量。</p>
-      <p>LoRA 也是产生变化量，但它常以平行分支的形式加在某些线性层旁边。它把一个大的权重更新近似成两个低秩矩阵的乘积，因此只需要训练很少的矩阵参数。和串接 Adapter 相比，LoRA 的一个卖点是平行计算更容易，不一定增加明显的推理深度。</p>
-      <p>prefix tuning 把可训练的 prefix 放到每一层 self-attention 的 key/value 前面。普通 token 有 query、key、value；prefix 不需要主动 query 别人，它主要被后续 token attend 到。训练完成后，每个任务保存对应层的 prefix key/value。soft prompt 更简单，只在输入 embedding 前面插入可训练向量，不在每一层都插。</p>
-      <table class="metric-table">
-        <tr><th>方法</th><th>插入位置</th><th>训练对象</th><th>容易混淆点</th></tr>
-        <tr><td>Adapter</td><td>每层内部，常在 attention/FFN 后</td><td>小型降维-升维模块和任务头</td><td>会让路径更深一点</td></tr>
-        <tr><td>LoRA</td><td>线性层旁边的低秩分支</td><td>低秩矩阵 A/B 和任务头</td><td>不是把原权重全量更新一遍</td></tr>
-        <tr><td>prefix tuning</td><td>每层 attention 的 key/value 前缀</td><td>每层 prefix 对应的向量</td><td>prefix 通常不需要 query</td></tr>
-        <tr><td>soft prompt</td><td>输入 embedding 前面</td><td>少量连续向量</td><td>不是人工写出的 hard prompt 词</td></tr>
-      </table>
-      <div class="grid2">
-        <div class="box info"><h3>hard prompt vs soft prompt</h3><p>hard prompt 是真实 token，例如“请判断这句话的情感”。它经过词表 embedding 得到向量。soft prompt 直接训练连续向量，不一定对应任何可读文字，因此更灵活，也更难人工解释。</p></div>
-        <div class="box warn"><h3>prompt tuning 名字容易乱</h3><p>有些论文把用自然语言模板称为 prompt tuning，有些把训练连续 prompt 向量称为 prompt tuning。读论文时不要只看名字，要看它到底在训练整颗模型、训练 LM head，还是只训练若干连续向量。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>看到一种方法时，先问两个问题：它插在哪里？训练哪些参数？</p></div>
-    </section>
-
-    <section id="exit">
-      <div class="head"><h2>Early Exit：容易的样本不用跑完整层数</h2><span class="tag">INFERENCE</span></div>
-      <p>前面的做法主要减少每个任务需要保存或训练的参数。early exit 更关心推理时间。大模型有很多层，但不是每个样本都需要走到最后一层才能判断。有些输入在前几层已经足够明显，继续计算后面的层只是增加成本。</p>
-      <p>一种做法是在每一层后面都放一个小分类器，再训练 confidence predictor 判断当前层输出是否已经足够可靠。如果第 2 层已经很有把握，就直接输出结果，后面的层不再计算；如果还不够有把握，就继续往后走。它没有把模型结构真正删掉，而是按样本动态选择走多远。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：提前退出到哪一层</h3>
-            <div class="slider-row"><label for="exitLayer">退出层</label><input id="exitLayer" type="range" min="1" max="12" value="5"><strong id="exitLayerOut">5/12</strong></div>
-            <table class="metric-table">
-              <tr><th>指标</th><th>当前值</th></tr>
-              <tr><td>相对计算量</td><td id="exitCompute">42%</td></tr>
-              <tr><td>节省计算</td><td id="exitSave">58%</td></tr>
-            </table>
-          </div>
-          <div class="viz-note">
-            <h3>判断提示</h3>
-            <p id="exitNote">越早退出，速度越快，但要依赖置信度判断。真正难的样本仍然应该走到后面层。</p>
-          </div>
-        </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释 early exit 和 Adapter/LoRA 的区别：前者主要省推理计算，后者主要省任务专属参数。</p></div>
-    </section>
-
-    <section id="share">
-      <div class="head"><h2>公开分享速查：少数据与少参数</h2><span class="tag">quick reference</span></div>
-      <div class="grid2">
-        <div class="box soft">
-          <h3>核心直觉</h3>
-          <p>少数据时，不要急着训练一个全新的分类头，而是尽量把任务改写成语言模型本来擅长的形式：补一个词、接一句话、按示例输出格式。</p>
-          <p>少参数时，不要为每个任务保存一整套大模型，而是冻结主干，只给每个任务存一小块可训练参数。</p>
-        </div>
-        <div class="box warn">
-          <h3>Worked example</h3>
-          <p>三分类情绪任务可以写成：<code>这条评论让人感觉 [MASK]</code>。Verbalizer 把 <code>差</code> 映射为负面，把 <code>普通</code> 映射为中性，把 <code>好</code> 映射为正面。</p>
-          <p>如果只有几十条标注，这种改写能复用 LM head 对词的知识；如果有几十个任务，再配合 Adapter 或 LoRA，就不用保存几十份完整模型。</p>
-        </div>
-      </div>
-      <table class="metric-table">
-        <tr><th>术语</th><th>精确定义</th><th>易混点</th></tr>
-        <tr><td>Template</td><td>把输入包装成语言模型可读的句式。</td><td>不是越长越好，关键是让目标词位置清楚。</td></tr>
-        <tr><td>Verbalizer</td><td>把标签映射到词表词，例如 positive -> great。</td><td>它不是分类头，而是解释 LM head 预测出的词。</td></tr>
-        <tr><td>Soft prompt</td><td>可训练的连续向量提示，不必对应可读文字。</td><td>不要把它理解成“写得更好的自然语言提示词”。</td></tr>
-        <tr><td>Adapter / LoRA / Prefix</td><td>冻结大模型，只训练插入模块、低秩分支或前缀向量。</td><td>它们主要省任务专属参数，不等于一定省推理时间。</td></tr>
-        <tr><td>Early exit</td><td>简单样本在中间层提前输出。</td><td>它主要省计算，和 LoRA 这类省存储方法不同。</td></tr>
-      </table>
-      <div class="box info">
-        <h3>选型检查表</h3>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
         <ul>
-          <li>标注很少：先考虑 prompt、verbalizer、demonstration 或伪标签。</li>
-          <li>任务很多：优先考虑 Adapter、LoRA、prefix tuning 或 soft prompt。</li>
-          <li>推理延迟敏感：再考虑 early exit，并为提前退出设计置信度门槛。</li>
+
         </ul>
       </div>
-    </section>
+    </div>
+  </header>
 
-    <section id="code">
-      <div class="head"><h2>最小代码：看懂冻结与小参数训练</h2><span class="tag">MINIMAL CODE</span></div>
-      <p>下面的伪代码只展示语义。重点不是具体框架调用，而是哪些参数会更新，哪些参数保持冻结。</p>
-      <div class="codebar"><span class="label">正确示例：prompt tuning 保留 LM head</span><span class="kind">pseudo python</span></div>
-      <pre><code>text = premise + <span class="str">" [MASK], "</span> + hypothesis
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#problem">两个现实问题：资料少，模型大</a>
+      <a href="#prompt">Prompt Tuning：保留 LM Head，用词表词表达标签</a>
+      <a href="#data">少数据路线：从 few-shot 到 zero-shot</a>
+      <a href="#parameter">少参数直觉：只学一个小的 Δh</a>
+      <a href="#methods">四种参数高效做法：插在哪里，训练什么</a>
+      <a href="#exit">Early Exit：容易的样本不用跑完整层数</a>
+      <a href="#share">公开分享速查：少数据与少参数</a>
+      <a href="#code">最小代码：看懂冻结与小参数训练</a>
+      <a href="#mistakes">常见误区与修正</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">MAP</span>
+        </div>
+<p>把预训练模型用于下游任务时，最朴素的方法是 standard fine-tuning：拿掉原本的 language model head，接一个新的 classifier head，然后把整颗模型一起微调。这个方法简单，但在有标注资料很少时，新分类头需要从很少的样本里学映射；在任务很多时，每个任务都要保存一份完整参数。</p>
+<p>参数高效微调继续往前走：如果整颗模型已经会很多东西，我们是否只训练一小块任务专属组件，让它改变 hidden representation 的方向，而不更新原始模型的大量参数？Adapter、LoRA、prefix tuning 和 soft prompt 都是在做这件事，只是插入位置和可训练对象不同。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>看到一个下游任务时，先判断它卡在“标注少”还是“每个任务参数太多”。</p>
+        </div>
+      </section>
+      <section id="problem">
+        <div class="head">
+          <h2>两个现实问题：资料少，模型大</h2>
+          <span class="tag">MOTIVATION</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>问题一：有标注资料太少</h3>
+<p>预训练阶段可以用海量未标注文本，但下游任务往往只有几十、几百或几千笔有标注资料。若直接训练一个新的分类头，分类头参数虽然看起来不大，却可能已经多过可用样本提供的信息量。模型容易记住训练样本，而不是学到稳健规则。</p>
+<p>少数据路线的核心做法是降低任务和预训练任务之间的差距。把任务写成自然语言提示，让模型继续做它熟悉的词表预测。</p>
+        </div>
+        <div class="box warn">
+<h3>问题二：每个任务保存一整颗模型</h3>
+<p>假设一个 BERT/RoBERTa 模型被微调用到四个任务上。standard fine-tuning 会得到四份完整模型参数。任务越多，存储成本越高；如果服务端要同时支持多个任务，加载和切换也会变麻烦。</p>
+<p>少参数路线的核心做法是冻结共用预训练模型，只为每个任务保存很小的专属参数。这样部署多个任务时，可以共享同一个基础模型，再按任务切换 Adapter、LoRA 权重、prefix 或 soft prompt。</p>
+<p>$$</p>
+<p>共同问题：不要让下游任务重新学习已经存在的语言知识。</p>
+<p>少数据：减少任务形式差距；少参数：减少每个任务新增参数。</p>
+<p>$$</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释为什么“模型已经预训练过”不代表下游使用就没有成本。</p>
+        </div>
+      </div>
+      </section>
+      <section id="prompt">
+        <div class="head">
+          <h2>Prompt Tuning：保留 LM Head，用词表词表达标签</h2>
+          <span class="tag">PROMPT</span>
+        </div>
+<p>standard fine-tuning 会丢掉原本的 LM head，接上一个任务分类器。prompt tuning 不这么做。它保留 LM head，让模型继续预测词表里的 token；我们再用 verbalizer 把 token 映射回标签。比如 NLI 任务中，entailment、neutral、contradiction 可以映射成 yes、maybe、no。</p>
+<p>小交互：template 与 verbalizer 如何决定标签</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>做法</th><th>保留 LM head 吗</th><th>新增分类器吗</th><th>适合观察什么</th></tr>
+<tr><td>standard fine-tuning</td><td>通常不保留</td><td>会新增</td><td>任务数据足够时很直接</td></tr><tr><td>prompt tuning</td><td>保留</td><td>通常不新增</td><td>标注少时，借用预训练填空能力</td></tr>
+        </table></div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>看到一个 prompt 方法时，指出 template、LM head 和 verbalizer 分别在哪里。</p>
+        </div>
+      </section>
+      <section id="data">
+        <div class="head">
+          <h2>少数据路线：从 few-shot 到 zero-shot</h2>
+          <span class="tag">DATA</span>
+        </div>
+<p>少数据路线一组围绕 prompt 的使用策略。few-shot 场景下，资料可能只有十几笔。LM-BFF 这类方法会在 prompt tuning 之外加入 demonstration，也就是把少量示范例子放进输入，让模型看到“这个任务的输入和输出应该长什么样”。这和 GPT 的 in-context learning 形式相似，但这里可以配合较小的 RoBERTa 类模型做微调。</p>
+<p>zero-shot 场景下，甚至没有目标任务的有标注样本。GPT-3 展示过只靠任务说明做推断的能力。一种解释是：预训练文本里本来就混着 FAQ、摘要、翻译、问答等任务形态，模型在预测下一个 token 时隐约学到多任务模式。更主动的做法是把 T5 等模型用多任务 prompt 形式训练，让它显式练习很多任务，再测试未见过的任务。</p>
+<p>LM-BFF给模型看 demonstration，让少量例子提供任务格式。它强调小一些的预训练模型也可以在 few-shot 上做得不错。</p>
+<p>PET用多组 prompt 模型给未标注资料产出伪标签，再训练一个标准分类模型。它把未标注资料转成可用信号。</p>
+<p>Zero-shot没有目标标签时，只能依赖模型在预训练或多任务训练中学到的任务理解能力。效果和任务、说明、模型规模都有关。</p>
+      </section>
+      <section id="parameter">
+        <div class="head">
+          <h2>少参数直觉：只学一个小的 Δh</h2>
+          <span class="tag">PARAMETER</span>
+        </div>
+<p>standard fine-tuning 更新整颗模型，本质上是在改变模型内部产生的 hidden representation。设原本预训练模型给出表示 <code>h</code>，下游任务想要的是更适合分类器或生成目标的 <code>h'</code>。如果可以让一个很小的任务模块产生变化量 <code>Δh</code>，使 <code>h' = h + Δh</code>，就不一定需要动到整颗模型。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>小交互：多个任务的存储量对比</th><th>任务数量<b>4</b></th><th>小模块比例<b>2%</b></th></tr>
+<tr><td>方案需要保存的相对参数说明</td><td>整颗模型各存一份400%每个任务都保存完整模型</td><td>共用模型 + 小参数108%一份基础模型加每任务小组件</td></tr>
+        </table></div>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+h' = h + Δh
+ 大模型负责通用语言知识；小模块负责把表示推向当前任务需要的方向。
+$$
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>用 <code>h</code>、<code>Δh</code>、<code>h'</code> 解释为什么冻结基础模型也能适配任务。</p>
+        </div>
+      </section>
+      <section id="methods">
+        <div class="head">
+          <h2>四种参数高效做法：插在哪里，训练什么</h2>
+          <span class="tag">METHODS</span>
+        </div>
+<p>Adapter、LoRA、prefix tuning、soft prompt 都在减少任务专属参数，但它们插入的位置不同。Adapter 是在 Transformer layer 内部串接一个小模块，通常放在 attention 或 feed-forward 后面。这个小模块先降维、非线性转换、再升维，然后用残差方式给原表示加一个变化量。</p>
+<p>prefix tuning 把可训练的 prefix 放到每一层 self-attention 的 key/value 前面。普通 token 有 query、key、value；prefix 不需要主动 query 别人，它主要被后续 token attend 到。训练完成后，每个任务保存对应层的 prefix key/value。soft prompt 更简单，只在输入 embedding 前面插入可训练向量，不在每一层都插。</p>
+        <div class="box info">
+<h3>hard prompt vs soft prompt</h3>
+<p>hard prompt 是真实 token，例如“请判断这句话的情感”。它经过词表 embedding 得到向量。soft prompt 直接训练连续向量，不一定对应任何可读文字，因此更灵活，也更难人工解释。</p>
+        </div>
+        <div class="box warn">
+<h3>prompt tuning 名字容易乱</h3>
+<p>有些论文把用自然语言模板称为 prompt tuning，有些把训练连续 prompt 向量称为 prompt tuning。读论文时不要只看名字，要看它到底在训练整颗模型、训练 LM head，还是只训练若干连续向量。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>看到一种方法时，先问两个问题：它插在哪里？训练哪些参数？</p>
+        </div>
+      </section>
+      <section id="exit">
+        <div class="head">
+          <h2>Early Exit：容易的样本不用跑完整层数</h2>
+          <span class="tag">INFERENCE</span>
+        </div>
+<p>前面的做法主要减少每个任务需要保存或训练的参数。early exit 更关心推理时间。大模型有很多层，但不是每个样本都需要走到最后一层才能判断。有些输入在前几层已经足够明显，继续计算后面的层只是增加成本。</p>
+<p>小交互：提前退出到哪一层</p>
+<p>退出层<b>5/12</b></p>
+<p>判断提示</p>
+<p>越早退出，速度越快，但要依赖置信度判断。真正难的样本仍然应该走到后面层。</p>
+      </section>
+      <section id="share">
+        <div class="head">
+          <h2>公开分享速查：少数据与少参数</h2>
+          <span class="tag">quick</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>核心直觉</h3>
+<p>少数据时，不要急着训练一个全新的分类头，而是尽量把任务改写成语言模型本来擅长的形式：补一个词、接一句话、按示例输出格式。</p>
+<p>少参数时，不要为每个任务保存一整套大模型，而是冻结主干，只给每个任务存一小块可训练参数。</p>
+        </div>
+        <div class="box warn">
+<h3>Worked example</h3>
+<p>三分类情绪任务可以写成：<code>这条评论让人感觉 [MASK]</code>。Verbalizer 把 <code>差</code> 映射为负面，把 <code>普通</code> 映射为中性，把 <code>好</code> 映射为正面。</p>
+<p>如果只有几十条标注，这种改写能复用 LM head 对词的知识；如果有几十个任务，再配合 Adapter 或 LoRA，就不用保存几十份完整模型。</p>
+<table class="metric-table">
+<tr><th>术语</th><th>精确定义</th><th>易混点</th></tr>
+<tr><td>Template</td><td>把输入包装成语言模型可读的句式。</td><td>不是越长越好，关键是让目标词位置清楚。</td></tr>
+<tr><td>Verbalizer</td><td>把标签映射到词表词，例如 positive -> great。</td><td>它解释 LM head 预测出的词。</td></tr>
+<tr><td>Soft prompt</td><td>可训练的连续向量提示，不必对应可读文字。</td><td>不要把它理解成“写得更好的自然语言提示词”。</td></tr>
+<tr><td>Adapter / LoRA / Prefix</td><td>冻结大模型，只训练插入模块、低秩分支或前缀向量。</td><td>它们主要省任务专属参数，不等于一定省推理时间。</td></tr>
+<tr><td>Early exit</td><td>简单样本在中间层提前输出。</td><td>它主要省计算，和 LoRA 这类省存储方法不同。</td></tr>
+</table>
+        </div>
+        <div class="box info">
+<h3>选型检查表</h3>
+<ul>
+<li>标注很少：先考虑 prompt、verbalizer、demonstration 或伪标签。</li>
+<li>任务很多：优先考虑 Adapter、LoRA、prefix tuning 或 soft prompt。</li>
+<li>推理延迟敏感：再考虑 early exit，并为提前退出设计置信度门槛。</li>
+</ul>
+        </div>
+      </div>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：看懂冻结与小参数训练</h2>
+          <span class="tag">MINIMAL</span>
+        </div>
+<p>下面的伪代码只展示语义。重点哪些参数会更新，哪些参数保持冻结。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">text = premise + " [MASK], " + hypothesis
 logits = pretrained_lm(text).mask_logits
 label_scores = {
-    <span class="str">"entailment"</span>: logits[<span class="str">"yes"</span>],
-    <span class="str">"neutral"</span>: logits[<span class="str">"maybe"</span>],
-    <span class="str">"contradiction"</span>: logits[<span class="str">"no"</span>],
+ "entailment": logits["yes"],
+ "neutral": logits["maybe"],
+ "contradiction": logits["no"],
 }
 loss = cross_entropy(label_scores, gold_label)
 update(pretrained_lm.parameters, loss)</code></pre>
-      <div class="codebar"><span class="label">正确示例：只训练 LoRA 小分支</span><span class="kind">pseudo python</span></div>
-      <pre><code><span class="kw">for</span> p <span class="kw">in</span> base_model.parameters:
-    p.requires_grad = <span class="kw">False</span>
+<p>正确示例：只训练 LoRA 小分支pseudo python</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text">for p in base_model.parameters:
+ p.requires_grad = False
 
 output = base_linear(x) + lora_B(lora_A(x))
 loss = task_loss(classifier(output), y)
 update(lora_A.parameters + lora_B.parameters + classifier.parameters, loss)</code></pre>
-      <div class="codebar error"><span class="label">错误示例：以为 soft prompt 是可读文字</span><span class="kind">pseudo</span></div>
-      <pre><code><span class="cmt"># 错误理解：soft prompt 一定能翻译成一句自然语言。</span>
-soft_prompt = [<span class="str">"请"</span>, <span class="str">"判断"</span>, <span class="str">"情感"</span>]
+<p>错误示例：以为 soft prompt 是可读文字pseudo</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-3">复制</button></div>
+        <pre id="code-code-3" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误理解：soft prompt 一定能翻译成一句自然语言。
+soft_prompt = ["请", "判断", "情感"]
 
-<span class="cmt"># 修正：soft prompt 通常是连续向量，不一定对应词表中的真实 token。</span>
+# 修正：soft prompt 通常是连续向量，不一定对应词表中的真实 token。
 soft_prompt = trainable_vectors(shape=(prompt_len, hidden_dim))</code></pre>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>读一段微调代码时，检查基础模型参数是否冻结，以及任务专属参数在哪里。</p></div>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区与修正</h2><span class="tag">PITFALLS</span></div>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与修正</h2>
+          <span class="tag">PITFALLS</span>
+        </div>
       <div class="grid2">
-        <div class="box redsoft"><h3>误区 1：prompt tuning 一定不更新模型</h3><p>错因：把自然语言 prompt、soft prompt 和 in-context use 混在一起。后果：判断训练成本时出错。修法：看是否有梯度更新，更新的是整颗模型还是少量向量。</p></div>
-        <div class="box redsoft"><h3>误区 2：verbalizer 只是翻译标签名</h3><p>错因：以为 yes/no/maybe 随便选。后果：模型预测的词表概率和真实标签对不上。修法：把 verbalizer 当成标签到词表词的关键映射。</p></div>
-        <div class="box redsoft"><h3>误区 3：few-shot 就等于完全不训练</h3><p>错因：看到 few-shot prompt 就联想到 GPT 的上下文学习。后果：混淆 LM-BFF 一类微调方法。修法：few-shot 只描述样本少，不自动说明是否更新参数。</p></div>
-        <div class="box redsoft"><h3>误区 4：Adapter、LoRA、prefix tuning 都只是换名字</h3><p>错因：它们都训练少量参数。后果：无法判断插入位置和推理成本。修法：分别看串接模块、低秩分支、每层 key/value 前缀。</p></div>
-        <div class="box redsoft"><h3>误区 5：soft prompt 是人工写出的提示词</h3><p>错因：名字里有 prompt。后果：期待它可读、可解释。修法：soft prompt 是可训练连续向量，hard prompt 才是真实 token。</p></div>
-        <div class="box redsoft"><h3>误区 6：early exit 会把大模型永久剪小</h3><p>错因：把动态退出和模型压缩混淆。后果：误解部署方式。修法：模型层仍在，简单样本可提前输出，难样本继续往后走。</p></div>
+        <div class="box redsoft">
+<h3>误区 1：prompt tuning 一定不更新模型</h3>
+<p>错因：把自然语言 prompt、soft prompt 和 in-context use 混在一起。后果：判断训练成本时出错。修法：看是否有梯度更新，更新的是整颗模型还是少量向量。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 2：verbalizer 只是翻译标签名</h3>
+<p>错因：以为 yes/no/maybe 随便选。后果：模型预测的词表概率和真实标签对不上。修法：把 verbalizer 当成标签到词表词的关键映射。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 3：few-shot 就等于完全不训练</h3>
+<p>错因：看到 few-shot prompt 就联想到 GPT 的上下文学习。后果：混淆 LM-BFF 一类微调方法。修法：few-shot 只描述样本少，不自动说明是否更新参数。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 4：Adapter、LoRA、prefix tuning 都只是换名字</h3>
+<p>错因：它们都训练少量参数。后果：无法判断插入位置和推理成本。修法：分别看串接模块、低秩分支、每层 key/value 前缀。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 5：soft prompt 是人工写出的提示词</h3>
+<p>错因：名字里有 prompt。后果：期待它可读、可解释。修法：soft prompt 是可训练连续向量，hard prompt 才是真实 token。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 6：early exit 会把大模型永久剪小</h3>
+<p>错因：把动态退出和模型压缩混淆。后果：误解部署方式。修法：模型层仍在，简单样本可提前输出，难样本继续往后走。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>用“训练对象、插入位置、推理路径”三点拆解各种高效使用方法。</p>
+        </div>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>用“训练对象、插入位置、推理路径”三点拆解各种高效使用方法。</p></div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>做题前先抓主线</strong><p>P26 的主线是：少数据时改写任务形式，少参数时冻结基础模型并训练小组件。</p></div>
-        <div class="review-card"><strong>自检重点</strong><ul><li>能不能区分 template、verbalizer、LM head？</li><li>能不能把 LM-BFF、PET、zero-shot 放在同一张图里？</li><li>能不能说清 Adapter、LoRA、prefix、soft prompt 的差别？</li></ul></div>
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础概念</h3></div>
+          <div class="quick-review">作答提示 不要只背名字，回答时带上“解决什么问题”。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. standard fine-tuning 最典型的做法是哪一个？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="保留 LM head，只改 verbalizer">保留 LM head，只改 verbalizer</label>
+      <label><input type="radio" name="q?" value="丢掉 LM head，接 classifier，并更新整颗模型">丢掉 LM head，接 classifier，并更新整颗模型</label>
+      <label><input type="radio" name="q?" value="只训练输入前面的连续向量">只训练输入前面的连续向量</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、基础概念</h3><p>先检查你是否能把本节关键词放到正确位置。</p></div><div class="quick-review"><b>作答提示</b><span>不要只背名字，回答时带上“解决什么问题”。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q01" data-role="homework"><div class="q-meta"><span class="pill">选择</span></div><h3>1. standard fine-tuning 最典型的做法是哪一个？</h3><div class="choices"><label><input type="radio" name="q01" value="保留 LM head，只改 verbalizer">保留 LM head，只改 verbalizer</label><label><input type="radio" name="q01" value="丢掉 LM head，接 classifier，并更新整颗模型">丢掉 LM head，接 classifier，并更新整颗模型</label><label><input type="radio" name="q01" value="只训练输入前面的连续向量">只训练输入前面的连续向量</label></div><div class="solve-note">提示：抓住“新分类头”和“整颗模型”。</div></div>
-          <div class="q" id="q02" data-role="homework"><div class="q-meta"><span class="pill">判断</span></div><h3>2. prompt tuning 中 verbalizer 的作用是把词表词映射回任务标签。</h3><div class="choices"><label><input type="radio" name="q02" value="对">对</label><label><input type="radio" name="q02" value="错">错</label></div><div class="solve-note">提示：回答时补一句为什么 verbalizer 不能随便选。</div></div>
-          <div class="q short" id="q03" data-role="homework"><div class="q-meta"><span class="pill">填空</span></div><h3>3. prompt tuning 至少需要三件东西：template、pretrained LM 和 ______。</h3><input type="text" id="ans03" placeholder="写出英文术语或中文解释"></div>
-          <div class="q short" id="q04" data-role="homework"><div class="q-meta"><span class="pill">填空</span></div><h3>4. 参数高效微调的直觉可以写成 h' = h + ______。</h3><input type="text" id="ans04" placeholder="写出符号或文字解释"></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 2. prompt tuning 中 verbalizer 的作用是把词表词映射回任务标签。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 3. prompt tuning 至少需要三件东西：template、pretrained LM 和 ______。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 4. 参数高效微调的直觉可以写成 h' = h + ______。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、少数据路线</h3><p>这组题检查你能否按标签数量减少的顺序解释方法。</p></div><div class="quick-review"><b>作答提示</b><span>从 few-shot、semi-supervised、zero-shot 三个场景组织答案。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q05" data-role="homework"><div class="q-meta"><span class="pill">匹配</span></div><h3>5. 将方法和核心动作匹配：LM-BFF / PET / 多任务 prompt 训练。</h3><textarea id="ans05" placeholder="例：LM-BFF → ...；PET → ...；多任务 prompt 训练 → ..."></textarea></div>
-          <div class="q" id="q06" data-role="homework"><div class="q-meta"><span class="pill">选择</span></div><h3>6. PET 为什么要训练多组 template 和 verbalizer 组合？</h3><div class="choices"><label><input type="radio" name="q06" value="为了完全避免使用未标注资料">为了完全避免使用未标注资料</label><label><input type="radio" name="q06" value="为了从多个 prompt 视角给未标注资料产生伪标签">为了从多个 prompt 视角给未标注资料产生伪标签</label><label><input type="radio" name="q06" value="为了把模型永久剪成更少层">为了把模型永久剪成更少层</label></div></div>
-          <div class="q" id="q07" data-role="homework"><div class="q-meta"><span class="pill">场景</span></div><h3>7. 你只有 16 笔影评标签和一个较小的 RoBERTa。请说明为什么 demonstration 可能比单独 template 更有帮助。</h3><textarea id="ans07" placeholder="从任务格式、示范输入输出、少样本稳定性回答。"></textarea></div>
-          <div class="q" id="q08" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>8. GPT-3 为什么可能有 zero-shot 能力？请给出“预训练资料像多任务环境”的解释。</h3><textarea id="ans08" placeholder="用 FAQ、摘要、翻译等资料形态作例子。"></textarea></div>
+        <div class="group-head">
+          <div><h3>二、少数据路线</h3></div>
+          <div class="quick-review">作答提示 从 few-shot、semi-supervised、zero-shot 三个场景组织答案。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">匹配</span></div>
+        <h3><b>Q:</b> 5. 将方法和核心动作匹配：LM-BFF / PET / 多任务 prompt 训练。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 6. PET 为什么要训练多组 template 和 verbalizer 组合？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="为了完全避免使用未标注资料">为了完全避免使用未标注资料</label>
+      <label><input type="radio" name="q?" value="为了从多个 prompt 视角给未标注资料产生伪标签">为了从多个 prompt 视角给未标注资料产生伪标签</label>
+      <label><input type="radio" name="q?" value="为了把模型永久剪成更少层">为了把模型永久剪成更少层</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、少参数路线</h3><p>这组题检查你能否从插入位置和训练对象区分方法。</p></div><div class="quick-review"><b>作答提示</b><span>每题都说清楚“冻结什么、训练什么”。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q09" data-role="homework"><div class="q-meta"><span class="pill">排序</span></div><h3>9. Adapter 模块内部通常经历哪些步骤？请按顺序写出：升维、降维、非线性、残差相加。</h3><textarea id="ans09" placeholder="按顺序写，并说明为什么它能产生 Δh。"></textarea></div>
-          <div class="q" id="q10" data-role="homework"><div class="q-meta"><span class="pill">判断</span></div><h3>10. LoRA 的低秩分支通常和原线性层平行相加，而不是替换原线性层。</h3><div class="choices"><label><input type="radio" name="q10" value="对">对</label><label><input type="radio" name="q10" value="错">错</label></div></div>
-          <div class="q" id="q11" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>11. prefix tuning 为什么要把 prefix 放到 self-attention 的 key/value 一侧？</h3><textarea id="ans11" placeholder="从 query、key、value 和被 token attend 的角度回答。"></textarea></div>
-          <div class="q" id="q12" data-role="homework"><div class="q-meta"><span class="pill">对照</span></div><h3>12. 用两句话区分 hard prompt 和 soft prompt。</h3><textarea id="ans12" placeholder="一句说 hard prompt；一句说 soft prompt。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景</span></div>
+        <h3><b>Q:</b> 7. 你只有 16 笔影评标签和一个较小的 RoBERTa。请说明为什么 demonstration 可能比单独 template 更有帮助。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 8. GPT-3 为什么可能有 zero-shot 能力？请给出“预训练资料像多任务环境”的解释。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>四、错误诊断与迁移</h3><p>这组题要求你定位错因、后果和修法。</p></div><div class="quick-review"><b>作答提示</b><span>错误示例题按“错在哪 / 会怎样 / 怎么改”写。</span></div></div>
-        <div class="drill-grid">
-          <div class="q full" id="q13" data-role="homework"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>13. 错误示例：有人说“soft prompt 就是把中文提示词写得更好，所以一定可读”。请诊断。</h3><textarea id="ans13" placeholder="错在哪？会导致什么误解？应该怎么改说法？"></textarea></div>
-          <div class="q" id="q14" data-role="homework"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>14. 错误示例：有人在少量标签任务中接了一个分类器，然后说这已经利用了 LM head 的知识。请诊断。</h3><textarea id="ans14" placeholder="从 LM head 是否保留、词表预测是否使用回答。"></textarea></div>
-          <div class="q" id="q15" data-role="homework"><div class="q-meta"><span class="pill">场景应用</span></div><h3>15. 你要给 20 个不同文本分类任务部署同一个基础模型。你会优先考虑哪类方法？为什么？</h3><textarea id="ans15" placeholder="从共用基础模型、任务专属小参数、存储成本回答。"></textarea></div>
-          <div class="q" id="q16" data-role="homework"><div class="q-meta"><span class="pill">面试短答</span></div><h3>16. 用 2-3 句话回答：Adapter 和 LoRA 的共同点与差别是什么？</h3><textarea id="ans16" placeholder="共同点说少量参数和 Δh；差别说串接模块和平行低秩分支。"></textarea></div>
+        <div class="group-head">
+          <div><h3>三、少参数路线</h3></div>
+          <div class="quick-review">作答提示 每题都说清楚“冻结什么、训练什么”。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">排序</span></div>
+        <h3><b>Q:</b> 9. Adapter 模块内部通常经历哪些步骤？请按顺序写出：升维、降维、非线性、残差相加。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 10. LoRA 的低秩分支通常和原线性层平行相加，而不是替换原线性层。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>五、表达输出</h3><p>最后两题检查你能否把整节课讲成一条完整主线。</p></div><div class="quick-review"><b>作答提示</b><span>关键词：prompt、verbalizer、少数据、Adapter、LoRA、prefix、soft prompt、early exit。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q17" data-role="homework"><div class="q-meta"><span class="pill">综合短答</span></div><h3>17. early exit 和 LoRA 都让模型“更有效”，但有效的对象不同。请说明。</h3><textarea id="ans17" placeholder="一个省推理计算，一个省任务专属参数；补充它们如何做到。"></textarea></div>
-          <div class="q full" id="q18" data-role="homework"><div class="q-meta"><span class="pill">费曼题</span></div><h3>18. 费曼题：请用 5-7 句话向刚学完 BERT/GPT 的同学解释，本节为什么分成“少数据”和“少参数”两条路线。</h3><textarea id="ans18" placeholder="必须串联：standard fine-tuning、prompt tuning、verbalizer、LM-BFF/PET/zero-shot、Adapter/LoRA/prefix/soft prompt、early exit。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 11. prefix tuning 为什么要把 prefix 放到 self-attention 的 key/value 一侧？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">对照</span></div>
+        <h3><b>Q:</b> 12. 用两句话区分 hard prompt 和 soft prompt。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>六、低摩擦核对与迁移</h3><p>快速判断方法适用场景，再迁移到一个新部署问题。</p></div><div class="quick-review"><b>作答提示</b><span>先判断瓶颈是标注、存储还是推理延迟。</span></div></div>
+        <div class="group-head">
+          <div><h3>四、错误诊断与迁移</h3></div>
+          <div class="quick-review">作答提示 错误示例题按“错在哪 / 会怎样 / 怎么改”写。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" id="q19" data-role="homework"><div class="q-meta"><span class="pill">选择</span><span class="pill">低摩擦</span></div><h3>19. 只有 30 条标注文本，优先把分类任务改成 [MASK] 补词，主要解决什么问题？</h3><div class="choices"><label><input type="radio" name="q19" value="少数据下复用预训练语言知识">少数据下复用预训练语言知识</label><label><input type="radio" name="q19" value="压缩模型文件大小">压缩模型文件大小</label><label><input type="radio" name="q19" value="让样本提前退出">让样本提前退出</label></div></div>
-          <div class="q" id="q20" data-role="homework"><div class="q-meta"><span class="pill">配对</span><span class="pill">低摩擦</span></div><h3>20. 在 Adapter、LoRA、Early Exit 中，哪一个最直接针对推理计算？</h3><input type="text" placeholder="写出方法名，并用一句话说明。"></div>
-          <div class="q" id="q21" data-role="homework"><div class="q-meta"><span class="pill">迁移</span><span class="pill">客服分类</span></div><h3>21. 为“投诉 / 咨询 / 表扬”三分类写一个 template 和 verbalizer。</h3><textarea placeholder="写出模板句，并列出三个标签各映射到哪个词。"></textarea></div>
-          <div class="q" id="q22" data-role="homework"><div class="q-meta"><span class="pill">迁移</span><span class="pill">部署</span></div><h3>22. 一个公司有 60 个相似文本任务、每天新增任务。请写出你会采用的参数高效方案和上线检查点。</h3><textarea placeholder="至少说明冻结主干、任务专属参数、存储成本、评估与回滚。"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 13. 错误示例：有人说“soft prompt 就是把中文提示词写得更好，所以一定可读”。请诊断。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 14. 错误示例：有人在少量标签任务中接了一个分类器，然后说这已经利用了 LM head 的知识。请诊断。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景应用</span></div>
+        <h3><b>Q:</b> 15. 你要给 20 个不同文本分类任务部署同一个基础模型。你会优先考虑哪类方法？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 16. 用 2-3 句话回答：Adapter 和 LoRA 的共同点与差别是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、表达输出</h3></div>
+          <div class="quick-review">作答提示 关键词：prompt、verbalizer、少数据、Adapter、LoRA、prefix、soft prompt、early exit。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">综合短答</span></div>
+        <h3><b>Q:</b> 17. early exit 和 LoRA 都让模型“更有效”，但有效的对象不同。请说明。</h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼题</span></div>
+        <h3><b>Q:</b> 18. 费曼题：请用 5-7 句话向刚学完 BERT/GPT 的同学解释，本节为什么分成“少数据”和“少参数”两条路线。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>六、低摩擦核对与迁移</h3></div>
+          <div class="quick-review">作答提示 先判断瓶颈是标注、存储还是推理延迟。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 19. 只有 30 条标注文本，优先把分类任务改成 [MASK] 补词，主要解决什么问题？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="少数据下复用预训练语言知识">少数据下复用预训练语言知识</label>
+      <label><input type="radio" name="q?" value="压缩模型文件大小">压缩模型文件大小</label>
+      <label><input type="radio" name="q?" value="让样本提前退出">让样本提前退出</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">配对</span></div>
+        <h3><b>Q:</b> 20. 在 Adapter、LoRA、Early Exit 中，哪一个最直接针对推理计算？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 21. 为“投诉 / 咨询 / 表扬”三分类写一个 template 和 verbalizer。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 22. 一个公司有 60 个相似文本任务、每天新增任务。请写出你会采用的参数高效方案和上线检查点。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
-      <p>完成练习后生成记录，方便你回看自己的判断链路。若有遗漏，页面会先提示哪些题还没写。</p>
-      <div class="quality" id="qualityBox"></div>
-      <div class="answer" id="answerBox">还没有生成记录。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" class="ghost" onclick="generateRecord()">生成记录</button>
-        <button type="button" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-const progress = document.getElementById('readProgress');
-window.addEventListener('scroll', () => {
-  const h = document.documentElement;
-  const max = h.scrollHeight - h.clientHeight;
-  progress.style.width = max > 0 ? (h.scrollTop / max * 100) + '%' : '0%';
-});
+      </ul>
+    </section>
+  </article>
 
-const promptCases = {
-  nli: {
-    text: 'Premise: A dog is running on the beach.\\n[MASK], Hypothesis: An animal is moving.',
-    labels: ['contradiction', 'neutral', 'entailment'],
-    words: ['no', 'maybe', 'yes']
-  },
-  review: {
-    text: 'Movie review: No reason to watch.\\nIt was [MASK].',
-    labels: ['negative', 'mixed', 'positive'],
-    words: ['terrible', 'okay', 'great']
-  },
-  topic: {
-    text: 'News: The central bank raised interest rates.\\nThis article is about [MASK].',
-    labels: ['sports', 'general', 'finance'],
-    words: ['sports', 'news', 'money']
-  }
-};
-let activeCase = 'nli';
-function updatePromptDemo(){
-  const data = promptCases[activeCase];
-  document.getElementById('promptBox').textContent = data.text + '\\n\\nverbalizer: ' + data.labels.map((x,i)=>x + ' → ' + data.words[i]).join('; ');
-  const scores = [
-    Number(document.getElementById('verbNo').value),
-    Number(document.getElementById('verbMaybe').value),
-    Number(document.getElementById('verbYes').value)
-  ];
-  document.getElementById('verbNoOut').textContent = scores[0];
-  document.getElementById('verbMaybeOut').textContent = scores[1];
-  document.getElementById('verbYesOut').textContent = scores[2];
-  const best = scores.indexOf(Math.max(...scores));
-  document.getElementById('promptTitle').textContent = '预测结果：' + data.labels[best];
-  document.getElementById('promptText').textContent = '当前分数最高的词是 "' + data.words[best] + '"，verbalizer 把它映射成 "' + data.labels[best] + '"。这说明标签来自词表词的概率，而不是额外分类器的输出。';
-}
-document.querySelectorAll('[data-case]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    activeCase = btn.dataset.case;
-    document.querySelectorAll('[data-case]').forEach(x => x.classList.toggle('active', x === btn));
-    updatePromptDemo();
-  });
-});
-['verbNo','verbMaybe','verbYes'].forEach(id => document.getElementById(id).addEventListener('input', updatePromptDemo));
-updatePromptDemo();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-function updateStorage(){
-  const tasks = Number(document.getElementById('paramTasks').value);
-  const ratio = Number(document.getElementById('paramRank').value);
-  document.getElementById('paramTasksOut').textContent = tasks;
-  document.getElementById('paramRankOut').textContent = ratio + '%';
-  document.getElementById('fullStore').textContent = (tasks * 100) + '%';
-  document.getElementById('adapterStore').textContent = (100 + tasks * ratio) + '%';
-}
-document.getElementById('paramTasks').addEventListener('input', updateStorage);
-document.getElementById('paramRank').addEventListener('input', updateStorage);
-updateStorage();
-
-function updateExit(){
-  const layer = Number(document.getElementById('exitLayer').value);
-  const compute = Math.round(layer / 12 * 100);
-  document.getElementById('exitLayerOut').textContent = layer + '/12';
-  document.getElementById('exitCompute').textContent = compute + '%';
-  document.getElementById('exitSave').textContent = (100 - compute) + '%';
-  document.getElementById('exitNote').textContent = layer <= 3 ? '很早退出适合非常容易的样本，但更依赖置信度判断。' : layer <= 8 ? '中间层退出在速度和可靠性之间折中，难样本仍可能继续往后走。' : '接近最后层时节省较少，但通常更稳。';
-}
-document.getElementById('exitLayer').addEventListener('input', updateExit);
-updateExit();
-
-function readQuestion(q){
-  const title = q.querySelector('h3')?.innerText.trim() || q.id;
-  const checked = Array.from(q.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(x => x.value);
-  const fields = Array.from(q.querySelectorAll('textarea,input[type="text"],select')).map(x => x.value.trim()).filter(Boolean);
-  const answer = checked.concat(fields).join('；');
-  return {title, answer};
-}
-function generateRecord(){
-  const qs = Array.from(document.querySelectorAll(".q[data-role='homework']"));
-  const rows = qs.map(readQuestion);
-  const missing = rows.filter(x => !x.answer);
-  const now = new Date();
-  const lines = [];
-  lines.push('# P26 有效使用自督导式模型｜练习记录');
-  lines.push('');
-  lines.push('- 生成时间：' + now.toLocaleString());
-  lines.push('- 题目数量：' + qs.length);
-  lines.push('');
-  rows.forEach((row, i) => {
-    lines.push('## ' + String(i + 1).padStart(2, '0') + ' ' + row.title);
-    lines.push(row.answer ? row.answer : '（未填写）');
-    lines.push('');
-  });
-  const text = lines.join('\\n');
-  document.getElementById('answerBox').textContent = text;
-  const quality = document.getElementById('qualityBox');
-  if(missing.length){
-    quality.style.display = 'block';
-    quality.textContent = '还有 ' + missing.length + ' 题没有填写：' + missing.map(x => x.title.replace(/^\\d+\\.\\s*/, '')).join('；');
-  }else{
-    quality.style.display = 'block';
-    quality.textContent = '已生成完整记录。复盘时重点看：是否说清了 template/verbalizer，是否混淆 hard prompt 与 soft prompt，是否能按插入位置区分 Adapter、LoRA、prefix tuning。';
-  }
-}
-function copyRecord(){
-  const text = document.getElementById('answerBox').textContent;
-  if(!text || text.includes('还没有生成')){
-    generateRecord();
-  }
-  const finalText = document.getElementById('answerBox').textContent;
-  if(navigator.clipboard){
-    navigator.clipboard.writeText(finalText).then(() => {
-      document.getElementById('qualityBox').style.display = 'block';
-      document.getElementById('qualityBox').textContent = '记录已复制。';
-    }).catch(() => fallbackCopy(finalText));
-  }else{
-    fallbackCopy(finalText);
-  }
-}
-function fallbackCopy(text){
-  const area = document.createElement('textarea');
-  area.value = text;
-  document.body.appendChild(area);
-  area.select();
-  document.execCommand('copy');
-  area.remove();
-  document.getElementById('qualityBox').style.display = 'block';
-  document.getElementById('qualityBox').textContent = '记录已复制。';
-}
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

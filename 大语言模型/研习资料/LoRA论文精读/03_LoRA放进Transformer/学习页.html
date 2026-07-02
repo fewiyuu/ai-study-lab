@@ -4,94 +4,113 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LoRA 放进 Transformer｜学习页</title>
-  <link rel="stylesheet" href="../assets/lora-study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body data-course="LoRA 放进 Transformer">
-<div class="progress"></div>
-<div class="layout">
-<aside>
-  <div class="brand"><strong>LoRA 放进 Transformer</strong><span>从 Wq/Wv 的落点理解显存、checkpoint、吞吐和任务切换</span></div>
-  <nav><a href="#goal"><span class="dot"></span>目标与地图</a>
-<a href="#attention"><span class="dot"></span>Transformer 里哪些矩阵可以放 LoRA</a>
-<a href="#why-qv"><span class="dot"></span>为什么论文常选 Wq 和 Wv</a>
-<a href="#memory"><span class="dot"></span>工程收益：显存、checkpoint 和吞吐</a>
-<a href="#switch"><span class="dot"></span>任务切换和推理路径</a>
-<a href="#limits"><span class="dot"></span>论文明确留下的边界</a>
-<a href="#examples"><span class="dot"></span>试一试：从配置看工程后果</a>
-<a href="#practice"><span class="dot"></span>综合练习</a>
-<a href="#final"><span class="dot"></span>导出记录</a></nav>
-  <div class="side-note">公式能跑只是第一步。真正用 LoRA，要知道它放在哪些权重上，以及这些选择带来什么工程后果。</div>
-</aside>
-<main>
-<header class="hero" id="goal">
-  <div>
-    <div class="kicker">第 3 块 · Transformer 应用</div>
-    <h1>LoRA 放进 Transformer</h1>
-    <p>从 Wq/Wv 的落点理解显存、checkpoint、吞吐和任务切换</p>
-  </div>
-  <div class="route">
-    <h3>学完你应该能做什么</h3>
-    <ol><li>说清 Transformer attention 中 Wq、Wk、Wv、Wo 的角色。</li><li>解释论文为什么主要把 LoRA 放在 attention 权重，而不是默认改所有层。</li><li>根据 target modules 判断参数量、显存、checkpoint 和任务切换影响。</li><li>诊断 target module 选错、MLP 是否冻结、merge 与多任务混批等工程问题。</li></ol>
-  </div>
-</header>
-<section id="attention"><div class="head"><h2>1. Transformer 里哪些矩阵可以放 LoRA</h2><span class="tag">attention</span></div>
-<p>论文说 LoRA 原则上可以应用到神经网络里的任意 dense layer。放到 Transformer 里，最自然的候选包括 self-attention 的四类投影矩阵 <code>Wq</code>、<code>Wk</code>、<code>Wv</code>、<code>Wo</code>，以及 MLP 里的两个线性层。论文实验为了简化和控制参数量，主要研究 attention 权重，并在多数实验中只适配 <code>Wq</code> 和 <code>Wv</code>。</p>
-<p>先给直觉：attention 需要把 token 表示投影成 query、key、value，再把注意力结果投影回模型维度。<code>Wq</code> 影响“我用什么问题去看上下文”，<code>Wk</code> 影响“别人提供什么索引被我匹配”，<code>Wv</code> 影响“被取回的信息内容是什么”，<code>Wo</code> 影响“注意力结果如何写回残差流”。这些说法不是严格语义解释，但能帮助你理解不同 target module 的作用位置。</p>
-<p>论文把每个投影看成 <code>d_model x d_model</code> 的矩阵，即使实现里会按 attention heads 切分输出维度。LoRA 不需要每个 head 单独理解，它通常作用在完整线性投影上。你现在应该能在模型模块名里识别 <code>q_proj</code>、<code>v_proj</code>、<code>query</code>、<code>value</code> 这类目标。</p>
+<body data-course="LoRA 放进 Transformer" data-unit="03">
 
-<div class="svg-wrap">
-<svg viewBox="0 0 820 280" role="img" aria-label="Transformer attention LoRA 落点">
-  <defs><marker id="a3" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#1b2a4a"/></marker></defs>
-  <rect x="30" y="105" width="90" height="60" fill="#eef8fe" stroke="#1b2a4a"/><text x="75" y="140" text-anchor="middle">hidden</text>
-  <line x1="125" y1="135" x2="185" y2="70" stroke="#1b2a4a" marker-end="url(#a3)"/><line x1="125" y1="135" x2="185" y2="135" stroke="#1b2a4a" marker-end="url(#a3)"/><line x1="125" y1="135" x2="185" y2="200" stroke="#1b2a4a" marker-end="url(#a3)"/>
-  <rect x="190" y="40" width="110" height="48" fill="#ecfdf3" stroke="#166534"/><text x="245" y="69" text-anchor="middle">Wq + LoRA</text>
-  <rect x="190" y="111" width="110" height="48" fill="#fff" stroke="#9aa8b6"/><text x="245" y="140" text-anchor="middle">Wk</text>
-  <rect x="190" y="182" width="110" height="48" fill="#ecfdf3" stroke="#166534"/><text x="245" y="211" text-anchor="middle">Wv + LoRA</text>
-  <rect x="370" y="103" width="150" height="66" fill="#f8fafc" stroke="#1b2a4a"/><text x="445" y="132" text-anchor="middle">attention</text><text x="445" y="154" text-anchor="middle" font-size="12">softmax(QK^T)V</text>
-  <line x1="305" y1="64" x2="365" y2="118" stroke="#1b2a4a" marker-end="url(#a3)"/><line x1="305" y1="135" x2="365" y2="135" stroke="#1b2a4a" marker-end="url(#a3)"/><line x1="305" y1="206" x2="365" y2="154" stroke="#1b2a4a" marker-end="url(#a3)"/>
-  <line x1="525" y1="136" x2="595" y2="136" stroke="#1b2a4a" marker-end="url(#a3)"/><rect x="600" y="112" width="110" height="48" fill="#fff" stroke="#9aa8b6"/><text x="655" y="141" text-anchor="middle">Wo</text>
-  <line x1="715" y1="136" x2="780" y2="136" stroke="#1b2a4a" marker-end="url(#a3)"/><text x="790" y="141" font-size="13">output</text>
-</svg>
-</div>
-<p>判断句：target module 不是随便填字符串。你要知道它对应 attention 的哪类投影，以及该选择会影响多少参数。你现在应该能把论文里的 <code>Wq/Wv</code> 映射到常见代码里的 <code>q_proj/v_proj</code>。</p>
-</section>
-<section id="why-qv"><div class="head"><h2>2. 为什么论文常选 Wq 和 Wv</h2><span class="tag">target modules</span></div>
-<p>论文在 GPT-3 175B 上做了一个固定参数预算的实验：给相同的可训练参数量，比较 LoRA 放到不同 attention 权重上的效果。结果显示，只放 <code>Wq</code> 或只放 <code>Wk</code> 往往不如把预算分给 <code>Wq</code> 和 <code>Wv</code>；适配 <code>Wq,Wv</code> 在 WikiSQL 和 MultiNLI 上整体表现强，适配四个投影也有竞争力。</p>
-<p>这给出一个实践直觉：与其把 rank 全堆到一个矩阵上，不如在关键投影上分散一些低秩方向。论文的解释不是“Wq/Wv 永远最优”，而是在它们的实验预算和任务里，query 与 value 的组合更划算。现代实现里也常把 LoRA 默认加到 <code>q_proj</code> 和 <code>v_proj</code>，有些模型会加上 <code>k_proj</code>、<code>o_proj</code>，甚至 MLP 投影。</p>
-<p>你要学到的是选择逻辑：target modules 越多，每个 rank 带来的参数越多；固定参数预算下，增加模块数可能需要降低 rank。选少了可能表达不够，选多了可能训练成本上升，也可能对具体任务没有额外收益。</p>
-<div class="grid3"><div class="box warn"><h3>只放 Wq</h3><p>改查询方向，参数集中但覆盖面窄。论文表中 WikiSQL 表现弱于 Wq+Wv。</p></div>
-<div class="box ok"><h3>放 Wq + Wv</h3><p>同时改注意力读取方式和被读取内容，是论文多数实验的简洁选择。</p></div>
-<div class="box blue"><h3>放四个投影</h3><p>覆盖更广，但固定预算下 rank 更低。是否更好要看任务和模型。</p></div></div>
-<div class="viz-panel">
-  <div class="viz-title"><span>交互观察</span><span class="tag">interactive</span></div>
-  <div class="viz-grid">
-    <div class="viz-cell"><div class="viz-flow"><button class="viz-btn" data-title="只适配 Wq" data-note="预算集中在 query 投影。可能改了“看什么”，但 value 内容通道不变。" data-rows="target=Wq|rank=8|WikiSQL=70.4|MultiNLI=91.0">Wq</button>
-<button class="viz-btn" data-title="只适配 Wv" data-note="预算集中在 value 投影。论文表中比只适配 Wq/Wk 更强。" data-rows="target=Wv|rank=8|WikiSQL=73.0|MultiNLI=91.0">Wv</button>
-<button class="viz-btn" data-title="适配 Wq 和 Wv" data-note="固定预算下 rank 降到 4，但整体表现很强。" data-rows="target=Wq,Wv|rank=4|WikiSQL=73.7|MultiNLI=91.3">Wq+Wv</button>
-<button class="viz-btn" data-title="适配 Wq,Wk,Wv,Wo" data-note="覆盖四类投影，rank 降到 2。MultiNLI 表现最好，WikiSQL 与 Wq+Wv 接近。" data-rows="target=四个 attention 投影|rank=2|WikiSQL=73.7|MultiNLI=91.7">all-attn</button></div></div>
-    <div class="viz-cell">
-      <div class="viz-output"><b class="viz-state-title">选择一个场景</b><span class="viz-note-text">这里会显示判断结果。</span></div>
-      <table class="metric-table"><thead><tr><th>项目</th><th>观察</th></tr></thead><tbody class="metric-body"></tbody></table>
-      <div class="viz-note">判断提示：固定预算下，target modules 和 rank 是一对 trade-off。不要只看 rank，也不要只看模块数。</div>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">LoRA 放进 Transformer</a>
+        <span class="sep">/</span>
+        <span>03</span>
+      </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">第 3 块 · Transformer 应用</div>
+      <div class="hero-meta">
+        <span class="hero-badge">03</span>
+      </div>
+      <h1 class="hero-title">LoRA 放进 Transformer｜学习页</h1>
+      <p class="hero-desc">从 Wq/Wv 的落点理解显存、checkpoint、吞吐和任务切换</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../02_LoRA低秩更新公式/学习页.html">上一节</a>
+            <a href="../04_实验设计与结果解读/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#attention">1. Transformer 里哪些矩阵可以放 LoRA</a>
+      <a href="#why-qv">2. 为什么论文常选 Wq 和 Wv</a>
+      <a href="#memory">3. 工程收益：显存、checkpoint 和吞吐</a>
+      <a href="#switch">4. 任务切换和推理路径</a>
+      <a href="#limits">5. 论文明确留下的边界</a>
+      <a href="#examples">6. 试一试：从配置看工程后果</a>
+      <a href="#practice">综合练习</a>
+      <a href="#final">导出练习记录</a>
     </div>
   </div>
-</div>
-</section>
-<section id="memory"><div class="head"><h2>3. 工程收益：显存、checkpoint 和吞吐</h2><span class="tag">engineering</span></div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="attention">
+        <div class="head">
+          <h2>1. Transformer 里哪些矩阵可以放 LoRA</h2>
+          <span class="tag">attention</span>
+        </div>
+<p>论文说 LoRA 原则上可以应用到神经网络里的任意 dense layer。放到 Transformer 里，最自然的候选包括 self-attention 的四类投影矩阵 <code>Wq</code>、<code>Wk</code>、<code>Wv</code>、<code>Wo</code>，以及 MLP 里的两个线性层。论文实验为了简化和控制参数量，主要研究 attention 权重，并在多数实验中只适配 <code>Wq</code> 和 <code>Wv</code>。</p>
+<p>论文把每个投影看成 <code>d_model x d_model</code> 的矩阵，即使实现里会按 attention heads 切分输出维度。LoRA 不需要每个 head 单独理解，它通常作用在完整线性投影上。你现在应该能在模型模块名里识别 <code>q_proj</code>、<code>v_proj</code>、<code>query</code>、<code>value</code> 这类目标。</p>
+<p>Wq + LoRA</p>
+<p>Wk</p>
+<p>Wv + LoRA</p>
+<p>attentionsoftmax(QK^T)V</p>
+<p>判断句：target module 不是随便填字符串。你要知道它对应 attention 的哪类投影，以及该选择会影响多少参数。你现在应该能把论文里的 <code>Wq/Wv</code> 映射到常见代码里的 <code>q_proj/v_proj</code>。</p>
+      </section>
+      <section id="why-qv">
+        <div class="head">
+          <h2>2. 为什么论文常选 Wq 和 Wv</h2>
+          <span class="tag">target</span>
+        </div>
+<p>论文在 GPT-3 175B 上做了一个固定参数预算的实验：给相同的可训练参数量，比较 LoRA 放到不同 attention 权重上的效果。结果显示，只放 <code>Wq</code> 或只放 <code>Wk</code> 往往不如把预算分给 <code>Wq</code> 和 <code>Wv</code>；适配 <code>Wq,Wv</code> 在 WikiSQL 和 MultiNLI 上整体表现强，适配四个投影也有竞争力。</p>
+<p>你要学到的是选择逻辑：target modules 越多，每个 rank 带来的参数越多；固定参数预算下，增加模块数可能需要降低 rank。选少了可能表达不够，选多了可能训练成本上升，也可能对具体任务没有额外收益。</p>
+<p>交互观察interactive</p>
+<p><b>选择一个场景</b>这里会显示判断结果。</p>
+<p>项目观察</p>
+<p>判断提示：固定预算下，target modules 和 rank 是一对 trade-off。不要只看 rank，也不要只看模块数。</p>
+      </section>
+      <section id="memory">
+        <div class="head">
+          <h2>3. 工程收益：显存、checkpoint 和吞吐</h2>
+          <span class="tag">engineering</span>
+        </div>
 <p>LoRA 的训练显存收益来自冻结大部分参数。使用 Adam 这类自适应优化器时，训练一个参数不仅要保存参数本身，还要保存梯度、一阶/二阶动量等优化器状态。冻结底座权重后，绝大多数参数不需要梯度和优化器状态，显存压力明显下降。论文给出的 GPT-3 175B 例子里，训练显存从约 1.2TB 降到约 350GB。</p>
-<p>checkpoint 收益也很直接。全量微调保存的是整套任务模型；LoRA 保存的是每个任务的 A/B 矩阵。论文中 <code>r=4</code> 且只适配 query/value 时，任务 checkpoint 从 350GB 量级降到 35MB 量级。底座模型仍然要保存和加载，但上百个任务只需要共享一份底座，外加很多小 LoRA。</p>
 <p>吞吐提升来自少算很多梯度。论文报告 GPT-3 175B 上 LoRA 训练吞吐比全量微调高约 25%。这个数字不是所有训练都固定成立，但机制清楚：冻结参数不反传梯度，不维护优化器状态，I/O 和内存压力也更低。</p>
-<div class="viz-panel"><div class="viz-title"><span>数值对比</span><span class="tag">scale</span></div><div class="viz-cell"><div class="bar-row"><b>训练显存：全量微调</b><div class="bar"><span style="width:100%"></span></div><span>约 1.2TB</span></div>
-<div class="bar-row"><b>训练显存：LoRA</b><div class="bar"><span style="width:29%"></span></div><span>约 350GB</span></div>
-<div class="bar-row"><b>单任务 checkpoint：全量</b><div class="bar"><span style="width:100%"></span></div><span>约 350GB</span></div>
-<div class="bar-row"><b>单任务 checkpoint：LoRA</b><div class="bar"><span style="width:1%"></span></div><span>约 35MB</span></div></div></div>
-<p>判断句：LoRA 的收益不是来自模型本体变小，而是来自“训练和保存的任务参数”变小。你现在应该能解释为什么部署时仍然需要底座模型。</p>
-</section>
-<section id="switch"><div class="head"><h2>4. 任务切换和推理路径</h2><span class="tag">deployment</span></div>
+<p>判断句：LoRA 的收益来自“训练和保存的任务参数”变小。你现在应该能解释为什么部署时仍然需要底座模型。</p>
+      </section>
+      <section id="switch">
+        <div class="head">
+          <h2>4. 任务切换和推理路径</h2>
+          <span class="tag">deployment</span>
+        </div>
 <p>共享底座模型后，不同任务只需要切换 LoRA 权重。对于一个在线服务，如果当前机器已经把底座模型放进显存，任务切换可以变成加载或替换小型 A/B 矩阵，而不是替换几百 GB 的全量权重。论文把这看成 LoRA 的重要部署优势。</p>
-<p>但任务切换也有边界。为了零额外推理延迟，通常要把 LoRA merge 到原权重。merge 以后当前权重对应某个任务；如果下一个请求来自另一个任务，就要 unmerge 或从干净底座重新加另一个 LoRA。对于高并发、多任务混合请求，这会影响批处理策略。可以不 merge 动态计算 LoRA 分支，但这样又回到额外计算路径。</p>
-<p>所以工程判断不是“LoRA 一定最适合所有服务”，而是看你的请求形态：如果一个服务一段时间主要服务同一任务，merge 很划算；如果一个 batch 内混合很多任务，需要设计 adapter 路由、LoRA 分组或不 merge 的推理路径。</p>
-<div class="codebar walk"><span><span class="badge walk">逐行拆解</span> 逐行拆解：切换任务的权重状态</span><button class="copy" onclick="copyCode('c3_switch')">复制</button></div><pre><code id="c3_switch"># 干净底座
+<p>所以工程判断看你的请求形态：如果一个服务一段时间主要服务同一任务，merge 很划算；如果一个 batch 内混合很多任务，需要设计 adapter 路由、LoRA 分组或不 merge 的推理路径。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-switch-1">复制</button></div>
+        <pre id="code-switch-1" data-export-context="代码" data-export-lang="text"><code class="language-text"># 干净底座
 W = W0
 
 # 切到客服摘要任务
@@ -101,92 +120,267 @@ W = W0 + scale_summary * (B_summary @ A_summary)
 W = W0 + scale_sql * (B_sql @ A_sql)
 
 # 不要从已经 merge 的 W 再叠加另一个任务
-W_wrong = W + scale_sql * (B_sql @ A_sql)</code></pre><div class="grid3"><div class="box ok"><h3>适合 merge</h3><p>长时间服务同一任务、单任务部署、离线批处理。</p></div>
-<div class="box warn"><h3>谨慎 merge</h3><p>batch 内混合多个任务，频繁切换 LoRA，或需要按样本选择模块。</p></div>
-<div class="box bad"><h3>不要忘记底座</h3><p>LoRA 权重只是增量。没有 W0，A/B 无法单独完成推理。</p></div></div></section>
-<section id="limits"><div class="head"><h2>5. 论文明确留下的边界</h2><span class="tag">limitations</span></div>
+W_wrong = W + scale_sql * (B_sql @ A_sql)</code></pre>
+<p>适合 merge长时间服务同一任务、单任务部署、离线批处理。</p>
+<p>谨慎 mergebatch 内混合多个任务，频繁切换 LoRA，或需要按样本选择模块。</p>
+<p>不要忘记底座LoRA 权重只是增量。没有 W0，A/B 无法单独完成推理。</p>
+        </div>
+      </section>
+      <section id="limits">
+        <div class="head">
+          <h2>5. 论文明确留下的边界</h2>
+          <span class="tag">limitations</span>
+        </div>
 <p>论文没有声称 LoRA 只能放 attention，也没有证明所有任务都应该用同一组 target modules。它为了简化和参数效率，主要冻结 MLP、LayerNorm 和 bias，把注意力权重作为研究对象。对后续项目来说，这是一条强基线，不是不可更改的规则。</p>
-<p>另一个边界是混合任务 batch。LoRA merge 后是单套权重，天然对应某个任务。不同任务用不同 A/B 时，想在一个 forward pass 里混合样本并不简单。你可以不 merge，动态选择 LoRA；也可以按任务分 batch；还可以复制计算路径。每个方案都在延迟、吞吐、显存和实现复杂度之间取舍。</p>
 <p>最后，论文的实验主要集中在语言模型和 NLP 任务。LoRA 原理可用于 dense layer，但“放哪里、rank 多大、是否只训 attention”到了视觉、多模态、扩散模型或现代 MoE 模型里，都需要重新验证。你现在应该能把论文结论和实践迁移分开。</p>
-<div class="grid3"><div class="box blue"><h3>不是所有层都必须加</h3><p>论文选择 attention 是实验设计和效率选择，不是数学限制。</p></div>
-<div class="box warn"><h3>不是所有任务都 r 很小</h3><p>任务分布差异大、需要新知识或新语言时，小 rank 可能不够。</p></div>
-<div class="box warn"><h3>不是所有服务都适合频繁 merge</h3><p>混合任务请求会让 merge 状态管理变复杂。</p></div></div></section>
-<section id="examples"><div class="head"><h2>6. 试一试：从配置看工程后果</h2><span class="tag">examples</span></div>
-<div class="grid3">
-  <div class="example-card"><h3>例题 1</h3><p>一个配置写 <code>target_modules=[q_proj,v_proj]</code>。它对应论文里的哪些矩阵？</p><p class="hint">Wq 和 Wv。</p></div>
-  <div class="example-card"><h3>例题 2</h3><p>为什么冻结 MLP 后训练显存会下降？</p><p class="hint">冻结参数不需要梯度和 Adam 优化器状态。</p></div>
-  <div class="example-card"><h3>例题 3</h3><p>一个服务每个请求都可能用不同 LoRA，要不要一律 merge？</p><p class="hint">要谨慎。merge 对单任务推理好，但混合任务需要考虑切换和分 batch。</p></div>
-</div>
-</section>
+      </section>
+      <section id="examples">
+        <div class="head">
+          <h2>6. 试一试：从配置看工程后果</h2>
+          <span class="tag">examples</span>
+        </div>
+<p>例题 1一个配置写 <code>target_modules=[q_proj,v_proj]</code>。它对应论文里的哪些矩阵？Wq 和 Wv。</p>
+<p>例题 2为什么冻结 MLP 后训练显存会下降？冻结参数不需要梯度和 Adam 优化器状态。</p>
+<p>例题 3一个服务每个请求都可能用不同 LoRA，要不要一律 merge？要谨慎。merge 对单任务推理好，但混合任务需要考虑切换和分 batch。</p>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">mixed</span>
+        </div>
+      <div class="practice-intro">
+
+      </div>
+<p><b>概念</b>能说清术语含义。</p>
+<p><b>公式</b>能解释符号和形状。</p>
+<p><b>诊断</b>能指出错误后果。</p>
+<p><b>表达</b>能用自己的话复述。</p>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、工程收益</h3></div>
+          <div class="quick-review">检查点 target modules 越多，参数量和保存成本越高。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 7. 为什么冻结底座权重会降低 Adam 训练显存？</h3>
 
 
-<section id="practice">
-  <div class="head"><h2>综合练习</h2><span class="tag">mixed drills</span></div>
-  <div class="practice-intro">
-    <div class="review-card"><strong>作答方式</strong><p>前面的例题用于即时检查；这里的综合练习会整理成记录。短答题尽量写出判断依据，不只写一个结论。</p></div>
-    <div class="review-card"><strong>自查重点</strong><ul><li>诊断题是否写了错因、后果、修法。</li><li>概念题是否区分相邻概念。</li><li>费曼题是否串起本块主线。</li></ul></div>
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 8. 为什么 LoRA checkpoint 小，但部署仍然需要完整底座模型？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 9. LoRA 训练吞吐可能提升，是因为大部分参数不需要反向传播梯度。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="正确">正确</label>
+      <label><input type="radio" name="q?" value="错误">错误</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">计算</span></div>
+        <h3><b>Q:</b> 10. 固定总参数预算时，target modules 从 2 个变成 4 个，rank 通常需要怎样调整？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 11. 为什么 LoRA 适合共享底座、多任务切换的部署方式？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景</span></div>
+        <h3><b>Q:</b> 12. 举一个适合 merge 的服务场景，再举一个需要谨慎 merge 的场景。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、错误诊断和边界</h3></div>
+          <div class="quick-review">检查点 诊断题按错因、后果、修法写。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 13. 诊断：配置里写了不存在的 target module，训练日志显示可训练参数为 0。按错因、后果、修法回答。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 14. 诊断：一个 batch 混合多个任务，但服务端只 merge 了其中一个任务的 LoRA。按错因、后果、修法回答。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">诊断</span></div>
+        <h3><b>Q:</b> 15. 诊断：为了“更强”，把 LoRA 加到所有线性层但没有重新评估显存和过拟合。按错因、后果、修法回答。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 16. 为什么不能把论文的 Wq/Wv 结论直接当成所有模型、所有任务的最优配置？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试追问</span></div>
+        <h3><b>Q:</b> 17. 用 1-3 句话解释 LoRA 在 Transformer 里的典型落点。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 18. 准备训练 LoRA 前，你会检查 target modules 的哪 5 件事？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 19. 用 6-9 句话解释 LoRA 如何放进 Transformer，以及为什么它能带来工程收益。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="final">
+        <div class="head">
+          <h2>导出练习记录</h2>
+          <span class="tag">record</span>
+        </div>
+<p>完成综合练习后生成一份记录，便于回看哪些判断还不稳。</p>
+<p>尚未生成。</p>
+      </section>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
-  <div class="practice-check">
-    <div class="check-item"><b>概念</b>能说清术语含义。</div>
-    <div class="check-item"><b>公式</b>能解释符号和形状。</div>
-    <div class="check-item"><b>诊断</b>能指出错误后果。</div>
-    <div class="check-item"><b>表达</b>能用自己的话复述。</div>
-  </div>
 
-  <div class="practice-group">
-    <div class="group-head"><div><h3>一、attention 落点</h3><p>先检查你是否能识别 LoRA 在 Transformer 里的位置。</p></div><div class="quick-review"><b>检查点</b><span>把模块名映射到 Wq/Wk/Wv/Wo。</span></div></div>
-    <div class="drill-grid">
-<div class="q" data-role="homework" data-type="choice" data-title="Wq"><div class="q-meta"><span class="pill">单选</span><span class="pill">一、attention 落点</span></div><h3>1. 常见实现里的 q_proj 通常对应论文里的哪个矩阵？</h3><label><input type="radio" name="q1" value="Wq"> Wq</label><label><input type="radio" name="q1" value="Wv"> Wv</label><label><input type="radio" name="q1" value="MLP down projection"> MLP down projection</label></div>
-<div class="q" data-role="homework" data-type="choice" data-title="Wv"><div class="q-meta"><span class="pill">单选</span><span class="pill">一、attention 落点</span></div><h3>2. 常见实现里的 v_proj 通常对应论文里的哪个矩阵？</h3><label><input type="radio" name="q2" value="Wv"> Wv</label><label><input type="radio" name="q2" value="Wk"> Wk</label><label><input type="radio" name="q2" value="LayerNorm"> LayerNorm</label></div>
-<div class="q" data-role="homework" data-type="choice" data-title="目标矩阵"><div class="q-meta"><span class="pill">判断</span><span class="pill">一、attention 落点</span></div><h3>3. LoRA 原理上只能用于 attention 权重，不能用于 MLP 线性层。</h3><label><input type="radio" name="q3" value="正确"> 正确</label><label><input type="radio" name="q3" value="错误"> 错误</label></div>
-<div class="q" data-role="homework" data-type="fill" data-title="论文默认选择"><div class="q-meta"><span class="pill">填空</span><span class="pill">一、attention 落点</span></div><h3>4. 论文多数实验为了简化，常把 LoRA 加到 ____ 和 ____。</h3><input type="text"></div>
-<div class="q" data-role="homework" data-type="short" data-title="head 切分"><div class="q-meta"><span class="pill">短答</span><span class="pill">一、attention 落点</span></div><h3>5. 为什么论文仍把 Wq 看成 d_model x d_model，即使实现里有多头 attention？</h3><textarea placeholder=""></textarea></div>
-<div class="q" data-role="homework" data-type="short" data-title="模块识别"><div class="q-meta"><span class="pill">匹配</span><span class="pill">一、attention 落点</span></div><h3>6. 把 q_proj、k_proj、v_proj、o_proj 分别对应到 Wq、Wk、Wv、Wo。</h3><textarea placeholder=""></textarea></div>
-    </div>
-  </div>
-
-  <div class="practice-group">
-    <div class="group-head"><div><h3>二、工程收益</h3><p>这一组检查你是否能把模块选择和资源联系起来。</p></div><div class="quick-review"><b>检查点</b><span>target modules 越多，参数量和保存成本越高。</span></div></div>
-    <div class="drill-grid">
-<div class="q" data-role="homework" data-type="short" data-title="显存来源"><div class="q-meta"><span class="pill">短答</span><span class="pill">二、工程收益</span></div><h3>7. 为什么冻结底座权重会降低 Adam 训练显存？</h3><textarea placeholder=""></textarea></div>
-<div class="q" data-role="homework" data-type="short" data-title="checkpoint"><div class="q-meta"><span class="pill">短答</span><span class="pill">二、工程收益</span></div><h3>8. 为什么 LoRA checkpoint 小，但部署仍然需要完整底座模型？</h3><textarea placeholder=""></textarea></div>
-<div class="q" data-role="homework" data-type="choice" data-title="吞吐"><div class="q-meta"><span class="pill">判断</span><span class="pill">二、工程收益</span></div><h3>9. LoRA 训练吞吐可能提升，是因为大部分参数不需要反向传播梯度。</h3><label><input type="radio" name="q9" value="正确"> 正确</label><label><input type="radio" name="q9" value="错误"> 错误</label></div>
-<div class="q" data-role="homework" data-type="short" data-title="参数预算"><div class="q-meta"><span class="pill">计算</span><span class="pill">二、工程收益</span></div><h3>10. 固定总参数预算时，target modules 从 2 个变成 4 个，rank 通常需要怎样调整？为什么？</h3><textarea placeholder=""></textarea></div>
-<div class="q" data-role="homework" data-type="short" data-title="任务切换"><div class="q-meta"><span class="pill">短答</span><span class="pill">二、工程收益</span></div><h3>11. 为什么 LoRA 适合共享底座、多任务切换的部署方式？</h3><textarea placeholder=""></textarea></div>
-<div class="q" data-role="homework" data-type="short" data-title="merge 场景"><div class="q-meta"><span class="pill">场景</span><span class="pill">二、工程收益</span></div><h3>12. 举一个适合 merge 的服务场景，再举一个需要谨慎 merge 的场景。</h3><textarea placeholder=""></textarea></div>
-    </div>
-  </div>
-
-  <div class="practice-group">
-    <div class="group-head"><div><h3>三、错误诊断和边界</h3><p>这一组要求你把配置错误讲清楚。</p></div><div class="quick-review"><b>检查点</b><span>诊断题按错因、后果、修法写。</span></div></div>
-    <div class="drill-grid">
-<div class="q" data-role="homework" data-type="diagnostic" data-title="错误诊断：target 选错"><div class="q-meta"><span class="pill">诊断</span><span class="pill">三、错误诊断和边界</span></div><h3>13. 诊断：配置里写了不存在的 target module，训练日志显示可训练参数为 0。按错因、后果、修法回答。</h3><textarea placeholder="错因：
-后果：
-修法："></textarea></div>
-<div class="q" data-role="homework" data-type="diagnostic" data-title="错误诊断：混批 merge"><div class="q-meta"><span class="pill">诊断</span><span class="pill">三、错误诊断和边界</span></div><h3>14. 诊断：一个 batch 混合多个任务，但服务端只 merge 了其中一个任务的 LoRA。按错因、后果、修法回答。</h3><textarea placeholder="错因：
-后果：
-修法："></textarea></div>
-<div class="q" data-role="homework" data-type="diagnostic" data-title="错误诊断：过度扩展"><div class="q-meta"><span class="pill">诊断</span><span class="pill">三、错误诊断和边界</span></div><h3>15. 诊断：为了“更强”，把 LoRA 加到所有线性层但没有重新评估显存和过拟合。按错因、后果、修法回答。</h3><textarea placeholder="错因：
-后果：
-修法："></textarea></div>
-<div class="q" data-role="homework" data-type="short" data-title="论文边界"><div class="q-meta"><span class="pill">短答</span><span class="pill">三、错误诊断和边界</span></div><h3>16. 为什么不能把论文的 Wq/Wv 结论直接当成所有模型、所有任务的最优配置？</h3><textarea placeholder=""></textarea></div>
-<div class="q" data-role="homework" data-type="short" data-title="面试追问"><div class="q-meta"><span class="pill">面试追问</span><span class="pill">三、错误诊断和边界</span></div><h3>17. 用 1-3 句话解释 LoRA 在 Transformer 里的典型落点。</h3><textarea placeholder=""></textarea></div>
-<div class="q" data-role="homework" data-type="short" data-title="实践清单"><div class="q-meta"><span class="pill">清单</span><span class="pill">三、错误诊断和边界</span></div><h3>18. 准备训练 LoRA 前，你会检查 target modules 的哪 5 件事？</h3><textarea placeholder=""></textarea></div>
-<div class="q full" data-role="homework" data-type="feynman" data-title="费曼解释" data-keys="Wq,Wv,attention,冻结,checkpoint,merge,任务切换"><div class="q-meta"><span class="pill">费曼解释</span><span class="pill">三、错误诊断和边界</span></div><h3>19. 用 6-9 句话解释 LoRA 如何放进 Transformer，以及为什么它能带来工程收益。</h3><p class="hint">请串联：Wq、Wv、attention、冻结、checkpoint、merge、任务切换。</p><textarea placeholder=""></textarea></div>
-    </div>
-  </div>
-
-</section>
-<section id="final">
-  <div class="head"><h2>导出练习记录</h2><span class="tag">record</span></div>
-  <p class="muted">完成综合练习后生成一份记录，便于回看哪些判断还不稳。</p>
-  <div class="actions"><button onclick="generateAnswer()">生成记录</button><button class="ghost" onclick="copyAnswer()">复制记录</button></div>
-  <div id="quality" class="quality"></div>
-  <div id="answer" class="answer">尚未生成。</div>
-</section>
-
-</main>
-</div>
-<script src="../assets/lora-study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

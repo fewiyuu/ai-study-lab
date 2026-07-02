@@ -4,1100 +4,700 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>自动伸缩、批处理与资源隔离｜LLM Serving 架构与请求调度</title>
-  <meta name="description" content="LLM Serving 第 05 单元：把自动伸缩、连续批处理和资源隔离放在同一张图里，看它们如何一起影响延迟、吞吐和 GPU 成本。">
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="LLM Serving 架构与请求调度" data-unit="Unit 05">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>LLM Serving 架构与请求调度</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">LLM Serving 架构与请求调度</a>
+        <span class="sep">/</span>
         <span>Unit 05</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#position"><span class="dot"></span>课程位置</a>
-        <a href="#map"><span class="dot"></span>概念骨架</a>
-        <a href="#terms"><span class="dot"></span>术语与误区</a>
-        <a href="#lesson"><span class="dot"></span>核心讲解</a>
-        <a href="#walkthrough"><span class="dot"></span>完整走读</a>
-        <a href="#diagnostics"><span class="dot"></span>诊断回路</a>
-        <a href="#case"><span class="dot"></span>典型案例</a>
-        <a href="#playbook"><span class="dot"></span>上线顺序</a>
-        <a href="#benchmark"><span class="dot"></span>压测模板</a>
-        <a href="#bridge"><span class="dot"></span>下一步</a>
-        <a href="#boundary"><span class="dot"></span>边界</a>
-        <a href="#mistakes"><span class="dot"></span>常见错误</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">
-        这一节先把三件事绑在一起看：副本什么时候变多，batch 为什么会伤 TTFT，长请求怎么不把短请求拖住。
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
-    </aside>
+    </div>
+  </nav>
 
-    <main>
-      <header class="hero">
-        <div>
-          <div class="kicker">Unit 05</div>
-          <h1>自动伸缩、批处理与资源隔离</h1>
-          <p>前一节已经把请求送到副本，这一节继续往里走：副本数量怎么变，单个副本里 batch 怎么攒，长上下文和短问答要不要共用同一池 GPU。</p>
-          <p>先把这三件事放在同一张图里，再谈参数。K8s、多集群和计费先不追，这页先把单集群内的决策算清。</p>
-          <div class="course-links">
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Unit 05</div>
+      <div class="hero-meta">
+        <span class="hero-badge">Unit 05</span>
+      </div>
+      <h1 class="hero-title">自动伸缩、批处理与资源隔离｜LLM Serving 架构与请求调度</h1>
+      <p class="hero-desc">前一节已经把请求送到副本，这一节继续往里走：副本数量怎么变，单个副本里 batch 怎么攒，长上下文和短问答要不要共用同一池 GPU。</p>
+      <div class="course-links">
             <a href="../index.html">课程地图</a>
             <a href="../04_模型副本路由与多租户/学习页.html">上一单元</a>
             <a href="../06_SLO观测与容量规划/学习页.html">下一单元</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>读完这页，你能先做什么</h3>
-          <ul>
-            <li>用 `target_ongoing_requests` 先估副本数，再用 token 长度和冷启动修正。</li>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>用 <code>target_ongoing_requests</code> 先估副本数，再用 token 长度和冷启动修正。</li>
             <li>解释为什么 batch 大一点常常更省 GPU，但 TTFT 也会更差。</li>
             <li>把长请求和短请求拆开看，不再拿一个共享池硬扛所有流量。</li>
-          </ul>
-        </div>
-      </header>
+        </ul>
+      </div>
+    </div>
+  </header>
 
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#position">课程位置</a>
+      <a href="#map">概念图</a>
+      <a href="#ledger">状态账本</a>
+      <a href="#terms">术语与误区</a>
+      <a href="#lesson">核心讲解</a>
+      <a href="#walkthrough">完整走读</a>
+      <a href="#diagnostics">诊断回路</a>
+      <a href="#case">典型案例</a>
+      <a href="#playbook">上线顺序</a>
+      <a href="#benchmark">压测模板</a>
+      <a href="#bridge">下一步再看什么</a>
+      <a href="#boundary">边界</a>
+      <a href="#mistakes">常见错误</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
         <div class="head">
           <h2>学习目标</h2>
           <span class="tag">Goals</span>
         </div>
-        <div class="grid3">
-          <div class="box">
-            <h3>先分清伸缩对象</h3>
-            <p>Ray Serve 伸的是副本，vLLM、SGLang 和 TensorRT-LLM 调的是引擎内的 token 和序列。别把这两层混成一个按钮。</p>
-          </div>
-          <div class="box">
-            <h3>再看批处理代价</h3>
-            <p>batch 变大通常有利于吞吐，但会抬高排队时间和首 token 延迟。你要能判断这次该保交互体验，还是该保总吞吐。</p>
-          </div>
-          <div class="box">
-            <h3>最后落到隔离</h3>
-            <p>资源隔离不只是分 GPU。队列、优先级、热副本、token 预算和路由规则都在里面。</p>
-          </div>
-        </div>
+<p>先分清伸缩对象</p>
+<p>Ray Serve 伸的是副本，vLLM、SGLang 和 TensorRT-LLM 调的是引擎内的 token 和序列。别把这两层混成一个按钮。</p>
+<p>最后落到隔离</p>
+<p>资源隔离不只是分 GPU。队列、优先级、热副本、token 预算和路由规则都在里面。</p>
       </section>
-
       <section id="position">
         <div class="head">
           <h2>课程位置</h2>
           <span class="tag">Sequence</span>
         </div>
-        <p>03 单元讲队列和背压，04 单元讲副本路由和多租户，05 单元把这两层继续往下压：已经接住的请求，怎么分给多少副本、每个副本怎么吃 batch、长短请求怎么隔开。06 单元会把这些选择翻成 TTFT、TPOT、p95/p99 和容量规划。</p>
-        <div class="table-wrap">
-          <table data-export-context="单元位置与输入输出" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>阶段</th>
-                <th>这页看什么</th>
-                <th>下一层看什么</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>进入副本之前</td>
-                <td>副本数、队列上限、热备状态</td>
-                <td>路由层和接纳层</td>
-              </tr>
-              <tr>
-                <td>副本内部</td>
-                <td>continuous batching、token 预算、prefill / decode 竞争</td>
-                <td>引擎 scheduler 和 KV cache</td>
-              </tr>
-              <tr>
-                <td>事故复盘时</td>
-                <td>TTFT、TPOT、队列时间、GPU 利用率、冷启动时长</td>
-                <td>06 单元的 SLO 和容量规划</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+<p>03 单元讲队列和背压，04 单元讲副本路由和多租户，05 单元把这两层继续往下压：已经接住的请求，怎么分给多少副本、每个副本怎么吃 batch、长短请求怎么隔开。06 单元会把这些选择翻成 TTFT、TPOT、p95/p99 和容量规划。</p>
       </section>
-
       <section id="map">
         <div class="head">
           <h2>概念图</h2>
-          <span class="tag">State Flow</span>
+          <span class="tag">State</span>
         </div>
-        <p>把一次请求拆成四步来看：入口把请求变成待排队对象，队列决定它会不会等，副本决定它什么时候进入 prefill 和 decode，观测层决定你会不会误判是“GPU 忙了”。</p>
-        <div class="shape-tracer" data-shape-tracer>
-          <div class="trace-lines">
-            <button type="button" class="trace-line" data-trace-step="entry">入口 <span>request, tenant, prompt_tokens, max_output_tokens</span></button>
-            <button type="button" class="trace-line" data-trace-step="queue">队列 <span>ongoing requests, queue depth, max_queued_requests</span></button>
-            <button type="button" class="trace-line" data-trace-step="replica">副本 <span>health, warm state, cache, load</span></button>
-            <button type="button" class="trace-line" data-trace-step="engine">引擎 <span>prefill, decode, KV cache</span></button>
-            <button type="button" class="trace-line" data-trace-step="observe">观测 <span>TTFT, TPOT, p95/p99, error rate</span></button>
-          </div>
-          <div class="trace-canvas">
-            <div class="tensor-card" data-trace-target="entry">
-              <b>before</b>
-              <span>外部请求</span>
-              <p>还没决定去哪个池，也没进入排队。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="queue">
-              <b>after</b>
-              <span>待调度请求</span>
-              <p>开始受 `target_ongoing_requests` 和 `max_queued_requests` 影响。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="replica">
-              <b>after</b>
-              <span>选中副本</span>
-              <p>副本健康、热状态和当前负载都写进选择结果。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="engine">
-              <b>after</b>
-              <span>prefill / decode</span>
-              <p>请求进入引擎内部，开始吃 KV cache 和 token 预算。</p>
-            </div>
-            <div class="tensor-card" data-trace-target="observe">
-              <b>symptom</b>
-              <span>指标被拉歪</span>
-              <p>GPU 忙不等于服务健康。先看排队和首 token。</p>
-            </div>
-          </div>
-        </div>
+<p>把一次请求拆成四步来看：入口把请求变成待排队对象，队列决定它会不会等，副本决定它什么时候进入 prefill 和 decode，观测层决定你会不会误判是“GPU 忙了”。</p>
       </section>
-
       <section id="ledger">
         <div class="head">
           <h2>状态账本</h2>
           <span class="tag">Ledger</span>
         </div>
-        <p>这页把四个状态分开记：副本数、热状态、批处理预算和请求池。排错时先看哪个字段被改了，再看症状从哪一层冒出来。</p>
-        <div class="table-wrap">
-          <table data-export-context="状态账本" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>对象</th>
-                <th>先读什么</th>
-                <th>会写什么</th>
-                <th>错了先坏哪里</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>副本池</td>
-                <td>queue depth、ongoing requests、cold start</td>
-                <td><code>min_replicas</code>、扩缩容窗口</td>
-                <td>流量一上来，TTFT 先抬头</td>
-              </tr>
-              <tr>
-                <td>批处理预算</td>
-                <td>prompt / output 长度、KV cache 水位</td>
-                <td><code>max_num_batched_tokens</code></td>
-                <td>短请求被排队，尾延迟变差</td>
-              </tr>
-              <tr>
-                <td>请求池</td>
-                <td>长度、优先级、租户类型</td>
-                <td>long-context-pool、interactive-hot-pool、batch-pool</td>
-                <td>长短请求互相抢资源</td>
-              </tr>
-              <tr>
-                <td>路由记录</td>
-                <td>tenant、model_version、health</td>
-                <td>route_reason、路由日志</td>
-                <td>出了问题说不清为什么落到这个副本</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="hint">如果你还写不出“谁读、谁写、坏了会怎样”，就说明问题还停在印象层。</p>
+<p>这页把四个状态分开记：副本数、热状态、批处理预算和请求池。排错时先看哪个字段被改了，再看症状从哪一层冒出来。</p>
       </section>
-
       <section id="terms">
         <div class="head">
           <h2>术语与误区</h2>
           <span class="tag">Terms</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>最常混的几组词</h3>
-            <div class="table-wrap">
-              <table data-export-context="术语与误区对照表" data-export-lang="table">
-                <thead>
-                  <tr>
-                    <th>术语</th>
-                    <th>一句话</th>
-                    <th>容易误读成什么</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td><code>target_ongoing_requests</code></td>
-                    <td>每个副本希望同时挂住多少个进行中的请求。</td>
-                    <td>延迟上限。</td>
-                  </tr>
-                  <tr>
-                    <td>continuous batching / in-flight batching</td>
-                    <td>请求还在跑时，新的请求也能并进来，不必等整轮结束。</td>
-                    <td>固定 batch。</td>
-                  </tr>
-                  <tr>
-                    <td>prefill</td>
-                    <td>把 prompt 喂进模型并建立上下文状态的阶段。</td>
-                    <td>只是在做一次普通前处理。</td>
-                  </tr>
-                  <tr>
-                    <td>decode</td>
-                    <td>一个 token 一个 token 地往外生成。</td>
-                    <td>和 prefill 一样的开销。</td>
-                  </tr>
-                  <tr>
-                    <td><code>max_queued_requests</code></td>
-                    <td>队列能堆多少请求。</td>
-                    <td>GPU 显存上限。</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div class="box warn">
-            <h3>先别混的三件事</h3>
-            <ul>
-              <li>副本数变多，不等于单个副本内部的 batching 变好了。</li>
-              <li>GPU 利用率高，不等于短请求体验好。</li>
-              <li>批处理吞吐上升，不等于系统整体更健康。</li>
-            </ul>
-            <p>本页后面会把这三件事分别落到参数、队列和隔离策略上。</p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>最常混的几组词</h3>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>术语</th><th>一句话</th><th>容易误读成什么</th></tr>
+<tr><td><code>target_ongoing_requests</code></td><td>每个副本希望同时挂住多少个进行中的请求。</td><td>延迟上限。</td></tr>
+<tr><td>continuous batching / in-flight batching</td><td>请求还在跑时，新的请求也能并进来，不必等整轮结束。</td><td>固定 batch。</td></tr>
+<tr><td>prefill</td><td>把 prompt 喂进模型并建立上下文状态的阶段。</td><td>只是在做一次普通前处理。</td></tr>
+<tr><td>decode</td><td>一个 token 一个 token 地往外生成。</td><td>和 prefill 一样的开销。</td></tr>
+<tr><td><code>max_queued_requests</code></td><td>队列能堆多少请求。</td><td>GPU 显存上限。</td></tr>
+</table></div>
         </div>
+        <div class="box warn">
+<h3>先别混的三件事</h3>
+<ul>
+<li>副本数变多，不等于单个副本内部的 batching 变好了。</li>
+<li>GPU 利用率高，不等于短请求体验好。</li>
+<li>批处理吞吐上升，不等于系统整体更健康。</li>
+</ul>
+<p>本页后面会把这三件事分别落到参数、队列和隔离策略上。</p>
+        </div>
+      </div>
       </section>
-
       <section id="lesson">
         <div class="head">
           <h2>核心讲解</h2>
           <span class="tag">Mechanism</span>
         </div>
-
-        <div class="grid2">
-          <div class="box">
-            <h3>先分清伸缩对象</h3>
-            <p>Ray Serve 看的是每个副本挂住了多少 ongoing requests。这个数高了，系统才会更想扩副本。扩出来的副本是服务入口，不是引擎内部的调度器。</p>
-            <p>所以，扩副本只能改变“有多少个执行入口”，不能自动解决“单个副本里该攒多大的 batch”这件事。后者要交给引擎层的 scheduler 和 token 预算。</p>
-            <div class="table-wrap">
-              <table data-export-context="伸缩对象读写表" data-export-lang="table">
-                <thead>
-                  <tr>
-                    <th>层</th>
-                    <th>读什么</th>
-                    <th>写什么</th>
-                    <th>看错会怎样</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>服务层</td>
-                    <td>ongoing requests、queue depth、健康状态</td>
-                    <td>副本数、路由落点、是否拒绝</td>
-                    <td>把扩容和调度混成一个动作</td>
-                  </tr>
-                  <tr>
-                    <td>引擎层</td>
-                    <td>token 预算、KV cache、水位、prefill/decode 竞争</td>
-                    <td>batch 形状、并发 token、逐 token 生成顺序</td>
-                    <td>只盯副本数，忽略真正的瓶颈</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div class="box info">
-            <h3>批处理不是越大越好</h3>
-            <p>batch 大一点，通常更容易把 GPU 吃满，吞吐会上去；但请求也更容易排队，首 token 时间会变长。对交互服务来说，这个代价往往比你想得更早出现。</p>
-            <div class="math-block" data-export-context="副本数估算公式" data-export-lang="math">
-              $$\text{replicas}_{\text{start}} \approx \left\lceil \frac{\text{并发请求数}}{\text{target\_ongoing\_requests}} \right\rceil$$
-              <p>这只是起点。长 prompt、长输出、冷启动时间和队列水位都会把真实值往上推。</p>
-            </div>
-            <div class="table-wrap">
-              <table data-export-context="批处理取舍表" data-export-lang="table">
-                <thead>
-                  <tr>
-                    <th>动作</th>
-                    <th>更直接保护什么</th>
-                    <th>代价</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>降低 batch token 预算</td>
-                    <td>TTFT、短请求体验</td>
-                    <td>吞吐可能下降</td>
-                  </tr>
-                  <tr>
-                    <td>提高 min_replicas</td>
-                    <td>冷启动</td>
-                    <td>闲置成本上升</td>
-                  </tr>
-                  <tr>
-                    <td>按请求长度分桶</td>
-                    <td>短请求不被长 prefill 拖住</td>
-                    <td>资源利用率变复杂</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先分清伸缩对象</h3>
+<p>Ray Serve 看的是每个副本挂住了多少 ongoing requests。这个数高了，系统才会更想扩副本。扩出来的副本是服务入口，不是引擎内部的调度器。</p>
+<p>所以，扩副本只能改变“有多少个执行入口”，不能自动解决“单个副本里该攒多大的 batch”这件事。后者要交给引擎层的 scheduler 和 token 预算。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>层</th><th>读什么</th><th>写什么</th><th>看错会怎样</th></tr>
+<tr><td>服务层</td><td>ongoing requests、queue depth、健康状态</td><td>副本数、路由落点、是否拒绝</td><td>把扩容和调度混成一个动作</td></tr>
+<tr><td>引擎层</td><td>token 预算、KV cache、水位、prefill/decode 竞争</td><td>batch 形状、并发 token、逐 token 生成顺序</td><td>只盯副本数，忽略真正的瓶颈</td></tr>
+</table></div>
         </div>
-
-        <div class="grid2" style="margin-top:12px">
-          <div class="box">
-            <h3>资源隔离要隔到请求类型</h3>
-            <p>真正难的是把不同类型的请求拆开。长上下文分析、短问答、批量摘要、灰度流量，最怕一起挤进同一个共享池。只要它们共享了同一条排队和同一组热副本，迟早会互相拖。</p>
-            <div class="codebar">
-              <span>Ray Serve / Scheduler 伪代码</span>
-              <button type="button" class="copy" data-copy="autoscale-code">复制</button>
-            </div>
-            <pre id="autoscale-code" data-export-context="自动伸缩判断伪代码" data-export-lang="python"><code class="language-python">def decide_pool(request, queue_depth, prompt_tokens):
-    if prompt_tokens >= 6000:
-        return "long-context-pool"
-    if request.priority == "interactive" and queue_depth > 32:
-        return "interactive-hot-pool"
-    if request.priority == "batch":
-        return "batch-pool"
-    return "shared-pool"
+        <div class="box info">
+<h3>批处理不是越大越好</h3>
+<p>batch 大一点，通常更容易把 GPU 吃满，吞吐会上去；但请求也更容易排队，首 token 时间会变长。对交互服务来说，这个代价往往比你想得更早出现。</p>
+<p>$$\text{replicas}_{\text{start}} \approx \left\lceil \frac{\text{并发请求数}}{\text{target\_ongoing\_requests}} \right\rceil$$</p>
+<p>这只是起点。长 prompt、长输出、冷启动时间和队列水位都会把真实值往上推。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>动作</th><th>更直接保护什么</th><th>代价</th></tr>
+<tr><td>降低 batch token 预算</td><td>TTFT、短请求体验</td><td>吞吐可能下降</td></tr>
+<tr><td>提高 min_replicas</td><td>冷启动</td><td>闲置成本上升</td></tr>
+<tr><td>按请求长度分桶</td><td>短请求不被长 prefill 拖住</td><td>资源利用率变复杂</td></tr>
+</table></div>
+        </div>
+        <div class="box">
+<h3>资源隔离要隔到请求类型</h3>
+<p>真正难的是把不同类型的请求拆开。长上下文分析、短问答、批量摘要、灰度流量，最怕一起挤进同一个共享池。只要它们共享了同一条排队和同一组热副本，迟早会互相拖。</p>
+<div class="code-example">
+<div class="codebar"><span>Ray Serve / Scheduler 伪代码</span><span>复制</span></div>
+<pre><code class="language-python">def decide_pool(request, queue_depth, prompt_tokens):
+ if prompt_tokens &gt;= 6000:
+ return "long-context-pool"
+ if request.priority == "interactive" and queue_depth &gt; 32:
+ return "interactive-hot-pool"
+ if request.priority == "batch":
+ return "batch-pool"
+ return "shared-pool"
 
 def decide_scale(concurrency, target_ongoing_requests, queue_p95):
-    base = math.ceil(concurrency / target_ongoing_requests)
-    if queue_p95 > 1.5:
-        base += 1
-    return max(1, base)</code></pre>
-            <p class="hint">这段代码不是生产实现，只是在把思路写成可检查的顺序：先分池，再决定副本数。</p>
-          </div>
-
-          <div class="box">
-            <h3>观测信号要分层看</h3>
-            <p>GPU 利用率高，只说明卡被压着跑，不说明用户体验好。排队、TTFT、TPOT 和错误率要一起看，才能知道问题出在入口、批处理还是副本冷启动。</p>
-            <div class="table-wrap">
-              <table data-export-context="观测信号与症状表" data-export-lang="table">
-                <thead>
-                  <tr>
-                    <th>症状</th>
-                    <th>先看什么</th>
-                    <th>常见动作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>TTFT 上升</td>
-                    <td>队列时间、prefill、冷启动</td>
-                    <td>保热副本、分桶、降 batch 预算</td>
-                  </tr>
-                  <tr>
-                    <td>吞吐升了，但短请求更慢</td>
-                    <td>长请求是否抢占了同池资源</td>
-                    <td>拆池、独立队列、保留短请求预算</td>
-                  </tr>
-                  <tr>
-                    <td>扩容后 p99 还是高</td>
-                    <td>副本加载时间、健康检查、路由积压</td>
-                    <td>确认热副本是否真的可用</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
+ base = math.ceil(concurrency / target_ongoing_requests)
+ if queue_p95 &gt; 1.5:
+ base += 1
+ return max(1, base)</code></pre>
+</div>
+<p>这段代码不是生产实现，只是在把思路写成可检查的顺序：先分池，再决定副本数。</p>
         </div>
+        <div class="box">
+<h3>观测信号要分层看</h3>
+<p>GPU 利用率高，只说明卡被压着跑，不说明用户体验好。排队、TTFT、TPOT 和错误率要一起看，才能知道问题出在入口、批处理还是副本冷启动。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>症状</th><th>先看什么</th><th>常见动作</th></tr>
+<tr><td>TTFT 上升</td><td>队列时间、prefill、冷启动</td><td>保热副本、分桶、降 batch 预算</td></tr>
+<tr><td>吞吐升了，但短请求更慢</td><td>长请求是否抢占了同池资源</td><td>拆池、独立队列、保留短请求预算</td></tr>
+<tr><td>扩容后 p99 还是高</td><td>副本加载时间、健康检查、路由积压</td><td>确认热副本是否真的可用</td></tr>
+</table></div>
+        </div>
+      </div>
       </section>
-
       <section id="walkthrough">
         <div class="head">
           <h2>完整走读</h2>
-          <span class="tag">Worked Case</span>
+          <span class="tag">Worked</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>先看一轮真实得多的混合流量</h3>
-            <p>假设你手里有一个交互聊天池和一个离线摘要池。聊天池每分钟 36 个请求，平均 prompt 900 token，平均输出 220 token；摘要池每分钟 12 个请求，平均 prompt 6400 token，平均输出 1024 token。两个池都从同一个模型家族出来，但它们应该承担的风险不同。</p>
-            <p>如果你把这两类请求硬放进同一个 shared pool，再用一个中等大小的 `target_ongoing_requests` 去兜住所有流量，表面上看副本数可能够了，实际上短请求会先被长 prefill 卡住。GPU 还在忙，TTFT 却先抬头，这就是“看起来健康，实际体验变差”的典型场景。</p>
-            <p>正确的做法不是先争论谁更重要，而是先问：哪类请求必须被保护，哪类请求可以等，哪类请求本来就应该为吞吐让步。这个问题的答案会直接决定分池、热副本和 token 预算。</p>
-          </div>
-          <div class="box info">
-            <h3>先算一个可落地的起点</h3>
-            <div class="math-block" data-export-context="混合流量的起始副本估算" data-export-lang="math">
-              $$\text{start replicas} = \left\lceil \frac{\text{concurrency}}{\text{target\_ongoing\_requests}} \right\rceil$$
-              <p>这个公式只负责给你一个起步值，不负责替你处理长 prompt、长输出和冷启动。</p>
-            </div>
-            <p>对聊天池来说，36 / 3 = 12，所以 12 个副本可以作为起点。对摘要池来说，12 / 2 = 6，所以 6 个副本也只是起点。它们不应该因为算出来都“差不多够”就强行合池，因为合池后被共享的是队列和 batch 预算，不只是副本数。</p>
-            <p>如果你把这两个池硬压成一个池，最容易漏掉的是长请求对短请求的隐性占用：prefill 会拉长，decode 也会变慢，最后你会在 p95 和用户反馈里才看到问题。</p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先看一轮真实得多的混合流量</h3>
+<p>假设你手里有一个交互聊天池和一个离线摘要池。聊天池每分钟 36 个请求，平均 prompt 900 token，平均输出 220 token；摘要池每分钟 12 个请求，平均 prompt 6400 token，平均输出 1024 token。两个池都从同一个模型家族出来，但它们应该承担的风险不同。</p>
+<p>如果你把这两类请求硬放进同一个 shared pool，再用一个中等大小的 <code>target_ongoing_requests</code> 去处理所有流量，表面上看副本数可能够了，实际上短请求会先被长 prefill 卡住。GPU 还在忙，TTFT 却先抬头，这就是“看起来健康，实际体验变差”的典型场景。</p>
+<p>正确的做法先问：哪类请求必须被保护，哪类请求可以等，哪类请求本来就应该为吞吐让步。这个问题的答案会直接决定分池、热副本和 token 预算。</p>
         </div>
-        <div class="table-wrap" style="margin-top:12px">
-          <table data-export-context="混合流量走读表" data-export-lang="table">
-            <thead>
-              <tr>
-                <th>池子</th>
-                <th>输入画像</th>
-                <th>起始副本估算</th>
-                <th>如果直接合池会怎样</th>
-                <th>先看哪一个指标</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>interactive chat</td>
-                <td>36 r/m，prompt 900，output 220</td>
-                <td>12</td>
-                <td>短请求会被长 prefill 或更大的 batch 预算拖慢</td>
-                <td>TTFT、queue wait</td>
-              </tr>
-              <tr>
-                <td>batch summary</td>
-                <td>12 r/m，prompt 6400，output 1024</td>
-                <td>6</td>
-                <td>吞吐看起来更高，但短请求体验会先坏掉</td>
-                <td>TPOT、GPU 利用率、KV cache 水位</td>
-              </tr>
-              <tr>
-                <td>shared pool</td>
-                <td>两类请求都进同一条队列</td>
-                <td>12 到 15 之间看似都能跑</td>
-                <td>数字可能“看着对”，但 queue fairness 和 tail latency 会先失真</td>
-                <td>分位数、路由账本、冷启动时间</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="box info">
+<h3>先算一个可落地的起点</h3>
+<p>$$\text{start replicas} = \left\lceil \frac{\text{concurrency}}{\text{target\_ongoing\_requests}} \right\rceil$$</p>
+<p>这个公式只负责给你一个起步值，不负责替你处理长 prompt、长输出和冷启动。</p>
+<p>对聊天池来说，36 / 3 = 12，所以 12 个副本可以作为起点。对摘要池来说，12 / 2 = 6，所以 6 个副本也只是起点。它们不应该因为算出来都“差不多够”就强行合池，因为合池后被共享的是队列和 batch 预算，不只是副本数。</p>
+<p>如果你把这两个池硬压成一个池，最容易漏掉的是长请求对短请求的隐性占用：prefill 会拉长，decode 也会变慢，最后你会在 p95 和用户反馈里才看到问题。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>池子</th><th>输入画像</th><th>起始副本估算</th><th>如果直接合池会怎样</th><th>先看哪一个指标</th></tr>
+<tr><td>interactive chat</td><td>36 r/m，prompt 900，output 220</td><td>12</td><td>短请求会被长 prefill 或更大的 batch 预算拖慢</td><td>TTFT、queue wait</td></tr>
+<tr><td>batch summary</td><td>12 r/m，prompt 6400，output 1024</td><td>6</td><td>吞吐看起来更高，但短请求体验会先坏掉</td><td>TPOT、GPU 利用率、KV cache 水位</td></tr>
+<tr><td>shared pool</td><td>两类请求都进同一条队列</td><td>12 到 15 之间看似都能跑</td><td>数字可能“看着对”，但 queue fairness 和 tail latency 会先失真</td><td>分位数、路由账本、冷启动时间</td></tr>
+</table></div>
         </div>
-        <div class="grid2" style="margin-top:12px">
-          <div class="box">
-            <h3>把估算写成一个小审计函数</h3>
-            <div class="codebar">
-              <span>容量审计伪代码</span>
-              <button type="button" class="copy" data-copy="capacity-audit-code">复制</button>
-            </div>
-            <pre id="capacity-audit-code" data-export-context="容量审计伪代码" data-export-lang="python"><code class="language-python">def capacity_audit(concurrency, target_ongoing_requests, prompt_tokens, output_tokens, queue_p95):
-    replicas = math.ceil(concurrency / target_ongoing_requests)
-    if prompt_tokens >= 6000:
-        replicas += 1
-    if output_tokens >= 1024:
-        replicas += 1
-    if queue_p95 > 1.5:
-        replicas += 1
-    return max(1, replicas)</code></pre>
-            <p>这段代码的价值不在于精确，而在于顺序：先有一个起点，再看长 prompt，再看长输出，最后才看排队。你如果反过来，只盯 queue_p95，往往会把真正的根因吞掉。</p>
-          </div>
-          <div class="box warn">
-            <h3>走读到这里，常见误判已经能看出来了</h3>
-            <p>第一个误判是把副本数当成全部答案。副本够多，只能说明入口多，不说明 batch 和队列就稳了。第二个误判是把 batch 做大当成无条件增益。吞吐上去了，TTFT 也可能一起上去。第三个误判是把长请求当成“只是更慢一点”的请求。它们真正占住的是更长时间的上下文状态和更长的 decode 生命周期。</p>
-            <p>一旦你在这三件事里看见任何一件，下一步就不该再问“要不要再多加一台机器”，而应该先问“是哪类请求在争同一组资源”。</p>
-          </div>
+        <div class="box">
+<h3>把估算写成一个小审计函数</h3>
+<div class="code-example">
+<div class="codebar"><span>容量审计伪代码</span><span>复制</span></div>
+<pre><code class="language-python">def capacity_audit(concurrency, target_ongoing_requests, prompt_tokens, output_tokens, queue_p95):
+ replicas = math.ceil(concurrency / target_ongoing_requests)
+ if prompt_tokens &gt;= 6000:
+ replicas += 1
+ if output_tokens &gt;= 1024:
+ replicas += 1
+ if queue_p95 &gt; 1.5:
+ replicas += 1
+ return max(1, replicas)</code></pre>
+</div>
+<p>这段代码的价值不在于精确，而在于顺序：先有一个起点，再看长 prompt，再看长输出，最后才看排队。你如果反过来，只盯 queue_p95，往往会把真正的根因吞掉。</p>
         </div>
+        <div class="box warn">
+<h3>走读到这里，常见误判已经能看出来了</h3>
+<p>第一个误判是把副本数当成全部答案。副本够多，只能说明入口多，不说明 batch 和队列就稳了。第二个误判是把 batch 做大当成无条件增益。吞吐上去了，TTFT 也可能一起上去。第三个误判是把长请求当成“只是更慢一点”的请求。它们真正占住的是更长时间的上下文状态和更长的 decode 生命周期。</p>
+<p>一旦你在这三件事里看见任何一件，下一步就不该再问“要不要再多加一台机器”，而应该先问“是哪类请求在争同一组资源”。</p>
+        </div>
+      </div>
       </section>
-
       <section id="diagnostics">
         <div class="head">
           <h2>诊断回路</h2>
           <span class="tag">Triage</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>先拿一个真的能排查的场景</h3>
-            <p>假设线上出现这样一组信号：交互聊天的 TTFT 从 0.9 秒涨到 2.4 秒，`queue_p95` 也跟着上升；与此同时，GPU 利用率看起来没有爆表，扩副本后 p99 只是在几分钟后慢慢回落。这个场景很典型，因为它把三种常见误判放在一起了：把问题直接归到 GPU、把扩副本当成唯一动作、把短请求和长请求混成一池。</p>
-            <p>这时第一步是先把症状拆成三个读数：排队是不是先坏了，prefill 是不是在抢时间，副本是不是还处在冷启动窗口。只要这三件事分开，你就知道该先动队列、分池，还是保热副本。</p>
-            <div class="table-wrap">
-              <table data-export-context="故障诊断读写表" data-export-lang="table">
-                <thead>
-                  <tr>
-                    <th>症状</th>
-                    <th>先读什么</th>
-                    <th>先写什么动作</th>
-                    <th>如果读错会怎样</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>TTFT 抬头</td>
-                    <td>queue wait、cold start、prefill 时长</td>
-                    <td>保热副本、降 batch token、分桶</td>
-                    <td>把问题当成纯算力不足</td>
-                  </tr>
-                  <tr>
-                    <td>吞吐上升但短请求更慢</td>
-                    <td>长请求占比、同池请求分布、TPOT</td>
-                    <td>拆池、单独队列、保短请求预算</td>
-                    <td>以为提升吞吐一定是正收益</td>
-                  </tr>
-                  <tr>
-                    <td>扩副本后 p99 仍高</td>
-                    <td>replica ready time、health check、routing backlog</td>
-                    <td>先保可用副本，再谈继续扩容</td>
-                    <td>只看副本数，不看可用性</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div class="box info">
-            <h3>把排查顺序写成一个小函数</h3>
-            <div class="codebar">
-              <span>故障分流伪代码</span>
-              <button type="button" class="copy" data-copy="triage-code">复制</button>
-            </div>
-            <pre id="triage-code" data-export-context="故障分流伪代码" data-export-lang="python"><code class="language-python">def triage(ttft_p95, queue_p95, prompt_tokens, output_tokens, replica_ready_s):
-    if replica_ready_s > 30:
-        return "keep warm replicas"
-    if prompt_tokens >= 6000:
-        return "split long-context pool"
-    if queue_p95 > 1.2 and ttft_p95 > 1.5:
-        return "tighten queue and lower batch token budget"
-    if output_tokens >= 1024:
-        return "cap output and isolate batch jobs"
-    return "hold steady and keep watching"</code></pre>
-            <p>这个顺序很重要。先看副本是否真能接流量，再看请求是不是太长，再看队列和 batch。顺序一旦反过来，常见结果就是把“慢启动”误修成“更大的队列”，或者把“长请求争抢”误修成“继续扩容”。</p>
-            <p class="solve-note">实践时先试 <a href="#practice">练习区</a> 里的第 5、8、10、11 题，再回来看这段函数能不能和你的答案对上。</p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先拿一个真的能排查的场景</h3>
+<p>假设线上出现这样一组信号：交互聊天的 TTFT 从 0.9 秒涨到 2.4 秒，<code>queue_p95</code> 也跟着上升；与此同时，GPU 利用率看起来没有爆表，扩副本后 p99 只是在几分钟后慢慢回落。这个场景很典型，因为它把三种常见误判放在一起了：把问题直接归到 GPU、把扩副本当成唯一动作、把短请求和长请求混成一池。</p>
+<p>这时第一步是先把症状拆成三个读数：排队是不是先坏了，prefill 是不是在抢时间，副本是不是还处在冷启动窗口。只要这三件事分开，你就知道该先动队列、分池，还是保热副本。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>症状</th><th>先读什么</th><th>先写什么动作</th><th>如果读错会怎样</th></tr>
+<tr><td>TTFT 抬头</td><td>queue wait、cold start、prefill 时长</td><td>保热副本、降 batch token、分桶</td><td>把问题当成纯算力不足</td></tr>
+<tr><td>吞吐上升但短请求更慢</td><td>长请求占比、同池请求分布、TPOT</td><td>拆池、单独队列、保短请求预算</td><td>以为提升吞吐一定是正收益</td></tr>
+<tr><td>扩副本后 p99 仍高</td><td>replica ready time、health check、routing backlog</td><td>先保可用副本，再谈继续扩容</td><td>只看副本数，不看可用性</td></tr>
+</table></div>
         </div>
+        <div class="box info">
+<h3>把排查顺序写成一个小函数</h3>
+<div class="code-example">
+<div class="codebar"><span>故障分流伪代码</span><span>复制</span></div>
+<pre><code class="language-python">def triage(ttft_p95, queue_p95, prompt_tokens, output_tokens, replica_ready_s):
+ if replica_ready_s &gt; 30:
+ return "keep warm replicas"
+ if prompt_tokens &gt;= 6000:
+ return "split long-context pool"
+ if queue_p95 &gt; 1.2 and ttft_p95 &gt; 1.5:
+ return "tighten queue and lower batch token budget"
+ if output_tokens &gt;= 1024:
+ return "cap output and isolate batch jobs"
+ return "hold steady and keep watching"</code></pre>
+</div>
+<p>这个顺序很重要。先看副本是否真能接流量，再看请求是不是太长，再看队列和 batch。顺序一旦反过来，常见结果就是把“慢启动”误修成“更大的队列”，或者把“长请求争抢”误修成“继续扩容”。</p>
+<p>实践时先试 <a href="#practice">练习区</a> 里的第 5、8、10、11 题，再回来看这段函数能不能和你的答案对上。</p>
+        </div>
+      </div>
       </section>
-
       <section id="case">
         <div class="head">
           <h2>典型案例</h2>
-          <span class="tag">Failure Case</span>
+          <span class="tag">Failure</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>一个最常见的冲突</h3>
-            <p>交互聊天池里突然进来一批长摘要任务。GPU 看起来更忙了，吞吐也上去了，但短请求的 TTFT 开始抬头，客户会先感到“变慢”，而不是先感到“更省钱”。</p>
-            <div class="table-wrap">
-              <table data-export-context="长短请求冲突表" data-export-lang="table">
-                <thead>
-                  <tr>
-                    <th>现象</th>
-                    <th>背后原因</th>
-                    <th>先动哪层</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>GPU 利用率高</td>
-                    <td>长 prefill 和长 decode 把卡占住了</td>
-                    <td>先拆池，再谈扩容</td>
-                  </tr>
-                  <tr>
-                    <td>短请求排队变长</td>
-                    <td>同池资源被长请求占走</td>
-                    <td>保短请求预算、限长输出</td>
-                  </tr>
-                  <tr>
-                    <td>扩了副本但 p99 还高</td>
-                    <td>新副本冷启动太慢</td>
-                    <td>保热副本，确认健康检查路径</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div class="box info">
-            <h3>切换三种故障场景</h3>
-            <div class="terminal-lab" data-terminal-lab data-export-context="过载故障实验室" data-export-lang="text">
-              <div class="terminal-controls">
-                <button type="button" class="ghost" data-terminal-case="chat">交互聊天突增</button>
-                <button type="button" class="ghost" data-terminal-case="summary">批量摘要占满</button>
-                <button type="button" class="ghost" data-terminal-case="cooldown">缩容太快</button>
-              </div>
-              <pre class="terminal-output language-text"></pre>
-              <template data-terminal-output="chat">[symptom] TTFT 上升，队列变长，但 GPU 不一定满到 100%
-[what to check] min_replicas, queue depth, hot replicas
-[next action] 先保热副本，再收紧 max_queued_requests</template>
-              <template data-terminal-output="summary">[symptom] 吞吐看起来更高，短请求体验却更差
-[what to check] 长请求是否和交互请求共池，prefill 是否抢占
-[next action] 分池、chunked prefill、限制长输出</template>
-              <template data-terminal-output="cooldown">[symptom] 这一波流量刚走，下一波又慢了
-[what to check] scale-down 速度、冷启动时间、健康检查
-[next action] 缓一点缩，留热副本</template>
-            </div>
-            <p class="hint">切换后，先看症状，再看要查的指标，最后再决定动哪一层。</p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>一个最常见的冲突</h3>
+<p>交互聊天池里突然进来一批长摘要任务。GPU 看起来更忙了，吞吐也上去了，但短请求的 TTFT 开始抬头，客户会先感到“变慢”，而不是先感到“更省钱”。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>现象</th><th>背后原因</th><th>先动哪层</th></tr>
+<tr><td>GPU 利用率高</td><td>长 prefill 和长 decode 把卡占住了</td><td>先拆池，再谈扩容</td></tr>
+<tr><td>短请求排队变长</td><td>同池资源被长请求占走</td><td>保短请求预算、限长输出</td></tr>
+<tr><td>扩了副本但 p99 还高</td><td>新副本冷启动太慢</td><td>保热副本，确认健康检查路径</td></tr>
+</table></div>
         </div>
+        <div class="box info">
+<h3>切换三种故障场景</h3>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>交互聊天突增</th><th>批量摘要占满</th><th>缩容太快</th></tr>
+<tr><td>[symptom] TTFT 上升，队列变长，但 GPU 不一定满到 100%</td><td>[what to check] min_replicas, queue depth, hot replicas</td><td>[next action] 先保热副本，再收紧 max_queued_requests</td></tr>
+<tr><td>[symptom] 吞吐看起来更高，短请求体验却更差</td><td>[what to check] 长请求是否和交互请求共池，prefill 是否抢占</td><td>[next action] 分池、chunked prefill、限制长输出</td></tr>
+<tr><td>[symptom] 这一波流量刚走，下一波又慢了</td><td>[what to check] scale-down 速度、冷启动时间、健康检查</td><td>[next action] 缓一点缩，留热副本</td></tr>
+</table></div>
+<p>切换后，先看症状，再看要查的指标，最后再决定动哪一层。</p>
+        </div>
+      </div>
       </section>
-
       <section id="playbook">
         <div class="head">
           <h2>上线顺序</h2>
           <span class="tag">Playbook</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>先排顺序，再调数字</h3>
-            <p>真实上线时，顺序很重要。先切分请求类型，再决定热副本和队列上限；接着定 batch token 预算；然后才是 `target_ongoing_requests`。很多人会反过来，从一个数字开始乱调，最后调出来的只是“看着不堵”的表象。</p>
-            <p>一个简单的判断法是：如果你不先分池，就很难区分是扩容慢、batch 太大，还是长请求本来就不该和交互请求共池。先把问题缩成“哪一池出事”，再去看“哪一个 knob 该动”。</p>
-          </div>
-          <div class="box info">
-            <h3>每个 knob 该读什么、写什么</h3>
-            <div class="table-wrap">
-              <table data-export-context="上线参数读写表" data-export-lang="table">
-                <thead>
-                  <tr>
-                    <th>参数 / 策略</th>
-                    <th>先读什么</th>
-                    <th>会写出什么效果</th>
-                    <th>错了最先坏哪里</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td><code>min_replicas</code></td>
-                    <td>冷启动时间、流量波峰、热副本剩余数</td>
-                    <td>保住一部分可立即接请求的副本</td>
-                    <td>新流量来了以后 TTFT 先涨</td>
-                  </tr>
-                  <tr>
-                    <td><code>max_queued_requests</code></td>
-                    <td>队列深度、峰值到达率、拒绝成本</td>
-                    <td>决定多大的队列还算可接受</td>
-                    <td>队列太大，尾延迟先坏</td>
-                  </tr>
-                  <tr>
-                    <td><code>target_ongoing_requests</code></td>
-                    <td>副本承载能力、长短请求比例</td>
-                    <td>决定扩缩容的目标点</td>
-                    <td>太高会拖慢每个请求，太低会把成本拉上去</td>
-                  </tr>
-                  <tr>
-                    <td><code>max_num_batched_tokens</code></td>
-                    <td>prompt / output 分布、KV cache 水位</td>
-                    <td>限制单轮 batch 的 token 预算</td>
-                    <td>预算太大，TTFT 和长尾一起坏</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先排顺序，再调数字</h3>
+<p>真实上线时，顺序很重要。先切分请求类型，再决定热副本和队列上限；接着定 batch token 预算；然后才是 <code>target_ongoing_requests</code>。很多人会反过来，从一个数字开始乱调，最后调出来的只是“看着不堵”的表象。</p>
+<p>一个简单的判断法是：如果你不先分池，就很难区分是扩容慢、batch 太大，还是长请求本来就不该和交互请求共池。先把问题缩成“哪一池出事”，再去看“哪一个 knob 该动”。</p>
         </div>
-        <div class="grid2" style="margin-top:12px">
-          <div class="box">
-            <h3>把坏味道翻回症状</h3>
-            <div class="table-wrap">
-              <table data-export-context="坏味道到症状映射表" data-export-lang="table">
-                <thead>
-                  <tr>
-                    <th>你看到的坏味道</th>
-                    <th>更像哪类问题</th>
-                    <th>下一步应该看什么</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>副本数一涨，短请求还是慢</td>
-                    <td>长请求共池，batch 过大或 queue 没隔开</td>
-                    <td>分池、分长度段、查 route log</td>
-                  </tr>
-                  <tr>
-                    <td>GPU 利用率很高，用户投诉更多</td>
-                    <td>吞吐和体验在打架</td>
-                    <td>TTFT、TPOT、排队时间、分位数</td>
-                  </tr>
-                  <tr>
-                    <td>扩容几分钟后才缓过来</td>
-                    <td>冷启动和副本就绪慢</td>
-                    <td>热副本、健康检查、镜像拉取时间</td>
-                  </tr>
-                  <tr>
-                    <td>某租户总被拖慢</td>
-                    <td>公平性和路由优先级不对</td>
-                    <td>按 tenant 拆指标，检查隔离策略</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div class="box warn">
-            <h3>练习前最后一把钥匙</h3>
-              <p>如果你今天只带走一件事，就带走这句：伸缩看副本，批处理看 token，隔离看请求类型。只要这三件事仍然被一个公共池和一个公共队列捆在一起，问题就会以尾延迟、冷启动或长短请求互相伤害的形式回来。</p>
-            <p>做练习时，先把答案写成“对象 + 读什么 + 写什么 + 结果”四列，再谈怎么优化。这样更容易看出你到底是在调参数，还是只是在换说法。</p>
-          </div>
+        <div class="box info">
+<h3>每个 knob 该读什么、写什么</h3>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>参数 / 策略</th><th>先读什么</th><th>会写出什么效果</th><th>错了最先坏哪里</th></tr>
+<tr><td><code>min_replicas</code></td><td>冷启动时间、流量波峰、热副本剩余数</td><td>保住一部分可立即接请求的副本</td><td>新流量来了以后 TTFT 先涨</td></tr>
+<tr><td><code>max_queued_requests</code></td><td>队列深度、峰值到达率、拒绝成本</td><td>决定多大的队列还算可接受</td><td>队列太大，尾延迟先坏</td></tr>
+<tr><td><code>target_ongoing_requests</code></td><td>副本承载能力、长短请求比例</td><td>决定扩缩容的目标点</td><td>太高会拖慢每个请求，太低会把成本拉上去</td></tr>
+<tr><td><code>max_num_batched_tokens</code></td><td>prompt / output 分布、KV cache 水位</td><td>限制单轮 batch 的 token 预算</td><td>预算太大，TTFT 和长尾一起坏</td></tr>
+</table></div>
         </div>
+        <div class="box">
+<h3>把坏味道翻回症状</h3>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>你看到的坏味道</th><th>更像哪类问题</th><th>下一步应该看什么</th></tr>
+<tr><td>副本数一涨，短请求还是慢</td><td>长请求共池，batch 过大或 queue 没隔开</td><td>分池、分长度段、查 route log</td></tr>
+<tr><td>GPU 利用率很高，用户投诉更多</td><td>吞吐和体验在打架</td><td>TTFT、TPOT、排队时间、分位数</td></tr>
+<tr><td>扩容几分钟后才缓过来</td><td>冷启动和副本就绪慢</td><td>热副本、健康检查、镜像拉取时间</td></tr>
+<tr><td>某租户总被拖慢</td><td>公平性和路由优先级不对</td><td>按 tenant 拆指标，检查隔离策略</td></tr>
+</table></div>
+        </div>
+        <div class="box warn">
+<h3>练习前最后一把钥匙</h3>
+<p>如果你今天只带走一件事，就带走这句：伸缩看副本，批处理看 token，隔离看请求类型。只要这三件事仍然被一个公共池和一个公共队列捆在一起，问题就会以尾延迟、冷启动或长短请求互相伤害的形式回来。</p>
+<p>做练习时，先把答案写成“对象 + 读什么 + 写什么 + 结果”四列，再谈怎么优化。这样更容易看出你到底是在调参数，还是只是在换说法。</p>
+        </div>
+      </div>
       </section>
-
       <section id="benchmark">
         <div class="head">
           <h2>压测模板</h2>
           <span class="tag">Benchmark</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>先用三组流量把线画出来</h3>
-            <p>这节课里的压测，不是为了找一个看起来最大的 QPS，而是为了找两个分界点：哪一档并发开始把 TTFT 推上去，哪一种请求长度开始让同池里的短请求受伤。只要这两个点找出来，你就知道该动 batch、动队列，还是动隔离。</p>
-            <p>最容易误判的地方，是把长上下文、短聊天和批量摘要混成一组压。它们看起来都能跑，实际上对 KV cache、prefill 和 decode 的压力完全不同。你要先把曲线拆开，再去谈副本数和 `target_ongoing_requests`，不然你测到的只是“能跑”，不是“该怎么跑”。</p>
-            <div class="table-wrap">
-              <table data-export-context="压测维度与固定项" data-export-lang="table">
-                <thead>
-                  <tr>
-                    <th>维度</th>
-                    <th>先固定什么</th>
-                    <th>再变化什么</th>
-                    <th>要看的结果</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>短聊天</td>
-                    <td>模型版本、地区、测试集、超时</td>
-                    <td>并发、`target_ongoing_requests`、`max_queued_requests`</td>
-                    <td>TTFT、queue wait、p95</td>
-                  </tr>
-                  <tr>
-                    <td>长上下文</td>
-                    <td>模型版本、长 prompt 集、同一张 GPU 池</td>
-                    <td>prompt 长度、batch token 预算、热副本数</td>
-                    <td>prefill 时长、KV cache 水位、尾延迟</td>
-                  </tr>
-                  <tr>
-                    <td>批量摘要</td>
-                    <td>输出格式、失败重试策略、数据集</td>
-                    <td>输出长度、batch 上限、隔离池大小</td>
-                    <td>吞吐、TPOT、是否挤压交互池</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div class="box info">
-            <h3>把实验顺序写出来，能少走很多弯路</h3>
-            <div class="codebar">
-              <span>压测顺序伪代码</span>
-              <button type="button" class="copy" data-copy="benchmark-code">复制</button>
-            </div>
-            <pre id="benchmark-code" data-export-context="压测顺序伪代码" data-export-lang="python"><code class="language-python">scenarios = ["chat", "long_context", "batch_summary"]
-for scenario in scenarios:
-    fix(model_version="same", region="same", timeout="same")
-    vary(scenario)
-    record(["TTFT", "TPOT", "queue_wait", "p95", "replica_ready_s"])
-    if scenario == "chat" and ttft_rises_first():
-        lower_batch_budget()
-    if scenario == "long_context" and queue_spike():
-        split_pool()
-    if scenario == "batch_summary" and short_chat_slows():
-        isolate_batch_pool()</code></pre>
-            <p>这个顺序的价值在于：你先拿到三条稳定曲线，再去解释副本、batch 和隔离分别出了什么问题。顺序错了，常见结果就是把“请求太长”误修成“batch 还不够大”，或者把“队列太深”误修成“再加几个副本”。</p>
-            <p class="solve-note">做练习 q12 时，先把“变化项”和“固定项”分开写，再去写指标。只写参数名，通常说明你还没把实验目的想清楚。</p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>先用三组流量把线画出来</h3>
+<p>这节课里的压测，为了找两个分界点：哪一档并发开始把 TTFT 推上去，哪一种请求长度开始让同池里的短请求受伤。只要这两个点找出来，你就知道该动 batch、动队列，还是动隔离。</p>
+<p>最容易误判的地方，是把长上下文、短聊天和批量摘要混成一组压。它们看起来都能跑，实际上对 KV cache、prefill 和 decode 的压力完全不同。你要先把曲线拆开，再去谈副本数和 <code>target_ongoing_requests</code>，不然你测到的只是“能跑”，不是“该怎么跑”。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>维度</th><th>先固定什么</th><th>再变化什么</th><th>要看的结果</th></tr>
+<tr><td>短聊天</td><td>模型版本、地区、测试集、超时</td><td>并发、<code>target_ongoing_requests</code>、<code>max_queued_requests</code></td><td>TTFT、queue wait、p95</td></tr>
+<tr><td>长上下文</td><td>模型版本、长 prompt 集、同一张 GPU 池</td><td>prompt 长度、batch token 预算、热副本数</td><td>prefill 时长、KV cache 水位、尾延迟</td></tr>
+<tr><td>批量摘要</td><td>输出格式、失败重试策略、数据集</td><td>输出长度、batch 上限、隔离池大小</td><td>吞吐、TPOT、是否挤压交互池</td></tr>
+</table></div>
         </div>
+        <div class="box info">
+<h3>把实验顺序写出来，能少走很多弯路</h3>
+<div class="code-example">
+<div class="codebar"><span>压测顺序伪代码</span><span>复制</span></div>
+<pre><code class="language-python">scenarios = ["chat", "long_context", "batch_summary"]
+for scenario in scenarios:
+ fix(model_version="same", region="same", timeout="same")
+ vary(scenario)
+ record(["TTFT", "TPOT", "queue_wait", "p95", "replica_ready_s"])
+ if scenario == "chat" and ttft_rises_first():
+ lower_batch_budget()
+ if scenario == "long_context" and queue_spike():
+ split_pool()
+ if scenario == "batch_summary" and short_chat_slows():
+ isolate_batch_pool()</code></pre>
+</div>
+<p>这个顺序的价值在于：你先拿到三条稳定曲线，再去解释副本、batch 和隔离分别出了什么问题。顺序错了，常见结果就是把“请求太长”误修成“batch 还不够大”，或者把“队列太深”误修成“再加几个副本”。</p>
+<p>做练习 q12 时，先把“变化项”和“固定项”分开写，再去写指标。只写参数名，通常说明你还没把实验目的想清楚。</p>
+        </div>
+      </div>
       </section>
-
       <section id="bridge">
         <div class="head">
           <h2>下一步再看什么</h2>
           <span class="tag">Next</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>接到 06 单元</h3>
-            <p>这一页先把决策起点摆正。06 单元会把副本、batch 和隔离翻成 TTFT、TPOT、p95/p99、错误率和容量规划。</p>
-          </div>
-          <div class="box warn">
-            <h3>这里先不追</h3>
-            <p>K8s HPA、服务网格、跨集群路由、计费配额和模型内核优化先放下。它们会在后面的课程或专题里出现。</p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>接到 06 单元</h3>
+<p>这一页先把决策起点摆正。06 单元会把副本、batch 和隔离翻成 TTFT、TPOT、p95/p99、错误率和容量规划。</p>
         </div>
+        <div class="box warn">
+<h3>这里先不追</h3>
+<p>K8s HPA、服务网格、跨集群路由、计费配额和模型内核优化先放下。它们会在后面的课程或专题里出现。</p>
+        </div>
+      </div>
       </section>
-
       <section id="boundary">
         <div class="head">
           <h2>边界</h2>
           <span class="tag">Boundary</span>
         </div>
-        <div class="grid2">
-          <div class="box warn">
-            <h3>这页先不追的内容</h3>
-            <ul>
-              <li>K8s、HPA、服务网格和跨集群路由。</li>
-              <li>计费、配额、组织级资源治理。</li>
-              <li>模型内核细节，比如算子 fusion、显存布局和 kernel 优化。</li>
-            </ul>
-          </div>
-          <div class="box">
-            <h3>下一步再看什么</h3>
-            <p>06 单元会把今天这些选择变成 SLO、观测图和容量规划。到那一节再去追更细的 KPI、分位数和压测矩阵，会顺很多。</p>
-          </div>
+      <div class="grid2">
+        <div class="box warn">
+<h3>这页先不追的内容</h3>
+<ul>
+<li>K8s、HPA、服务网格和跨集群路由。</li>
+<li>计费、配额、组织级资源治理。</li>
+<li>模型内核细节，比如算子 fusion、显存布局和 kernel 优化。</li>
+</ul>
         </div>
+        <div class="box">
+<h3>下一步再看什么</h3>
+<p>06 单元会把今天这些选择变成 SLO、观测图和容量规划。到那一节再去追更细的 KPI、分位数和压测矩阵，会顺很多。</p>
+        </div>
+      </div>
       </section>
-
       <section id="mistakes">
         <div class="head">
           <h2>常见错误</h2>
           <span class="tag">Mistakes</span>
         </div>
-        <div class="grid3">
-          <div class="box">
-            <h3>只盯 GPU 利用率</h3>
-            <p>卡跑满了，不代表用户体验好。先看 TTFT 和队列时间，再看利用率。</p>
-          </div>
-          <div class="box">
-            <h3>把 `target_ongoing_requests` 当延迟上限</h3>
-            <p>它只描述副本希望挂住多少进行中的请求，不表示 SLA，也不直接给出用户要等多久。</p>
-          </div>
-          <div class="box">
-            <h3>把长请求和短请求混在一起</h3>
-            <p>一个共享池能省心，但一旦长 prefill 进来，短请求会先被拖慢。拆池通常比一味加机器更直接。</p>
-          </div>
-        </div>
+<p>只盯 GPU 利用率</p>
+<p>卡跑满了，不代表用户体验好。先看 TTFT 和队列时间，再看利用率。</p>
+<p>把长请求和短请求混在一起</p>
+<p>一个共享池能省心，但一旦长 prefill 进来，短请求会先被拖慢。拆池通常比一味加机器更直接。</p>
       </section>
-
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">Practice</span>
         </div>
-        <div class="practice-intro">
-          <div class="box soft">
-            <h3>做题目标</h3>
-            <p>先分概念，再做诊断，最后把它写成一个能落地的策略。答案里尽量写清楚：对象、代价、症状、动作。</p>
-          </div>
-          <div class="quick-review">
-            <b>检查重点</b>
-            <span>答题时别只写名词。每个答案至少要把“看什么”和“为什么这样做”写出来。</span>
-          </div>
+      <div class="practice-intro">
+      <div class="box soft">
+<h3>做题目标</h3>
+<p>先分概念，再做诊断，最后把它写成一个能落地的策略。答案里尽量写清楚：对象、代价、症状、动作。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、概念辨析</h3></div>
+          <div class="quick-review">快速回忆 先分清服务层和引擎层，再谈参数。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="每个副本希望同时挂住的进行中请求数">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Ray Serve 的 <code>target_ongoing_requests</code> 主要表示什么？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>一、概念辨析</h3>
-              <p>先确认你分得清副本、batch、缓存和队列。</p>
-            </div>
-            <div class="quick-review">
-              <b>快速回忆</b>
-              <span>先分清服务层和引擎层，再谈参数。</span>
-            </div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q1" data-group="一、概念辨析" data-title="Ray Serve 的 target_ongoing_requests 主要表示什么？" data-answer="A" data-explain="它是每个副本希望挂住的进行中请求数，不是延迟上限。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">伸缩</span></div>
-              <h3>Ray Serve 的 <code>target_ongoing_requests</code> 主要表示什么？</h3>
-              <div class="choices">
-                <label><input type="radio" name="q1" value="A"> A. 每个副本希望同时挂住的进行中请求数</label>
-                <label><input type="radio" name="q1" value="B"> B. 单次生成允许输出的 token 上限</label>
-                <label><input type="radio" name="q1" value="C"> C. GPU 的显存上限</label>
-              </div>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q1" value="每个副本希望同时挂住的进行中请求数">每个副本希望同时挂住的进行中请求数</label>
+      <label><input type="radio" name="q1" value="单次生成允许输出的 token 上限">单次生成允许输出的 token 上限</label>
+      <label><input type="radio" name="q1" value="GPU 的显存上限">GPU 的显存上限</label>
+      </div>
 
-            <div class="q" data-question="q2" data-group="一、概念辨析" data-title="连续批处理等同于固定 batch 吗？" data-answer="false" data-explain="连续批处理允许新请求在运行过程中并入，不是等一批完全结束后再开始下一批。">
-              <div class="q-meta"><span class="pill">true/false</span><span class="pill">batch</span></div>
-              <h3>连续批处理等同于固定 batch，一批结束后才开始下一批。</h3>
-              <label><input type="radio" name="q2" value="true"> 对</label>
-              <label><input type="radio" name="q2" value="false"> 错</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>每个副本希望同时挂住的进行中请求数。它是每个副本希望挂住的进行中请求数，不是延迟上限。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="false">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> 连续批处理等同于固定 batch，一批结束后才开始下一批。</h3>
 
-            <div class="q short" data-question="q3" data-group="一、概念辨析" data-title="填空：LLM 请求在生成期间持续占用什么缓存？">
-              <div class="q-meta"><span class="pill">fill</span><span class="pill">cache</span></div>
-              <h3>填空：LLM 请求在生成期间持续占用什么缓存？</h3>
-              <input type="text" name="q3" data-answer="KV cache,kv cache" placeholder="写出一个短词">
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">把 prefill 和 decode 的状态连起来想。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>答案是 <code>KV cache</code>。它会在请求生成期间一直保留上下文状态，所以长请求会更占资源，也更容易影响同池里的短请求。</p>
-              </details>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      </div>
 
-            <div class="q" data-question="q4" data-group="一、概念辨析" data-title="vLLM 的 max_num_batched_tokens 直接限制什么？" data-answer="A" data-explain="它限制的是单轮批处理能吃下的 token 预算，不是每秒 QPS。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">token budget</span></div>
-              <h3>vLLM 的 <code>max_num_batched_tokens</code> 直接限制什么？</h3>
-              <div class="choices">
-                <label><input type="radio" name="q4" value="A"> A. 单轮批处理的 token 预算</label>
-                <label><input type="radio" name="q4" value="B"> B. 每秒 QPS 上限</label>
-                <label><input type="radio" name="q4" value="C"> C. 模型版本数量</label>
-              </div>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-          </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>false。连续批处理允许新请求在运行过程中并入，不是等一批完全结束后再开始下一批。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 填空：LLM 请求在生成期间持续占用什么缓存？</h3>
+
+
+      <textarea name="q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。答案是 KV cache 。它会在请求生成期间一直保留上下文状态，所以长请求会更占资源，也更容易影响同池里的短请求。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="单轮批处理的 token 预算">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> vLLM 的 <code>max_num_batched_tokens</code> 直接限制什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q4" value="单轮批处理的 token 预算">单轮批处理的 token 预算</label>
+      <label><input type="radio" name="q4" value="每秒 QPS 上限">每秒 QPS 上限</label>
+      <label><input type="radio" name="q4" value="模型版本数量">模型版本数量</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>单轮批处理的 token 预算。它限制的是单轮批处理能吃下的 token 预算，不是每秒 QPS。</p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>二、调参诊断</h3>
-              <p>根据现象判断该调伸缩、批处理还是隔离。</p>
-            </div>
-            <div class="quick-review">
-              <b>快速回忆</b>
-              <span>长 prompt、长输出和高并发，会以不同方式挤压系统。</span>
-            </div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q5" data-group="二、调参诊断" data-title="短请求被长 prefill 拖慢，优先考虑什么？" data-answer="A" data-explain="先把长请求隔开，或者至少分桶和降低长请求对短请求池的干扰。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">latency</span></div>
-              <h3>短请求被长 prefill 拖慢，优先考虑什么？</h3>
-              <div class="choices">
-                <label><input type="radio" name="q5" value="A"> A. chunked prefill、长度分桶或独立副本池</label>
-                <label><input type="radio" name="q5" value="B"> B. 只提高 max output tokens</label>
-                <label><input type="radio" name="q5" value="C"> C. 只降低日志级别</label>
-              </div>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-
-            <div class="q" data-question="q6" data-group="二、调参诊断" data-title="给交互聊天保住三项" data-answer="A" data-explain="交互池最先要保的是热副本、队列上限和输出 token 上限。">
-              <div class="q-meta"><span class="pill">mini fields</span><span class="pill">protect</span></div>
-              <h3>给交互聊天保住三项，分别写出最该保住的策略或参数。</h3>
-              <div class="mini-fields">
-                <label>1 <input type="text" data-answer="热副本" placeholder="策略 1"></label>
-                <label>2 <input type="text" data-answer="max_queued_requests" placeholder="参数 2"></label>
-                <label>3 <input type="text" data-answer="输出 token 上限,max output tokens" placeholder="策略 3"></label>
-              </div>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">每个空写一个短词，不用写长句。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>这题要写清楚“保护什么”：热副本保护冷启动；<code>max_queued_requests</code> 保护排队；输出 token 上限保护 decode 时长和短请求体验。只写“加机器”不算答对。</p>
-              </details>
-            </div>
-
-            <div class="q short" data-question="q7" data-group="二、调参诊断" data-title="SGLang 中 #queue-req 长期过大说明什么风险？">
-              <div class="q-meta"><span class="pill">fill</span><span class="pill">queue</span></div>
-              <h3><code>#queue-req</code> 长期过大，最直接抬高什么风险？</h3>
-              <input type="text" name="q7" data-answer="尾延迟,排队开销" placeholder="写一个短词">
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <p class="hint">想想请求在队列里等多久。</p>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>答案可以写“尾延迟”或“排队开销”。如果你还写了“队列积压会拖慢 TTFT”，说明你已经把这个信号和用户可见延迟连起来了。</p>
-              </details>
-            </div>
-
-            <div class="q" data-question="q8" data-group="二、调参诊断" data-title="批处理吞吐上升但 TTFT 恶化，应该怎么看？" data-answer="A" data-explain="这是取舍，不是单点故障。通常要按业务类型拆配置。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">tradeoff</span></div>
-              <h3>批处理吞吐上升但 TTFT 恶化，最合理的判断是？</h3>
-              <div class="choices">
-                <label><input type="radio" name="q8" value="A"> A. 吞吐和延迟正在发生取舍，需要按业务类型分配置</label>
-                <label><input type="radio" name="q8" value="B"> B. 一定是网络坏了</label>
-                <label><input type="radio" name="q8" value="C"> C. 应继续无条件增大 batch</label>
-              </div>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、调参诊断</h3></div>
+          <div class="quick-review">快速回忆 长 prompt、长输出和高并发，会以不同方式挤压系统。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="chunked prefill、长度分桶或独立副本池">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 短请求被长 prefill 拖慢，优先考虑什么？</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>三、设计与复盘</h3>
-              <p>把策略写成能上线的最小版本。</p>
-            </div>
-            <div class="quick-review">
-              <b>快速回忆</b>
-              <span>先留证据，再谈均衡；先分池，再谈扩容。</span>
-            </div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q9" data-group="三、设计与复盘" data-title="路由账本里最少留哪三类字段？" data-answer="A" data-explain="最少要知道是谁、跑了哪个版本、为什么选中这个副本。">
-              <div class="q-meta"><span class="pill">mini fields</span><span class="pill">ledger</span></div>
-              <h3>路由账本里最少留哪三类字段？</h3>
-              <div class="mini-fields">
-                <label>1 <input type="text" data-answer="tenant_id" placeholder="字段 1"></label>
-                <label>2 <input type="text" data-answer="model_version" placeholder="字段 2"></label>
-                <label>3 <input type="text" data-answer="route_reason" placeholder="字段 3"></label>
-              </div>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>最少要知道 tenant、model_version 和 route_reason。前两个字段帮助你判断热租户或灰度版本是否在出问题，第三个字段帮助你知道为什么选中这个副本。</p>
-              </details>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q5" value="chunked prefill、长度分桶或独立副本池">chunked prefill、长度分桶或独立副本池</label>
+      <label><input type="radio" name="q5" value="只提高 max output tokens">只提高 max output tokens</label>
+      <label><input type="radio" name="q5" value="只降低日志级别">只降低日志级别</label>
+      </div>
 
-            <div class="q full" data-question="q10" data-group="三、设计与复盘" data-title="扩副本了但 p99 还是高，可能是哪三类原因？">
-              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">diagnosis</span></div>
-              <h3>某服务流量突增后，Ray Serve 已经扩了副本，但 p99 仍然高了几分钟。列出三个可能原因，并写出你会看什么指标或日志。</h3>
-              <p class="solve-note">答案顺序按“原因 + 证据 + 下一步”写。别只写现象。</p>
-              <textarea name="q10" placeholder="例如：冷启动太慢 -> 看 replica warm-up time 和健康检查日志 -> 保热副本。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>至少要提到三类：1) 新副本冷启动慢或没真正进入健康状态，先看加载时间、就绪探针和副本日志；2) 队列已经积压，先看 queue depth、排队时间和 ongoing requests；3) 长请求或坏副本把流量拖住，先看 route reason、长短请求分布和 p95/p99 分层指标。</p>
-              </details>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>chunked prefill、长度分桶或独立副本池。先把长请求隔开，或者至少分桶和降低长请求对短请求池的干扰。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="A">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">mini-fields</span></div>
+        <h3><b>Q:</b> 给交互聊天保住三项，分别写出最该保住的策略或参数。</h3>
 
-            <div class="q" data-question="q11" data-group="三、设计与复盘" data-title="长上下文和短问答共存时，怎么隔离更合理？" data-answer="A" data-explain="先拆长短请求池，再给短请求保留预算。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">isolation</span></div>
-              <h3>长上下文摘要和短问答共存时，更合理的隔离动作是什么？</h3>
-              <div class="choices">
-                <label><input type="radio" name="q11" value="A"> A. 长请求分到隔离池或独立队列，并给短请求保留预算</label>
-                <label><input type="radio" name="q11" value="B"> B. 所有租户继续混在同一个池里</label>
-                <label><input type="radio" name="q11" value="C"> C. 只把队列阈值调大</label>
-              </div>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q6" value="1">1</label>
+      <label><input type="radio" name="q6" value="2">2</label>
+      <label><input type="radio" name="q6" value="3">3</label>
+      </div>
 
-            <div class="q full" data-question="q12" data-group="三、设计与复盘" data-title="最小容量实验矩阵" >
-              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">capacity</span></div>
-              <h3>写出一个最小容量实验矩阵：你要变什么、固定什么、看什么。</h3>
-              <p class="solve-note">至少覆盖并发、prompt 长度、输出长度、副本数和 batch token 预算。回答里也要写清固定条件。</p>
-              <textarea name="q12" placeholder="先写变量，再写固定项，最后写指标。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>合格答案会把实验拆成几组维度：并发、prompt 长度、输出长度、副本数、batch token 预算；固定模型版本、地区、测试集和超时策略；观察 TTFT、TPOT、queue wait、错误率和尾延迟。要能说明为什么这些维度足够决定 `target_ongoing_requests` 和 batch 预算，而不是只写“压测一下”。</p>
-              </details>
-            </div>
-          </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>A。交互池最先要保的是热副本、队列上限和输出 token 上限。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> <code>#queue-req</code> 长期过大，最直接抬高什么风险？</h3>
+
+
+      <textarea name="q7"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。答案可以写“尾延迟”或“排队开销”。如果你还写了“队列积压会拖慢 TTFT”，说明你已经把这个信号和用户可见延迟连起来了。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="吞吐和延迟正在发生取舍，需要按业务类型分配置">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 批处理吞吐上升但 TTFT 恶化，最合理的判断是？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q8" value="吞吐和延迟正在发生取舍，需要按业务类型分配置">吞吐和延迟正在发生取舍，需要按业务类型分配置</label>
+      <label><input type="radio" name="q8" value="一定是网络坏了">一定是网络坏了</label>
+      <label><input type="radio" name="q8" value="应继续无条件增大 batch">应继续无条件增大 batch</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>吞吐和延迟正在发生取舍，需要按业务类型分配置。这是取舍，不是单点故障。通常要按业务类型拆配置。</p>
+        </details>
+      </article>
         </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、设计与复盘</h3></div>
+          <div class="quick-review">快速回忆 先留证据，再谈均衡；先分池，再谈扩容。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="A">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">mini-fields</span></div>
+        <h3><b>Q:</b> 路由账本里最少留哪三类字段？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q9" value="1">1</label>
+      <label><input type="radio" name="q9" value="2">2</label>
+      <label><input type="radio" name="q9" value="3">3</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>A。最少要知道是谁、跑了哪个版本、为什么选中这个副本。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 某服务流量突增后，Ray Serve 已经扩了副本，但 p99 仍然高了几分钟。列出三个可能原因，并写出你会看什么指标或日志。</h3>
+
+
+      <textarea name="q10"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。至少要提到三类：1) 新副本冷启动慢或没真正进入健康状态，先看加载时间、就绪探针和副本日志；2) 队列已经积压，先看 queue depth、排队时间和 ongoing requests；3) 长请求或坏副本把流量拖住，先看 route reason、长短请求分布和 p95/p99 分层指标。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="长请求分到隔离池或独立队列，并给短请求保留预算">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 长上下文摘要和短问答共存时，更合理的隔离动作是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q11" value="长请求分到隔离池或独立队列，并给短请求保留预算">长请求分到隔离池或独立队列，并给短请求保留预算</label>
+      <label><input type="radio" name="q11" value="所有租户继续混在同一个池里">所有租户继续混在同一个池里</label>
+      <label><input type="radio" name="q11" value="只把队列阈值调大">只把队列阈值调大</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>长请求分到隔离池或独立队列，并给短请求保留预算。先拆长短请求池，再给短请求保留预算。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 写出一个最小容量实验矩阵：你要变什么、固定什么、看什么。</h3>
+
+
+      <textarea name="q12"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。合格答案会把实验拆成几组维度：并发、prompt 长度、输出长度、副本数、batch token 预算；固定模型版本、地区、测试集和超时策略；观察 TTFT、TPOT、queue wait、错误率和尾延迟。要能说明为什么这些维度足够决定 <code>target_ongoing_requests</code> 和 batch 预算，而不是只写“压测一下”。</p>
+        </details>
+      </article>
+        </div>
+      </div>
       </section>
-
-      <section id="sources">
+      <section id="section-sources">
         <div class="head">
-          <h2>公开资料</h2>
-          <span class="tag">Sources</span>
+          <h2>参考资料</h2>
+          <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-          <li><a href="../index.html">课程地图</a>：说明本页前后接哪几节，课程顺序怎么排。</li>
-          <li><a href="https://docs.ray.io/en/latest/serve/advanced-guides/advanced-autoscaling.html">Ray Serve autoscaling</a>：支持副本、`target_ongoing_requests`、伸缩窗口这些部分。访问时间：2026-06-22。</li>
-          <li><a href="https://docs.vllm.ai/en/latest/api/vllm/config/scheduler/">vLLM scheduler</a>：支持 token / sequence 预算和调度边界。访问时间：2026-06-22。</li>
-          <li><a href="https://docs.sglang.ai/advanced_features/hyperparameter_tuning.html">SGLang tuning</a>：支持 queue、batching 和诊断指标。访问时间：2026-06-22。</li>
-          <li><a href="https://nvidia.github.io/TensorRT-LLM/features/paged-attention-ifb-scheduler.html">TensorRT-LLM IFB</a>：支持 in-flight batching、continuous batching 和 packed input。访问时间：2026-06-22。</li>
-        </ul>
+<ul>
+<li><a href="../index.html">课程地图</a>：说明本页前后接哪几节，课程顺序怎么排。</li>
+<li><a href="https://docs.ray.io/en/latest/serve/advanced-guides/advanced-autoscaling.html">Ray Serve autoscaling</a>：支持副本、<code>target_ongoing_requests</code>、伸缩窗口这些部分。访问时间：2026-06-22。</li>
+<li><a href="https://docs.vllm.ai/en/latest/api/vllm/config/scheduler/">vLLM scheduler</a>：支持 token / sequence 预算和调度边界。访问时间：2026-06-22。</li>
+<li><a href="https://docs.sglang.ai/advanced_features/hyperparameter_tuning.html">SGLang tuning</a>：支持 queue、batching 和诊断指标。访问时间：2026-06-22。</li>
+<li><a href="https://nvidia.github.io/TensorRT-LLM/features/paged-attention-ifb-scheduler.html">TensorRT-LLM IFB</a>：支持 in-flight batching、continuous batching 和 packed input。访问时间：2026-06-22。</li>
+</ul>
       </section>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-      <section id="export">
-        <div class="head">
-          <h2>导出</h2>
-          <span class="tag">Markdown</span>
-        </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" type="button" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" type="button" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
-    </main>
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

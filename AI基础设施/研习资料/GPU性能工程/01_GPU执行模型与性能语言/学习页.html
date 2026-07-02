@@ -4,1037 +4,711 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GPU 执行模型与性能语言</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="GPU 性能工程" data-unit="01｜GPU 执行模型与性能语言">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>GPU 性能工程</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">GPU 性能工程</a>
+        <span class="sep">/</span>
         <span>01｜GPU 执行模型与性能语言</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#overview"><span class="dot"></span>先抓主线</a>
-        <a href="#mechanism"><span class="dot"></span>核心机制</a>
-        <a href="#example"><span class="dot"></span>例子</a>
-        <a href="#mistakes"><span class="dot"></span>常见误区</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">先把执行模型和性能语言连成一条线，再看 CUDA、Triton 和 FlashAttention。遇到慢 kernel，先问工作怎么分、数据怎么动、瓶颈在哪里。</div>
-    </aside>
-
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">GPU 性能工程｜第 01 单元</div>
-          <h1>GPU 执行模型与性能语言</h1>
-          <p class="lead">很多 GPU 优化先卡在两件事上：执行模型没看清，或者把 occupancy、warp、shared memory 当成背诵词。先用 CUDA 看线程和 SM 怎么推进，再用 Triton 看块级读法，最后用 FlashAttention 看为什么少搬数据常常比多做算术更重要。</p>
-
-          <div class="course-links">
-            <a href="../index.html">课程地图</a><a href="../02_CUDA线程层级与内核边界/学习页.html">下一单元</a><a href="../03_内存层次访存合并与带宽/学习页.html">后续：内存层次</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>读完本页应该能做什么</h3>
-          <ul>
-  <li>用 grid、block、thread、warp、SM 画出一个 kernel 的执行关系。</li>
-  <li>把 occupancy、latency hiding、bandwidth、arithmetic intensity 改写成可检查的判断句。</li>
-  <li>把 CUDA、Triton、FlashAttention 放进同一套数据移动账本里。</li>
-</ul>
-
-        </div>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
+    </div>
+  </nav>
 
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">GPU 性能工程｜第 01 单元</div>
+      <div class="hero-meta">
+        <span class="hero-badge">01｜GPU 执行模型与性能语言</span>
+      </div>
+      <h1 class="hero-title">GPU 执行模型与性能语言</h1>
+      <p class="hero-desc">很多 GPU 优化先卡在两件事上：执行模型没看清，或者把 occupancy、warp、shared memory 当成背诵词。先用 CUDA 看线程和 SM 怎么推进，再用 Triton 看块级读法，最后用 FlashAttention 看为什么少搬数据常常比多做算术更重要。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../02_CUDA线程层级与内核边界/学习页.html">下一单元</a>
+            <a href="../03_内存层次访存合并与带宽/学习页.html">后续：内存层次</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>用 grid、block、thread、warp、SM 画出一个 kernel 的执行关系。</li>
+            <li>把 occupancy、latency hiding、bandwidth、arithmetic intensity 改写成可检查的判断句。</li>
+            <li>把 CUDA、Triton、FlashAttention 放进同一套数据移动账本里。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#overview">先抓主线</a>
+      <a href="#mechanism">状态账本：层级读写和症状</a>
+      <a href="#example">例子：向量加法和 attention 两条线</a>
+      <a href="#cuda">CUDA 读法：先问四件事</a>
+      <a href="#triton">Triton 读法：program、tile 和 mask</a>
+      <a href="#measure">测量与副作用：改参数会顺手改变什么</a>
+      <a href="#why-it-slows">真实排错：把一条调优链走完整</a>
+      <a href="#memory-path">访存合并：地址形状先于参数</a>
+      <a href="#warp-lane">一个 warp 怎么读一个小 kernel</a>
+      <a href="#fusion-lanes">launch 太碎时，先看交接成本</a>
+      <a href="#flashattention">FlashAttention 视角</a>
+      <a href="#mistakes">常见误区与排错</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
-  <div class="head"><h2>学习目标</h2><span class="tag">goal</span></div>
-  <div class="grid">
-    <div class="card">
-      <b>先建立执行模型</b>
-      <p>读一个 kernel 时，先知道 grid、block、thread、warp、SM 的关系，再看程序是否把工作切对了。</p>
-    </div>
-    <div class="card">
-      <b>再建立性能语言</b>
-      <p>把 occupancy、latency hiding、bandwidth、arithmetic intensity 变成可以查 profiler、可以算账的句子。</p>
-    </div>
-    <div class="card">
-      <b>最后建立迁移桥</b>
-      <p>能够从 CUDA 走到 Triton，再走到 FlashAttention，知道三者是在同一张性能账本上看不同抽象层。</p>
-    </div>
-  </div>
-</section>
-
-<section id="overview">
-  <div class="head"><h2>先抓主线</h2><span class="tag">overview</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>先把问题改写成三句话</h3>
-      <p>这个 kernel 的工作怎么分给硬件？数据怎么在寄存器、shared memory、L2、HBM 之间流动？SM 为什么会等？</p>
-      <p>这三句一旦问清楚，很多“先加 shared memory”“先调 BLOCK_SIZE”的冲动都会慢下来，变成可验证的假设。</p>
-    </div>
-    <div class="box info">
-      <h3>本页的边界</h3>
-      <p>本页不讲完整 CUDA 语法，不讲微架构深水区，也不直接做 profiler 截图分析。它只负责把判断词典搭起来，让你读后续单元时知道该看什么。</p>
-    </div>
-  </div>
-  <div class="flow">
-    <div class="step"><b>1</b><p>先分清软件层级和硬件层级。</p></div>
-    <div class="step"><b>2</b><p>再分清“有很多工作”与“工作真的被推进”的差别。</p></div>
-    <div class="step"><b>3</b><p>最后把数据移动、资源占用和同步边界放进同一张表。</p></div>
-  </div>
-  <div class="box">
-    <h3>一个固定锚点：向量加法 kernel</h3>
-    <p>后面所有例子都围绕同一件事展开：<code>c[i] = a[i] + b[i]</code>。它足够小，能看出执行模型；又足够真实，能看出带宽、launch overhead、边界处理和资源占用。</p>
-    <div class="codebar"><span>向量加法案例</span><button class="copy" data-copy="vec-add-kernel">复制</button></div>
-    <pre id="vec-add-kernel" data-export-context="GPU 执行模型与性能语言｜向量加法案例" data-export-lang="python"><code class="language-python">__global__ void vec_add(const float* a, const float* b, float* c, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i &lt; n) {
-        c[i] = a[i] + b[i];
-    }
+        <div class="head">
+          <h2>学习目标</h2>
+          <span class="tag">goal</span>
+        </div>
+      <div class="grid">
+<p><b>先建立执行模型</b></p>
+<p>读一个 kernel 时，先知道 grid、block、thread、warp、SM 的关系，再看程序是否把工作切对了。</p>
+<p><b>最后建立迁移桥</b></p>
+<p>能够从 CUDA 走到 Triton，再走到 FlashAttention，知道三者是在同一张性能账本上看不同抽象层。</p>
+      </div>
+      </section>
+      <section id="overview">
+        <div class="head">
+          <h2>先抓主线</h2>
+          <span class="tag">overview</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>先把问题改写成三句话</h3>
+<p>这个 kernel 的工作怎么分给硬件？数据怎么在寄存器、shared memory、L2、HBM 之间流动？SM 为什么会等？</p>
+<p>这三句一旦问清楚，很多“先加 shared memory”“先调 BLOCK_SIZE”的冲动都会慢下来，变成可验证的假设。</p>
+        </div>
+        <div class="box info">
+<h3>本页的边界</h3>
+<p>本页不讲完整 CUDA 语法，不讲微架构深水区，也不直接做 profiler 截图分析。它只负责把判断词典搭起来，让你读后续单元时知道该看什么。</p>
+<p><b>1</b>先分清软件层级和硬件层级。</p>
+<p><b>2</b>再分清“有很多工作”与“工作真的被推进”的差别。</p>
+<p><b>3</b>最后把数据移动、资源占用和同步边界放进同一张表。</p>
+        </div>
+        <div class="box">
+<h3>一个固定锚点：向量加法 kernel</h3>
+<p>后面所有例子都围绕同一件事展开：<code>c[i] = a[i] + b[i]</code>。它足够小，能看出执行模型；又足够真实，能看出带宽、launch overhead、边界处理和资源占用。</p>
+<p>向量加法案例复制</p>
+<pre><code class="language-python">__global__ void vec_add(const float* a, const float* b, float* c, int n) {
+ int i = blockIdx.x * blockDim.x + threadIdx.x;
+ if (i &lt; n) {
+ c[i] = a[i] + b[i];
+ }
 }
 
 int threads = 256;
 int blocks = (n + threads - 1) / threads;
 vec_add&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(a, b, c, n);</code></pre>
-  </div>
-</section>
-
-<section id="mechanism">
-  <div class="head"><h2>状态账本：层级读写和症状</h2><span class="tag">trace</span></div>
-  <p>下面这张表把每一层的读写和症状摆出来。先按这个顺序看，再去看 warp、SM、shared memory 这些词，判断会稳很多。</p>
-  <div class="table-wrap">
-    <table data-export-context="GPU 执行模型与性能语言｜执行层级账本" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>层级</th>
-          <th>你写出来的对象</th>
-          <th>硬件看到的推进方式</th>
-          <th>出问题时的症状</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>grid</td>
-          <td>一个 kernel launch 的全部 block</td>
-          <td>分散到多个 SM 上执行，顺序不要假设固定</td>
-          <td>把 block 间顺序当成逻辑前提，会写出依赖错位的代码</td>
-        </tr>
-        <tr>
-          <td>block</td>
-          <td>同一组可以局部协作的线程</td>
-          <td>通常驻留在同一个 SM，可共享 block 级 shared memory</td>
-          <td>把 block 当成物理核心，或者错误假设 block 间同步</td>
-        </tr>
-        <tr>
-          <td>warp</td>
-          <td>32 个线程的调度和 SIMT 单位</td>
-          <td>调度器按 warp 选择可发射指令的候选</td>
-          <td>只看 thread 数，不看 warp 是否都在等同一种瓶颈</td>
-        </tr>
-        <tr>
-          <td>SM</td>
-          <td>资源容器和执行工作站</td>
-          <td>保存寄存器、shared memory、warp 上下文并发射指令</td>
-          <td>寄存器或 shared memory 太满，active warp 变少，延迟隐藏失败</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button class="trace-line active" data-trace-step="step-1">
-        <code>blockIdx.x * blockDim.x + threadIdx.x</code><span>映射到元素下标</span>
-      </button>
-      <button class="trace-line" data-trace-step="step-2">
-        <code>warp scheduler</code><span>从就绪 warp 中选择发射</span>
-      </button>
-      <button class="trace-line" data-trace-step="step-3">
-        <code>shared memory / registers</code><span>决定驻留和复用能力</span>
-      </button>
-      <button class="trace-line" data-trace-step="step-4">
-        <code>stall reason</code><span>解释为什么看起来并行仍然慢</span>
-      </button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="step-1">
-        <b>程序员视角</b><span>一个元素或一小段 tile</span><p>先把工作映射到某个线程或某个 program，再谈后面的资源和带宽。</p>
+        </div>
       </div>
-      <div class="tensor-card" data-trace-target="step-2">
-        <b>调度器视角</b><span>warp</span><p>warp 会在等待、就绪、发射之间切换。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-3">
-        <b>资源视角</b><span>寄存器 / shared memory</span><p>资源越紧，能驻留的 warp 就越少，延迟隐藏的余地就越小。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-4">
-        <b>症状视角</b><span>带宽、分支、同步、启动</span><p>同样的“慢”可能来自不同瓶颈，所以第一步是拆症状，再决定怎么改参数。</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section id="example">
-  <div class="head"><h2>例子：向量加法和 attention 两条线</h2><span class="tag">example</span></div>
-  <p>向量加法用来暴露低算术强度，FlashAttention 用来暴露中间矩阵的 IO 路径。两个例子看的是同一件事：数据到底有没有必要经过慢速层级。</p>
-  <div class="grid2">
-    <div class="box">
-      <h3>例子 1：向量加法为什么是好起点</h3>
-      <p>它很简单，但恰好能把工作分配、访存模式和算术强度同时看清楚。每个元素读两个值、写一个值，只做一次加法，算术强度很低，优先怀疑带宽。</p>
-      <div class="codebar"><span>向量加法账本</span><button class="copy" data-copy="vec-add-budget">复制</button></div>
-      <pre id="vec-add-budget" data-export-context="GPU 执行模型与性能语言｜向量加法账本" data-export-lang="text"><code class="language-text">每个元素:
-- 读 a[i], b[i]
-- 写 c[i]
-- 只做 1 次加法
-=> 计算很少, 数据移动占比很高</code></pre>
-      <div class="table-wrap">
-        <table data-export-context="GPU 执行模型与性能语言｜向量加法诊断表" data-export-lang="table">
-          <thead>
-            <tr>
-              <th>观察项</th>
-              <th>看到什么</th>
-              <th>该怎么想</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td>FLOPs</td><td>每个元素只有 1 次加法</td><td>算术很少，先别把问题归到计算吞吐</td></tr>
-            <tr><td>bytes moved</td><td>每元素约 12 bytes</td><td>带宽通常比算力更关键</td></tr>
-            <tr><td>launch</td><td>如果 kernel 很小，启动开销会显眼</td><td>考虑融合、批量化或减少碎片 launch</td></tr>
-            <tr><td>boundary</td><td>最后一个 block 可能越界</td><td>必须有边界判断或 mask</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-    <div class="box info">
-      <h3>例子 2：FlashAttention 如何减少中间矩阵落盘</h3>
-      <p>它更准确的变化是 IO 路径。标准 attention 如果显式物化 N x N 中间矩阵，就会把大量数据反复写回慢速内存；FlashAttention 的价值是把中间状态留在更快的层级，减少 HBM 往返。</p>
-      <div class="codebar"><span>Attention 公式</span><button class="copy" data-copy="attention-formula">复制</button></div>
-      <div class="math-block" data-export-context="GPU 执行模型与性能语言｜Attention 中间矩阵" data-export-lang="math">
-        $$
-        S = QK^T,\quad P = \operatorname{softmax}(S),\quad O = PV
-        $$
-        <p>这里真正要问的是：S 和 P 必须完整落到慢速内存吗？如果答案是否定的，性能语言就会立刻转向 IO 和分块。</p>
-      </div>
-      <pre id="attention-formula" data-export-context="GPU 执行模型与性能语言｜Attention 公式注释" data-export-lang="text"><code class="language-text">S = QK^T
+      </section>
+      <section id="mechanism">
+        <div class="head">
+          <h2>状态账本：层级读写和症状</h2>
+          <span class="tag">trace</span>
+        </div>
+<p>下面这张表把每一层的读写和症状摆出来。先按这个顺序看，再去看 warp、SM、shared memory 这些词，判断会稳很多。</p>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>例子：向量加法和 attention 两条线</h2>
+          <span class="tag">example</span>
+        </div>
+<p>向量加法用来暴露低算术强度，FlashAttention 用来暴露中间矩阵的 IO 路径。两个例子看的是同一件事：数据到底有没有必要经过慢速层级。</p>
+        <div class="box info">
+<h3>例子 2：FlashAttention 如何减少中间矩阵记录下来</h3>
+<p>它更准确的变化是 IO 路径。标准 attention 如果显式物化 N x N 中间矩阵，就会把大量数据反复写回慢速内存；FlashAttention 的价值是把中间状态留在更快的层级，减少 HBM 往返。</p>
+<p>Attention 公式复制</p>
+<p>$$</p>
+<p>S = QK^T,\quad P = \operatorname{softmax}(S),\quad O = PV</p>
+<p>$$</p>
+<p>这里真正要问的是：S 和 P 必须完整落到慢速内存吗？如果答案是否定的，性能语言就会立刻转向 IO 和分块。</p>
+<pre><code class="language-text">S = QK^T
 P = softmax(S)
 O = P V
 关键点在中间矩阵要不要完整写回慢速内存</code></pre>
-    </div>
-  </div>
-</section>
-
-<section id="cuda">
-  <div class="head"><h2>CUDA 读法：先问四件事</h2><span class="tag">bridge</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>读 CUDA 代码时先问四件事</h3>
-      <ol>
-        <li>工作粒度：一个 thread、一个 warp、一个 block 各处理多少数据？</li>
-        <li>访存模式：相邻 thread 是否访问相邻地址，能否形成合并访存？</li>
-        <li>资源占用：每个 thread 用多少寄存器，每个 block 用多少 shared memory？</li>
-        <li>同步边界：是否需要 block 内同步，是否误以为 block 间也能同步？</li>
-      </ol>
-    </div>
-    <div class="box warn">
-      <h3>不要把 block 大小当成固定答案</h3>
-      <p><code>256</code> threads per block 是常见起点，只是经验值。更大 block 可能提高并行度，也可能增加寄存器或 shared memory 压力；更小 block 可能提高调度灵活性，也可能让 active warp 不够。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="GPU 执行模型与性能语言｜CUDA 读法" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>对象</th>
-          <th>先看什么</th>
-          <th>常见误判</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>vec add kernel</td><td>索引映射和边界判断</td><td>以为 block 数越多就越快</td></tr>
-        <tr><td>tensor kernel</td><td>访存和资源占用</td><td>只看 thread 数，不看 warp 是否能继续推进</td></tr>
-        <tr><td>fused kernel</td><td>中间量是否真的需要写回</td><td>把“融合”理解成只是在一个函数里写更多代码</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="triton">
-  <div class="head"><h2>Triton 读法：program、tile 和 mask</h2><span class="tag">bridge</span></div>
-  <div class="grid2">
-    <div class="box">
-      <h3>块级思维怎么读</h3>
-      <p>Triton 把线程细节上提成“一个 program 处理一个 tile”。你还是要关心并行度、mask、访存合并、寄存器和 cache 行为，但代码读法从“每个 thread 干什么”变成“每个 program 处理哪个块级向量”。</p>
-      <div class="codebar"><span>Triton tile 账本</span><button class="copy" data-copy="triton-tile-ledger">复制</button></div>
-      <pre id="triton-tile-ledger" data-export-context="GPU 执行模型与性能语言｜Triton tile 账本" data-export-lang="python"><code class="language-python">@triton.jit
+        </div>
+      </section>
+      <section id="cuda">
+        <div class="head">
+          <h2>CUDA 读法：先问四件事</h2>
+          <span class="tag">bridge</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>读 CUDA 代码时先问四件事</h3>
+<ol>
+<li>工作粒度：一个 thread、一个 warp、一个 block 各处理多少数据？</li>
+<li>访存模式：相邻 thread 是否访问相邻地址，能否形成合并访存？</li>
+<li>资源占用：每个 thread 用多少寄存器，每个 block 用多少 shared memory？</li>
+<li>同步边界：是否需要 block 内同步，是否误以为 block 间也能同步？</li>
+</ol>
+        </div>
+        <div class="box warn">
+<h3>不要把 block 大小当成固定答案</h3>
+<p><code>256</code> threads per block 是常见起点，只是经验值。更大 block 可能提高并行度，也可能增加寄存器或 shared memory 压力；更小 block 可能提高调度灵活性，也可能让 active warp 不够。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>对象</th><th>先看什么</th><th>常见误判</th></tr>
+<tr><td>vec add kernel索引映射和边界判断以为 block 数越多就越快</td><td>tensor kernel访存和资源占用只看 thread 数，不看 warp 是否能继续推进</td><td>fused kernel中间量是否真的需要写回把“融合”理解成只是在一个函数里写更多代码</td></tr>
+</table></div>
+        </div>
+      </div>
+      </section>
+      <section id="triton">
+        <div class="head">
+          <h2>Triton 读法：program、tile 和 mask</h2>
+          <span class="tag">bridge</span>
+        </div>
+      <div class="grid2">
+        <div class="box">
+<h3>块级思维怎么读</h3>
+<p>Triton 把线程细节上提成“一个 program 处理一个 tile”。你还是要关心并行度、mask、访存合并、寄存器和 cache 行为，但代码读法从“每个 thread 干什么”变成“每个 program 处理哪个块级向量”。</p>
+<p>Triton tile 账本复制</p>
+<pre><code class="language-python">@triton.jit
 def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets &lt; n_elements
-    x = tl.load(x_ptr + offsets, mask=mask)
-    y = tl.load(y_ptr + offsets, mask=mask)
-    tl.store(out_ptr + offsets, x + y, mask=mask)</code></pre>
-    </div>
-    <div class="box info">
-      <h3>三个关键字</h3>
-      <p><code>program_id</code> 是块级任务编号，<code>BLOCK_SIZE</code> 决定 tile 粒度，<code>mask</code> 负责边界安全。它们一起回答的是“这个 program 负责哪一段数据，怎么不越界，为什么这个 tile 大小值得这样选”。</p>
-    </div>
-  </div>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button class="trace-line active" data-trace-step="t-1">
-        <code>program_id(axis=0)</code><span>选择 tile</span>
-      </button>
-      <button class="trace-line" data-trace-step="t-2">
-        <code>BLOCK_SIZE</code><span>决定 tile 大小</span>
-      </button>
-      <button class="trace-line" data-trace-step="t-3">
-        <code>mask</code><span>处理边界</span>
-      </button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="t-1">
-        <b>program</b><span>一个 tile</span><p>先把任务切片，再看每片怎么读写。</p>
+ pid = tl.program_id(axis=0)
+ offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+ mask = offsets &lt; n_elements
+ x = tl.load(x_ptr + offsets, mask=mask)
+ y = tl.load(y_ptr + offsets, mask=mask)
+ tl.store(out_ptr + offsets, x + y, mask=mask)</code></pre>
+        </div>
+        <div class="box info">
+<h3>三个关键字</h3>
+<p><code>program_id</code> 是块级任务编号，<code>BLOCK_SIZE</code> 决定 tile 粒度，<code>mask</code> 负责边界安全。它们一起回答的是“这个 program 负责哪一段数据，怎么不越界，为什么这个 tile 大小值得这样选”。</p>
+        </div>
       </div>
-      <div class="tensor-card" data-trace-target="t-2">
-        <b>block size</b><span>向量宽度</span><p>更大的 tile 不一定更快，要同时看复用和资源压力。</p>
+      </section>
+      <section id="measure">
+        <div class="head">
+          <h2>测量与副作用：改参数会顺手改变什么</h2>
+          <span class="tag">measure</span>
+        </div>
+<p>先定基线，再看改动。很多“调好了”的参数，其实只是把瓶颈换到了另一层资源上，所以要先记录它改动了什么。</p>
+        <div class="box warn">
+<h3>失败后果</h3>
+<p>如果只拿 occupancy 当答案，就容易把问题修歪：block 变大、寄存器更多、shared memory 更满，最后 active warp 反而更少。看上去像更“满”，实际上更慢。</p>
+<p>动作</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>会改动什么</th><th>常见副作用</th><th>先看什么</th></tr>
+<tr><td>把 block 调大寄存器、shared memory、驻留数量active warp 下降，延迟隐藏变差occupancy、寄存器占用</td><td>加 shared memory tile复用路径和片上占用资源压力上升，block 更难并发stall reason、shared memory</td><td>合并 launch中间值生命周期和同步点依赖更长，调试边界更清楚但更复杂时间线、同步位置</td></tr>
+<tr><td>问题</td><td>先看什么</td><td>下一步动作</td></tr>
+<tr><td>kernel 很短launch 次数和同步点尝试融合或增大批量</td><td>GPU 利用率低active warp 和 stall reason看资源占用是否过高或等待是否过多</td><td>算术很少FLOP/byte优先看带宽和数据布局</td></tr>
+</table></div>
+<p>block 很大寄存器与 shared memory检查是否压低了驻留数量</p>
+        </div>
+      </section>
+      <section id="why-it-slows">
+        <div class="head">
+          <h2>真实排错：把一条调优链走完整</h2>
+          <span class="tag">chain</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>一条完整链</h3>
+<p>先看向量加法。它的每个元素只做一次加法，却要读两个输入、写一个输出。这个时候，性能瓶颈通常落在数据搬运。</p>
+<p>如果你把 block 调大，只是为了让 occupancy 更高，但寄存器和 shared memory 跟着上涨，SM 能驻留的 warp 反而可能更少。表面上更满，实际更慢。</p>
+        </div>
+        <div class="box warn">
+<h3>失败的后果</h3>
+<p>常见错误是把“线程更多”直接等价成“更快”。结果是：边界判断没改好、launch overhead 没处理、缓存和访存形状也没变，最后只是把问题搬到另一个瓶颈上。</p>
+<p>真正的下一步是先判断：这个 kernel 是带宽受限、资源受限，还是 launch 太碎？</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>阶段</th><th>看见什么</th><th>决定什么</th></tr>
+<tr><td>读代码索引、边界、线程映射工作是否切对</td><td>算账FLOPs / bytes moved先看算力还是带宽</td><td>看资源寄存器、shared memory、block 大小驻留数量会不会下降</td></tr>
+</table></div>
+<p>看结果stall reason、利用率、吞吐下一步改什么，要用结果来定</p>
+        </div>
       </div>
-      <div class="tensor-card" data-trace-target="t-3">
-        <b>边界</b><span>最后一个 tile</span><p>没有 mask 就会越界，或者把无效数据写出去。</p>
+      </section>
+      <section id="memory-path">
+        <div class="head">
+          <h2>访存合并：地址形状先于参数</h2>
+          <span class="tag">bandwidth</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>先看地址形状</h3>
+<p>GPU 的带宽先看地址形状，再看线程数。对于一个 warp 来说，如果线程访问的是连续、对齐、同类型的地址，硬件更容易把请求合并成少量内存事务；如果访问带着 stride、转置或者尾部补齐，事务数量就会上升，单次搬运的浪费也会变大。</p>
+<p>这就是为什么同样是向量加法，连续布局通常很顺，而稍微换成跨步读取、打乱索引或切片视图后，性能会明显变差。算式没变，地址形状变了，结果就会变。</p>
+        </div>
+        <div class="box warn">
+<h3>别先加参数</h3>
+<p>很多调参动作看起来是在“增强并行”，实际只是让更多 warp 一起做同样低效的访问。线程数量增加以后，如果每个 warp 仍然在拆散地址、重复穿过慢速层级，吞吐不会像预期那样线性上升。</p>
+<p>所以先问三个问题：地址是否连续，是否需要 stride，最后一段有没有尾部处理。把这三件事说清楚，shared memory tile、vectorized load、padding 和对齐才有意义。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>访问形状</th><th>warp 看到的地址</th><th>事务效果</th><th>常见症状</th><th>先试什么</th></tr>
+<tr><td>连续、对齐</td><td>相邻元素排在一起</td><td>更容易合并成少量事务</td><td>带宽利用率更稳定</td><td>保持连续布局和对齐</td></tr>
+<tr><td>跨步、转置</td><td>地址间隔变大</td><td>事务增多，浪费上升</td><td>吞吐下降但算术并没变</td><td>改数据布局或做 tile 重排</td></tr>
+<tr><td>尾部补齐</td><td>部分 lane 失活</td><td>最后一段更容易出现无效访问</td><td>边界处理变慢或越界</td><td>加 mask / padding / 边界分支</td></tr>
+</table></div>
+        </div>
+        <div class="box info">
+<h3>和后面单元怎么接</h3>
+<p>下一节会继续看到 memory hierarchy、shared memory 和 bandwidth。这里先记住一个判断句：当访问形状不好时，更多线程并不会自动换来更多有效带宽；先修地址形状，再谈更复杂的 tile 和缓存策略。</p>
+        </div>
       </div>
-    </div>
-  </div>
-</section>
-
-<section id="measure">
-  <div class="head"><h2>测量与副作用：改参数会顺手改变什么</h2><span class="tag">measure</span></div>
-  <p>先定基线，再看改动。很多“调好了”的参数，其实只是把瓶颈换到了另一层资源上，所以要先记录它改动了什么。</p>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>为什么不能只靠感觉</h3>
-      <p>“看起来像带宽瓶颈”只能算假设。要把它变成工作结论，至少要能说出你会看什么：kernel 时间、吞吐、带宽占用、warp stall 原因、launch 次数，或者更后面的 Roofline 位置。</p>
-      <p>这也是后续第 04 单元的入口：先测，再判断，再动手改。</p>
-    </div>
-    <div class="box warn">
-      <h3>失败后果</h3>
-      <p>如果只拿 occupancy 当答案，就容易把问题修歪：block 变大、寄存器更多、shared memory 更满，最后 active warp 反而更少。看上去像更“满”，实际上更慢。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="GPU 执行模型与性能语言｜调参副作用表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>动作</th>
-          <th>会改动什么</th>
-          <th>常见副作用</th>
-          <th>先看什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>把 block 调大</td><td>寄存器、shared memory、驻留数量</td><td>active warp 下降，延迟隐藏变差</td><td>occupancy、寄存器占用</td></tr>
-        <tr><td>加 shared memory tile</td><td>复用路径和片上占用</td><td>资源压力上升，block 更难并发</td><td>stall reason、shared memory</td></tr>
-        <tr><td>合并 launch</td><td>中间值生命周期和同步点</td><td>依赖更长，调试边界更清楚但更复杂</td><td>时间线、同步位置</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="GPU 执行模型与性能语言｜诊断路径" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>问题</th>
-          <th>先看什么</th>
-          <th>下一步动作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>kernel 很短</td><td>launch 次数和同步点</td><td>尝试融合或增大批量</td></tr>
-        <tr><td>GPU 利用率低</td><td>active warp 和 stall reason</td><td>看资源占用是否过高或等待是否过多</td></tr>
-        <tr><td>算术很少</td><td>FLOP/byte</td><td>优先看带宽和数据布局</td></tr>
-        <tr><td>block 很大</td><td>寄存器与 shared memory</td><td>检查是否压低了驻留数量</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="why-it-slows">
-  <div class="head"><h2>真实排错：把一条调优链走完整</h2><span class="tag">chain</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>一条完整链</h3>
-      <p>先看向量加法。它的每个元素只做一次加法，却要读两个输入、写一个输出。这个时候，性能瓶颈通常落在数据搬运。</p>
-      <p>如果你把 block 调大，只是为了让 occupancy 更高，但寄存器和 shared memory 跟着上涨，SM 能驻留的 warp 反而可能更少。表面上更满，实际更慢。</p>
-    </div>
-    <div class="box warn">
-      <h3>失败的后果</h3>
-      <p>常见错误是把“线程更多”直接等价成“更快”。结果是：边界判断没改好、launch overhead 没处理、缓存和访存形状也没变，最后只是把问题搬到另一个瓶颈上。</p>
-      <p>真正的下一步是先判断：这个 kernel 是带宽受限、资源受限，还是 launch 太碎？</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="GPU 执行模型与性能语言｜向量加法到优化决策" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>阶段</th>
-          <th>看见什么</th>
-          <th>决定什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>读代码</td><td>索引、边界、线程映射</td><td>工作是否切对</td></tr>
-        <tr><td>算账</td><td>FLOPs / bytes moved</td><td>先看算力还是带宽</td></tr>
-        <tr><td>看资源</td><td>寄存器、shared memory、block 大小</td><td>驻留数量会不会下降</td></tr>
-        <tr><td>看结果</td><td>stall reason、利用率、吞吐</td><td>下一步改什么，要用结果来定</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="memory-path">
-  <div class="head"><h2>访存合并：地址形状先于参数</h2><span class="tag">bandwidth</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>先看地址形状</h3>
-      <p>GPU 的带宽先看地址形状，再看线程数。对于一个 warp 来说，如果线程访问的是连续、对齐、同类型的地址，硬件更容易把请求合并成少量内存事务；如果访问带着 stride、转置或者尾部补齐，事务数量就会上升，单次搬运的浪费也会变大。</p>
-      <p>这就是为什么同样是向量加法，连续布局通常很顺，而稍微换成跨步读取、打乱索引或切片视图后，性能会明显变差。算式没变，地址形状变了，结果就会变。</p>
-    </div>
-    <div class="box warn">
-      <h3>别先加参数</h3>
-      <p>很多调参动作看起来是在“增强并行”，实际只是让更多 warp 一起做同样低效的访问。线程数量增加以后，如果每个 warp 仍然在拆散地址、重复穿过慢速层级，吞吐不会像预期那样线性上升。</p>
-      <p>所以先问三个问题：地址是否连续，是否需要 stride，最后一段有没有尾部处理。把这三件事说清楚，shared memory tile、vectorized load、padding 和对齐才有意义。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="GPU 执行模型与性能语言｜访存合并账本" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>访问形状</th>
-          <th>warp 看到的地址</th>
-          <th>事务效果</th>
-          <th>常见症状</th>
-          <th>先试什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>连续、对齐</td>
-          <td>相邻元素排在一起</td>
-          <td>更容易合并成少量事务</td>
-          <td>带宽利用率更稳定</td>
-          <td>保持连续布局和对齐</td>
-        </tr>
-        <tr>
-          <td>跨步、转置</td>
-          <td>地址间隔变大</td>
-          <td>事务增多，浪费上升</td>
-          <td>吞吐下降但算术并没变</td>
-          <td>改数据布局或做 tile 重排</td>
-        </tr>
-        <tr>
-          <td>尾部补齐</td>
-          <td>部分 lane 失活</td>
-          <td>最后一段更容易出现无效访问</td>
-          <td>边界处理变慢或越界</td>
-          <td>加 mask / padding / 边界分支</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button class="trace-line active" data-trace-step="mp-1">
-        <code>连续</code><span>合并访问</span>
-      </button>
-      <button class="trace-line" data-trace-step="mp-2">
-        <code>stride</code><span>拆散请求</span>
-      </button>
-      <button class="trace-line" data-trace-step="mp-3">
-        <code>tail</code><span>处理尾段</span>
-      </button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="mp-1">
-        <b>合并前</b><span>连续地址</span><p>warp 里多个 lane 读相邻元素，事务更少，带宽更像“按块搬运”。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="mp-2">
-        <b>合并后</b><span>跨步地址</span><p>lane 之间相隔更远，同一条 warp 请求被拆成更多次访问，慢速层级更忙。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="mp-3">
-        <b>边界层</b><span>尾段/无效 lane</span><p>最后一个 tile 常常暴露 mask、padding 和越界问题，症状看上去像“偶发慢”。</p>
-      </div>
-    </div>
-  </div>
-  <div class="box info">
-    <h3>和后面单元怎么接</h3>
-    <p>下一节会继续看到 memory hierarchy、shared memory 和 bandwidth。这里先记住一个判断句：当访问形状不好时，更多线程并不会自动换来更多有效带宽；先修地址形状，再谈更复杂的 tile 和缓存策略。</p>
-  </div>
-</section>
-
-<section id="warp-lane">
-  <div class="head"><h2>一个 warp 怎么读一个小 kernel</h2><span class="tag">lane</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>先看最小版本</h3>
-      <p>把例子缩到最小：一个 block 里正好放 32 个线程，刚好组成一个 warp。每个线程负责一个 float，grid 负责把输入切成若干个 32 元素区间。这个版本没有花哨算子，只有“谁读谁写、谁和谁一起推进”三件事，因此最适合看执行模型。</p>
-      <div class="codebar"><span>单 warp 拷贝</span><button class="copy" data-copy="warp-copy-kernel">复制</button></div>
-      <pre id="warp-copy-kernel" data-export-context="GPU 执行模型与性能语言｜单 warp 拷贝" data-export-lang="python"><code class="language-python">__global__ void warp_copy(const float* in, float* out, int n) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid &lt; n) {
-        out[tid] = in[tid];
-    }
+      </section>
+      <section id="warp-lane">
+        <div class="head">
+          <h2>一个 warp 怎么读一个小 kernel</h2>
+          <span class="tag">lane</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>先看最小版本</h3>
+<p>把例子缩到最小：一个 block 里正好放 32 个线程，刚好组成一个 warp。每个线程负责一个 float，grid 负责把输入切成若干个 32 元素区间。这个版本没有花哨算子，只有“谁读谁写、谁和谁一起推进”三件事，因此最适合看执行模型。</p>
+<p>单 warp 拷贝复制</p>
+<pre><code class="language-python">__global__ void warp_copy(const float* in, float* out, int n) {
+ int tid = blockIdx.x * blockDim.x + threadIdx.x;
+ if (tid &lt; n) {
+ out[tid] = in[tid];
+ }
 }</code></pre>
-      <p>读这段代码时，先画三层映射：<code>grid</code> 决定发多少个 block，<code>blockDim.x = 32</code> 让一个 block 正好等于一个 warp，<code>threadIdx.x</code> 决定 lane 号。这样一来，<code>tid</code> 既是元素下标，也是每个 lane 在同一轮里访问的地址位置。</p>
-    </div>
-    <div class="box warn">
-      <h3>性能症状从哪里冒出来</h3>
-      <p>当访问保持连续时，32 个 lane 往往能形成更少的内存事务，吞吐主要受带宽上限约束。只要把地址改成跨步读取，事务就会散开，warp 还是那个 warp，地址形状却更差了，结果常见是带宽利用率下降、memory stall 上升、表面线程数不变但速度变慢。</p>
-      <p>这类症状很容易被误读成“GPU 没有吃满”。更准确的说法是：warp 在跑，SM 也在调度，只是每轮数据搬运做得更碎，很多 lane 的时间花在等内存上。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="GPU 执行模型与性能语言｜warp trace 账本" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>步骤</th>
-          <th>grid / block / thread / warp</th>
-          <th>读写什么</th>
-          <th>看见的症状</th>
-          <th>下一步</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>1</td>
-          <td>grid 发出若干 block</td>
-          <td>把输入切成连续区间</td>
-          <td>block 数过少时并行度不够</td>
-          <td>先看 batch 和 launch 粒度</td>
-        </tr>
-        <tr>
-          <td>2</td>
-          <td>block 里 32 个 thread 组成一个 warp</td>
-          <td>lane 0..31 读写相邻元素</td>
-          <td>访问连续时事务少</td>
-          <td>保持对齐和连续布局</td>
-        </tr>
-        <tr>
-          <td>3</td>
-          <td>threadIdx.x 决定 lane 编号</td>
-          <td>每个 lane 负责一个位置</td>
-          <td>边界判断错会出现无效 lane</td>
-          <td>补 mask 或边界分支</td>
-        </tr>
-        <tr>
-          <td>4</td>
-          <td>warp scheduler 选择就绪 warp</td>
-          <td>等待内存返回或继续发射</td>
-          <td>memory dependency stall 上升</td>
-          <td>减少跨步访问和中间往返</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button class="trace-line active" data-trace-step="wl-1">
-        <code>grid</code><span>分配 block</span>
-      </button>
-      <button class="trace-line" data-trace-step="wl-2">
-        <code>block / warp</code><span>32 个 lane 同步看地址</span>
-      </button>
-      <button class="trace-line" data-trace-step="wl-3">
-        <code>连续访问</code><span>事务更少</span>
-      </button>
-      <button class="trace-line" data-trace-step="wl-4">
-        <code>stride 访问</code><span>事务拆散</span>
-      </button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="wl-1">
-        <b>分配层</b><span>grid -> block</span><p>grid 负责把总体工作切块；切得太碎会让 launch overhead 显眼，切得太大则会让每个 block 的资源压力升高。</p>
+<p>读这段代码时，先画三层映射：<code>grid</code> 决定发多少个 block，<code>blockDim.x = 32</code> 让一个 block 正好等于一个 warp，<code>threadIdx.x</code> 决定 lane 号。这样一来，<code>tid</code> 既是元素下标，也是每个 lane 在同一轮里访问的地址位置。</p>
+        </div>
+        <div class="box warn">
+<h3>性能症状从哪里冒出来</h3>
+<p>当访问保持连续时，32 个 lane 往往能形成更少的内存事务，吞吐主要受带宽上限约束。只要把地址改成跨步读取，事务就会散开，warp 还是那个 warp，地址形状却更差了，结果常见是带宽利用率下降、memory stall 上升、表面线程数不变但速度变慢。</p>
+<p>这类症状很容易被误读成“GPU 没有吃满”。更准确的说法是：warp 在跑，SM 也在调度，只是每轮数据搬运做得更碎，很多 lane 的时间花在等内存上。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>步骤</th><th>grid / block / thread / warp</th><th>读写什么</th><th>看见的症状</th><th>下一步</th></tr>
+<tr><td>1</td><td>grid 发出若干 block</td><td>把输入切成连续区间</td><td>block 数过少时并行度不够</td><td>先看 batch 和 launch 粒度</td></tr>
+<tr><td>2</td><td>block 里 32 个 thread 组成一个 warp</td><td>lane 0..31 读写相邻元素</td><td>访问连续时事务少</td><td>保持对齐和连续布局</td></tr>
+<tr><td>3</td><td>threadIdx.x 决定 lane 编号</td><td>每个 lane 负责一个位置</td><td>边界判断错会出现无效 lane</td><td>补 mask 或边界分支</td></tr>
+<tr><td>4</td><td>warp scheduler 选择就绪 warp</td><td>等待内存返回或继续发射</td><td>memory dependency stall 上升</td><td>减少跨步访问和中间往返</td></tr>
+</table></div>
+        </div>
+        <div class="box info">
+<h3>练习钩子</h3>
+<p>把这个 kernel 改成 <code>out[tid] = in[tid * 2]</code>，再问自己三件事：lane 的地址还连续吗，warp 的事务数会怎么变，最先出现的症状会落在吞吐、stall 还是边界处理上。你不需要先背结论，只要把这三问答成可检查的句子，就已经能开始做性能判断了。</p>
+        </div>
+        <div class="box">
+<h3>边界提醒</h3>
+<p>这个例子故意把算术压到最低。先学会读执行模型和地址形状，再回头看 shared memory tile、矩阵乘和注意力时，判断会更稳。这里要先抓的是“谁在一起推进、谁在等内存、谁把事务拆散了”。</p>
+        </div>
       </div>
-      <div class="tensor-card" data-trace-target="wl-2">
-        <b>执行层</b><span>block -> warp -> lane</span><p>一个 warp 里 32 个 lane 一起推进，真正需要盯的是这些 lane 的地址是不是彼此相邻。</p>
+      </section>
+      <section id="fusion-lanes">
+        <div class="head">
+          <h2>launch 太碎时，先看交接成本</h2>
+          <span class="tag">fusion</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>把碎 kernel 合成一条链</h3>
+<p>有些程序kernel 太多、每个都太短。每次 launch 都会引入固定开销，CPU 还要不断和 GPU 交接。结果是，真正花在计算上的时间不多，花在启动、同步和排队上的时间反而显眼。</p>
+<p>两个短 kernel复制</p>
+<pre><code class="language-python">normalize&lt;&lt;&gt;&gt;(x, y, n);
+scale&lt;&lt;&gt;&gt;(y, out, n);</code></pre>
+<p>如果这两步之间没有必须落地的同步点，很多时候可以把它们合成一条链：先归一化再缩放，让中间结果留在寄存器或更近的层级，少一次写回，也少一次 launch。</p>
+        </div>
+        <div class="box warn">
+<h3>慢的后果</h3>
+<p>碎 launch 的典型症状GPU 利用率低、队列里有空洞、profile 里小 kernel 堆了一串。你会看到很多“看起来没做多少事”的时间，却很难把它直接归到一个算子上。</p>
+<p>这时只调 block size 往往不够，因为问题根本不在单个 kernel 的内部，而在核与核之间的交接成本。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>场景</th><th>看到什么</th><th>先改什么</th><th>如果不改</th></tr>
+<tr><td>两个短 kernel</td><td>每个 kernel 都只有十几微秒</td><td>考虑融合成一条执行链</td><td>launch overhead 会吃掉很大一块时间</td></tr>
+<tr><td>中间张量落地</td><td>一次写回、一次再读</td><td>让中间值留在更近的层级</td><td>HBM 往返增加，带宽压力更大</td></tr>
+<tr><td>同步过多</td><td>CPU/GPU 交接频繁</td><td>合并 launch 或减少同步点</td><td>调度空洞更明显，吞吐波动更大</td></tr>
+</table></div>
+        </div>
+        <div class="box info">
+<h3>练习钩子</h3>
+<p>把这两个 kernel 画成一条时间线：哪里是计算，哪里是交接，哪里是写回。然后回答一句话：如果它们能融合，最先减少的是哪一类开销。这个问题会直接连到后面的矩阵算子、Triton tile 和 attention 融合。</p>
+        </div>
+        <div class="box">
+<h3>边界提醒</h3>
+<p>只有中间结果要被别的分支复用，或者同步边界必须保留时，融合才该收住。判断重点是中间值能不能留得更近；是否把步骤合成一条链，还要看复用和同步边界。</p>
+        </div>
       </div>
-      <div class="tensor-card" data-trace-target="wl-3">
-        <b>好路径</b><span>连续地址</span><p>当 lane 读写相邻元素时，内存事务更容易合并，症状通常更接近“带宽吃满”。</p>
+      </section>
+      <section id="flashattention">
+        <div class="head">
+          <h2>FlashAttention 视角</h2>
+          <span class="tag">boundary</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>核心直觉</h3>
+<p>FlashAttention 保持 exact attention，通过按块读取 Q、K、V，在片上内存里完成局部 attention，并用在线 softmax 维护归一化所需的最大值和分母。这样仍然得到精确结果，同时避免把完整 N x N 注意力矩阵写回慢速内存。</p>
+        </div>
+        <div class="box warn">
+<h3>它教会你看什么</h3>
+<p>同一个数学表达式可以有不同的数据移动路径。性能工程常常改的是中间量的停留位置、停留时长和写回方式。</p>
+<div class="table-wrap"><table class="metric-table">
+<tr><th>问法</th><th>普通实现</th><th>FlashAttention 式问法</th></tr>
+<tr><td>中间结果</td><td>可能显式保存 attention scores / probabilities</td><td>按 tile 计算并在线合并，尽量不物化完整 N x N 矩阵</td></tr>
+<tr><td>瓶颈</td><td>只看矩阵乘 FLOPs</td><td>同时看 HBM 读写量、片上复用和 softmax 数值稳定</td></tr>
+<tr><td>工程边界</td><td>认为算法快就一定端到端快</td><td>还要看序列长度、head dim、精度、因果 mask、硬件型号和框架集成</td></tr>
+</table></div>
+        </div>
       </div>
-      <div class="tensor-card" data-trace-target="wl-4">
-        <b>坏路径</b><span>跨步地址</span><p>当 lane 之间的地址间隔拉大，warp 仍然一样大，事务却更多，慢的信号会落到带宽和 stall 上。</p>
-      </div>
-    </div>
-  </div>
-  <div class="grid2">
-    <div class="box info">
-      <h3>练习钩子</h3>
-      <p>把这个 kernel 改成 <code>out[tid] = in[tid * 2]</code>，再问自己三件事：lane 的地址还连续吗，warp 的事务数会怎么变，最先出现的症状会落在吞吐、stall 还是边界处理上。你不需要先背结论，只要把这三问答成可检查的句子，就已经能开始做性能判断了。</p>
-    </div>
-    <div class="box">
-      <h3>边界提醒</h3>
-      <p>这个例子故意把算术压到最低。先学会读执行模型和地址形状，再回头看 shared memory tile、矩阵乘和注意力时，判断会更稳。这里要先抓的是“谁在一起推进、谁在等内存、谁把事务拆散了”。</p>
-    </div>
-  </div>
-</section>
-
-<section id="fusion-lanes">
-  <div class="head"><h2>launch 太碎时，先看交接成本</h2><span class="tag">fusion</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>把碎 kernel 合成一条链</h3>
-      <p>有些程序不是单个 kernel 很慢，而是 kernel 太多、每个都太短。每次 launch 都会引入固定开销，CPU 还要不断和 GPU 交接。结果是，真正花在计算上的时间不多，花在启动、同步和排队上的时间反而显眼。</p>
-      <div class="codebar"><span>两个短 kernel</span><button class="copy" data-copy="split-kernels">复制</button></div>
-      <pre id="split-kernels" data-export-context="GPU 执行模型与性能语言｜两个短 kernel" data-export-lang="python"><code class="language-python">normalize<<<grid, block>>>(x, y, n);
-scale<<<grid, block>>>(y, out, n);</code></pre>
-      <p>如果这两步之间没有必须落地的同步点，很多时候可以把它们合成一条链：先归一化再缩放，让中间结果留在寄存器或更近的层级，少一次写回，也少一次 launch。</p>
-    </div>
-    <div class="box warn">
-      <h3>慢的后果</h3>
-      <p>碎 launch 的典型症状不是某个算子算不动，而是 GPU 利用率低、队列里有空洞、profile 里小 kernel 堆了一串。你会看到很多“看起来没做多少事”的时间，却很难把它直接归到一个算子上。</p>
-      <p>这时只调 block size 往往不够，因为问题根本不在单个 kernel 的内部，而在核与核之间的交接成本。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="GPU 执行模型与性能语言｜launch 融合账本" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>场景</th>
-          <th>看到什么</th>
-          <th>先改什么</th>
-          <th>如果不改</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>两个短 kernel</td>
-          <td>每个 kernel 都只有十几微秒</td>
-          <td>考虑融合成一条执行链</td>
-          <td>launch overhead 会吃掉很大一块时间</td>
-        </tr>
-        <tr>
-          <td>中间张量落地</td>
-          <td>一次写回、一次再读</td>
-          <td>让中间值留在更近的层级</td>
-          <td>HBM 往返增加，带宽压力更大</td>
-        </tr>
-        <tr>
-          <td>同步过多</td>
-          <td>CPU/GPU 交接频繁</td>
-          <td>合并 launch 或减少同步点</td>
-          <td>调度空洞更明显，吞吐波动更大</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button class="trace-line active" data-trace-step="fl-1">
-        <code>kernel A</code><span>先做一半</span>
-      </button>
-      <button class="trace-line" data-trace-step="fl-2">
-        <code>launch gap</code><span>交接开销</span>
-      </button>
-      <button class="trace-line" data-trace-step="fl-3">
-        <code>kernel B</code><span>再做下一步</span>
-      </button>
-      <button class="trace-line" data-trace-step="fl-4">
-        <code>fused chain</code><span>把中间值留住</span>
-      </button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="fl-1">
-        <b>前半段</b><span>normalize</span><p>先把输入处理到可用状态，但此时结果还没有结束。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="fl-2">
-        <b>交接层</b><span>launch gap</span><p>如果这里要立刻写回、再读回，时间会花在内存和调度上，而不是有效计算上。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="fl-3">
-        <b>后半段</b><span>scale</span><p>第二个 kernel 只能接着前一个结果再跑一次，前面的写回成了额外成本。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="fl-4">
-        <b>融合层</b><span>one chain</span><p>如果能把两步合起来，中间结果就不必反复经过慢速层级，launch 也只发生一次。</p>
-      </div>
-    </div>
-  </div>
-  <div class="grid2">
-    <div class="box info">
-      <h3>练习钩子</h3>
-      <p>把这两个 kernel 画成一条时间线：哪里是计算，哪里是交接，哪里是写回。然后回答一句话：如果它们能融合，最先减少的是哪一类开销。这个问题会直接连到后面的矩阵算子、Triton tile 和 attention 融合。</p>
-    </div>
-    <div class="box">
-      <h3>边界提醒</h3>
-      <p>只有中间结果要被别的分支复用，或者同步边界必须保留时，融合才该收住。判断重点是中间值能不能留得更近；是否把步骤合成一条链，还要看复用和同步边界。</p>
-    </div>
-  </div>
-</section>
-
-<section id="flashattention">
-  <div class="head"><h2>FlashAttention 视角</h2><span class="tag">boundary</span></div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>核心直觉</h3>
-      <p>FlashAttention 保持 exact attention，通过按块读取 Q、K、V，在片上内存里完成局部 attention，并用在线 softmax 维护归一化所需的最大值和分母。这样仍然得到精确结果，同时避免把完整 N x N 注意力矩阵写回慢速内存。</p>
-    </div>
-    <div class="box warn">
-      <h3>它教会你看什么</h3>
-      <p>同一个数学表达式可以有不同的数据移动路径。性能工程常常改的是中间量的停留位置、停留时长和写回方式。</p>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="GPU 执行模型与性能语言｜FlashAttention 问法对照" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>问法</th>
-          <th>普通实现</th>
-          <th>FlashAttention 式问法</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>中间结果</td>
-          <td>可能显式保存 attention scores / probabilities</td>
-          <td>按 tile 计算并在线合并，尽量不物化完整 N x N 矩阵</td>
-        </tr>
-        <tr>
-          <td>瓶颈</td>
-          <td>只看矩阵乘 FLOPs</td>
-          <td>同时看 HBM 读写量、片上复用和 softmax 数值稳定</td>
-        </tr>
-        <tr>
-          <td>工程边界</td>
-          <td>认为算法快就一定端到端快</td>
-          <td>还要看序列长度、head dim、精度、因果 mask、硬件型号和框架集成</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button class="trace-line active" data-trace-step="fa-1">
-        <code>Q/K/V tiles</code><span>按块读取输入</span>
-      </button>
-      <button class="trace-line" data-trace-step="fa-2">
-        <code>online softmax</code><span>更新统计量</span>
-      </button>
-      <button class="trace-line" data-trace-step="fa-3">
-        <code>O tile</code><span>只保留需要的输出</span>
-      </button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="fa-1">
-        <b>输入层</b><span>Q / K / V tile</span><p>先把输入切块，决定每次只在片上处理一小段注意力。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="fa-2">
-        <b>中间层</b><span>max / sum</span><p>softmax 的统计量按块更新，不需要把完整中间矩阵常驻在慢速内存。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="fa-3">
-        <b>输出层</b><span>O</span><p>输出只写必要的结果，避免把 N x N 中间态当成最终产物。</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section id="mistakes">
-  <div class="head"><h2>常见误区与排错</h2><span class="tag">debug</span></div>
-  <div class="table-wrap">
-    <table data-export-context="GPU 执行模型与性能语言｜概念对照" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>概念 A</th>
-          <th>概念 B</th>
-          <th>区别</th>
-          <th>一句判断</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Occupancy</td>
-          <td>Utilization</td>
-          <td>occupancy 是可驻留 warp 的比例；utilization 是硬件实际忙碌程度。</td>
-          <td>occupancy 高只说明“有候选工作”，不说明“候选工作都有效推进”。</td>
-        </tr>
-        <tr>
-          <td>Latency</td>
-          <td>Bandwidth</td>
-          <td>latency 是一次操作等多久；bandwidth 是单位时间搬多少。</td>
-          <td>GPU 常用并发隐藏 latency，但带宽上限不能靠更多等待完全绕过。</td>
-        </tr>
-        <tr>
-          <td>CUDA thread</td>
-          <td>Triton program</td>
-          <td>CUDA thread 是线程级实例；Triton program 通常是块级 tile 实例。</td>
-          <td>读 Triton 时先找 tile 形状，不要逐行想象成单个 thread。</td>
-        </tr>
-        <tr>
-          <td>计算优化</td>
-          <td>IO 优化</td>
-          <td>计算优化减少或加速算术；IO 优化减少慢速内存流量或提高复用。</td>
-          <td>FlashAttention 的核心是 IO-aware，保持 exact attention，只改变中间结果的停留方式。</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <p>下面这个小终端只演示三类常见失败：越界、资源过载、launch 太碎。先看报错，再回到上面的表里找对应的层级。</p>
-  <div class="terminal-lab" data-terminal-lab>
-    <div class="terminal-controls">
-      <button class="ghost active" data-terminal-case="case-1">缺少 mask</button>
-      <button class="ghost" data-terminal-case="case-2">资源过载</button>
-      <button class="ghost" data-terminal-case="case-3">launch 太碎</button>
-    </div>
-    <div class="codebar"><span>终端默认输出</span><button class="copy" data-copy="terminal-output-default">复制</button></div>
-    <pre id="terminal-output-default" class="terminal-output" data-export-context="GPU 执行模型与性能语言｜终端默认输出" data-export-lang="text" aria-live="polite">cudaErrorIllegalAddress: an illegal memory access was encountered</pre>
-    <template data-terminal-output="case-1">cudaErrorIllegalAddress: an illegal memory access was encountered</template>
-    <template data-terminal-output="case-2">kernel launch failed: too many resources requested for launch</template>
-    <template data-terminal-output="case-3">Nsight Systems: many sub-20us kernels, host gaps dominate the timeline</template>
-  </div>
-</section>
-
-
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与排错</h2>
+          <span class="tag">debug</span>
+        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>概念 A</th><th>概念 B</th><th>区别</th><th>一句判断</th></tr>
+<tr><td>Occupancy</td><td>Utilization</td><td>occupancy 是可驻留 warp 的比例；utilization 是硬件实际忙碌程度。</td><td>occupancy 高只说明“有候选工作”，不说明“候选工作都有效推进”。</td></tr>
+<tr><td>Latency</td><td>Bandwidth</td><td>latency 是一次操作等多久；bandwidth 是单位时间搬多少。</td><td>GPU 常用并发隐藏 latency，但带宽上限不能靠更多等待完全绕过。</td></tr>
+<tr><td>CUDA thread</td><td>Triton program</td><td>CUDA thread 是线程级实例；Triton program 通常是块级 tile 实例。</td><td>读 Triton 时先找 tile 形状，不要逐行想象成单个 thread。</td></tr>
+<tr><td>计算优化</td><td>IO 优化</td><td>计算优化减少或加速算术；IO 优化减少慢速内存流量或提高复用。</td><td>FlashAttention 的核心是 IO-aware，保持 exact attention，只改变中间结果的停留方式。</td></tr>
+        </table></div>
+      </section>
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-intro">
-  <div class="box soft">
-    <h3>怎么答才算会</h3>
-    <p>不要只写术语定义。每道题尽量按“对象是什么、为什么影响性能、下一步怎么验证”来回答。</p>
-  </div>
-  <div class="box info">
-    <h3>检查重点</h3>
-    <p>能否把 CUDA、Triton、FlashAttention 放进同一套执行模型和性能账本。</p>
-  </div>
-</div>
+      <div class="practice-intro">
+      <div class="box soft">
+<h3>怎么答才算会</h3>
+<p>不要只写术语定义。每道题尽量按“对象是什么、为什么影响性能、下一步怎么验证”来回答。</p>
+      </div>
+      <div class="box info">
+<h3>检查重点</h3>
+<p>能否把 CUDA、Triton、FlashAttention 放进同一套执行模型和性能账本。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、术语和执行模型</h3></div>
+          <div class="quick-review">答题提示 遇到 block、warp、SM，要说明它们的边界和协作能力。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="B. warp">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q1. CUDA 中哪一项通常是硬件调度和 SIMT 执行的关键单位？</h3>
 
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>一、术语和执行模型</h3>
-      <p>先确认你能把软件层级和硬件层级对应起来。</p>
-    </div>
-    <div class="quick-review">
-      <b>答题提示</b>
-      <span>遇到 block、warp、SM，要说明它们的边界和协作能力。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q1" data-group="一、术语和执行模型" data-title="Q1. CUDA 中哪一项通常是硬件调度和 SIMT 执行的关键单位？" data-answer="B. warp" data-explain="warp 是 NVIDIA GPU 上常见的调度和 SIMT 执行单位。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">warp</span></div>
-      <h3>Q1. CUDA 中哪一项通常是硬件调度和 SIMT 执行的关键单位？</h3>
+      <div class="choices">
       <label><input type="radio" name="q1" value="A. thread">A. thread</label>
       <label><input type="radio" name="q1" value="B. warp">B. warp</label>
       <label><input type="radio" name="q1" value="C. grid">C. grid</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q2" data-group="一、术语和执行模型" data-title="Q2. 同一个 CUDA block 内的线程通常可以通过 shared memory 协作。" data-answer="true" data-explain="shared memory 通常用于 block 内协作；block 之间默认不能直接共享它。">
-      <div class="q-meta"><span class="pill">判断</span><span class="pill">block 边界</span></div>
-      <h3>Q2. 同一个 CUDA block 内的线程通常可以通过 shared memory 协作。</h3>
-      <label><input type="radio" name="q2" value="true">对</label>
-      <label><input type="radio" name="q2" value="false">错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">同时想一想：block 之间是否也能这样直接协作？</p>
-    </div>
-    <div class="q" data-question="q3" data-group="一、术语和执行模型" data-title="Q3. 填空：NVIDIA GPU 上一个 warp 通常包含多少个线程？">
-      <div class="q-meta"><span class="pill">填空</span><span class="pill">warp size</span></div>
-      <h3>Q3. 填空：NVIDIA GPU 上一个 warp 通常包含多少个线程？</h3>
-      <input type="text" name="q3" data-answer="32" data-explain="通常是 32 个线程。">
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">写数字即可。</p>
-    </div>
-    <div class="q full" data-question="q4" data-group="一、术语和执行模型" data-title="Q4. 用三句话解释 grid、block、thread、warp、SM 的关系。">
-      <div class="q-meta"><span class="pill">解释</span><span class="pill">层级关系</span></div>
-      <h3>Q4. 用三句话解释 grid、block、thread、warp、SM 的关系。</h3>
-      <textarea name="q4" placeholder="第一句说软件层级，第二句说硬件执行，第三句说同步或资源边界。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>要点：grid 包含 block；block 内线程会按 warp 组织；warp 在 SM 上被调度推进。答题时要提到 block 之间默认不能直接协作，也不要把 block 当成硬件核心。</p></details>
-    </div>
-  </div>
-</div>
+      </div>
 
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>二、性能语言</h3>
-      <p>把“慢”翻译成可以测量和验证的瓶颈假设。</p>
-    </div>
-    <div class="quick-review">
-      <b>答题提示</b>
-      <span>先判断受限类型，再给验证指标。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q5" data-group="二、性能语言" data-title="Q5. occupancy 高一定代表 kernel 快吗？" data-answer="B. 不一定，它只是延迟隐藏的条件之一" data-explain="occupancy 只是延迟隐藏的条件，不等于实际吞吐已经高。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">occupancy</span></div>
-      <h3>Q5. occupancy 高一定代表 kernel 快吗？</h3>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. warp。warp 是 NVIDIA GPU 上常见的调度和 SIMT 执行单位。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="true">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> Q2. 同一个 CUDA block 内的线程通常可以通过 shared memory 协作。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>true。shared memory 通常用于 block 内协作；block 之间默认不能直接共享它。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> Q3. 填空：NVIDIA GPU 上一个 warp 通常包含多少个线程？</h3>
+
+
+      <textarea name="q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> Q4. 用三句话解释 grid、block、thread、warp、SM 的关系。</h3>
+
+
+      <textarea name="q4"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。要点：grid 包含 block；block 内线程会按 warp 组织；warp 在 SM 上被调度推进。答题时要提到 block 之间默认不能直接协作，也不要把 block 当成硬件核心。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、性能语言</h3></div>
+          <div class="quick-review">答题提示 先判断受限类型，再给验证指标。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="B. 不一定，它只是延迟隐藏的条件之一">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q5. occupancy 高一定代表 kernel 快吗？</h3>
+
+      <div class="choices">
       <label><input type="radio" name="q5" value="A. 一定，因为更多 warp 总会提升吞吐">A. 一定，因为更多 warp 总会提升吞吐</label>
       <label><input type="radio" name="q5" value="B. 不一定，它只是延迟隐藏的条件之一">B. 不一定，它只是延迟隐藏的条件之一</label>
       <label><input type="radio" name="q5" value="C. 一定无关，可以完全忽略">C. 一定无关，可以完全忽略</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">想想 active warp 和实际发射指令之间的差别。</p>
-    </div>
-    <div class="q" data-question="q6" data-group="二、性能语言" data-title="Q6. 一个算子每个元素读 12 bytes、只做 1 次 FLOP，更可能先看计算吞吐还是内存带宽？" data-answer="B. 内存带宽" data-explain="FLOP/byte 很低时，先看带宽更合理。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">算术强度</span></div>
-      <h3>Q6. 一个算子每个元素读写约 12 bytes、只做 1 次 FLOP，更可能先看计算吞吐还是内存带宽？</h3>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. 不一定，它只是延迟隐藏的条件之一。occupancy 只是延迟隐藏的条件，不等于实际吞吐已经高。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="B. 内存带宽">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q6. 一个算子每个元素读写约 12 bytes、只做 1 次 FLOP，更可能先看计算吞吐还是内存带宽？</h3>
+
+      <div class="choices">
       <label><input type="radio" name="q6" value="A. 计算吞吐">A. 计算吞吐</label>
       <label><input type="radio" name="q6" value="B. 内存带宽">B. 内存带宽</label>
       <label><input type="radio" name="q6" value="C. 只看 block 数">C. 只看 block 数</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">用 FLOP/byte 的直觉判断。</p>
-    </div>
-    <div class="q" data-question="q7" data-group="二、性能语言" data-title="Q7. arithmetic intensity 的定义更接近哪种说法？" data-answer="B. FLOPs / bytes moved" data-explain="它描述每搬一个字节做多少计算。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">Roofline</span></div>
-      <h3>Q7. arithmetic intensity 的定义更接近哪种说法？</h3>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. 内存带宽。FLOP/byte 很低时，先看带宽更合理。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="B. FLOPs / bytes moved">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q7. arithmetic intensity 的定义更接近哪种说法？</h3>
+
+      <div class="choices">
       <label><input type="radio" name="q7" value="A. FLOPs + bytes moved">A. FLOPs + bytes moved</label>
       <label><input type="radio" name="q7" value="B. FLOPs / bytes moved">B. FLOPs / bytes moved</label>
       <label><input type="radio" name="q7" value="C. bytes moved / FLOPs">C. bytes moved / FLOPs</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">它描述每搬一个字节做多少计算。</p>
-    </div>
-    <div class="q full" data-question="q8" data-group="二、性能语言" data-title="Q8. 诊断：某 kernel GPU utilization 低，但每次运行只有十几微秒。你会先怀疑什么？">
-      <div class="q-meta"><span class="pill">错误诊断</span><span class="pill">launch overhead</span></div>
-      <h3>Q8. 诊断：某 kernel GPU utilization 低，但每次运行只有十几微秒。你会先怀疑什么？</h3>
-      <textarea name="q8" placeholder="请从 kernel 粒度、启动开销、同步、融合机会四个角度回答。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>优先怀疑 kernel 太小、launch 太碎、CPU/GPU 同步过密、SM 上没有足够可驻留工作。要能说出会看哪些时间线或 profiler 指标，而不是只写“线程不够”。</p></details>
-    </div>
-    <div class="q full" data-question="q9" data-group="二、性能语言" data-title="Q9. 解释 latency hiding：它隐藏了什么，没有消灭什么？">
-      <div class="q-meta"><span class="pill">解释</span><span class="pill">调度</span></div>
-      <h3>Q9. 解释 latency hiding：它隐藏了什么，没有消灭什么？</h3>
-      <textarea name="q9" placeholder="从 warp 等待、调度器切换、SM 是否空闲三个角度解释。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>它隐藏的是等待时间在整体执行中的可见程度，不是把内存访问或依赖消掉。优秀答案会区分“某次访问仍然慢”和“SM 没有一直等它”。</p></details>
-    </div>
-  </div>
-</div>
+      </div>
 
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>三、CUDA、Triton、FlashAttention 迁移</h3>
-      <p>把同一套性能语言迁移到不同抽象层。</p>
-    </div>
-    <div class="quick-review">
-      <b>答题提示</b>
-      <span>不要把 Triton program 当成 CUDA thread。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q10" data-group="三、CUDA、Triton、FlashAttention 迁移" data-title="Q10. Triton 中 tl.program_id(axis=0) 更接近哪种概念？" data-answer="B. 当前块级 program/tile 的编号" data-explain="它对应块级 program 编号，不是单个 CUDA thread。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">Triton</span></div>
-      <h3>Q10. Triton 中 <code>tl.program_id(axis=0)</code> 更接近哪种概念？</h3>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. FLOPs / bytes moved。它描述每搬一个字节做多少计算。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> Q8. 诊断：某 kernel GPU utilization 低，但每次运行只有十几微秒。你会先怀疑什么？</h3>
+
+
+      <textarea name="q8"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。优先怀疑 kernel 太小、launch 太碎、CPU/GPU 同步过密、SM 上没有足够可驻留工作。要能说出会看哪些时间线或 profiler 指标，而不是只写“线程不够”。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> Q9. 解释 latency hiding：它隐藏了什么，没有消灭什么？</h3>
+
+
+      <textarea name="q9"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。它隐藏的是等待时间在整体执行中的可见程度，不是把内存访问或依赖消掉。优秀答案会区分“某次访问仍然慢”和“SM 没有一直等它”。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、CUDA、Triton、FlashAttention 迁移</h3></div>
+          <div class="quick-review">答题提示 不要把 Triton program 当成 CUDA thread。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="B. 当前块级 program/tile 的编号">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> Q10. Triton 中 <code>tl.program_id(axis=0)</code> 更接近哪种概念？</h3>
+
+      <div class="choices">
       <label><input type="radio" name="q10" value="A. 当前 CUDA thread 的 lane id">A. 当前 CUDA thread 的 lane id</label>
       <label><input type="radio" name="q10" value="B. 当前块级 program/tile 的编号">B. 当前块级 program/tile 的编号</label>
       <label><input type="radio" name="q10" value="C. 当前 GPU 的 SM 编号">C. 当前 GPU 的 SM 编号</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">看它如何生成 offsets。</p>
-    </div>
-    <div class="q" data-question="q11" data-group="三、CUDA、Triton、FlashAttention 迁移" data-title="Q11. FlashAttention 的核心是用近似 attention 换速度。" data-answer="false" data-explain="FlashAttention 保持 exact attention，核心是改中间状态的停留方式和 HBM 往返。">
-      <div class="q-meta"><span class="pill">判断</span><span class="pill">FlashAttention</span></div>
-      <h3>Q11. FlashAttention 的核心是用近似 attention 换速度。</h3>
-      <label><input type="radio" name="q11" value="true">对</label>
-      <label><input type="radio" name="q11" value="false">错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">回到 exact attention、IO-aware、分块和在线 softmax。</p>
-    </div>
-    <div class="q full" data-question="q12" data-group="三、CUDA、Triton、FlashAttention 迁移" data-title="Q12. 读 Triton add kernel，解释 offsets 和 mask 分别解决什么问题。">
-      <div class="q-meta"><span class="pill">代码阅读</span><span class="pill">边界处理</span></div>
-      <h3>Q12. 读 Triton add kernel，解释 <code>offsets</code> 和 <code>mask</code> 分别解决什么问题。</h3>
-      <textarea name="q12" placeholder="先说明 program_id 和 BLOCK_SIZE 如何决定 tile，再说明 mask 如何处理最后一块。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p><code>offsets</code> 把 tile 中每个位置映射到全局地址；<code>mask</code> 处理边界和越界问题。答案要能解释为什么没有 mask 会有越界风险。</p></details>
-    </div>
-    <div class="q full" data-question="q13" data-group="三、CUDA、Triton、FlashAttention 迁移" data-title="Q13. 用性能语言解释 FlashAttention 为什么关注 N x N 中间矩阵。">
-      <div class="q-meta"><span class="pill">迁移</span><span class="pill">IO-aware</span></div>
-      <h3>Q13. 用性能语言解释 FlashAttention 为什么关注 <code>N x N</code> 中间矩阵。</h3>
-      <textarea name="q13" placeholder="请从 HBM 读写、片上复用、softmax 统计量、中间结果生命周期回答。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>要说明标准实现若物化 scores/probabilities，会让 N x N 中间结果反复经过 HBM；FlashAttention 通过分块和在线 softmax，把大量中间状态留在更快的片上层级。</p></details>
-    </div>
-    <div class="q full" data-question="q14" data-group="三、CUDA、Triton、FlashAttention 迁移" data-title="Q14. 综合解释：看到一个慢 attention kernel，你的前三个诊断问题是什么？">
-      <div class="q-meta"><span class="pill">综合解释</span><span class="pill">诊断路径</span></div>
-      <h3>Q14. 综合解释：看到一个慢 attention kernel，你的前三个诊断问题是什么？</h3>
-      <textarea name="q14" placeholder="至少包含一个执行模型问题、一个数据移动问题、一个测量问题。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>先问工作如何映射到 warp 和 SM；再问数据是否重复搬运、是否物化中间矩阵；最后问 profiler 或计时如何验证瓶颈，而不是凭感觉换参数。</p></details>
-    </div>
-  </div>
-</div>
+      </div>
 
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>四、连接成一段话</h3>
-      <p>用自己的语言把本页内容讲成一个连贯故事。</p>
-    </div>
-    <div class="quick-review">
-      <b>目标</b>
-      <span>能讲给刚学 PyTorch 的工程师听。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q full" data-question="q15" data-group="四、连接成一段话" data-title="Q15. 请用 250 字以内解释 GPU 执行模型与性能语言。">
-      <div class="q-meta"><span class="pill">综合</span><span class="pill">Feynman</span></div>
-      <h3>Q15. 请用 250 字以内解释 GPU 执行模型与性能语言。</h3>
-      <textarea name="q15" placeholder="要求包含：grid/block/thread、warp/SM、latency hiding、bandwidth 或 arithmetic intensity、Triton 或 FlashAttention。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details><summary>参考答案 / 评分要点</summary><p>优秀答案要把执行模型、数据移动和性能判断连起来；能讲清楚一个 kernel 为什么会慢，以及下一步会先测什么。</p></details>
-    </div>
-  </div>
-</div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>B. 当前块级 program/tile 的编号。它对应块级 program 编号，不是单个 CUDA thread。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="false">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> Q11. FlashAttention 的核心是用近似 attention 换速度。</h3>
 
-      </section>
+      <div class="choices">
+      <label><input type="radio" name="q11" value="对">对</label>
+      <label><input type="radio" name="q11" value="错">错</label>
+      </div>
 
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>false。FlashAttention 保持 exact attention，核心是改中间状态的停留方式和 HBM 往返。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">代码阅读</span></div>
+        <h3><b>Q:</b> Q12. 读 Triton add kernel，解释 <code>offsets</code> 和 <code>mask</code> 分别解决什么问题。</h3>
+
+
+      <textarea name="q12"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。offsets 把 tile 中每个位置映射到全局地址； mask 处理边界和越界问题。答案要能解释为什么没有 mask 会有越界风险。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q13" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">13</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> Q13. 用性能语言解释 FlashAttention 为什么关注 <code>N x N</code> 中间矩阵。</h3>
+
+
+      <textarea name="q13"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。要说明标准实现若物化 scores/probabilities，会让 N x N 中间结果反复经过 HBM；FlashAttention 通过分块和在线 softmax，把大量中间状态留在更快的片上层级。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q14" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">14</span><span class="pill">综合解释</span></div>
+        <h3><b>Q:</b> Q14. 综合解释：看到一个慢 attention kernel，你的前三个诊断问题是什么？</h3>
+
+
+      <textarea name="q14"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。先问工作如何映射到 warp 和 SM；再问数据是否重复搬运、是否物化中间矩阵；最后问 profiler 或计时如何验证瓶颈，而不是凭感觉换参数。</p>
+        </details>
+      </article>
         </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、连接成一段话</h3></div>
+          <div class="quick-review">目标 能讲给刚学 PyTorch 的工程师听。 --></div>
         </div>
-      </section>
+        <div class="drill-grid">
+      <article class="q" data-question="q15" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">15</span><span class="pill">综合</span></div>
+        <h3><b>Q:</b> Q15. 请用 250 字以内解释 GPU 执行模型与性能语言。</h3>
 
-      <section id="sources">
+
+      <textarea name="q15"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。优秀答案要把执行模型、数据移动和性能判断连起来；能讲清楚一个 kernel 为什么会慢，以及下一步会先测什么。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <p>本页的公开来源主要分成四组，访问日期 2026-06-20：CUDA 文档负责执行模型，CUDA Best Practices 负责性能和内存术语，Triton 教程负责块级读法，FlashAttention 论文和仓库负责 IO 路径的例子。</p>
-<ul class="source-list">
-  <li><strong>NVIDIA CUDA Programming Guide</strong><br>支撑 grid、block、warp、SM 和 kernel 边界的基础读法。<br><a href="https://docs.nvidia.com/cuda/cuda-programming-guide/">https://docs.nvidia.com/cuda/cuda-programming-guide/</a></li>
-  <li><strong>NVIDIA CUDA C++ Best Practices Guide</strong><br>支撑 occupancy、latency hiding、bandwidth 和访存合并的术语。<br><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/">https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/</a></li>
-  <li><strong>Triton 官方教程</strong><br>支撑 program_id、BLOCK_SIZE、mask 和 tile 的块级读法。<br><a href="https://triton-lang.org/main/getting-started/tutorials/">https://triton-lang.org/main/getting-started/tutorials/</a></li>
-  <li><strong>FlashAttention 论文</strong><br>支撑 exact attention、IO-aware 和中间矩阵路径的例子。<br><a href="https://arxiv.org/abs/2205.14135">https://arxiv.org/abs/2205.14135</a></li>
-  <li><strong>FlashAttention 代码仓库</strong><br>支撑公开实现里的分块、融合和工程边界。<br><a href="https://github.com/Dao-AILab/flash-attention">https://github.com/Dao-AILab/flash-attention</a></li>
+<ul>
+<li><b>NVIDIA CUDA Programming Guide</b></li>
 </ul>
-
+<p>支撑 grid、block、warp、SM 和 kernel 边界的基础读法。</p>
+<p><a href="https://docs.nvidia.com/cuda/cuda-programming-guide/">https://docs.nvidia.com/cuda/cuda-programming-guide/</a></p>
+<ul>
+<li><b>NVIDIA CUDA C++ Best Practices Guide</b></li>
+</ul>
+<p>支撑 occupancy、latency hiding、bandwidth 和访存合并的术语。</p>
+<p><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/">https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/</a></p>
+<ul>
+<li><b>Triton 官方教程</b></li>
+</ul>
+<p>支撑 program_id、BLOCK_SIZE、mask 和 tile 的块级读法。</p>
+<p><a href="https://triton-lang.org/main/getting-started/tutorials/">https://triton-lang.org/main/getting-started/tutorials/</a></p>
+<ul>
+<li><b>FlashAttention 论文</b></li>
+</ul>
+<p>支撑 exact attention、IO-aware 和中间矩阵路径的例子。</p>
+<p><a href="https://arxiv.org/abs/2205.14135">https://arxiv.org/abs/2205.14135</a></p>
+<ul>
+<li><b>FlashAttention 代码仓库</b></li>
+</ul>
+<p>支撑公开实现里的分块、融合和工程边界。</p>
+<p><a href="https://github.com/Dao-AILab/flash-attention">https://github.com/Dao-AILab/flash-attention</a></p>
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

@@ -4,1214 +4,632 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>语言建模全景：从文本到下一个 token</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="从零训练小语言模型" data-unit="01">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>从零训练小语言模型</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">从零训练小语言模型</a>
+        <span class="sep">/</span>
         <span>01</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#overview"><span class="dot"></span>先抓主线</a>
-        <a href="#terms"><span class="dot"></span>术语与误区</a>
-        <a href="#mechanism"><span class="dot"></span>追踪闭环</a>
-        <a href="#batch-shape"><span class="dot"></span>batch 与形状</a>
-        <a href="#padding-mask"><span class="dot"></span>padding 与 mask</a>
-        <a href="#example"><span class="dot"></span>例子与数值</a>
-        <a href="#softmax-lens"><span class="dot"></span>logits 到概率</a>
-        <a href="#code-reading"><span class="dot"></span>读训练代码</a>
-        <a href="#debug-lab"><span class="dot"></span>故障实验室</a>
-        <a href="#curve-reading"><span class="dot"></span>读 loss 曲线</a>
-        <a href="#trace-log"><span class="dot"></span>日志诊断</a>
-        <a href="#mistakes"><span class="dot"></span>常见误区</a>
-        <a href="#bridge"><span class="dot"></span>下一步</a>
-        <a href="#boundary"><span class="dot"></span>边界</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">先把文本、token、logits、loss 的闭环看顺，再往 tokenizer 和 Transformer 去。看到训练卡住时，先查对齐和目标，不要先怀疑模型太小。</div>
-    </aside>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">基础单元</div>
-          <h1>语言建模全景：从文本到下一个 token</h1>
-          <p>这一页先把语言建模的最小闭环讲清：文本如何变成 token，模型如何给下一个位置打分，loss 怎样把错误变成更新信号。这里不进入 tokenizer 实现和 Transformer 结构，先把训练目标看明白，再去看后面的单元。</p>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">基础单元</div>
+      <div class="hero-meta">
+        <span class="hero-badge">01</span>
+      </div>
+      <h1 class="hero-title">语言建模全景：从文本到下一个 token</h1>
+      <p class="hero-desc">这一页先把语言建模的最小闭环讲清：文本如何变成 token，模型如何给下一个位置打分，loss 怎样把错误变成更新信号。这里不进入 tokenizer 实现和 Transformer 结构，先把训练目标看明白，再去看后面的单元。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../02_Tokenizer与token流/学习页.html">下一节：Tokenizer 与 token 流</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>画出文本、token、x / y、logits 和 loss 的闭环。</li>
+            <li>看到一段训练代码时，能先找出输入、目标、分数和损失分别在哪里。</li>
+            <li>用一个短句例子解释为什么“预测下一个 token”已经能训练 base model。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
 
-          <div class="course-links">
-            <a href="../index.html">课程地图</a><a href="../02_Tokenizer与token流/学习页.html">下一节：Tokenizer 与 token 流</a>
-          </div>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">这节课先看清什么</a>
+      <a href="#overview">先看一遍闭环</a>
+      <a href="#terms">先把术语钉住</a>
+      <a href="#mechanism">闭环里每一步读什么、写什么</a>
+      <a href="#batch-shape">从单句到 batch，形状怎么变</a>
+      <a href="#padding-mask">padding 和 mask 为什么要一起看</a>
+      <a href="#example">用一个短句跑一遍</a>
+      <a href="#softmax-lens">从 logits 到概率，再到 loss</a>
+      <a href="#code-reading">读训练代码时先找哪几行</a>
+      <a href="#debug-lab">故障实验室：三种最像真的报错</a>
+      <a href="#curve-reading">loss 曲线怎么读</a>
+      <a href="#trace-log">从一条日志回到问题源头</a>
+      <a href="#mistakes">最常见的几种错法</a>
+      <a href="#bridge">下一步怎么接到单元 02</a>
+      <a href="#boundary">先不追的东西</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>这节课先看清什么</h2>
+          <span class="tag">goal</span>
+        </div>
+      <div class="grid">
+        <div class="box soft">
+<h3>先看对象</h3>
+<p>这一页只处理语言建模目标。你要先知道模型在学什么，再去看 tokenizer、Transformer、优化器和系统细节。</p>
+        </div>
+        <div class="box info">
+<h3>先看方向</h3>
+<p>训练时，前文是输入，后一位是真实标签。模型在给正确的下一位 token 提高概率。</p>
+        </div>
+        <div class="box">
+<h3>先看判断线</h3>
+<p>看到训练代码时，你应该能先说出 x、y、logits、softmax 和 loss 分别承担什么角色。</p>
+<p>把这一节学完，不代表你已经会写完整训练系统；它只表示你已经能把训练目标和表示方式分开。后面的单元会继续补 tokenizer 的切分方式、Transformer 的内部结构、训练循环和性能瓶颈。</p>
+        </div>
+      </div>
+      </section>
+      <section id="overview">
+        <div class="head">
+          <h2>先看一遍闭环</h2>
+          <span class="tag">overview</span>
+        </div>
+<p>最小闭环只有五步：文本进来，切成 token，把前文做成 x、把后一位做成 y，模型给每个位置输出 logits，最后用 y 去算交叉熵，loss 再回到参数更新。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>环节</th><th>读什么</th><th>写什么</th><th>错了会怎样</th></tr>
+<tr><td>切分文本</td><td>原始句子</td><td>token 序列</td><td>长度暴涨，或者词表粒度失控</td></tr>
+<tr><td>构造监督</td><td>token 序列</td><td>x / y 错位对</td><td>模型学成复制当前 token</td></tr>
+<tr><td>模型前向</td><td>x 和参数</td><td>logits</td><td>最后一维对不齐，loss 没法按位置比较</td></tr>
+<tr><td>计算损失</td><td>logits 和 y</td><td>一个标量 loss</td><td>如果 target 读错，loss 再小也没有意义</td></tr>
+<tr><td>更新参数</td><td>loss 和优化器状态</td><td>新的参数</td><td>看起来在训练，实际没有学到东西</td></tr>
+        </table></div>
+      </section>
+      <section id="terms">
+        <div class="head">
+          <h2>先把术语钉住</h2>
+          <span class="tag">terms</span>
+        </div>
+<p>这几件事最容易混在一起：token、输入、标签、分数、概率、损失。看见它们时，先问“它是表示、目标、分数，还是损失”。</p>
+        <div class="box">
+<h3>token 不等于词</h3>
+<p>一个 token 可能是一个字、一个词、一个子词片段，甚至是标点。你如果把 token 当成“单词”，训练成本和上下文长度的估算都会偏掉。</p>
         </div>
         <div class="box soft">
-          <h3>读完本页后，你应该能做到</h3>
-          <ul>
-  <li>画出文本、token、x / y、logits 和 loss 的闭环。</li>
-  <li>看到一段训练代码时，能先找出输入、目标、分数和损失分别在哪里。</li>
-  <li>用一个短句例子解释为什么“预测下一个 token”已经能训练 base model。</li>
-</ul>
-
+<h3>logits 还没变成概率</h3>
+<p>logits 只是分数。只有经过 softmax，才能把“谁更像正确答案”变成概率分布，再去和真实标签比较。</p>
         </div>
-      </div>
-
-      <section id="goals">
-  <div class="head">
-    <h2>这节课先看清什么</h2>
-    <span class="tag">goal</span>
-  </div>
-  <div class="grid">
-    <div class="box soft">
-      <h3>先看对象</h3>
-      <p>这一页只处理语言建模目标。你要先知道模型在学什么，再去看 tokenizer、Transformer、优化器和系统细节。</p>
-    </div>
-    <div class="box info">
-      <h3>先看方向</h3>
-      <p>训练时，前文是输入，后一位是真实标签。模型不是在复述整句，而是在给正确的下一位 token 提高概率。</p>
-    </div>
-    <div class="box">
-      <h3>先看判断线</h3>
-      <p>看到训练代码时，你应该能先说出 x、y、logits、softmax 和 loss 分别承担什么角色。</p>
-    </div>
-  </div>
-  <p>把这一节学完，不代表你已经会写完整训练系统；它只表示你已经能把训练目标和表示方式分开。后面的单元会继续补 tokenizer 的切分方式、Transformer 的内部结构、训练循环和性能瓶颈。</p>
-</section>
-
-<section id="overview">
-  <div class="head">
-    <h2>先看一遍闭环</h2>
-    <span class="tag">overview</span>
-  </div>
-  <p>最小闭环只有五步：文本进来，切成 token，把前文做成 x、把后一位做成 y，模型给每个位置输出 logits，最后用 y 去算交叉熵，loss 再回到参数更新。</p>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button class="trace-line active" type="button" data-trace-step="step-1">
-        <code>文本</code><span>原始句子</span>
-      </button>
-      <button class="trace-line" type="button" data-trace-step="step-2">
-        <code>token</code><span>离散编号</span>
-      </button>
-      <button class="trace-line" type="button" data-trace-step="step-3">
-        <code>x / y</code><span>输入与目标错位</span>
-      </button>
-      <button class="trace-line" type="button" data-trace-step="step-4">
-        <code>logits</code><span>每个位置的词表分数</span>
-      </button>
-      <button class="trace-line" type="button" data-trace-step="step-5">
-        <code>loss</code><span>单个标量，推动更新</span>
-      </button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="step-1">
-        <b>输入前</b>
-        <span>一段自然语言</span>
-        <p>模型还没看到离散编号，只看到原始文本。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-2">
-        <b>切分后</b>
-        <span>token 列表</span>
-        <p>文本被拆成可训练的符号序列，后面的步骤只处理这些符号。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-3">
-        <b>对齐后</b>
-        <span>x 负责输入，y 负责监督</span>
-        <p>前文喂给模型，后一位留作答案。这里一旦错位，后面再算 loss 也会偏。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-4">
-        <b>前向后</b>
-        <span>[T, V] 或 [B, T, V]</span>
-        <p>每个位置都有一组词表分数，V 是词表大小。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-5">
-        <b>回到参数</b>
-        <span>一个标量 loss</span>
-        <p>损失越大，说明正确 token 的概率越低；梯度就会把它往上推。</p>
-      </div>
-    </div>
-  </div>
-  <p>你可以把这条线记成一张读写图：前面的步骤负责把“该预测什么”说清楚，后面的步骤负责把“模型猜得对不对”变成可计算的损失。只要 x / y 错位没做好，后面再好的模型也会朝错误目标学习。</p>
-  <div class="table-wrap">
-    <table data-export-context="语言建模闭环追踪表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>环节</th>
-          <th>读什么</th>
-          <th>写什么</th>
-          <th>错了会怎样</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>切分文本</td>
-          <td>原始句子</td>
-          <td>token 序列</td>
-          <td>长度暴涨，或者词表粒度失控</td>
-        </tr>
-        <tr>
-          <td>构造监督</td>
-          <td>token 序列</td>
-          <td>x / y 错位对</td>
-          <td>模型学成复制当前 token</td>
-        </tr>
-        <tr>
-          <td>模型前向</td>
-          <td>x 和参数</td>
-          <td>logits</td>
-          <td>最后一维对不齐，loss 没法按位置比较</td>
-        </tr>
-        <tr>
-          <td>计算损失</td>
-          <td>logits 和 y</td>
-          <td>一个标量 loss</td>
-          <td>如果 target 读错，loss 再小也没有意义</td>
-        </tr>
-        <tr>
-          <td>更新参数</td>
-          <td>loss 和优化器状态</td>
-          <td>新的参数</td>
-          <td>看起来在训练，实际没有学到东西</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="terms">
-  <div class="head">
-    <h2>先把术语钉住</h2>
-    <span class="tag">terms</span>
-  </div>
-  <p>这几件事最容易混在一起：token、输入、标签、分数、概率、损失。看见它们时，先问“它是表示、目标、分数，还是损失”。</p>
-  <div class="table-wrap">
-    <table data-export-context="核心术语对照表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>术语</th>
-          <th>它是什么</th>
-          <th>不要和什么混</th>
-          <th>为什么重要</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>token</td>
-          <td>模型实际看到的离散符号</td>
-          <td>不要直接等同于“词”</td>
-          <td>它决定序列长度、词表大小和训练成本</td>
-        </tr>
-        <tr>
-          <td>x</td>
-          <td>输入序列，负责给上下文</td>
-          <td>不要和 y 混成同一列</td>
-          <td>它告诉模型“看到什么以后再预测”</td>
-        </tr>
-        <tr>
-          <td>y</td>
-          <td>真实下一个 token</td>
-          <td>不要当成模型输出</td>
-          <td>它是监督信号，决定 loss 怎么算</td>
-        </tr>
-        <tr>
-          <td>logits</td>
-          <td>每个位置对词表中每个 token 的分数</td>
-          <td>不要直接当概率</td>
-          <td>它要先经过 softmax 才能解释成分布</td>
-        </tr>
-        <tr>
-          <td>softmax</td>
-          <td>把分数变成概率分布</td>
-          <td>不要和 loss 混在一起</td>
-          <td>它让“正确答案的概率”能被比较</td>
-        </tr>
-        <tr>
-          <td>交叉熵</td>
-          <td>衡量正确 token 被分到多大概率的损失</td>
-          <td>不要把它理解成聊天质量分数</td>
-          <td>它只在 base 目标里看下一位 token 的预测质量</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="grid2">
-    <div class="box">
-      <h3>token 不等于词</h3>
-      <p>一个 token 可能是一个字、一个词、一个子词片段，甚至是标点。你如果把 token 当成“单词”，训练成本和上下文长度的估算都会偏掉。</p>
-    </div>
-    <div class="box soft">
-      <h3>logits 还没变成概率</h3>
-      <p>logits 只是分数。只有经过 softmax，才能把“谁更像正确答案”变成概率分布，再去和真实标签比较。</p>
-    </div>
-  </div>
-</section>
-
-<section id="mechanism">
-  <div class="head">
-    <h2>闭环里每一步读什么、写什么</h2>
-    <span class="tag">trace</span>
-  </div>
-  <p>这里看的是状态，不是口号。训练时每一步都在改同一个对象：先改样本表示，再改模型输出，再改参数。你只要把读写顺序理顺，很多看起来复杂的问题会突然变简单。</p>
-  <div class="table-wrap">
-    <table data-export-context="训练闭环状态台账" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>步骤</th>
-          <th>读什么</th>
-          <th>写什么</th>
-          <th>什么时候有效</th>
-          <th>错了的症状</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>输入文本</td>
-          <td>原始句子</td>
-          <td>token 序列</td>
-          <td>切词器和词表已固定</td>
-          <td>长度异常，或者同一句话切得不稳定</td>
-        </tr>
-        <tr>
-          <td>构造 x / y</td>
-          <td>token 序列</td>
-          <td>输入 x 与目标 y</td>
-          <td>已经有稳定的 token 编号</td>
-          <td>模型像在抄答案，loss 看着低但没学会预测</td>
-        </tr>
-        <tr>
-          <td>前向传播</td>
-          <td>x 和参数</td>
-          <td>logits</td>
-          <td>张量维度对齐，最后一维对应词表大小 V</td>
-          <td>shape 报错，或者无法逐位置比较</td>
-        </tr>
-        <tr>
-          <td>损失函数</td>
-          <td>logits 和 y</td>
-          <td>loss 标量</td>
-          <td>每个位置的真实 token 都能对上</td>
-          <td>loss 数字有了，但和任务目标没关系</td>
-        </tr>
-        <tr>
-          <td>反向和更新</td>
-          <td>loss 和优化器状态</td>
-          <td>新参数</td>
-          <td>梯度没有被截断或清零错位</td>
-          <td>训练“在跑”，曲线却纹丝不动</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="math-block" data-export-context="交叉熵公式" data-export-lang="math">
-    $$
-    L = - \frac{1}{T} \sum_{t=1}^{T} \log p_{\theta}(y_t \mid x_{\le t})
-    $$
-    <p>这里的 <code>T</code> 是错位后序列的长度，<code>x</code> 是输入，<code>y</code> 是对应位置的真实下一个 token，<code>p_{\theta}</code> 是模型对正确答案的概率。只要正确 token 的概率上升，<code>-log</code> 就会下降，loss 也会跟着变小。</p>
-  </div>
-  <p>公式里最关键的不是符号本身，而是方向：模型先产出分数，再把分数变成概率，再把真实标签拿来比较。训练就是沿着这个方向，把正确 token 的概率慢慢推高。</p>
-</section>
-
-<section id="batch-shape">
-  <div class="head">
-    <h2>从单句到 batch，形状怎么变</h2>
-    <span class="tag">shape</span>
-  </div>
-  <p>单句很好懂，但训练不会只看一句。实际训练时，会把多条样本打包成 batch，这时你要同时盯住两个轴：batch 维 B 和时间步维 T。B 表示一次喂给模型多少条样本，T 表示每条样本里有多少个位置。</p>
-  <p>如果样本长度不一样，通常会补 padding，再配一个 mask。mask 的作用很朴素：把填充位置排除在损失之外。这样做以后，模型不会把空位当成真 token 学进去。</p>
-  <div class="table-wrap">
-    <table data-export-context="batch 形状追踪表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>对象</th>
-          <th>典型形状</th>
-          <th>读什么</th>
-          <th>写什么</th>
-          <th>错了会怎样</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>单条 x</td>
-          <td>[T]</td>
-          <td>一条 token 序列</td>
-          <td>当前位置之前的上下文</td>
-          <td>如果直接把整句塞进去，y 就没法错位</td>
-        </tr>
-        <tr>
-          <td>单条 y</td>
-          <td>[T]</td>
-          <td>同一条 token 序列</td>
-          <td>后一位真实 token</td>
-          <td>如果没错位，模型学到的是复制，不是预测</td>
-        </tr>
-        <tr>
-          <td>batch x</td>
-          <td>[B, T]</td>
-          <td>多条样本打包后的输入</td>
-          <td>整个 batch 的前文</td>
-          <td>如果 T 没统一，后面的矩阵运算会乱掉</td>
-        </tr>
-        <tr>
-          <td>batch y</td>
-          <td>[B, T]</td>
-          <td>多条样本打包后的标签</td>
-          <td>每个位置的下一 token</td>
-          <td>如果 y 对不齐，loss 会看见错误监督</td>
-        </tr>
-        <tr>
-          <td>logits</td>
-          <td>[B, T, V]</td>
-          <td>x 和参数</td>
-          <td>每个位置对词表 V 的分数</td>
-          <td>最后一维不是 V，交叉熵就没法按词表算</td>
-        </tr>
-        <tr>
-          <td>mask</td>
-          <td>[B, T]</td>
-          <td>哪些位置是真数据</td>
-          <td>把 padding 位排除掉</td>
-          <td>padding 被算进 loss，会把训练带偏</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="math-block" data-export-context="batch 平均损失" data-export-lang="math">
-    $$
-    L = \frac{1}{\sum_{b,t} m_{b,t}} \sum_{b=1}^{B}\sum_{t=1}^{T} m_{b,t}\, \bigl(-\log p_{\theta}(y_{b,t}\mid x_{b,\le t})\bigr)
-    $$
-    <p><code>m_{b,t}</code> 是 mask。它等于 1 时，这个位置参与平均；它等于 0 时，这个位置被忽略。这样写的好处是，长度不一样的样本也能放在一起训练，而且 padding 不会污染 loss。</p>
-  </div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>batch 里的平均不是装饰</h3>
-      <p>如果你不把有效位置平均掉，长样本会比短样本更重。训练看起来还在算 loss，但不同长度的样本已经不在同一尺度上比较了。</p>
-    </div>
-    <div class="box info">
-      <h3>为什么这里要看形状</h3>
-      <p>shape 不是形式主义。它直接告诉你哪一维是样本、哪一维是时间、哪一维是词表。三个维度错一个，训练就会在不该错的地方报错，或者更糟，悄悄学偏。</p>
-    </div>
-  </div>
-</section>
-
-<section id="padding-mask">
-  <div class="head">
-    <h2>padding 和 mask 为什么要一起看</h2>
-    <span class="tag">mask</span>
-  </div>
-  <p>当 batch 里的句子长短不一样时，通常要把短句补到同样长度。补出来的 PAD 只是占位符，不是真 token。如果你让它参与 loss，模型会被迫去“预测空位”，训练就会朝错误方向偏一点。</p>
-  <p>最稳妥的做法，是把每个位置都标一个 mask：真实位置记 1，填充位置记 0。这样，loss 只在真实 token 上累积，padding 位不会影响平均值。这个逻辑看起来简单，但它正是很多训练脚本的隐形坑。</p>
-  <div class="table-wrap">
-    <table data-export-context="padding 与 mask 的微型例子" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>样本</th>
-          <th>x</th>
-          <th>y</th>
-          <th>mask</th>
-          <th>说明</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>样本 A</td>
-          <td>我 / 喜 / 欢 / 预测</td>
-          <td>喜 / 欢 / 预测 / token</td>
-          <td>1 / 1 / 1 / 1</td>
-          <td>完整样本，所有位置都参与 loss</td>
-        </tr>
-        <tr>
-          <td>样本 B</td>
-          <td>语 / 言 / PAD / PAD</td>
-          <td>言 / 模 / PAD / PAD</td>
-          <td>1 / 1 / 0 / 0</td>
-          <td>后两位是补位，只用于对齐 batch 形状</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar">
-    <span>带 mask 的 loss 片段</span>
-    <button class="copy" type="button" data-copy="code-03">复制</button>
-  </div>
-  <pre id="code-03" data-export-context="带 mask 的 loss 片段" data-export-lang="python"><code class="language-python">loss_per_pos = cross_entropy(logits.reshape(-1, V), y.reshape(-1), reduction="none")
+      </section>
+      <section id="mechanism">
+        <div class="head">
+          <h2>闭环里每一步读什么、写什么</h2>
+          <span class="tag">trace</span>
+        </div>
+<p>这里看的是状态，不是口号。训练时每一步都在改同一个对象：先改样本表示，再改模型输出，再改参数。你只要把读写顺序理顺，很多看起来复杂的问题会突然变简单。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+L = - \frac{1}{T} \sum_{t=1}^{T} \log p_{\theta}(y_t \mid x_{\le t})
+$$
+        </div>
+<p>这里的 <code>T</code> 是错位后序列的长度，<code>x</code> 是输入，<code>y</code> 是对应位置的真实下一个 token，<code>p_{\theta}</code> 是模型对正确答案的概率。只要正确 token 的概率上升，<code>-log</code> 就会下降，loss 也会跟着变小。</p>
+      </section>
+      <section id="batch-shape">
+        <div class="head">
+          <h2>从单句到 batch，形状怎么变</h2>
+          <span class="tag">shape</span>
+        </div>
+<p>单句很好懂，但训练不会只看一句。实际训练时，会把多条样本打包成 batch，这时你要同时盯住两个轴：batch 维 B 和时间步维 T。B 表示一次喂给模型多少条样本，T 表示每条样本里有多少个位置。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>对象</th><th>典型形状</th><th>读什么</th><th>写什么</th><th>错了会怎样</th></tr>
+<tr><td>单条 x</td><td>[T]</td><td>一条 token 序列</td><td>当前位置之前的上下文</td><td>如果直接把整句塞进去，y 就没法错位</td></tr>
+<tr><td>单条 y</td><td>[T]</td><td>同一条 token 序列</td><td>后一位真实 token</td><td>如果没错位，模型学到的是复制，不是预测</td></tr>
+<tr><td>batch x</td><td>[B, T]</td><td>多条样本打包后的输入</td><td>整个 batch 的前文</td><td>如果 T 没统一，后面的矩阵运算会乱掉</td></tr>
+<tr><td>batch y</td><td>[B, T]</td><td>多条样本打包后的标签</td><td>每个位置的下一 token</td><td>如果 y 对不齐，loss 会看见错误监督</td></tr>
+<tr><td>logits</td><td>[B, T, V]</td><td>x 和参数</td><td>每个位置对词表 V 的分数</td><td>最后一维不是 V，交叉熵就没法按词表算</td></tr>
+<tr><td>mask</td><td>[B, T]</td><td>哪些位置是真数据</td><td>把 padding 位排除掉</td><td>padding 被算进 loss，会把训练带偏</td></tr>
+        </table></div>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+L = \frac{1}{\sum_{b,t} m_{b,t}} \sum_{b=1}^{B}\sum_{t=1}^{T} m_{b,t}\, \bigl(-\log p_{\theta}(y_{b,t}\mid x_{b,\le t})\bigr)
+$$
+        </div>
+<p><code>m_{b,t}</code> 是 mask。它等于 1 时，这个位置参与平均；它等于 0 时，这个位置被忽略。这样写的好处是，长度不一样的样本也能放在一起训练，而且 padding 不会污染 loss。</p>
+        <div class="box info">
+<h3>为什么这里要看形状</h3>
+<p>shape 不是形式主义。它直接告诉你哪一维是样本、哪一维是时间、哪一维是词表。三个维度错一个，训练就会在不该错的地方报错，或者更糟，悄悄学偏。</p>
+        </div>
+      </section>
+      <section id="padding-mask">
+        <div class="head">
+          <h2>padding 和 mask 为什么要一起看</h2>
+          <span class="tag">mask</span>
+        </div>
+<p>当 batch 里的句子长短不一样时，通常要把短句补到同样长度。补出来的 PAD 只是占位符，不是真 token。如果你让它参与 loss，模型会被迫去“预测空位”，训练就会朝错误方向偏一点。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>样本</th><th>x</th><th>y</th><th>mask</th><th>说明</th></tr>
+<tr><td>样本 A</td><td>我 / 喜 / 欢 / 预测</td><td>喜 / 欢 / 预测 / token</td><td>1 / 1 / 1 / 1</td><td>完整样本，所有位置都参与 loss</td></tr>
+<tr><td>样本 B</td><td>语 / 言 / PAD / PAD</td><td>言 / 模 / PAD / PAD</td><td>1 / 1 / 0 / 0</td><td>后两位是补位，只用于对齐 batch 形状</td></tr>
+        </table></div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-padding-mask-1">复制</button></div>
+        <pre id="code-padding-mask-1" data-export-context="代码" data-export-lang="python"><code class="language-python">loss_per_pos = cross_entropy(logits.reshape(-1, V), y.reshape(-1), reduction="none")
 mask_flat = mask.reshape(-1).float()
 masked_loss = (loss_per_pos * mask_flat).sum() / mask_flat.sum()</code></pre>
-  <p>这段代码只做了一件事：先算出每个位置的损失，再用 mask 把补位去掉，最后按有效位置数平均。只要你记住这一点，看到 “padding” 和 “loss” 同时出现时，就知道先检查 mask，而不是先怀疑模型结构。</p>
-  <div class="grid2">
-    <div class="box warn">
-      <h3>典型故障</h3>
-      <p>如果短句和长句混在一起训练，而你没有 mask，loss 往往会被 PAD 拉低或拉高，曲线看起来不稳定，但根因不是学习率，而是有效位置数算错了。</p>
-    </div>
-    <div class="box info">
-      <h3>先查哪一项</h3>
-      <p>先查 y 里有没有把 PAD 当真答案，再查 mask 有没有和 y 同步，再查 loss 平均时是不是只除以有效位置数。这个顺序通常比改模型参数更快。</p>
-    </div>
-  </div>
-</section>
-
-<section id="example">
-  <div class="head">
-    <h2>用一个短句跑一遍</h2>
-    <span class="tag">example</span>
-  </div>
-  <p>假设句子是“我 喜 欢 预测 下一个 token”。训练时，输入拿前五个 token，目标拿后五个 token。模型看到的是前文，监督信号是后一位。</p>
-  <div class="shift-demo" data-shift-demo>
-    <label>输入一个已经切好的 token 序列
-      <input type="text" value="我 喜 欢 预测 下一个 token" aria-label="输入一个已经切好的 token 序列">
-    </label>
-    <div class="shift-rows" aria-live="polite">
-      <div class="shift-row x">
-        <b>x 输入</b>
-        <div class="shift-cells">
-          <span class="shift-cell">我</span>
-          <span class="shift-cell">喜</span>
-          <span class="shift-cell">欢</span>
-          <span class="shift-cell">预测</span>
-          <span class="shift-cell">下一个</span>
+<p>这段代码只做了一件事：先算出每个位置的损失，再用 mask 把补位去掉，最后按有效位置数平均。只要你记住这一点，看到 “padding” 和 “loss” 同时出现时，就知道先检查 mask，而不是先怀疑模型结构。</p>
         </div>
-      </div>
-      <div class="shift-row y">
-        <b>y 目标</b>
-        <div class="shift-cells">
-          <span class="shift-cell">喜</span>
-          <span class="shift-cell">欢</span>
-          <span class="shift-cell">预测</span>
-          <span class="shift-cell">下一个</span>
-          <span class="shift-cell">token</span>
+        <div class="box warn">
+<h3>典型故障</h3>
+<p>如果短句和长句混在一起训练，而你没有 mask，loss 往往会被 PAD 拉低或拉高，曲线看起来不稳定，但根因有效位置数算错了。</p>
         </div>
-      </div>
-    </div>
-  </div>
-  <div class="codebar">
-    <span>最小训练伪代码</span>
-    <button class="copy" type="button" data-copy="code-01">复制</button>
-  </div>
-  <pre id="code-01" data-export-context="最小训练伪代码" data-export-lang="python"><code class="language-python">tokens = ["我", "喜", "欢", "预测", "下一个", "token"]
+        <div class="box info">
+<h3>先查哪一项</h3>
+<p>先查 y 里有没有把 PAD 当真答案，再查 mask 有没有和 y 同步，再查 loss 平均时是不是只除以有效位置数。这个顺序通常比改模型参数更快。</p>
+        </div>
+      </section>
+      <section id="example">
+        <div class="head">
+          <h2>用一个短句跑一遍</h2>
+          <span class="tag">example</span>
+        </div>
+<p>假设句子是“我 喜 欢 预测 下一个 token”。训练时，输入拿前五个 token，目标拿后五个 token。模型看到的是前文，监督信号是后一位。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-example-1">复制</button></div>
+        <pre id="code-example-1" data-export-context="代码" data-export-lang="python"><code class="language-python">tokens = ["我", "喜", "欢", "预测", "下一个", "token"]
 x = tokens[:-1]
 y = tokens[1:]
 
 V = vocab_size
-logits = model(x)                  # shape: [T, V]
+logits = model(x) # shape: [T, V]
 loss = cross_entropy(logits.reshape(-1, V), y.reshape(-1))
 loss.backward()
 optimizer.step()</code></pre>
-  <p>这里先把 <code>reshape(-1, V)</code> 当成一个记号：它表示把 batch 里的所有位置摊平，逐位置和目标对齐。真正重要的是哪一位是输入，哪一位是标签。</p>
-  <div class="table-wrap">
-    <table data-export-context="概率与 loss 对照表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>真实 token 概率</th>
-          <th>单位置 loss = -log(p)</th>
-          <th>直觉</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>0.90</td>
-          <td>0.105</td>
-          <td>模型几乎把正确答案排在最前面</td>
-        </tr>
-        <tr>
-          <td>0.50</td>
-          <td>0.693</td>
-          <td>模型有把握，但还不稳</td>
-        </tr>
-        <tr>
-          <td>0.10</td>
-          <td>2.303</td>
-          <td>模型对正确答案给得太少</td>
-        </tr>
-        <tr>
-          <td>0.01</td>
-          <td>4.605</td>
-          <td>模型几乎没把正确 token 当回事</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <p>当你把这张表和上面的伪代码放在一起看，训练曲线就不再只是一个数字了。它是在告诉你，正确 token 的概率有没有被推高，还是模型一直在把分数给别的位置。</p>
-</section>
-
-<section id="softmax-lens">
-  <div class="head">
-    <h2>从 logits 到概率，再到 loss</h2>
-    <span class="tag">softmax</span>
-  </div>
-  <p>这一步是很多初学者第一次真正卡住的地方。logits 只是分数，真正可比较的是 softmax 之后的概率分布。只要你把这个转换看懂，loss 的数字就不再神秘。</p>
-  <p>假设某个位置上，模型对三个候选 token 的 logits 分别是 2.0、1.0、0.0。softmax 会把它们变成一组加起来等于 1 的概率。因为指数会放大差异，logit 高一点的 token 会拿到更多概率，但不会直接等于 1。</p>
-  <div class="table-wrap">
-    <table data-export-context="softmax 手算例子" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>候选 token</th>
-          <th>logit</th>
-          <th>softmax 后概率</th>
-          <th>如果它是正确答案，loss 大概多大</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>A</td>
-          <td>2.0</td>
-          <td>0.67</td>
-          <td>0.40</td>
-        </tr>
-        <tr>
-          <td>B</td>
-          <td>1.0</td>
-          <td>0.24</td>
-          <td>1.43</td>
-        </tr>
-        <tr>
-          <td>C</td>
-          <td>0.0</td>
-          <td>0.09</td>
-          <td>2.41</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar">
-    <span>手算 softmax 的思路</span>
-    <button class="copy" type="button" data-copy="code-04">复制</button>
-  </div>
-  <pre id="code-04" data-export-context="手算 softmax 的思路" data-export-lang="python"><code class="language-python">import math
-
-logits = [2.0, 1.0, 0.0]
-exps = [math.exp(x) for x in logits]
-total = sum(exps)
-probs = [x / total for x in exps]
-
-print([round(p, 3) for p in probs])</code></pre>
-  <div class="math-block" data-export-context="softmax 与交叉熵关系" data-export-lang="math">
-    $$
-    p_i = \frac{e^{z_i}}{\sum_j e^{z_j}}, \qquad L = -\log p_{\text{correct}}
-    $$
-    <p>这里的 <code>z_i</code> 是 logits，<code>p_i</code> 是概率。正确答案的概率越高，<code>-log</code> 越小，loss 也越小。训练就是不断调参数，让正确 token 的 <code>z_i</code> 相对更高一点。</p>
-  </div>
-  <div class="grid2">
-    <div class="box warn">
-      <h3>常见误读</h3>
-      <p>如果你把 logits 当成概率，看到 2.0、1.0、0.0 这种数时会误以为“最大值就是答案”。其实真正比较的是 softmax 之后的分布，而不是原始分数本身。</p>
-    </div>
-    <div class="box info">
-      <h3>训练里真正被推动的是什么</h3>
-      <p>被推动的不是“某个 token 的绝对分数”，而是正确 token 相对其他 token 的位置。这个相对关系一旦看懂，很多 loss 曲线的变化就能解释得通。</p>
-    </div>
-  </div>
-</section>
-
-<section id="code-reading">
-  <div class="head">
-    <h2>读训练代码时先找哪几行</h2>
-    <span class="tag">code</span>
-  </div>
-  <p>训练脚本看起来长，真正决定这节课成败的往往就几行。先找输入怎么来、目标怎么错位、分数怎么变成 loss、loss 怎么回到优化器。只要这四件事看懂了，其它花哨的参数先放后面。</p>
-  <div class="codebar">
-    <span>读代码的最短路径</span>
-    <button class="copy" type="button" data-copy="code-02">复制</button>
-  </div>
-  <pre id="code-02" data-export-context="读训练代码的最短路径" data-export-lang="python"><code class="language-python">tokens = tokenize(text)             # 原始文本 -> token 序列
-x = tokens[:-1]                     # 看到前文
-y = tokens[1:]                      # 预测后一位
-logits = model(x)                   # [B, T, V] 或 [T, V]
-loss = cross_entropy(logits, y)     # 逐位置对齐监督
+<p>这里先把 <code>reshape(-1, V)</code> 当成一个记号：它表示把 batch 里的所有位置摊平，逐位置和目标对齐。真正重要的是哪一位是输入，哪一位是标签。</p>
+        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>真实 token 概率</th><th>单位置 loss = -log(p)</th><th>直觉</th></tr>
+<tr><td>0.90</td><td>0.105</td><td>模型几乎把正确答案排在最前面</td></tr>
+<tr><td>0.50</td><td>0.693</td><td>模型有把握，但还不稳</td></tr>
+<tr><td>0.10</td><td>2.303</td><td>模型对正确答案给得太少</td></tr>
+<tr><td>0.01</td><td>4.605</td><td>模型几乎没把正确 token 当回事</td></tr>
+        </table></div>
+      </section>
+      <section id="softmax-lens">
+        <div class="head">
+          <h2>从 logits 到概率，再到 loss</h2>
+          <span class="tag">softmax</span>
+        </div>
+<p>这一步是很多初学者第一次真正卡住的地方。logits 只是分数，真正可比较的是 softmax 之后的概率分布。只要你把这个转换看懂，loss 的数字就不再神秘。</p>
+<p>候选 token</p>
+<p>logit</p>
+<p>softmax 后概率</p>
+<p>如果它是正确答案，loss 大概多大</p>
+<p>B</p>
+<p>1.0</p>
+<p>0.24</p>
+<p>1.43</p>
+<p>手算 softmax 的思路</p>
+<p>复制</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+p_i = \frac{e^{z_i}}{\sum_j e^{z_j}}, \qquad L = -\log p_{\text{correct}}
+$$
+        </div>
+<p>这里的 <code>z_i</code> 是 logits，<code>p_i</code> 是概率。正确答案的概率越高，<code>-log</code> 越小，loss 也越小。训练就是不断调参数，让正确 token 的 <code>z_i</code> 相对更高一点。</p>
+        <div class="box info">
+<h3>训练里真正被推动的是什么</h3>
+<p>被推动的正确 token 相对其他 token 的位置。这个相对关系一旦看懂，很多 loss 曲线的变化就能解释得通。</p>
+        </div>
+      </section>
+      <section id="code-reading">
+        <div class="head">
+          <h2>读训练代码时先找哪几行</h2>
+          <span class="tag">code</span>
+        </div>
+<p>训练脚本看起来长，真正决定这节课成败的往往就几行。先找输入怎么来、目标怎么错位、分数怎么变成 loss、loss 怎么回到优化器。只要这四件事看懂了，其它花哨的参数先放后面。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-reading-1">复制</button></div>
+        <pre id="code-code-reading-1" data-export-context="代码" data-export-lang="python"><code class="language-python">tokens = tokenize(text) # 原始文本 -&gt; token 序列
+x = tokens[:-1] # 看到前文
+y = tokens[1:] # 预测后一位
+logits = model(x) # [B, T, V] 或 [T, V]
+loss = cross_entropy(logits, y) # 逐位置对齐监督
 loss.backward()
 optimizer.step()</code></pre>
-  <div class="table-wrap">
-    <table data-export-context="训练代码阅读台账" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>行号</th>
-          <th>它读什么</th>
-          <th>它写什么</th>
-          <th>最常见的误读</th>
-          <th>一眼先查什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>tokenize(text)</td>
-          <td>原始文本</td>
-          <td>token 序列</td>
-          <td>把 token 当成词</td>
-          <td>切分后的长度有没有变化得离谱</td>
-        </tr>
-        <tr>
-          <td>x = tokens[:-1]</td>
-          <td>token 序列</td>
-          <td>输入前文</td>
-          <td>把 x 和 y 写成同一条切片</td>
-          <td>这里有没有少掉最后一位</td>
-        </tr>
-        <tr>
-          <td>y = tokens[1:]</td>
-          <td>token 序列</td>
-          <td>监督标签</td>
-          <td>忘了错开一位</td>
-          <td>这里有没有从第二位开始取</td>
-        </tr>
-        <tr>
-          <td>logits = model(x)</td>
-          <td>x 和参数</td>
-          <td>词表分数</td>
-          <td>把 logits 直接当概率</td>
-          <td>最后一维是不是 V</td>
-        </tr>
-        <tr>
-          <td>cross_entropy(...)</td>
-          <td>logits 和 y</td>
-          <td>loss</td>
-          <td>以为只要 loss 下降就一定学对</td>
-          <td>目标是不是下一位 token</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <p>如果你只看模型结构，很容易漏掉真正出错的地方。很多训练问题不在层数、头数或激活函数，而在这几行里某个切片、维度或 target 对齐写错了。</p>
-</section>
-
-<section id="debug-lab">
-  <div class="head">
-    <h2>故障实验室：三种最像真的报错</h2>
-    <span class="tag">lab</span>
-  </div>
-  <p>下面这三个调试场景，基本就是这节课最常见的三类症状。点不同案例，看输出会怎么变。你要练的是先认症状，再回到闭环里找原因。</p>
-  <div class="terminal-lab" data-terminal-lab>
-    <div class="terminal-controls">
-      <button class="ghost active" type="button" data-terminal-case="case-good">对齐正常</button>
-      <button class="ghost" type="button" data-terminal-case="case-shift">错位失败</button>
-      <button class="ghost" type="button" data-terminal-case="case-vocab">词表不匹配</button>
-    </div>
-    <pre class="terminal-output" aria-live="polite">step 1  x shape: [2, 5]
-step 2  y shape: [2, 5]
-step 3  logits shape: [2, 5, 32000]
-step 4  loss: 2.31
-note    batch、错位和词表都对齐，训练可以继续</pre>
-    <template data-terminal-output="case-good">step 1  x shape: [2, 5]
-step 2  y shape: [2, 5]
-step 3  logits shape: [2, 5, 32000]
-step 4  loss: 2.31
-note    batch、错位和词表都对齐，训练可以继续</template>
-    <template data-terminal-output="case-shift">step 1  x and y use the same slice
-step 2  loss starts falling very fast
-step 3  next-token accuracy stays low
-note    模型在复制输入，不是在预测下一位</template>
-    <template data-terminal-output="case-vocab">step 1  logits shape: [2, 5, 256]
-step 2  target id: 1024
-error   target index out of range
-note    词表大小和 tokenizer 编号没有对上</template>
-  </div>
-  <div class="grid2">
-    <div class="box warn">
-      <h3>错位失败的假象</h3>
-      <p>这种情况最麻烦，因为 loss 可能还会下降。你看到的不是“学会了”，而是“把当前 token 复制得更熟了”。</p>
-    </div>
-    <div class="box info">
-      <h3>词表不匹配的含义</h3>
-      <p>如果 target id 超过 logits 的词表维度，问题往往不在优化器，而在 tokenizer、词表大小或数据编号没有统一。</p>
-    </div>
-  </div>
-</section>
-
-<section id="curve-reading">
-  <div class="head">
-    <h2>loss 曲线怎么读</h2>
-    <span class="tag">diagnosis</span>
-  </div>
-  <p>训练时最常见的误解，是把“loss 在变小”直接等同于“模型在变强”。更稳的读法是：先看训练 loss 的方向，再看验证 loss 是否跟上，最后看两者之间的距离有没有越来越大。</p>
-  <p>如果训练 loss 降得很快，但验证 loss 一直不动，通常不是“模型太弱”，而是数据切分、目标错位或过拟合在说话。如果训练和验证一起下降，而且下降幅度接近，说明模型大概率真的在学通用模式。</p>
-  <div class="table-wrap">
-    <table data-export-context="loss 曲线诊断表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>曲线现象</th>
-          <th>更像什么</th>
-          <th>下一步先查哪一类问题</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>训练 loss 持续下降，验证 loss 也下降</td>
-          <td>大体正常</td>
-          <td>继续看样本质量和收敛速度</td>
-        </tr>
-        <tr>
-          <td>训练 loss 下降很快，验证 loss 不动</td>
-          <td>过拟合、数据泄漏或监督写错</td>
-          <td>先查训练 / 验证分流，再查 input / target</td>
-        </tr>
-        <tr>
-          <td>两条曲线都很抖</td>
-          <td>batch 太小、mask 不稳或学习率不合适</td>
-          <td>先查 batch、mask 和学习率，而不是先加层数</td>
-        </tr>
-        <tr>
-          <td>训练 loss 几乎不变</td>
-          <td>模型没在学，或者梯度链路断了</td>
-          <td>先查监督对齐，再查 backward / step 有没有真的执行</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>为什么要同时看两条曲线</h3>
-      <p>训练 loss 只告诉你“模型对已见数据的拟合程度”，验证 loss 才告诉你“它有没有在陌生数据上保持预测能力”。只看一条，容易把记忆当能力。</p>
-    </div>
-    <div class="box info">
-      <h3>这页的收尾动作</h3>
-      <p>以后你读训练日志时，先问三件事：目标对了吗，mask 对了吗，训练和验证分开了吗。只要这三个问题没答清，先别急着改模型规模。</p>
-    </div>
-  </div>
-</section>
-
-<section id="trace-log">
-  <div class="head">
-    <h2>从一条日志回到问题源头</h2>
-    <span class="tag">log</span>
-  </div>
-  <p>假设你看到下面这组日志：训练 loss 从 2.9 掉到 1.4，验证 loss 只从 3.0 掉到 2.8，样本数量正常，显存也没有爆。这个时候最容易犯的错，是立刻去调更大的模型或更小的学习率。更稳的做法是先回到这一页的闭环，检查监督是否真的对齐。</p>
-  <div class="codebar">
-    <span>一眼能读懂的日志</span>
-    <button class="copy" type="button" data-copy="code-05">复制</button>
-  </div>
-  <pre id="code-05" data-export-context="一眼能读懂的日志" data-export-lang="text"><code class="language-text">step 1200 | train loss 1.42 | val loss 2.79 | mask ok
+        </div>
+      </section>
+      <section id="debug-lab">
+        <div class="head">
+          <h2>故障实验室：三种最像真的报错</h2>
+          <span class="tag">lab</span>
+        </div>
+<p>下面这三个调试场景，基本就是这节课最常见的三类症状。点不同案例，看输出会怎么变。你要练的是先认症状，再回到闭环里找原因。</p>
+        <div class="box info">
+<h3>词表不匹配的含义</h3>
+<p>如果 target id 超过 logits 的词表维度，问题往往不在优化器，而在 tokenizer、词表大小或数据编号没有统一。</p>
+        </div>
+      </section>
+      <section id="curve-reading">
+        <div class="head">
+          <h2>loss 曲线怎么读</h2>
+          <span class="tag">diagnosis</span>
+        </div>
+<p>训练时最常见的误解，是把“loss 在变小”直接等同于“模型在变强”。更稳的读法是：先看训练 loss 的方向，再看验证 loss 是否跟上，最后看两者之间的距离有没有越来越大。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>曲线现象</th><th>更像什么</th><th>下一步先查哪一类问题</th></tr>
+<tr><td>训练 loss 持续下降，验证 loss 也下降</td><td>大体正常</td><td>继续看样本质量和收敛速度</td></tr>
+<tr><td>训练 loss 下降很快，验证 loss 不动</td><td>过拟合、数据泄漏或监督写错</td><td>先查训练 / 验证分流，再查 input / target</td></tr>
+<tr><td>两条曲线都很抖</td><td>batch 太小、mask 不稳或学习率不合适</td><td>先查 batch、mask 和学习率，而不是先加层数</td></tr>
+<tr><td>训练 loss 几乎不变</td><td>模型没在学，或者梯度链路断了</td><td>先查监督对齐，再查 backward / step 有没有真的执行</td></tr>
+        </table></div>
+        <div class="box soft">
+<h3>为什么要同时看两条曲线</h3>
+<p>训练 loss 只告诉你“模型对已见数据的拟合程度”，验证 loss 才告诉你“它有没有在陌生数据上保持预测能力”。只看一条，容易把记忆当能力。</p>
+        </div>
+        <div class="box info">
+<h3>这页的收尾动作</h3>
+<p>以后你读训练日志时，先问三件事：目标对了吗，mask 对了吗，训练和验证分开了吗。只要这三个问题没答清，先别急着改模型规模。</p>
+        </div>
+      </section>
+      <section id="trace-log">
+        <div class="head">
+          <h2>从一条日志回到问题源头</h2>
+          <span class="tag">log</span>
+        </div>
+<p>假设你看到下面这组日志：训练 loss 从 2.9 掉到 1.4，验证 loss 只从 3.0 掉到 2.8，样本数量正常，显存也没有爆。这个时候最容易犯的错，是立刻去调更大的模型或更小的学习率。更稳的做法是先回到这一页的闭环，检查监督是否真的对齐。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-trace-log-1">复制</button></div>
+        <pre id="code-trace-log-1" data-export-context="代码" data-export-lang="text"><code class="language-text">step 1200 | train loss 1.42 | val loss 2.79 | mask ok
 step 1600 | train loss 1.31 | val loss 2.78 | target shift ???
 step 2000 | train loss 1.24 | val loss 2.77 | repeat rate up</code></pre>
-  <div class="table-wrap">
-    <table data-export-context="日志到原因的对应表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>日志信号</th>
-          <th>更像什么</th>
-          <th>先查哪一处</th>
-          <th>为什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>train loss 快速下降，val loss 几乎不动</td>
-          <td>训练在记忆，泛化没跟上</td>
-          <td>训练 / 验证分流、重复样本、目标错位</td>
-          <td>数据或监督先出问题，比模型结构更常见</td>
-        </tr>
-        <tr>
-          <td>mask ok，但 repeat rate 升高</td>
-          <td>模型开始偏向重复模式</td>
-          <td>目标切片、温度、采样设置</td>
-          <td>训练目标和生成设置不是同一件事，但会互相影响</td>
-        </tr>
-        <tr>
-          <td>loss 抖得厉害</td>
-          <td>更新不稳定</td>
-          <td>batch、mask、学习率</td>
-          <td>输入和平均方式不稳时，曲线会先乱掉</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <p>这条链的重点是顺序：先判断日志在说哪类问题，再回去查对齐、mask 和数据分流，最后才考虑调参。只要顺序对了，很多看似复杂的训练失败会直接缩成几个可以检查的点。</p>
-  <div class="grid2">
-    <div class="box warn">
-      <h3>常见误判</h3>
-      <p>训练 loss 降得快，不代表下一位 token 的学习方式就对了。它只说明模型在当前目标上更擅长了；如果目标写错，下降得再漂亮也没用。</p>
-    </div>
-    <div class="box info">
-      <h3>这页最实用的回看动作</h3>
-      <p>下次看到训练日志，先把“目标对齐、mask、训练验证分离”三个检查点默念一遍，再决定要不要改学习率或模型规模。</p>
-    </div>
-  </div>
-</section>
-
-<section id="mistakes">
-  <div class="head">
-    <h2>最常见的几种错法</h2>
-    <span class="tag">debug</span>
-  </div>
-  <p>这页最值得记住的不是定义，而是排错顺序。先查对齐，再查维度，再查训练和验证是否分开，最后才怀疑模型不够大。</p>
-  <div class="table-wrap">
-    <table data-export-context="常见错误与首查点" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>症状</th>
-          <th>最可能的原因</th>
-          <th>先查什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>loss 一直不降</td>
-          <td>x / y 错位了，或者标签被打乱了</td>
-          <td>先看 input 和 target 有没有差一位</td>
-        </tr>
-        <tr>
-          <td>模型学会复制当前 token</td>
-          <td>输入和目标用了同一个切片</td>
-          <td>先看构造监督那一行</td>
-        </tr>
-        <tr>
-          <td>shape 报错</td>
-          <td>logits 的最后一维没对齐词表大小</td>
-          <td>先看 V 和 loss 输入维度</td>
-        </tr>
-        <tr>
-          <td>训练集很好，验证集很差</td>
-          <td>数据分流不干净，或者记住了重复样本</td>
-          <td>先看训练 / 验证分离</td>
-        </tr>
-        <tr>
-          <td>输出看起来像在说话，但不稳定</td>
-          <td>base model 还没经过指令微调或后续对齐</td>
-          <td>先分清 base 能力和聊天能力</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="grid2">
-    <div class="box warn">
-      <h3>先查顺序</h3>
-      <p>看到异常时，先看监督信号有没有对齐，再看 logits 的最后一维，再看训练 / 验证分流。顺序一乱，排错就会绕远路。</p>
-    </div>
-    <div class="box info">
-      <h3>别把 base model 当聊天模型</h3>
-      <p>这一页讨论的是 next-token objective。聊天能力、指令跟随和偏好对齐，会在后面的单元和后训练章节里再回来。</p>
-    </div>
-  </div>
-</section>
-
-<section id="bridge">
-  <div class="head">
-    <h2>下一步怎么接到单元 02</h2>
-    <span class="tag">bridge</span>
-  </div>
-  <p>看完这一页，下一步不是去背 tokenizer 算法，而是去比较：同一句话在不同切分下会变成什么 token，序列长度怎么变，训练成本为什么会变。</p>
-  <div class="table-wrap">
-    <table data-export-context="下一节操作桥" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>下一步</th>
-          <th>要看什么</th>
-          <th>你要带着的问题</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><a href="../02_Tokenizer与token流/学习页.html">打开单元 02</a></td>
-          <td>同一句话在不同切分下的 token 序列</td>
-          <td>长度为什么会变，训练成本为什么会变</td>
-        </tr>
-        <tr>
-          <td>回看本页的 shift-demo</td>
-          <td>x 和 y 的错位关系</td>
-          <td>你能不能不看答案就指出输入和目标</td>
-        </tr>
-        <tr>
-          <td>继续往后读单元 03 和 04</td>
-          <td>Transformer 和训练循环</td>
-          <td>它们怎样把同一个闭环做成可运行系统</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <p>如果你现在就跳去看 attention 头数、并行策略或训练配方，闭环会被打断。先让自己能从文本一路说到 loss，再打开下一节。</p>
-</section>
-
-<section id="boundary">
-  <div class="head">
-    <h2>先不追的东西</h2>
-    <span class="tag">boundary</span>
-  </div>
-  <p>这一页只负责把“训练语言模型到底在学什么”定住。你先能跟着一个句子走完整个闭环，后面每一节才有落点。</p>
-  <div class="table-wrap">
-    <table data-export-context="后续回头表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>现在先放下</th>
-          <th>这页先怎么处理</th>
-          <th>后面在哪回来</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>tokenizer 的具体合并算法</td>
-          <td>先把 token 当成离散输入单位</td>
-          <td>单元 02</td>
-        </tr>
-        <tr>
-          <td>attention 头和残差结构</td>
-          <td>先把模型当成输出 logits 的黑箱</td>
-          <td>单元 03</td>
-        </tr>
-        <tr>
-          <td>优化器、学习率和检查点</td>
-          <td>先把 loss 和更新的关系看清</td>
-          <td>单元 04</td>
-        </tr>
-        <tr>
-          <td>GPU 吞吐、混合精度和通信瓶颈</td>
-          <td>先不管跑得快不快，先看目标对不对</td>
-          <td>单元 05</td>
-        </tr>
-        <tr>
-          <td>scaling 曲线和验证集设计</td>
-          <td>先能读懂一个位置上的 loss</td>
-          <td>单元 06</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="grid2">
-    <div class="box soft">
-      <h3>这一页先别钻</h3>
-      <p>先别把注意力放到 tokenizer 细节、head 数量、优化器技巧和吞吐优化上。那些都会回来，但它们都建立在这一页的闭环之上。</p>
-    </div>
-    <div class="box">
-      <h3>你现在应该保住的东西</h3>
-      <p>你至少要能把输入、目标、分数和损失分开说清。能说清这四件事，后面的单位都能接上。</p>
-    </div>
-  </div>
-</section>
-
-
+        </div>
+        <div class="box warn">
+<h3>常见误判</h3>
+<p>训练 loss 降得快，不代表下一位 token 的学习方式就对了。它只说明模型在当前目标上更擅长了；如果目标写错，下降得再漂亮也没用。</p>
+        </div>
+        <div class="box info">
+<h3>这页最实用的回看动作</h3>
+<p>下次看到训练日志，先把“目标对齐、mask、训练验证分离”三个检查点默念一遍，再决定要不要改学习率或模型规模。</p>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>最常见的几种错法</h2>
+          <span class="tag">debug</span>
+        </div>
+<p>这页最值得记住的不是定义，而是排错顺序。先查对齐，再查维度，再查训练和验证是否分开，最后才怀疑模型不够大。</p>
+        <div class="box warn">
+<h3>先查顺序</h3>
+<p>看到异常时，先看监督信号有没有对齐，再看 logits 的最后一维，再看训练 / 验证分流。顺序一乱，排错就会绕远路。</p>
+        </div>
+        <div class="box info">
+<h3>别把 base model 当聊天模型</h3>
+<p>这一页讨论的是 next-token objective。聊天能力、指令跟随和偏好对齐，会在后面的单元和后训练章节里再回来。</p>
+        </div>
+      </section>
+      <section id="bridge">
+        <div class="head">
+          <h2>下一步怎么接到单元 02</h2>
+          <span class="tag">bridge</span>
+        </div>
+<p>看完这一页，下一步去比较：同一句话在不同切分下会变成什么 token，序列长度怎么变，训练成本为什么会变。</p>
+      </section>
+      <section id="boundary">
+        <div class="head">
+          <h2>先不追的东西</h2>
+          <span class="tag">boundary</span>
+        </div>
+<p>这一页只负责把“训练语言模型到底在学什么”定住。你先能跟着一个句子走完整个闭环，后面每一节才有落点。</p>
+        <div class="box soft">
+<h3>这一页先别钻</h3>
+<p>先别把注意力放到 tokenizer 细节、head 数量、优化器技巧和吞吐优化上。那些都会回来，但它们都建立在这一页的闭环之上。</p>
+        </div>
+        <div class="box">
+<h3>你现在应该保住的东西</h3>
+<p>你至少要能把输入、目标、分数和损失分开说清。能说清这四件事，后面的单位都能接上。</p>
+        </div>
+      </section>
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-intro">
-  <div class="box soft">
-    <h3>怎么答才算会</h3>
-    <p>答案里要同时说出对象和方向：谁是输入，谁是目标，loss 在看什么，错了会先在哪里露馅。</p>
-  </div>
-  <div class="box info">
-    <h3>检查重点</h3>
-    <p>如果你把 token 当成词，把 logits 当成概率，或者把 base model 当成聊天模型，说明还要回到前面的术语和闭环。</p>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>基础判断</h3>
-      <p>先把目标、token 和错位关系分开，再往下做数值题。</p>
-    </div>
-    <div class="quick-review">先说对象，再说方向，再说目标。看见“预测下一个 token”时，先问“预测谁，拿什么预测”。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q1" data-group="基础判断" data-title="语言建模目标" data-answer="B">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">objective</span></div>
-      <h3>语言建模目标</h3>
-      <p>这页里“预测下一个 token”最准确的意思是什么？</p>
-      <label><input type="radio" name="q1" value="A"> 让模型复述整句内容。</label>
-      <label><input type="radio" name="q1" value="B"> 让模型给正确的下一位 token 更高概率。</label>
-      <label><input type="radio" name="q1" value="C"> 让模型直接输出最终答案。</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q2" data-group="基础判断" data-title="token 的范围" data-answer="错">
-      <div class="q-meta"><span class="pill">true/false</span><span class="pill">objective</span></div>
-      <h3>token 的范围</h3>
-      <p>“token 一定等于词” 这句话对不对？</p>
-      <label><input type="radio" name="q2" value="对"> 对</label>
-      <label><input type="radio" name="q2" value="错"> 错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q3" data-group="基础判断" data-title="错位叫法">
-      <div class="q-meta"><span class="pill">fill</span><span class="pill">objective</span></div>
-      <h3>错位叫法</h3>
-      <p>把前文作为输入、把后一位作为标签，这个错位常叫 ______ 。</p>
-      <input type="text" name="q3" data-answer="shift;错位;错开一位" data-explain="记住“错开一位”就够了，不必死背术语。">
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>闭环追踪</h3>
-      <p>把 logits、词表大小、监督信号和复制错误分开。</p>
-    </div>
-    <div class="quick-review">先看最后一维，再看输入 / 目标，再看训练和验证是否分开。不要先把锅甩给模型太小。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q4" data-group="闭环追踪" data-title="logits 的最后一维" data-answer="C">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">objective</span></div>
-      <h3>logits 的最后一维</h3>
-      <p>在这个单元里，logits 的最后一维最应该对齐什么？</p>
-      <label><input type="radio" name="q4" value="A"> batch size</label>
-      <label><input type="radio" name="q4" value="B"> 序列长度</label>
-      <label><input type="radio" name="q4" value="C"> 词表大小</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q5" data-group="闭环追踪" data-title="先查什么">
-      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">diagnosis</span></div>
-      <h3>先查什么</h3>
-      <p>下面哪些检查最能优先定位“模型在复制而不是在预测”的问题？</p>
-      <label><input type="checkbox" name="q5" value="检查 input 和 target 是否错开一位"> 检查 input 和 target 是否错开一位</label>
-      <label><input type="checkbox" name="q5" value="检查 logits 的最后一维是不是词表大小"> 检查 logits 的最后一维是不是词表大小</label>
-      <label><input type="checkbox" name="q5" value="检查训练集和验证集有没有混在一起"> 检查训练集和验证集有没有混在一起</label>
-      <label><input type="checkbox" name="q5" value="先把模型层数翻倍"> 先把模型层数翻倍</label>
-      <details>
-        <summary>展开反馈</summary>
-        <p>正确顺序是先查输入 / 目标错位、再查 logits 维度、再查数据分流。先翻倍模型层数通常只会把问题藏起来。</p>
-      </details>
-    </div>
-    <div class="q full" data-question="q6" data-group="闭环追踪" data-title="loss 与能力">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">explain</span></div>
-      <h3>loss 与能力</h3>
-      <p>用 4 句以内解释：为什么交叉熵下降，能说明模型更接近真实 token，却不等于聊天能力已经变强。</p>
-      <p class="solve-note">答案里要说清三层关系：下一位 token 的概率、base objective、后训练能力。</p>
-      <textarea name="q6" placeholder="先说概率，再说目标，再说能力层次。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>好的答案至少要提到三点：第一，交叉熵下降意味着模型给正确下一位 token 分到更高概率；第二，这只是在优化 next-token objective，还没有覆盖指令跟随、偏好对齐和对话格式；第三，聊天能力通常还要依赖后续的微调、偏好优化和解码设置。只要把这三层分开，答案就够了。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>数值和代码</h3>
-      <p>把一个位置上的概率、loss 和代码里的维度关系接住。</p>
-    </div>
-    <div class="quick-review">数值题只看数量级，代码题只看读写对象和错位。别把符号记成咒语。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q7" data-group="数值和代码" data-title="loss 数值" data-answer="C">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">objective</span></div>
-      <h3>loss 数值</h3>
-      <p>如果真实 token 的概率是 0.1，单位置 loss 最接近哪一个数？</p>
-      <label><input type="radio" name="q7" value="A"> 0.10</label>
-      <label><input type="radio" name="q7" value="B"> 0.69</label>
-      <label><input type="radio" name="q7" value="C"> 2.30</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q8" data-group="数值和代码" data-title="维度含义">
-      <div class="q-meta"><span class="pill">fill</span><span class="pill">objective</span></div>
-      <h3>维度含义</h3>
-      <p>示例代码里，把 batch 和时间步压平之前，最后一维代表什么？</p>
-      <input type="text" name="q8" data-answer="词表大小;vocab_size;V" data-explain="写出“词表大小”或“V”就够了。">
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q full" data-question="q9" data-group="数值和代码" data-title="同一切片的后果">
-      <div class="q-meta"><span class="pill">code reading</span><span class="pill">debug</span></div>
-      <h3>同一切片的后果</h3>
-      <p>如果你把 input 和 target 写成同一个切片，模型最可能学成什么？请写出症状、根因和你会先改哪一行。</p>
-      <p class="solve-note">答案要包含“复制当前 token”的症状、“错位失败”的根因，以及先改监督构造那一行。</p>
-      <textarea name="q9" placeholder="先写症状，再写根因，再写第一处修改。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>应该写到：模型最容易学成复制当前 token，loss 可能看起来下降，但它学的是重建输入而不是预测下一位。根因是 input / target 没有错开一位，监督信号被写错了。先改的地方是构造 y 的切片，也就是把 target 从 tokens[:-1] 改成 tokens[1:]。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>迁移与边界</h3>
-      <p>把这一页转成下一步动作，再把不该现在追的东西放下。</p>
-    </div>
-    <div class="quick-review">学完以后要能说出“下一页看什么、为什么现在看它”。</div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q10" data-group="迁移与边界" data-title="下一步顺序" data-answer="B">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">transfer</span></div>
-      <h3>下一步顺序</h3>
-      <p>下一节最合理的顺序是什么？</p>
-      <label><input type="radio" name="q10" value="A"> 先看 03 Transformer 最小实现</label>
-      <label><input type="radio" name="q10" value="B"> 先看 02 Tokenizer 与 token 流</label>
-      <label><input type="radio" name="q10" value="C"> 先看 05 GPU 系统与性能瓶颈</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-    </div>
-    <div class="q" data-question="q11" data-group="迁移与边界" data-title="现在先放下什么">
-      <div class="q-meta"><span class="pill">debug checklist</span><span class="pill">boundary</span></div>
-      <h3>现在先放下什么</h3>
-      <p>下面哪些内容现在可以先放下，等后面再回来看？</p>
-      <label><input type="checkbox" name="q11" value="tokenizer 的具体合并算法"> tokenizer 的具体合并算法</label>
-      <label><input type="checkbox" name="q11" value="attention 头数怎么分配"> attention 头数怎么分配</label>
-      <label><input type="checkbox" name="q11" value="交叉熵的含义"> 交叉熵的含义</label>
-      <label><input type="checkbox" name="q11" value="input / target 错位"> input / target 错位</label>
-      <details>
-        <summary>展开反馈</summary>
-        <p>这一页先放下的是 tokenizer 的具体合并算法和 attention 头数怎么分配。交叉熵和 input / target 错位是本页核心，不该放下。</p>
-      </details>
-    </div>
-    <div class="q full" data-question="q12" data-group="迁移与边界" data-title="行动提醒">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">transfer</span></div>
-      <h3>行动提醒</h3>
-      <p>把这一页压成一句行动提醒：下次看到训练代码时，你会先盯哪 3 个对象，为什么？</p>
-      <p class="solve-note">答案里最好出现 x、y、logits 或 loss，并说出为什么先看它们。</p>
-      <textarea name="q12" placeholder="先写你会盯的 3 个对象，再写理由。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>合格答案可以写成：我会先盯 x、y 和 logits，因为它们决定输入、监督和分数是否对齐；如果这三件事错了，loss 再怎么下降也不代表学对了。只要把对象和理由说清，就算过关。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-      </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
+      <div class="practice-intro">
+      <div class="box soft">
+<h3>怎么答才算会</h3>
+<p>答案里要同时说出对象和方向：谁是输入，谁是目标，loss 在看什么，错了会先在哪里露馅。</p>
+      </div>
+      <div class="box info">
+<h3>检查重点</h3>
+<p>如果你把 token 当成词，把 logits 当成概率，或者把 base model 当成聊天模型，说明还要回到前面的术语和闭环。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>基础判断</h3></div>
+          <div class="quick-review">先说对象，再说方向，再说目标。看见“预测下一个 token”时，先问“预测谁，拿什么预测”。 --></div>
         </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="让模型给正确的下一位 token 更高概率。">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 语言建模目标</h3>
 
-      <section id="sources">
+      <div class="choices">
+      <label><input type="radio" name="q1" value="让模型复述整句内容。">让模型复述整句内容。</label>
+      <label><input type="radio" name="q1" value="让模型给正确的下一位 token 更高概率。">让模型给正确的下一位 token 更高概率。</label>
+      <label><input type="radio" name="q1" value="让模型直接输出最终答案。">让模型直接输出最终答案。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>让模型给正确的下一位 token 更高概率。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="错">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> token 的范围</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>错</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 错位叫法</h3>
+
+
+      <textarea name="q3"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>闭环追踪</h3></div>
+          <div class="quick-review">先看最后一维，再看输入 / 目标，再看训练和验证是否分开。不要先把锅甩给模型太小。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="词表大小">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> logits 的最后一维</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q4" value="batch size">batch size</label>
+      <label><input type="radio" name="q4" value="序列长度">序列长度</label>
+      <label><input type="radio" name="q4" value="词表大小">词表大小</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>词表大小</p>
+        </details>
+      </article>
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">debug-checklist</span></div>
+        <h3><b>Q:</b> 先查什么</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q5" value="检查 input 和 target 是否错开一位">检查 input 和 target 是否错开一位</label>
+      <label><input type="radio" name="q5" value="检查 logits 的最后一维是不是词表大小">检查 logits 的最后一维是不是词表大小</label>
+      <label><input type="radio" name="q5" value="检查训练集和验证集有没有混在一起">检查训练集和验证集有没有混在一起</label>
+      <label><input type="radio" name="q5" value="先把模型层数翻倍">先把模型层数翻倍</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。正确顺序是先查输入 / 目标错位、再查 logits 维度、再查数据分流。先翻倍模型层数通常只会把问题藏起来。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> loss 与能力</h3>
+
+
+      <textarea name="q6"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好的答案至少要提到三点：第一，交叉熵下降意味着模型给正确下一位 token 分到更高概率；第二，这只是在优化 next-token objective，还没有覆盖指令跟随、偏好对齐和对话格式；第三，聊天能力通常还要依赖后续的微调、偏好优化和解码设置。只要把这三层分开，答案就够了。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>数值和代码</h3></div>
+          <div class="quick-review">数值题只看数量级，代码题只看读写对象和错位。别把符号记成咒语。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="2.30">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> loss 数值</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q7" value="0.10">0.10</label>
+      <label><input type="radio" name="q7" value="0.69">0.69</label>
+      <label><input type="radio" name="q7" value="2.30">2.30</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>2.30</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 维度含义</h3>
+
+
+      <textarea name="q8"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">code reading</span></div>
+        <h3><b>Q:</b> 同一切片的后果</h3>
+
+
+      <textarea name="q9"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。应该写到：模型最容易学成复制当前 token，loss 可能看起来下降，但它学的是重建输入而不是预测下一位。根因是 input / target 没有错开一位，监督信号被写错了。先改的地方是构造 y 的切片，也就是把 target 从 tokens[:-1] 改成 tokens[1:]。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>迁移与边界</h3></div>
+          <div class="quick-review">学完以后要能说出“下一页看什么、为什么现在看它”。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="先看 02 Tokenizer 与 token 流">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 下一步顺序</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q10" value="先看 03 Transformer 最小实现">先看 03 Transformer 最小实现</label>
+      <label><input type="radio" name="q10" value="先看 02 Tokenizer 与 token 流">先看 02 Tokenizer 与 token 流</label>
+      <label><input type="radio" name="q10" value="先看 05 GPU 系统与性能瓶颈">先看 05 GPU 系统与性能瓶颈</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>先看 02 Tokenizer 与 token 流</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">debug-checklist</span></div>
+        <h3><b>Q:</b> 现在先放下什么</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q11" value="tokenizer 的具体合并算法">tokenizer 的具体合并算法</label>
+      <label><input type="radio" name="q11" value="attention 头数怎么分配">attention 头数怎么分配</label>
+      <label><input type="radio" name="q11" value="交叉熵的含义">交叉熵的含义</label>
+      <label><input type="radio" name="q11" value="input / target 错位">input / target 错位</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。这一页先放下的是 tokenizer 的具体合并算法和 attention 头数怎么分配。交叉熵和 input / target 错位是本页核心，不该放下。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 行动提醒</h3>
+
+
+      <textarea name="q12"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。合格答案可以写成：我会先盯 x、y 和 logits，因为它们决定输入、监督和分数是否对齐；如果这三件事错了，loss 再怎么下降也不代表学对了。只要把对象和理由说清，就算过关。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-  <li><a href="https://cs336.stanford.edu/spring2025/index.html">Stanford CS336: Language Modeling from Scratch</a> - 课程主线，支撑“从语言建模目标开始”的顺序判断。访问日期：2026-06-21。</li>
-  <li><a href="https://github.com/karpathy/llm.c">llm.c</a> - 训练实现参照，适合对照训练循环、张量流和复现记录。访问日期：2026-06-21。</li>
-  <li><a href="https://arxiv.org/abs/2501.00656">OLMo 2 technical report</a> - 公开训练配方和开放训练过程的参考。访问日期：2026-06-21。</li>
-  <li><a href="https://allenai.org/olmo2">OLMo 项目页</a> - 用来对照 fully open 模型如何公开权重、数据、代码、日志和检查点。访问日期：2026-06-21。</li>
+<ul>
+<li><a href="https://cs336.stanford.edu/spring2025/index.html">Stanford CS336: Language Modeling from Scratch</a> - 课程主线，支撑“从语言建模目标开始”的顺序判断。访问日期：2026-06-21。</li>
+<li><a href="https://github.com/karpathy/llm.c">llm.c</a> - 训练实现参照，适合对照训练循环、张量流和复现记录。访问日期：2026-06-21。</li>
+<li><a href="https://arxiv.org/abs/2501.00656">OLMo 2 technical report</a> - 公开训练配方和开放训练过程的参考。访问日期：2026-06-21。</li>
+<li><a href="https://allenai.org/olmo2">OLMo 项目页</a> - 用来对照 fully open 模型如何公开权重、数据、代码、日志和检查点。访问日期：2026-06-21。</li>
 </ul>
-
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

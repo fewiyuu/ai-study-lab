@@ -4,418 +4,673 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P33｜异常检测 5：无标签概率模型</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="unlabeled anomaly detection,feature vector,probability model,p(x),likelihood,threshold,Twitch Plays Pokemon,normal player,trash talk,anarchy mode">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>无标签概率模型</strong><span>P33。没有 classifier 时，用 p(x) 判断一个玩家行为是否常见。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#setting"><span class="dot"></span>无标签设定</a>
-      <a href="#case"><span class="dot"></span>Twitch 例子</a>
-      <a href="#features"><span class="dot"></span>玩家变向量</a>
-      <a href="#prob"><span class="dot"></span>概率模型</a>
-      <a href="#density"><span class="dot"></span>二维密度</a>
-      <a href="#threshold"><span class="dot"></span>阈值判断</a>
-      <a href="#share"><span class="dot"></span>速查例题</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：没有 label 时，不能训练 classifier；我们改成学习正常资料的 p(x)，低概率样本就是异常候选。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P33</div>
-        <h1>没有标签时，就学习“常见行为长什么样”</h1>
-        <p>P29-P32 先讲有标签场景：训练分类器，再用 confidence score 做 open set detection。P33 换到第二个例子：我们没有每个样本的 label，只收集到一堆玩家行为。此时不能训练分类器，只能问：这些行为本身的分布是什么？新玩家的行为在这个分布下常不常见？</p>
-        <p>课程用 Twitch Plays Pokemon 讲这个问题。多数玩家被假设为正常玩家，他们的行为构成训练资料。每个玩家先被表示成 feature vector，例如说无关话的比例、在无政府状态下发言的比例。然后学习一个概率模型 <code>p(x)</code>。若某个玩家行为出现概率高，就判为 normal；若概率低，就判为 anomaly。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>区分有标签 open set 和无标签异常检测。</li>
-          <li>说明为什么样本必须先变成 feature vector。</li>
-          <li>用 Twitch 玩家行为解释训练资料 <code>x</code>。</li>
-          <li>解释 <code>p(x)</code> 如何替代 classifier confidence。</li>
-          <li>用 likelihood 和 threshold 判断 anomaly。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
-      <p>前几节有 classifier，所以可以问“分类器有多有信心”。P33 没有 label，因此没有 classifier。新的主线是 density estimation：用训练资料估计一个概率模型，描述 normal data 在 feature space 中怎么分布。新样本如果落在高概率区域，就像训练资料；如果落在低概率区域，就不像训练资料。</p>
-      <p>这里的关键不是某个具体分布公式，而是思考顺序。第一，把真实对象转成向量。第二，观察大多数训练样本聚在哪里。第三，建立能给每个 <code>x</code> 分数的模型。第四，用阈值把概率分数转成 normal/anomaly 判断。这个框架后面可以接 Gaussian、mixture model、flow、autoencoder reconstruction score 等不同实现。</p>
-      <div class="map">
-        <span class="node">无标签资料</span>
-        <span class="node">feature vector</span>
-        <span class="node">学习 p(x)</span>
-        <span class="node">likelihood score</span>
-        <span class="node">threshold 决策</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P33</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把无标签异常检测解释成“学习资料分布，再找低概率样本”。</p></div>
-    </section>
-
-    <section id="setting">
-      <div class="head"><h2>无标签设定：只有 x，没有 y</h2><span class="tag">SETTING</span></div>
-      <p>在 open set recognition 中，训练资料有已知类别标签，比如辛普森角色是谁。P33 的设定不同：我们只有大量样本 <code>x¹, x², ..., xᴺ</code>，没有 <code>y</code>。因此无法训练“输入 x 输出类别 y”的 classifier，也不能直接用 classifier confidence。</p>
-      <p>没有 label 不代表不能做事。我们仍然可以假设多数训练样本来自正常行为，于是训练资料本身就告诉我们“常见样本应该长什么样”。要做的是建立一个模型来描述这种常见程度。这个模型给每个新样本一个概率或概率密度分数，分数越低，越值得怀疑。</p>
-      <div class="grid2">
-        <div class="box info"><h3>有标签 open set</h3><p>有 <code>(x, y)</code>，先训练 classifier，再用 confidence 做 unknown 判断。</p></div>
-        <div class="box warn"><h3>无标签异常检测</h3><p>只有 <code>x</code>，学习 <code>p(x)</code> 或类似 normality score。</p></div>
+      <h1 class="hero-title">P33｜异常检测 5：无标签概率模型</h1>
+      <p class="hero-desc">P29-P32 先讲有标签场景：训练分类器，再用 confidence score 做 open set detection。P33 换到第二个例子：我们没有每个样本的 label，只收集到一堆玩家行为。此时不能训练分类器，只能问：这些行为本身的分布是什么？新玩家的行为在这个分布下常不常见？</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P32_异常检测4_分类器过度自信/学习页.html">上一节</a>
+            <a href="../P34_异常检测6_高斯与最大似然/学习页.html">下一节</a>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说明为什么没有 label 时，P30 的 classifier confidence 路线不能直接用。</p></div>
-    </section>
-
-    <section id="case">
-      <div class="head"><h2>Twitch Plays Pokemon：多数玩家视为正常</h2><span class="tag">CASE</span></div>
-      <p>Twitch Plays Pokemon 是一个多人共同操控宝可梦游戏的活动。大量玩家同时输入上下左右、A、B 等指令，系统从输入流中选指令执行。因为参与者很多，游戏过程非常混乱。人们怀疑其中可能存在 troll，也就是故意捣乱的玩家。</p>
-      <p>异常检测的表述是：把多数玩家视为正常训练资料，学习正常玩家行为模式；再找出行为不像多数人的玩家。这里没有明确 label 告诉我们“某玩家是不是 troll”。甚至原稿也提醒：troll 是否真的存在都可以讨论。机器学习任务只做一件事：找行为上明显不像多数人的样本。</p>
-      <div class="grid3">
-        <div class="box info"><h3>样本</h3><p>每一个玩家是一笔资料 <code>x</code>。</p></div>
-        <div class="box soft"><h3>假设</h3><p>多数玩家想正常推进游戏，因此构成正常行为分布。</p></div>
-        <div class="box warn"><h3>目标</h3><p>找出行为概率低、和多数玩家不同的人。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把一个社群行为问题改写成无标签异常检测问题。</p></div>
-    </section>
-
-    <section id="features">
-      <div class="head"><h2>第一步：玩家必须先变成向量</h2><span class="tag">FEATURE VECTOR</span></div>
-      <p>机器学习模型通常不能直接吃“一个玩家”这个抽象对象。我们需要把玩家表示成 feature vector。原稿举了两个特征：第一，说无关话的比例。游戏真正有效的输入是上下左右、A、B、Start 等，其他聊天内容可视为无关话。第二，在无政府状态下发言的比例。无政府状态会直接从输入流中选指令，可能更容易被捣乱者利用。</p>
-      <p>这两个特征都在 0 到 1 之间。一个玩家可以表示为 <code>x = [trash_talk_rate, anarchy_talk_rate]</code>。这当然只是简化例子，真实系统可以加入更多特征，例如指令重复率、反向指令比例、投票一致性、时间段行为等。但无论特征多少，第一关都是让每个样本变成可计算的向量。</p>
-      <table class="metric-table">
-        <tr><th>特征</th><th>含义</th><th>可能提供的线索</th></tr>
-        <tr><td>trash talk rate</td><td>无关发言占所有发言比例</td><td>过高可能不像认真玩游戏的人</td></tr>
-        <tr><td>anarchy talk rate</td><td>无政府状态下发言比例</td><td>过低或过高都可能和多数玩家不同</td></tr>
-        <tr><td>command consistency</td><td>指令是否跟主流目标一致</td><td>可衡量是否常做反向操作</td></tr>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>为一个无标签异常检测任务设计 2-3 个可计算特征。</p></div>
-    </section>
-
-    <section id="prob">
-      <div class="head"><h2>第二步：学习 p(x)，用概率替代信心分数</h2><span class="tag">PROBABILITY</span></div>
-      <p>有 classifier 时，我们用 confidence score 判断异常。没有 classifier 时，就学习 <code>p(x)</code>。它表示某种行为向量在训练资料分布下有多常见。若一个玩家有 1%-2% 的无关发言比例，且大约 80% 的发言发生在无政府状态，这可能落在高密度区域；若某人 60% 都在说无关话，或者很少在多数人都发言的状态发言，就可能落在低密度区域。</p>
-      <p>注意这里说的是概率模型，不是道德判断。低概率不等于一定是坏人，也不等于一定是 troll。它只说明这个行为向量不像多数训练玩家。异常检测系统的输出应该被看作候选线索，后续还需要结合规则、人工审查或业务决策。</p>
-      <div class="formula">
-        Train a probability model from x¹, ..., xᴺ<br>
-        if p(x_new) ≥ λ → normal<br>
-        if p(x_new) &lt; λ → anomaly candidate
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说明 <code>p(x)</code> 和 P30 的 confidence score 在角色上的相似处：都是给样本一个 normality 分数。</p></div>
-    </section>
-
-    <section id="density">
-      <div class="head"><h2>小交互：二维行为空间里的高低概率</h2><span class="tag">DENSITY</span></div>
-      <p>下面用简化二维密度图表示玩家分布。横轴是无关发言比例，纵轴是无政府状态发言比例。蓝色点是训练玩家，红点是待检查玩家。红点越靠近多数蓝点聚集区，概率越高；越远离高密度区域，概率越低。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>调整待检查玩家</h3>
-            <div class="slider-row"><label for="trashRate">无关发言比例</label><input id="trashRate" type="range" min="0" max="100" value="12"><strong id="trashRateOut">12%</strong></div>
-            <div class="slider-row"><label for="anarchyRate">无政府发言比例</label><input id="anarchyRate" type="range" min="0" max="100" value="78"><strong id="anarchyRateOut">78%</strong></div>
-            <div class="plane" id="plane"><span class="axis x"></span><span class="axis y"></span><span class="density" id="densityBlob"></span><span class="point test" id="testPoint"></span></div>
-            <div class="barrow"><span>相对 p(x)</span><div class="bar"><div class="fill" id="probBar"></div></div><strong id="probOut">0.86</strong></div>
-          </div>
-          <div class="viz-note">
-            <h3 id="densityTitle">高概率，像多数玩家</h3>
-            <p id="densityText">这个点接近训练玩家的高密度区域，当前概率分数较高。</p>
-          </div>
-        </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>用二维图解释为什么有些点直觉上正常，有些点直觉上异常。</p></div>
-    </section>
-
-    <section id="threshold">
-      <div class="head"><h2>第三步：阈值把概率变成决策</h2><span class="tag">THRESHOLD</span></div>
-      <p>概率模型只给分数，仍然需要阈值。阈值高，系统更严格，更多低到中等概率样本会被标为异常；阈值低，系统更宽松，只抓非常低概率样本。这个取舍和 P31 一样，需要 development set 或业务代价来决定。</p>
-      <p>还有一个技术提醒：连续变量中的 <code>p(x)</code> 更准确地说常常是概率密度，不是单点概率。初学时可以先把它理解为“模型认为这个位置常不常见的分数”。在实际实现中，常用 log likelihood，因为概率密度可能很小，直接相乘容易数值下溢。</p>
-      <div class="grid2">
-        <div class="box info"><h3>高 p(x)</h3><p>样本落在训练资料常见区域，倾向 normal。</p></div>
-        <div class="box warn"><h3>低 p(x)</h3><p>样本落在稀有区域，作为 anomaly candidate。</p></div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么概率模型输出后仍然需要 threshold 和评估指标。</p></div>
-    </section>
-
-    <section id="share">
-      <div class="head"><h2>公开分享速查：没有标签就学 p(x)</h2><span class="tag">quick reference</span></div>
-      <div class="grid2">
-        <div class="box soft">
-          <h3>核心直觉</h3>
-          <p>没有 label 时，模型无法学习“x 属于哪个 y”。于是问题改成：只看 x 本身，哪些行为常见，哪些行为稀有。常见行为高 p(x)，稀有行为低 p(x)。</p>
-          <p>低概率不等于犯罪或故障，只表示它不像大多数训练资料，应该进入复查队列。</p>
-        </div>
-        <div class="box warn">
-          <h3>Worked example</h3>
-          <p>玩家 A 99% 消息都与游戏无关，且总在无政府状态下刷屏。若大多数玩家这两个特征都很低，A 在二维行为空间会落到低密度区域。</p>
-          <p>模型输出低 likelihood 后，不应直接定性为恶意，而是标记为 anomaly candidate，再结合日志上下文复查。</p>
-        </div>
-      </div>
-      <table class="metric-table">
-        <tr><th>术语</th><th>精确定义</th><th>易混点</th></tr>
-        <tr><td>Unlabeled data</td><td>只有样本 x，没有类别 y。</td><td>不能假装有 y 去训练普通分类器。</td></tr>
-        <tr><td>Feature vector</td><td>把原始行为转成模型可学习的数值描述。</td><td>概率模型只能看到特征空间里的结构。</td></tr>
-        <tr><td>p(x) / density</td><td>样本在正常资料分布下的常见程度。</td><td>连续变量里常是密度，不是单点概率。</td></tr>
-        <tr><td>Likelihood score</td><td>把新样本代入模型得到的解释程度。</td><td>低 likelihood 是异常候选，不是最终罪名。</td></tr>
-        <tr><td>Log likelihood</td><td>用对数形式表示 likelihood，数值更稳定。</td><td>阈值也要在同一分数尺度上比较。</td></tr>
-      </table>
-      <div class="box info">
-        <h3>流程检查表</h3>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
         <ul>
-          <li>先把原始日志变成稳定、可解释的 feature vector。</li>
-          <li>只用 x 拟合正常行为分布，不伪造不存在的标签。</li>
-          <li>低 p(x) 只进入复查，不直接等同于恶意。</li>
+
         </ul>
       </div>
-    </section>
+    </div>
+  </header>
 
-    <section id="code">
-      <div class="head"><h2>最小代码：从玩家日志到 likelihood</h2><span class="tag">MINIMAL CODE</span></div>
-      <p>下面伪代码表达流程：先抽特征，再拟合概率模型，最后用 log likelihood 和阈值判断。</p>
-      <div class="codebar"><span class="label">正确示例：无标签异常检测流程</span><span class="kind">pseudo python</span></div>
-      <pre><code>players = load_player_logs()
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#setting">无标签设定：只有 x，没有 y</a>
+      <a href="#case">Twitch Plays Pokemon：多数玩家视为正常</a>
+      <a href="#features">第一步：玩家必须先变成向量</a>
+      <a href="#prob">第二步：学习 p(x)，用概率替代信心分数</a>
+      <a href="#density">小交互：二维行为空间里的高低概率</a>
+      <a href="#threshold">第三步：阈值把概率变成决策</a>
+      <a href="#share">公开分享速查：没有标签就学 p(x)</a>
+      <a href="#code">最小代码：从玩家日志到 likelihood</a>
+      <a href="#mistakes">常见误区与修正</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">MAP</span>
+        </div>
+<p>前几节有 classifier，所以可以问“分类器有多有信心”。P33 没有 label，因此没有 classifier。新的主线是 density estimation：用训练资料估计一个概率模型，描述 normal data 在 feature space 中怎么分布。新样本如果落在高概率区域，就像训练资料；如果落在低概率区域，就不像训练资料。</p>
+<p>无标签资料</p>
+<p>feature vector</p>
+<p>学习 p(x)</p>
+<p>likelihood score</p>
+<p>threshold 决策</p>
+      </section>
+      <section id="setting">
+        <div class="head">
+          <h2>无标签设定：只有 x，没有 y</h2>
+          <span class="tag">SETTING</span>
+        </div>
+<p>在 open set recognition 中，训练资料有已知类别标签，比如辛普森角色是谁。P33 的设定不同：我们只有大量样本 <code>x¹, x², ..., xᴺ</code>，没有 <code>y</code>。因此无法训练“输入 x 输出类别 y”的 classifier，也不能直接用 classifier confidence。</p>
+        <div class="box info">
+<h3>有标签 open set</h3>
+<p>有 <code>(x, y)</code>，先训练 classifier，再用 confidence 做 unknown 判断。</p>
+        </div>
+        <div class="box warn">
+<h3>无标签异常检测</h3>
+<p>只有 <code>x</code>，学习 <code>p(x)</code> 或类似 normality score。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>说明为什么没有 label 时，P30 的 classifier confidence 路线不能直接用。</p>
+        </div>
+      </section>
+      <section id="case">
+        <div class="head">
+          <h2>Twitch Plays Pokemon：多数玩家视为正常</h2>
+          <span class="tag">CASE</span>
+        </div>
+<p>Twitch Plays Pokemon 是一个多人共同操控宝可梦游戏的活动。大量玩家同时输入上下左右、A、B 等指令，系统从输入流中选指令执行。因为参与者很多，游戏过程非常混乱。人们怀疑其中可能存在 troll，也就是故意捣乱的玩家。</p>
+<p>样本每一个玩家是一笔资料 <code>x</code>。</p>
+<p>假设多数玩家想正常推进游戏，因此构成正常行为分布。</p>
+<p>目标找出行为概率低、和多数玩家不同的人。</p>
+      </section>
+      <section id="features">
+        <div class="head">
+          <h2>第一步：玩家必须先变成向量</h2>
+          <span class="tag">FEATURE</span>
+        </div>
+<p>机器学习模型通常不能直接吃“一个玩家”这个抽象对象。我们需要把玩家表示成 feature vector。原稿举了两个特征：第一，说无关话的比例。游戏真正有效的输入是上下左右、A、B、Start 等，其他聊天内容可视为无关话。第二，在无政府状态下发言的比例。无政府状态会直接从输入流中选指令，可能更容易被捣乱者利用。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>特征</th><th>含义</th><th>可能提供的线索</th></tr>
+<tr><td>trash talk rate</td><td>无关发言占所有发言比例</td><td>过高可能不像认真玩游戏的人</td></tr><tr><td>anarchy talk rate</td><td>无政府状态下发言比例</td><td>过低或过高都可能和多数玩家不同</td></tr><tr><td>command consistency</td><td>指令是否跟主流目标一致</td><td>可衡量是否常做反向操作</td></tr>
+        </table></div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>为一个无标签异常检测任务设计 2-3 个可计算特征。</p>
+        </div>
+      </section>
+      <section id="prob">
+        <div class="head">
+          <h2>第二步：学习 p(x)，用概率替代信心分数</h2>
+          <span class="tag">PROBABILITY</span>
+        </div>
+<p>有 classifier 时，我们用 confidence score 判断异常。没有 classifier 时，就学习 <code>p(x)</code>。它表示某种行为向量在训练资料分布下有多常见。若一个玩家有 1%-2% 的无关发言比例，且大约 80% 的发言发生在无政府状态，这可能落在高密度区域；若某人 60% 都在说无关话，或者很少在多数人都发言的状态发言，就可能落在低密度区域。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+Train a probability model from x¹, ..., xᴺ
+ if p(x_new) ≥ λ → normal
+ if p(x_new) < λ → anomaly candidate
+$$
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>说明 <code>p(x)</code> 和 P30 的 confidence score 在角色上的相似处：都是给样本一个 normality 分数。</p>
+        </div>
+      </section>
+      <section id="density">
+        <div class="head">
+          <h2>小交互：二维行为空间里的高低概率</h2>
+          <span class="tag">DENSITY</span>
+        </div>
+<p>下面用简化二维密度图表示玩家分布。横轴是无关发言比例，纵轴是无政府状态发言比例。蓝色点是训练玩家，红点是待检查玩家。红点越靠近多数蓝点聚集区，概率越高；越远离高密度区域，概率越低。</p>
+<p>相对 p(x)<b>0.86</b></p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>用二维图解释为什么有些点直觉上正常，有些点直觉上异常。</p>
+        </div>
+      </section>
+      <section id="threshold">
+        <div class="head">
+          <h2>第三步：阈值把概率变成决策</h2>
+          <span class="tag">THRESHOLD</span>
+        </div>
+<p>概率模型只给分数，仍然需要阈值。阈值高，系统更严格，更多低到中等概率样本会被标为异常；阈值低，系统更宽松，只抓非常低概率样本。这个取舍和 P31 一样，需要 development set 或业务代价来决定。</p>
+        <div class="box info">
+<h3>高 p(x)</h3>
+<p>样本落在训练资料常见区域，倾向 normal。</p>
+        </div>
+        <div class="box warn">
+<h3>低 p(x)</h3>
+<p>样本落在稀有区域，作为 anomaly candidate。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释为什么概率模型输出后仍然需要 threshold 和评估指标。</p>
+        </div>
+      </section>
+      <section id="share">
+        <div class="head">
+          <h2>公开分享速查：没有标签就学 p(x)</h2>
+          <span class="tag">quick</span>
+        </div>
+      <div class="grid2">
+        <div class="box soft">
+<h3>核心直觉</h3>
+<p>没有 label 时，模型无法学习“x 属于哪个 y”。于是问题改成：只看 x 本身，哪些行为常见，哪些行为稀有。常见行为高 p(x)，稀有行为低 p(x)。</p>
+<p>低概率不等于犯罪或故障，只表示它不像大多数训练资料，应该进入复查队列。</p>
+        </div>
+        <div class="box warn">
+<h3>Worked example</h3>
+<p>玩家 A 99% 消息都与游戏无关，且总在无政府状态下刷屏。若大多数玩家这两个特征都很低，A 在二维行为空间会落到低密度区域。</p>
+<p>模型输出低 likelihood 后，不应直接定性为恶意，而是标记为 anomaly candidate，再结合日志上下文复查。</p>
+<table class="metric-table">
+<tr><th>术语</th><th>精确定义</th><th>易混点</th></tr>
+<tr><td>Unlabeled data</td><td>只有样本 x，没有类别 y。</td><td>不能假装有 y 去训练普通分类器。</td></tr>
+<tr><td>Feature vector</td><td>把原始行为转成模型可学习的数值描述。</td><td>概率模型只能看到特征空间里的结构。</td></tr>
+<tr><td>p(x) / density</td><td>样本在正常资料分布下的常见程度。</td><td>连续变量里常是密度，不是单点概率。</td></tr>
+<tr><td>Likelihood score</td><td>把新样本代入模型得到的解释程度。</td><td>低 likelihood 是异常候选，不是最终罪名。</td></tr>
+<tr><td>Log likelihood</td><td>用对数形式表示 likelihood，数值更稳定。</td><td>阈值也要在同一分数尺度上比较。</td></tr>
+</table>
+        </div>
+        <div class="box info">
+<h3>流程检查表</h3>
+<ul>
+<li>先把原始日志变成稳定、可解释的 feature vector。</li>
+<li>只用 x 拟合正常行为分布，不伪造不存在的标签。</li>
+<li>低 p(x) 只进入复查，不直接等同于恶意。</li>
+</ul>
+        </div>
+      </div>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：从玩家日志到 likelihood</h2>
+          <span class="tag">MINIMAL</span>
+        </div>
+<p>下面伪代码表达流程：先抽特征，再拟合概率模型，最后用 log likelihood 和阈值判断。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">players = load_player_logs()
 X = [extract_features(player) for player in players]
 
 density_model = fit_probability_model(X)
 log_p = density_model.log_prob(x_new)
 
-if log_p < threshold:
-    label = <span class="str">"anomaly candidate"</span>
+if log_p &lt; threshold:
+ label = "anomaly candidate"
 else:
-    label = <span class="str">"normal"</span></code></pre>
-      <div class="codebar"><span class="label">正确示例：玩家特征</span><span class="kind">pseudo python</span></div>
-      <pre><code>features = [
-    trash_talk_count / total_messages,
-    anarchy_messages / total_messages,
-    repeated_commands / total_commands,
+ label = "normal"</code></pre>
+<p>正确示例：玩家特征pseudo python</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text">features = [
+ trash_talk_count / total_messages,
+ anarchy_messages / total_messages,
+ repeated_commands / total_commands,
 ]</code></pre>
-      <div class="codebar error"><span class="label">错误示例：没有 label 却硬训练 classifier</span><span class="kind">pseudo</span></div>
-      <pre><code><span class="cmt"># 错误：没有 y，却写成监督分类。</span>
+<p>错误示例：没有 label 却硬训练 classifierpseudo</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-3">复制</button></div>
+        <pre id="code-code-3" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误：没有 y，却写成监督分类。
 model.fit(X, y)
 
-<span class="cmt"># 修正：无标签时先考虑 p(x)、距离、重建误差等 normality score。</span></code></pre>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>写出一个无标签异常检测的最小数据流：feature extraction → density model → threshold。</p></div>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区与修正</h2><span class="tag">PITFALLS</span></div>
+# 修正：无标签时先考虑 p(x)、距离、重建误差等 normality score。</code></pre>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与修正</h2>
+          <span class="tag">PITFALLS</span>
+        </div>
       <div class="grid2">
-        <div class="box redsoft"><h3>误区 1：没有 label 就不能做异常检测</h3><p>错因：只知道 classifier 路线。后果：忽略无监督 normality score。修法：学习 <code>p(x)</code> 或其他分布分数。</p></div>
-        <div class="box redsoft"><h3>误区 2：低概率一定等于坏人</h3><p>错因：把统计异常当道德判断。后果：误伤罕见但正常行为。修法：说 anomaly candidate，并结合后续检查。</p></div>
-        <div class="box redsoft"><h3>误区 3：feature 随便选都可以</h3><p>错因：低估表示的重要性。后果：概率模型学到无用分布。修法：特征要和异常行为机制有关。</p></div>
-        <div class="box redsoft"><h3>误区 4：二维边缘分布足够判断所有异常</h3><p>错因：只看单一维度。后果：忽略特征组合异常。修法：看联合分布 <code>p(x)</code>。</p></div>
-        <div class="box redsoft"><h3>误区 5：高 p(x) 样本永远正常</h3><p>错因：把模型分数绝对化。后果：漏掉伪装成常见行为的异常。修法：理解模型假设和特征覆盖范围。</p></div>
-        <div class="box redsoft"><h3>误区 6：阈值可以脱离评估来定</h3><p>错因：忘记 P31 的评估逻辑。后果：误报漏报不可控。修法：用 dev set 或 cost table 选 threshold。</p></div>
+        <div class="box redsoft">
+<h3>误区 1：没有 label 就不能做异常检测</h3>
+<p>错因：只知道 classifier 路线。后果：忽略无监督 normality score。修法：学习 <code>p(x)</code> 或其他分布分数。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 2：低概率一定等于坏人</h3>
+<p>错因：把统计异常当道德判断。后果：误伤罕见但正常行为。修法：说 anomaly candidate，并结合后续检查。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 3：feature 随便选都可以</h3>
+<p>错因：低估表示的重要性。后果：概率模型学到无用分布。修法：特征要和异常行为机制有关。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 4：二维边缘分布足够判断所有异常</h3>
+<p>错因：只看单一维度。后果：忽略特征组合异常。修法：看联合分布 <code>p(x)</code>。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 5：高 p(x) 样本永远正常</h3>
+<p>错因：把模型分数绝对化。后果：漏掉伪装成常见行为的异常。修法：理解模型假设和特征覆盖范围。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 6：阈值可以脱离评估来定</h3>
+<p>错因：忘记 P31 的评估逻辑。后果：误报漏报不可控。修法：用 dev set 或 cost table 选 threshold。</p>
+        </div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>检查一个无标签异常检测方案是否说清楚了特征、概率模型、阈值和输出含义。</p>
+        </div>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>检查一个无标签异常检测方案是否说清楚了特征、概率模型、阈值和输出含义。</p></div>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>做题前先抓主线</strong><p>P33 的核心是：没有 label 时，不能训练分类器；先把样本转成向量，再学习 <code>p(x)</code>，用低概率找异常候选。</p></div>
-        <div class="review-card"><strong>自检重点</strong><ul><li>能不能区分 confidence score 和 likelihood？</li><li>能不能设计 feature vector？</li><li>能不能解释概率低只是候选异常？</li></ul></div>
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、基础设定</h3></div>
+          <div class="quick-review">作答提示 回答时明确只有 x，没有 y。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. P33 的设定和 P30 最大差别是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="P33 没有标签，不能先训练已知类分类器">P33 没有标签，不能先训练已知类分类器</label>
+      <label><input type="radio" name="q?" value="P33 不需要任何训练资料">P33 不需要任何训练资料</label>
+      <label><input type="radio" name="q?" value="P33 只能处理图像">P33 只能处理图像</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、基础设定</h3><p>先检查你是否理解无标签异常检测。</p></div><div class="quick-review"><b>作答提示</b><span>回答时明确只有 x，没有 y。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q01" data-role="homework"><div class="q-meta"><span class="pill">选择</span></div><h3>1. P33 的设定和 P30 最大差别是什么？</h3><div class="choices"><label><input type="radio" name="q01" value="P33 没有标签，不能先训练已知类分类器">P33 没有标签，不能先训练已知类分类器</label><label><input type="radio" name="q01" value="P33 不需要任何训练资料">P33 不需要任何训练资料</label><label><input type="radio" name="q01" value="P33 只能处理图像">P33 只能处理图像</label></div></div>
-          <div class="q" id="q02" data-role="homework"><div class="q-meta"><span class="pill">判断</span></div><h3>2. 无标签异常检测可以学习 <code>p(x)</code>，用低概率样本作为异常候选。</h3><div class="choices"><label><input type="radio" name="q02" value="对">对</label><label><input type="radio" name="q02" value="错">错</label></div></div>
-          <div class="q" id="q03" data-role="homework"><div class="q-meta"><span class="pill">填空</span></div><h3>3. 在 P33 中，每一个玩家被看作一笔资料 ______。</h3><input type="text" id="ans03" placeholder="写符号"></div>
-          <div class="q" id="q04" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>4. 为什么没有 label 时不能直接套用 P30 的 classifier confidence 方法？</h3><textarea id="ans04" placeholder="从没有 y、不能训练已知类分类器回答。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 2. 无标签异常检测可以学习 <code>p(x)</code>，用低概率样本作为异常候选。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 3. 在 P33 中，每一个玩家被看作一笔资料 ______。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 4. 为什么没有 label 时不能直接套用 P30 的 classifier confidence 方法？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、特征与概率</h3><p>这组题检查你能否把真实对象变成向量。</p></div><div class="quick-review"><b>作答提示</b><span>特征要能反映行为模式。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q05" data-role="homework"><div class="q-meta"><span class="pill">匹配</span></div><h3>5. 写出 Twitch 玩家例子中的两个特征，并说明它们的含义。</h3><textarea id="ans05" placeholder="例：trash talk rate → ...；anarchy talk rate → ..."></textarea></div>
-          <div class="q" id="q06" data-role="homework"><div class="q-meta"><span class="pill">选择</span></div><h3>6. 若多数玩家大约 1%-2% 的时间说无关话，一个 60% 无关话的玩家为什么可疑？</h3><div class="choices"><label><input type="radio" name="q06" value="它落在训练资料低概率区域">它落在训练资料低概率区域</label><label><input type="radio" name="q06" value="它一定已经有 label">它一定已经有 label</label><label><input type="radio" name="q06" value="它让 classifier confidence 变高">它让 classifier confidence 变高</label></div></div>
-          <div class="q" id="q07" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>7. 为什么只看单一特征的边缘分布可能不够？</h3><textarea id="ans07" placeholder="从特征组合、联合分布回答。"></textarea></div>
-          <div class="q" id="q08" data-role="homework"><div class="q-meta"><span class="pill">场景</span></div><h3>8. 你要检测论坛异常用户，请设计三个 feature。</h3><textarea id="ans08" placeholder="例如发帖频率、重复文本比例、深夜发言比例等，并说明原因。"></textarea></div>
+        <div class="group-head">
+          <div><h3>二、特征与概率</h3></div>
+          <div class="quick-review">作答提示 特征要能反映行为模式。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">匹配</span></div>
+        <h3><b>Q:</b> 5. 写出 Twitch 玩家例子中的两个特征，并说明它们的含义。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 6. 若多数玩家大约 1%-2% 的时间说无关话，一个 60% 无关话的玩家为什么可疑？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="它落在训练资料低概率区域">它落在训练资料低概率区域</label>
+      <label><input type="radio" name="q?" value="它一定已经有 label">它一定已经有 label</label>
+      <label><input type="radio" name="q?" value="它让 classifier confidence 变高">它让 classifier confidence 变高</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、模型与阈值</h3><p>这组题检查你能否从概率分数做决策。</p></div><div class="quick-review"><b>作答提示</b><span>高 p(x) 像训练资料，低 p(x) 是候选异常。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q09" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>9. <code>p(x)</code> 在无标签异常检测里扮演什么角色？</h3><textarea id="ans09" placeholder="把它和 P30 的 confidence score 对照。"></textarea></div>
-          <div class="q" id="q10" data-role="homework"><div class="q-meta"><span class="pill">判断</span></div><h3>10. 连续特征里常用 log likelihood，是因为直接概率密度数值可能很小。</h3><div class="choices"><label><input type="radio" name="q10" value="对">对</label><label><input type="radio" name="q10" value="错">错</label></div></div>
-          <div class="q" id="q11" data-role="homework"><div class="q-meta"><span class="pill">计算</span></div><h3>11. 若阈值是 -5，某玩家 log p(x)=-8，应判为 normal 还是 anomaly candidate？为什么？</h3><textarea id="ans11" placeholder="写出比较关系。"></textarea></div>
-          <div class="q" id="q12" data-role="homework"><div class="q-meta"><span class="pill">短答</span></div><h3>12. 为什么低概率只能说是异常候选，而不能直接断定玩家是恶意小白？</h3><textarea id="ans12" placeholder="从统计异常和真实意图不同回答。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 7. 为什么只看单一特征的边缘分布可能不够？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景</span></div>
+        <h3><b>Q:</b> 8. 你要检测论坛异常用户，请设计三个 feature。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>四、错误诊断与迁移</h3><p>这组题要求定位错因、后果和修法。</p></div><div class="quick-review"><b>作答提示</b><span>错误示例题按“错在哪 / 后果 / 修法”写。</span></div></div>
-        <div class="drill-grid">
-          <div class="q full" id="q13" data-role="homework"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>13. 错误示例：有人没有任何 label，却写了 model.fit(X, y)。请诊断。</h3><textarea id="ans13" placeholder="指出 y 不存在，应改用 p(x) 或其他 normality score。"></textarea></div>
-          <div class="q" id="q14" data-role="homework"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>14. 错误示例：有人说“概率模型觉得罕见，所以这个玩家一定是恶意”。请诊断。</h3><textarea id="ans14" placeholder="区分统计罕见和恶意意图。"></textarea></div>
-          <div class="q" id="q15" data-role="homework"><div class="q-meta"><span class="pill">场景应用</span></div><h3>15. 你要检测服务器异常行为，但没有攻击标签。请写出无标签概率模型方案。</h3><textarea id="ans15" placeholder="说明特征、拟合 p(x)、阈值、候选异常。"></textarea></div>
-          <div class="q" id="q16" data-role="homework"><div class="q-meta"><span class="pill">面试短答</span></div><h3>16. 用 2-3 句话回答：feature engineering 在无标签异常检测中为什么重要？</h3><textarea id="ans16" placeholder="从模型只能学习特征空间中的分布回答。"></textarea></div>
+        <div class="group-head">
+          <div><h3>三、模型与阈值</h3></div>
+          <div class="quick-review">作答提示 高 p(x) 像训练资料，低 p(x) 是候选异常。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 9. <code>p(x)</code> 在无标签异常检测里扮演什么角色？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 10. 连续特征里常用 log likelihood，是因为直接概率密度数值可能很小。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>五、表达输出</h3><p>最后两题检查你能否把整节课讲成一条主线。</p></div><div class="quick-review"><b>作答提示</b><span>关键词：unlabeled、feature vector、Twitch、p(x)、likelihood、threshold、anomaly candidate。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" id="q17" data-role="homework"><div class="q-meta"><span class="pill">综合短答</span></div><h3>17. 请比较 P30 的 confidence score 和 P33 的 likelihood score：它们相同和不同在哪里？</h3><textarea id="ans17" placeholder="相同：都是 normality 分数；不同：来源是 classifier vs probability model。"></textarea></div>
-          <div class="q full" id="q18" data-role="homework"><div class="q-meta"><span class="pill">费曼题</span></div><h3>18. 费曼题：请用 5-7 句话向只懂分类器的人解释，没有 label 时如何做异常检测。</h3><textarea id="ans18" placeholder="必须串联：只有 x、特征向量、学习 p(x)、高低概率、阈值、异常候选、Twitch 例子。"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">计算</span></div>
+        <h3><b>Q:</b> 11. 若阈值是 -5，某玩家 log p(x)=-8，应判为 normal 还是 anomaly candidate？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 12. 为什么低概率只能说是异常候选，而不能直接断定玩家是恶意小白？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>六、低摩擦核对与迁移</h3><p>快速判断无标签流程是否成立，并迁移到新日志。</p></div><div class="quick-review"><b>作答提示</b><span>所有题都先问：我到底有没有 y？</span></div></div>
+        <div class="group-head">
+          <div><h3>四、错误诊断与迁移</h3></div>
+          <div class="quick-review">作答提示 错误示例题按“错在哪 / 后果 / 修法”写。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" id="q19" data-role="homework"><div class="q-meta"><span class="pill">判断</span><span class="pill">低摩擦</span></div><h3>19. 没有 label 时，核心目标是学习 p(y|x) 还是 p(x)？</h3><div class="choices"><label><input type="radio" name="q19" value="学习 p(x)，也就是样本本身的常见程度。">学习 p(x)，也就是样本本身的常见程度。</label><label><input type="radio" name="q19" value="学习 p(y|x)，因为分类器总需要标签。">学习 p(y|x)，因为分类器总需要标签。</label></div></div>
-          <div class="q" id="q20" data-role="homework"><div class="q-meta"><span class="pill">填空</span><span class="pill">低摩擦</span></div><h3>20. 一个样本 log likelihood 很低，页面建议把它称为什么，而不是直接定罪？</h3><input type="text" placeholder="写出 anomaly candidate / 异常候选等。"></div>
-          <div class="q" id="q21" data-role="homework"><div class="q-meta"><span class="pill">迁移</span><span class="pill">账号安全</span></div><h3>21. 你有一批未标注账号登录记录。请设计三个 feature，并说明它们为什么能帮助学习 p(x)。</h3><textarea placeholder="例如登录时段熵、地区切换频率、失败率、设备数量等。"></textarea></div>
-          <div class="q" id="q22" data-role="homework"><div class="q-meta"><span class="pill">迁移</span><span class="pill">复查流程</span></div><h3>22. 对低 likelihood 账号，你会如何设计人工复查与阈值调整流程？</h3><textarea placeholder="从告警队列、误报反馈、阈值、特征修正和安全处置回答。"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 13. 错误示例：有人没有任何 label，却写了 model.fit(X, y)。请诊断。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 14. 错误示例：有人说“概率模型觉得罕见，所以这个玩家一定是恶意”。请诊断。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">场景应用</span></div>
+        <h3><b>Q:</b> 15. 你要检测服务器异常行为，但没有攻击标签。请写出无标签概率模型方案。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">面试短答</span></div>
+        <h3><b>Q:</b> 16. 用 2-3 句话回答：feature engineering 在无标签异常检测中为什么重要？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、表达输出</h3></div>
+          <div class="quick-review">作答提示 关键词：unlabeled、feature vector、Twitch、p(x)、likelihood、threshold、anomaly candidate。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">综合短答</span></div>
+        <h3><b>Q:</b> 17. 请比较 P30 的 confidence score 和 P33 的 likelihood score：它们相同和不同在哪里？</h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼题</span></div>
+        <h3><b>Q:</b> 18. 费曼题：请用 5-7 句话向只懂分类器的人解释，没有 label 时如何做异常检测。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>六、低摩擦核对与迁移</h3></div>
+          <div class="quick-review">作答提示 所有题都先问：我到底有没有 y？ --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 19. 没有 label 时，核心目标是学习 p(y|x) 还是 p(x)？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="学习 p(x)，也就是样本本身的常见程度。">学习 p(x)，也就是样本本身的常见程度。</label>
+      <label><input type="radio" name="q?" value="学习 p(y|x)，因为分类器总需要标签。">学习 p(y|x)，因为分类器总需要标签。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 20. 一个样本 log likelihood 很低，页面建议把它称为什么，而不是直接定罪？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 21. 你有一批未标注账号登录记录。请设计三个 feature，并说明它们为什么能帮助学习 p(x)。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 22. 对低 likelihood 账号，你会如何设计人工复查与阈值调整流程？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
-      <p>完成练习后生成记录，方便你回看自己的判断链路。若有遗漏，页面会先提示哪些题还没写。</p>
-      <div class="quality" id="qualityBox"></div>
-      <div class="answer" id="answerBox">还没有生成记录。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" class="ghost" onclick="generateRecord()">生成记录</button>
-        <button type="button" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-const progress = document.getElementById('readProgress');
-window.addEventListener('scroll', () => {
-  const h = document.documentElement;
-  const max = h.scrollHeight - h.clientHeight;
-  progress.style.width = max > 0 ? (h.scrollTop / max * 100) + '%' : '0%';
-});
+      </ul>
+    </section>
+  </article>
 
-const trainPoints = [
-  [9,76],[12,82],[7,78],[15,80],[10,70],[18,83],[6,74],[14,88],[20,79],[11,85],[4,68],[16,72]
-];
-function gaussianScore(x,y){
-  const cx = 12, cy = 78, sx = 16, sy = 18;
-  const d = ((x-cx)*(x-cx))/(2*sx*sx) + ((y-cy)*(y-cy))/(2*sy*sy);
-  return Math.exp(-d);
-}
-function drawDensity(){
-  const plane = document.getElementById('plane');
-  plane.querySelectorAll('.point:not(.test), .density').forEach(x => x.remove());
-  const blob = document.createElement('span');
-  blob.className = 'density';
-  blob.style.left = '12%';
-  blob.style.top = '22%';
-  blob.style.width = '210px';
-  blob.style.height = '190px';
-  plane.appendChild(blob);
-  trainPoints.forEach(p => {
-    const dot = document.createElement('span');
-    dot.className = 'point';
-    dot.style.left = p[0] + '%';
-    dot.style.top = (100 - p[1]) + '%';
-    plane.appendChild(dot);
-  });
-  plane.appendChild(document.getElementById('testPoint'));
-}
-function updateDensity(){
-  drawDensity();
-  const trash = Number(document.getElementById('trashRate').value);
-  const anarchy = Number(document.getElementById('anarchyRate').value);
-  document.getElementById('trashRateOut').textContent = trash + '%';
-  document.getElementById('anarchyRateOut').textContent = anarchy + '%';
-  const test = document.getElementById('testPoint');
-  test.style.left = trash + '%';
-  test.style.top = (100 - anarchy) + '%';
-  const score = gaussianScore(trash, anarchy);
-  document.getElementById('probBar').style.width = Math.round(score*100) + '%';
-  document.getElementById('probOut').textContent = score.toFixed(2);
-  const title = document.getElementById('densityTitle');
-  const text = document.getElementById('densityText');
-  if(score > 0.65){
-    title.textContent = '高概率，像多数玩家';
-    text.textContent = '这个点接近训练玩家的高密度区域，当前概率分数较高。';
-  }else if(score > 0.25){
-    title.textContent = '中等概率，边界样本';
-    text.textContent = '这个点离高密度区域有一点距离，是否报警要看阈值和任务代价。';
-  }else{
-    title.textContent = '低概率，异常候选';
-    text.textContent = '这个点远离多数训练玩家的分布，可以作为异常候选，但仍需后续判断。';
-  }
-}
-document.getElementById('trashRate').addEventListener('input', updateDensity);
-document.getElementById('anarchyRate').addEventListener('input', updateDensity);
-updateDensity();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-function readQuestion(q){
-  const title = q.querySelector('h3')?.innerText.trim() || q.id;
-  const checked = Array.from(q.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(x => x.value);
-  const fields = Array.from(q.querySelectorAll('textarea,input[type="text"],select')).map(x => x.value.trim()).filter(Boolean);
-  const answer = checked.concat(fields).join('；');
-  return {title, answer};
-}
-function generateRecord(){
-  const qs = Array.from(document.querySelectorAll(".q[data-role='homework']"));
-  const rows = qs.map(readQuestion);
-  const missing = rows.filter(x => !x.answer);
-  const now = new Date();
-  const lines = [];
-  lines.push('# P33 异常检测 5：无标签概率模型｜练习记录');
-  lines.push('');
-  lines.push('- 生成时间：' + now.toLocaleString());
-  lines.push('- 题目数量：' + qs.length);
-  lines.push('');
-  rows.forEach((row, i) => {
-    lines.push('## ' + String(i + 1).padStart(2, '0') + ' ' + row.title);
-    lines.push(row.answer ? row.answer : '（未填写）');
-    lines.push('');
-  });
-  document.getElementById('answerBox').textContent = lines.join('\n');
-  const quality = document.getElementById('qualityBox');
-  quality.style.display = 'block';
-  if(missing.length){
-    quality.textContent = '还有 ' + missing.length + ' 题没有填写：' + missing.map(x => x.title.replace(/^\d+\.\s*/, '')).join('；');
-  }else{
-    quality.textContent = '已生成完整记录。复盘时重点看：是否说清只有 x 没有 y，是否能解释 feature vector 和 p(x)，是否把低概率说成候选异常而不是定罪。';
-  }
-}
-function copyRecord(){
-  const text = document.getElementById('answerBox').textContent;
-  if(!text || text.includes('还没有生成')) generateRecord();
-  const finalText = document.getElementById('answerBox').textContent;
-  if(navigator.clipboard){
-    navigator.clipboard.writeText(finalText).then(() => {
-      document.getElementById('qualityBox').style.display = 'block';
-      document.getElementById('qualityBox').textContent = '记录已复制。';
-    }).catch(() => fallbackCopy(finalText));
-  }else{
-    fallbackCopy(finalText);
-  }
-}
-function fallbackCopy(text){
-  const area = document.createElement('textarea');
-  area.value = text;
-  document.body.appendChild(area);
-  area.select();
-  document.execCommand('copy');
-  area.remove();
-  document.getElementById('qualityBox').style.display = 'block';
-  document.getElementById('qualityBox').textContent = '记录已复制。';
-}
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

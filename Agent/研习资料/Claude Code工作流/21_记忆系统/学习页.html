@@ -4,231 +4,451 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>21 记忆系统｜Claude Code 工作流</title>
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
-<body>
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>Claude Code 工作流</strong><span>21｜记忆系统</span></div>
-    <nav>
-      <a href="#goal"><span class="dot"></span>目标与主线</a>
-      <a href="#why"><span class="dot"></span>为什么需要记忆</a>
-      <a href="#save"><span class="dot"></span>保存记忆</a>
-      <a href="#load"><span class="dot"></span>加载注入</a>
-      <a href="#criteria"><span class="dot"></span>什么值得存</a>
-      <a href="#pitfall"><span class="dot"></span>常见误区</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>整理学习答案</a>
-    </nav>
-    <div class="side-note">Memory 不是把所有聊天都存起来，而是保存跨会话仍有价值、当前仓库又推导不出的偏好和事实。</div>
-  </aside>
-  <main>
-    <header class="hero" id="goal">
-      <div>
-        <div class="kicker">Memory system</div>
-        <h1>记忆系统</h1>
-        <p class="muted">记忆系统让 Agent 不必每次从零开始。用户表达稳定偏好后，模型可调用 `save_memory`，把记忆写入 `.memory/*.md` 并重建 `.memory/memory.md` 索引。下一轮 `build_system_prompt` 会加载 memory prompt，把相关记忆注入 system prompt，于是新会话也能遵循用户偏好。</p>
-        <div class="map">
-          <span class="node">用户表达偏好</span><span class="arrow">→</span>
-          <span class="node">save_memory</span><span class="arrow">→</span>
-          <span class="node">.memory/*.md</span><span class="arrow">→</span>
-          <span class="node">memory index</span><span class="arrow">→</span>
-          <span class="node">system prompt</span>
-        </div>
-        <p>学完本页，你应该能判断什么信息值得进 Memory，也能解释 Memory 与 CLAUDE.md、Skill、上下文压缩的区别。</p>
-      </div>
-      <div class="box soft">
-        <h3>来源材料</h3>
-        <p>视频：《Learn Claude Code 源码详解》告别每次从零开始：记忆系统，开发实战分享屋，2026-04-17。</p>
-        <p>重点：`MemoryManager`、`.memory` 目录、`save_memory`、frontmatter、memory index、system prompt 注入、记忆选择标准。</p>
-      </div>
-    </header>
+<body data-course="Claude Code 工作流" data-unit="21">
 
-    <section id="why">
-      <div class="head"><h2>1. Memory 在 Agent loop 中动态读写</h2><span class="tag">not static</span></div>
-      <p>`CLAUDE.md` 和 Skill 更像启动时加载的静态指导材料；Memory 不同，它是在 Agent loop 过程中读写的。开始时可能没有 memory，用户表达偏好后，模型会调用 `save_memory` 工具，把偏好保存下来。下一轮构建 system prompt 时，再把这些记忆注入给模型。</p>
-      <p>视频里的例子是：用户说自己喜欢 Python 文件里定义 `main` 函数。第一次模型可能先修改当前文件，再调用 `save_memory` 记录这个偏好。之后用户让生成 `greet.py`，即使没再次说明，模型也会生成带 `main()` 的 Python 文件。</p>
-      <p>术语边界：聊天历史保存当前会话的上下文，Memory 保存跨会话仍值得复用的稳定事实；项目配置描述当前代码库规则，Memory 描述用户偏好、长期约定或外部事实。三者都能影响模型，但生命周期和来源不同。</p>
-      <div class="grid2">
-        <div class="box warn">
-          <h3>无记忆</h3>
-          <p>每轮像第一次合作，用户偏好需要反复说明。</p>
-        </div>
-        <div class="box ok">
-          <h3>有记忆</h3>
-          <p>跨会话保留偏好、反馈和项目参考，让 Agent 更像持续合作伙伴。</p>
-        </div>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">Claude Code 工作流</a>
+        <span class="sep">/</span>
+        <span>21</span>
       </div>
-    </section>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <section id="save">
-      <div class="head"><h2>2. 保存记忆：写文件并重建索引</h2><span class="tag">save_memory</span></div>
-      <p>`MemoryManager` 初始化时指定 `.memory` 目录，并维护内存中的 `memories` 字典。`save_memory(name, description, type, content)` 会先校验 memory type，再规范化 name，创建 `.memory` 目录，写入一个带 frontmatter 的 Markdown 文件。</p>
-      <div class="codebar"><span class="label">记忆文件示例：Python main 偏好</span><span>Markdown</span></div>
-      <pre><code>---
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Memory system</div>
+      <div class="hero-meta">
+        <span class="hero-badge">21</span>
+      </div>
+      <h1 class="hero-title">21 记忆系统｜Claude Code 工作流</h1>
+      <p class="hero-desc">记忆系统让 Agent 不必每次从零开始。用户表达稳定偏好后，模型可调用 `save_memory`，把记忆写入 `.memory/*.md` 并重建 `.memory/memory.md` 索引。下一轮 `build_system_prompt` 会加载 memory prompt，把相关记忆注入 system prompt，于是新会话也能遵循用户偏好。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../20_Hook系统/学习页.html">上一节</a>
+            <a href="../22_错误恢复/学习页.html">下一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#why">1. Memory 在 Agent loop 中动态读写</a>
+      <a href="#save">2. 保存记忆：写文件并重建索引</a>
+      <a href="#load">3. 加载记忆：构建 system prompt 时注入</a>
+      <a href="#criteria">4. 什么值得进入 Memory</a>
+      <a href="#pitfall">5. 常见误区：Memory 不是聊天记录仓库</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
+      <section id="why">
+        <div class="head">
+          <h2>1. Memory 在 Agent loop 中动态读写</h2>
+          <span class="tag">not</span>
+        </div>
+<p><code>CLAUDE.md</code> 和 Skill 更像启动时加载的静态指导材料；Memory 不同，它是在 Agent loop 过程中读写的。开始时可能没有 memory，用户表达偏好后，模型会调用 <code>save_memory</code> 工具，把偏好保存下来。下一轮构建 system prompt 时，再把这些记忆注入给模型。</p>
+<p>术语边界：聊天历史保存当前会话的上下文，Memory 保存跨会话仍值得复用的稳定事实；项目配置描述当前代码库规则，Memory 描述用户偏好、长期约定或外部事实。三者都能影响模型，但生命周期和来源不同。</p>
+        <div class="box">
+<h3>有记忆</h3>
+<p>跨会话保留偏好、反馈和项目参考，让 Agent 更像持续合作伙伴。</p>
+        </div>
+      </section>
+      <section id="save">
+        <div class="head">
+          <h2>2. 保存记忆：写文件并重建索引</h2>
+          <span class="tag">save_memory</span>
+        </div>
+<p><code>MemoryManager</code> 初始化时指定 <code>.memory</code> 目录，并维护内存中的 <code>memories</code> 字典。<code>save_memory(name, description, type, content)</code> 会先校验 memory type，再规范化 name，创建 <code>.memory</code> 目录，写入一个带 frontmatter 的 Markdown 文件。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-save-1">复制</button></div>
+        <pre id="code-save-1" data-export-context="代码" data-export-lang="text"><code class="language-text">---
 name: python_main_convention
 description: User prefers main function in Python files
 type: user
 ---
 
 When creating Python files, always define a main function.</code></pre>
-      <p>写入文件后，系统还会更新内存字典，并调用 `rebuild_index()`。索引文件 `.memory/memory.md` 像目录，列出当前有哪些 memory、类型和描述。这样模型可以先看到索引，再按需要引用具体记忆。</p>
-      <div class="codebar"><span class="label">索引文件示例：memory.md</span><span>Markdown</span></div>
-      <pre><code># Memory Index
-
-- python_main_convention [user]: User prefers main function in Python files</code></pre>
-      <p>保存流程里有两个容易漏的细节。第一，name 要规范化成稳定文件名，避免同一偏好出现多个拼写版本。第二，保存后要重建索引，否则下一轮模型可能只看到旧目录，看不到刚写入的记忆。</p>
-    </section>
-
-    <section id="load">
-      <div class="head"><h2>3. 加载记忆：构建 system prompt 时注入</h2><span class="tag">load prompt</span></div>
-      <p>每轮 Agent loop 开始时，`build_system_prompt` 会尝试加载 memory prompt。如果当前没有 memories，就只加入 memory guidance，告诉模型什么时候该调用 `save_memory`、什么时候不该保存。如果有 memory，就按类型分组，把 description 和 content 加入 system prompt。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div class="viz-cell">
-            <div class="viz-actions">
-              <button data-memory="empty" class="active">无记忆</button>
-              <button data-memory="save">保存偏好</button>
-              <button data-memory="index">重建索引</button>
-              <button data-memory="inject">注入提示词</button>
-            </div>
-            <div class="memory-view" id="memoryText"></div>
-          </div>
-          <div class="viz-cell">
-            <h3 id="memoryTitle">无记忆启动</h3>
-            <p id="memoryExplain">说明会显示在这里。</p>
-            <div class="mem-step" data-mem-step="load">1. load_all</div>
-            <div class="mem-step" data-mem-step="save">2. save_memory</div>
-            <div class="mem-step" data-mem-step="index">3. rebuild_index</div>
-            <div class="mem-step" data-mem-step="prompt">4. build_system_prompt</div>
-            <div class="viz-note">Memory 最终会占用上下文窗口，所以必须只存真正值得跨会话保留的信息。</div>
-          </div>
+<p>写入文件后，系统还会更新内存字典，并调用 <code>rebuild_index()</code>。索引文件 <code>.memory/memory.md</code> 像目录，列出当前有哪些 memory、类型和描述。这样模型可以先看到索引，再按需要引用具体记忆。</p>
         </div>
-      </div>
-      <div class="codebar"><span class="label">Worked example：从用户反馈到下一轮行为</span><span>Flow</span></div>
-      <pre><code>第 1 轮：
-  用户：以后生成 Python 脚本时，请保留 main() 和 if __name__ == "__main__"。
-  Agent：调用 save_memory，写入 python_entrypoint_preference。
-  MemoryManager：写 .memory/python_entrypoint_preference.md 并重建 memory.md。
+<p>索引文件示例：memory.mdMarkdown</p>
+<p>保存流程里有两个容易漏的细节。第一，name 要规范化成稳定文件名，避免同一偏好出现多个拼写版本。第二，保存后要重建索引，否则下一轮模型可能只看到旧目录，看不到刚写入的记忆。</p>
+      </section>
+      <section id="load">
+        <div class="head">
+          <h2>3. 加载记忆：构建 system prompt 时注入</h2>
+          <span class="tag">load</span>
+        </div>
+<p>每轮 Agent loop 开始时，<code>build_system_prompt</code> 会尝试加载 memory prompt。如果当前没有 memories，就只加入 memory guidance，告诉模型什么时候该调用 <code>save_memory</code>、什么时候不该保存。如果有 memory，就按类型分组，把 description 和 content 加入 system prompt。</p>
+<p>无记忆启动</p>
+<p>说明会显示在这里。</p>
+<ol>
+<li>load_all</li>
+<li>save_memory</li>
+<li>rebuild_index</li>
+<li>build_system_prompt</li>
+</ol>
+<p>Memory 最终会占用上下文窗口，所以必须只存真正值得跨会话保留的信息。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-load-1">复制</button></div>
+        <pre id="code-load-1" data-export-context="代码" data-export-lang="text"><code class="language-text">第 1 轮：
+ 用户：以后生成 Python 脚本时，请保留 main() 和 if __name__ == "__main__"。
+ Agent：调用 save_memory，写入 python_entrypoint_preference。
+ MemoryManager：写 .memory/python_entrypoint_preference.md 并重建 memory.md。
 
 第 2 轮：
-  用户：写一个统计 CSV 行数的脚本。
-  build_system_prompt：注入这条用户偏好。
-  Agent：生成带 main() 入口的 Python 脚本，不需要用户重复说明。</code></pre>
-      <p>你现在应该能做什么：从 `.memory/*.md` 和 `.memory/memory.md` 反推出 system prompt 中会出现哪些记忆。</p>
-    </section>
-
-    <section id="criteria">
-      <div class="head"><h2>4. 什么值得进入 Memory</h2><span class="tag">criteria</span></div>
-      <p>视频强调：只有跨会话仍然有价值、且无法从当前工作区轻易推导出的知识，才值得进入 Memory。用户偏好就是典型例子：仓库里看不出用户是否喜欢 Python 文件必须有 `main()`，所以值得保存。</p>
-      <p>如果什么都存，Memory 会变成垃圾堆：越存越乱、越存越长，还会占用上下文窗口。更危险的是，过期记忆可能与当前真实状态冲突，让 Agent 产生幻觉式判断。</p>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>信息</th><th>是否适合存</th><th>原因</th></tr></thead>
-          <tbody>
-            <tr><td>用户偏好 Python 文件使用 main 函数</td><td>适合</td><td>跨会话有价值，仓库不一定能推导。</td></tr>
-            <tr><td>当前目录有哪些文件</td><td>不适合</td><td>随时可读，且容易变化。</td></tr>
-            <tr><td>用户长期不喜欢直接改文件，先给计划</td><td>适合</td><td>稳定协作偏好。</td></tr>
-            <tr><td>刚刚工具调用返回的一次性错误</td><td>通常不适合</td><td>短期上下文即可，不应长期污染。</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p>判断是否保存时可以用三问：下次还会用吗？当前仓库或工具能实时查到吗？如果它过期了会不会误导模型？只有前两个答案分别是“会、查不到”，且第三个风险可控，才适合进入 Memory。</p>
-    </section>
-
-    <section id="pitfall">
-      <div class="head"><h2>5. 常见误区：Memory 不是聊天记录仓库</h2><span class="tag">pitfalls</span></div>
-      <p>Memory 的目标不是保存所有对话，而是保存可复用的稳定知识。聊天历史用于当前会话，Memory 用于跨会话延续偏好和重要事实。上下文压缩解决“当前长会话太长”的问题，Memory 解决“下次不从零开始”的问题。</p>
-      <div class="grid3">
-        <div class="box warn"><h3>垃圾堆</h3><p>把所有临时信息都存入 memory。</p></div>
-        <div class="box warn"><h3>过期记忆</h3><p>记忆不再真实，却继续影响模型。</p></div>
-        <div class="box warn"><h3>上下文膨胀</h3><p>记忆太多，每轮 system prompt 都变长。</p></div>
-      </div>
-      <div class="codebar error"><span class="label">错误示例：把可实时读取的信息存成记忆</span><span>不值得</span></div>
-      <pre><code>save_memory(
-  name="current_file_list",
-  type="project",
-  content="The current folder has hello.py and greet.py"
-)
-
-# 问题：文件列表可以实时读取，而且会变化。</code></pre>
-      <p>成熟的 Memory 系统还需要更新和删除。用户偏好改变时应覆盖旧记忆而不是叠加冲突版本；项目事实变化时应删除或标记过期；记忆太多时应按类型、更新时间和引用频率做整理，避免每轮 prompt 被历史负担拖慢。</p>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">检查理解</span></div>
+ 用户：写一个统计 CSV 行数的脚本。
+ build_system_prompt：注入这条用户偏好。
+ Agent：生成带 main() 入口的 Python 脚本，不需要用户重复说明。</code></pre>
+<p>你现在应该能做什么：从 <code>.memory/*.md</code> 和 <code>.memory/memory.md</code> 反推出 system prompt 中会出现哪些记忆。</p>
+        </div>
+      </section>
+      <section id="criteria">
+        <div class="head">
+          <h2>4. 什么值得进入 Memory</h2>
+          <span class="tag">criteria</span>
+        </div>
+<p>视频强调：只有跨会话仍然有价值、且无法从当前工作区轻易推导出的知识，才值得进入 Memory。用户偏好就是典型例子：仓库里看不出用户是否喜欢 Python 文件必须有 <code>main()</code>，所以值得保存。</p>
+<p>信息是否适合存原因</p>
+<p>判断是否保存时可以用三问：下次还会用吗？当前仓库或工具能实时查到吗？如果它过期了会不会误导模型？只有前两个答案分别是“会、查不到”，且第三个风险可控，才适合进入 Memory。</p>
+      </section>
+      <section id="pitfall">
+        <div class="head">
+          <h2>5. 常见误区：Memory 不是聊天记录仓库</h2>
+          <span class="tag">pitfalls</span>
+        </div>
+<p>Memory 的目标保存可复用的稳定知识。聊天历史用于当前会话，Memory 用于跨会话延续偏好和重要事实。上下文压缩解决“当前长会话太长”的问题，Memory 解决“下次不从零开始”的问题。</p>
+<p>错误示例：把可实时读取的信息存成记忆不值得</p>
+<p>成熟的 Memory 系统还需要更新和删除。用户偏好改变时应覆盖旧记忆而不是叠加冲突版本；项目事实变化时应删除或标记过期；记忆太多时应按类型、更新时间和引用频率做整理，避免每轮 prompt 被历史负担拖慢。</p>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">检查理解</span>
+        </div>
       <div class="practice-group">
-        <div class="group-head"><div><h3>一、Memory 定位</h3><p>先分清 Memory 和其他上下文来源。</p></div><div class="box soft">Memory 是跨会话动态读写。</div></div>
+        <div class="group-head">
+          <div><h3>一、Memory 定位</h3></div>
+          
+        </div>
         <div class="drill-grid">
-          <div class="q" data-title="1. Memory位置"><div class="q-meta"><span class="pill">选择</span></div><h3>1. Memory 主要在什么时候读写？</h3><label><input type="radio" name="q1" value="A">A. Agent loop 过程中</label><br><label><input type="radio" name="q1" value="B">B. 只在安装项目时</label><br><label><input type="radio" name="q1" value="C">C. 只在 Git 提交时</label></div>
-          <div class="q" data-title="2. 和Skill区别"><div class="q-meta"><span class="pill">比较</span></div><h3>2. Memory 和 Skill / CLAUDE.md 有什么区别？</h3><textarea name="q2"></textarea></div>
-          <div class="q" data-title="3. 解决问题"><div class="q-meta"><span class="pill">解释</span></div><h3>3. Memory 解决“每次从零开始”的哪类问题？</h3><textarea name="q3"></textarea></div>
-          <div class="q" data-title="4. system prompt"><div class="q-meta"><span class="pill">短答</span></div><h3>4. Memory 最终如何影响模型行为？</h3><textarea name="q4"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. Memory 主要在什么时候读写？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="Agent loop 过程中">Agent loop 过程中</label>
+      <label><input type="radio" name="q?" value="只在安装项目时">只在安装项目时</label>
+      <label><input type="radio" name="q?" value="只在 Git 提交时">只在 Git 提交时</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">比较</span></div>
+        <h3><b>Q:</b> 2. Memory 和 Skill / CLAUDE.md 有什么区别？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 3. Memory 解决“每次从零开始”的哪类问题？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 4. Memory 最终如何影响模型行为？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、保存与加载</h3><p>掌握文件结构。</p></div><div class="box warn">`.memory/*.md` + `.memory/memory.md`。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="5. 保存字段"><div class="q-meta"><span class="pill">清单</span></div><h3>5. `save_memory` 工具通常需要哪些字段？</h3><textarea name="q5"></textarea></div>
-          <div class="q" data-title="6. frontmatter"><div class="q-meta"><span class="pill">解释</span></div><h3>6. 单个 memory Markdown 的 frontmatter 记录什么？</h3><textarea name="q6"></textarea></div>
-          <div class="q" data-title="7. index作用"><div class="q-meta"><span class="pill">解释</span></div><h3>7. `.memory/memory.md` 索引文件有什么作用？</h3><textarea name="q7"></textarea></div>
-          <div class="q" data-title="8. 下一轮加载"><div class="q-meta"><span class="pill">流程</span></div><h3>8. 写入 memory 后，下一轮 Agent loop 如何使用它？</h3><textarea name="q8"></textarea></div>
+        <div class="group-head">
+          <div><h3>二、保存与加载</h3></div>
+          
         </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>三、判断什么值得存</h3><p>训练记忆边界。</p></div><div class="box soft">跨会话有价值 + 当前仓库推导不出。</div></div>
         <div class="drill-grid">
-          <div class="q" data-title="9. 值得存标准"><div class="q-meta"><span class="pill">填空</span></div><h3>9. 值得进入 Memory 的两个核心标准是什么？</h3><textarea name="q9"></textarea></div>
-          <div class="q" data-title="10. 偏好判断"><div class="q-meta"><span class="pill">判断</span></div><h3>10. “用户喜欢 Python 文件使用 main 函数”是否适合存？为什么？</h3><textarea name="q10"></textarea></div>
-          <div class="q" data-title="11. 文件列表"><div class="q-meta"><span class="pill">判断</span></div><h3>11. “当前目录有 hello.py”是否适合存？为什么？</h3><textarea name="q11"></textarea></div>
-          <div class="q" data-title="12. 过期风险"><div class="q-meta"><span class="pill">解释</span></div><h3>12. 过期 Memory 为什么会导致错误行为？</h3><textarea name="q12"></textarea></div>
-        </div>
-      </div>
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、设计迁移</h3><p>给自己的 Agent 设计记忆系统。</p></div><div class="box soft">记忆要可写、可查、可压缩、可删除。</div></div>
-        <div class="drill-grid">
-          <div class="q" data-title="13. 类型设计"><div class="q-meta"><span class="pill">设计</span></div><h3>13. 你会为 Memory 设计哪些 type？各存什么？</h3><textarea name="q13"></textarea></div>
-          <div class="q" data-title="14. 压缩"><div class="q-meta"><span class="pill">迁移</span></div><h3>14. 为什么 Memory 也需要压缩或整理？</h3><textarea name="q14"></textarea></div>
-          <div class="q" data-title="15. 删除策略"><div class="q-meta"><span class="pill">设计</span></div><h3>15. 设计一个删除或更新过期 Memory 的策略。</h3><textarea name="q15"></textarea></div>
-          <div class="q" data-title="16. Hook结合"><div class="q-meta"><span class="pill">关联</span></div><h3>16. 如何结合 Hook 系统，在会话结束时整理 Memory？</h3><textarea name="q16"></textarea></div>
-          <div class="q full" data-title="17. 面试表达"><div class="q-meta"><span class="pill">表达</span></div><h3>17. 用 3-5 句话解释 Memory 在 Agent Harness 中的价值。</h3><textarea name="q17"></textarea></div>
-          <div class="q full" data-title="18. 费曼解释"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 6-9 句话讲清楚：记忆系统如何让 Agent 不再每次从零开始。</h3><div class="solve-note">请串联 save_memory、.memory、memory.md、frontmatter、system prompt、用户偏好、跨会话、有价值标准。</div><textarea name="q18"></textarea></div>
-        </div>
-      </div>
-    </section>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">清单</span></div>
+        <h3><b>Q:</b> 5. <code>save_memory</code> 工具通常需要哪些字段？</h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 6. 单个 memory Markdown 的 frontmatter 记录什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 7. <code>.memory/memory.md</code> 索引文件有什么作用？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">流程</span></div>
+        <h3><b>Q:</b> 8. 写入 memory 后，下一轮 Agent loop 如何使用它？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、判断什么值得存</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 9. 值得进入 Memory 的两个核心标准是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 10. “用户喜欢 Python 文件使用 main 函数”是否适合存？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 11. “当前目录有 hello.py”是否适合存？为什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">解释</span></div>
+        <h3><b>Q:</b> 12. 过期 Memory 为什么会导致错误行为？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、设计迁移</h3></div>
+          
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b> 13. 你会为 Memory 设计哪些 type？各存什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">迁移</span></div>
+        <h3><b>Q:</b> 14. 为什么 Memory 也需要压缩或整理？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">设计</span></div>
+        <h3><b>Q:</b> 15. 设计一个删除或更新过期 Memory 的策略。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">关联</span></div>
+        <h3><b>Q:</b> 16. 如何结合 Hook 系统，在会话结束时整理 Memory？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">表达</span></div>
+        <h3><b>Q:</b> 17. 用 3-5 句话解释 Memory 在 Agent Harness 中的价值。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 18. 用 6-9 句话讲清楚：记忆系统如何让 Agent 不再每次从零开始。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>整理学习答案</h2><span class="tag">学习输出</span></div>
-      <p class="muted">完成练习后生成 Markdown 学习笔记，便于保存和继续学习。</p>
-      <div class="actions"><button onclick="generateRecord()">生成学习笔记</button><button class="ghost" onclick="copyRecord()">复制内容</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">学习笔记会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const section of sections){const rect=section.getBoundingClientRect();if(rect.top<innerHeight*.36)current=section.id}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`))}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-const memStates={
-  empty:["无记忆启动","MemoryManager.load_all()\n.memory/ 不存在\nmemories = {}\n\nbuild_system_prompt:\n- base system prompt\n- memory guidance only\n\n模型知道什么时候该 save_memory，但还没有可注入记忆。","第一次合作时没有具体记忆，只会注入保存记忆的指导。",["load","prompt"]],
-  save:["保存偏好","用户：I like to define a main method in Python files.\n\n模型调用 save_memory:\nname = python_main_convention\ntype = user\ndescription = User prefers main function\ncontent = Always define a main function in Python files.\n\n写入 .memory/python_main_convention.md","用户表达稳定偏好，模型把它保存为 user 类型 memory。",["save"]],
-  index:["重建索引",".memory/memory.md\n\n# Memory Index\n\n- python_main_convention [user]: User prefers main function\n\n内存字典 memories 同步更新。","索引像目录，让系统知道当前有哪些记忆。",["index"]],
-  inject:["注入提示词","build_system_prompt:\n\n## Memory\n### user\n- python_main_convention: User prefers main function\nAlways define a main function in Python files.\n\n之后生成 greet.py 时，模型会主动使用 main()。","下一轮请求时，记忆进入 system prompt，影响模型工具调用参数。",["prompt"]]
-};
-function renderMemory(name){const d=memStates[name]||memStates.empty;document.querySelectorAll("[data-memory]").forEach(b=>b.classList.toggle("active",b.dataset.memory===name));document.querySelectorAll("[data-mem-step]").forEach(s=>s.classList.toggle("active",d[3].includes(s.dataset.memStep)));document.getElementById("memoryTitle").textContent=d[0];document.getElementById("memoryText").textContent=d[1];document.getElementById("memoryExplain").textContent=d[2]}
-document.querySelectorAll("[data-memory]").forEach(btn=>btn.addEventListener("click",()=>renderMemory(btn.dataset.memory)));renderMemory("empty");
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{navigator.clipboard.writeText(bar.nextElementSibling?.innerText||"").then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200)})});bar.appendChild(btn)});
-const questions=[
-  ["Memory定位","1. Memory 读写时机。","q1","radio"],["Memory定位","2. Memory 和 Skill/CLAUDE.md 区别。","q2","text"],["Memory定位","3. Memory 解决什么问题。","q3","text"],["Memory定位","4. Memory 如何影响模型。","q4","text"],["保存加载","5. save_memory 字段。","q5","text"],["保存加载","6. frontmatter 记录什么。","q6","text"],["保存加载","7. memory.md 索引作用。","q7","text"],["保存加载","8. 下一轮如何使用。","q8","text"],["判断标准","9. 值得存的两个标准。","q9","text"],["判断标准","10. Python main 偏好是否适合。","q10","text"],["判断标准","11. 当前文件列表是否适合。","q11","text"],["判断标准","12. 过期 Memory 风险。","q12","text"],["设计迁移","13. Memory type 设计。","q13","text"],["设计迁移","14. 为什么需要压缩整理。","q14","text"],["设计迁移","15. 删除/更新策略。","q15","text"],["设计迁移","16. Hook 结合整理 Memory。","q16","text"],["设计迁移","17. Harness 价值。","q17","text"],["费曼解释","18. 记忆系统费曼解释。","q18","text"]
-];
-function val(q){if(q[3]==="radio"){const el=document.querySelector(`input[name="${q[2]}"]:checked`);return el?el.value:""}const el=document.querySelector(`[name="${q[2]}"]`);return el?el.value.trim():""}
-function generateRecord(){const groups={};const missing=[];questions.forEach(q=>{const v=val(q);if(!v)missing.push(q[1]);if(!groups[q[0]])groups[q[0]]=[];groups[q[0]].push({t:q[1],a:v||"（未填写）"})});let out="# 21 记忆系统｜学习笔记\n\n";Object.keys(groups).forEach(g=>{out+=`## ${g}\n\n`;groups[g].forEach(item=>{out+=`### ${item.t}\n${item.a}\n\n`})});document.getElementById("record").textContent=out;const warnings=[];if(missing.length)warnings.push(`还有 ${missing.length} 题未填写。`);const f=val(["","","q18","text"]);const keys=["save_memory",".memory","memory.md","system prompt","偏好","跨会话"];const lack=keys.filter(k=>!f.includes(k));if(f&&f.length<120)warnings.push("费曼解释偏短，建议讲成 6-9 句话。");if(f&&lack.length)warnings.push(`费曼解释可能缺少关键词：${lack.join("、")}。`);const q=document.getElementById("quality");q.style.display="block";q.textContent=warnings.length?warnings.join("\n"):"学习笔记已生成，便于保存和继续学习。"}
-function copyRecord(){navigator.clipboard.writeText(document.getElementById("record").textContent).catch(()=>alert("复制失败，请手动复制。"))}
-</script>
-<script src="../assets/study-page.js"></script>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
+
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

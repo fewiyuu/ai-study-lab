@@ -4,1044 +4,618 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>工具失败、超时与重试策略</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="智能体可靠性工程" data-unit="04">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>智能体可靠性工程</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">智能体可靠性工程</a>
+        <span class="sep">/</span>
         <span>04</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#overview"><span class="dot"></span>先抓主线</a>
-        <a href="#taxonomy"><span class="dot"></span>失败分类</a>
-        <a href="#timers"><span class="dot"></span>超时边界</a>
-        <a href="#policy"><span class="dot"></span>重试策略</a>
-        <a href="#limits"><span class="dot"></span>限流与熔断</a>
-        <a href="#case"><span class="dot"></span>案例</a>
-        <a href="#trace"><span class="dot"></span>追踪字段</a>
-        <a href="#bridge"><span class="dot"></span>落地顺序</a>
-        <a href="#mistakes"><span class="dot"></span>常见错误</a>
-        <a href="#boundary"><span class="dot"></span>边界与去向</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">先分失败类型，再算时间预算，最后决定重试、熔断还是接管。</div>
-    </aside>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">失败分流</div>
-          <h1>工具失败、超时与重试策略</h1>
-          <p>这一页接着 03 的幂等边界往前走：工具已经被拆进 Activity 之后，真正会卡住系统的就变成超时、限流、权限失败、参数错误和业务冲突。先把失败分清，再算时间预算，最后才决定重试、熔断还是人工接管。</p>
-
-          <div class="course-links">
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">失败分流</div>
+      <div class="hero-meta">
+        <span class="hero-badge">04</span>
+      </div>
+      <h1 class="hero-title">工具失败、超时与重试策略</h1>
+      <p class="hero-desc">这一页接着 03 的幂等边界往前走：工具已经被拆进 Activity 之后，真正会卡住系统的就变成超时、限流、权限失败、参数错误和业务冲突。先把失败分清，再算时间预算，最后才决定重试、熔断还是人工接管。</p>
+      <div class="course-links">
             <a href="../03_确定性幂等与副作用隔离/学习页.html">回到 03 幂等与副作用隔离</a>
             <a href="../05_结构化输出与防漂移边界/学习页.html">继续看 05 结构化输出</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>读完后可以直接做的事</h3>
-          <ul>
-  <li>能把工具失败分成临时故障、终态故障、限流、权限失败、参数错误和业务冲突，不再看到“失败”就直接重试。</li>
-  <li>能为一个工具同时写出单次超时、整体超时、最大尝试次数和退避规则，并看出预算是否已经超了。</li>
-  <li>能从 trace、幂等键、外部请求号和错误类型里拼出一条排查链，判断该继续重试、熔断还是接管。</li>
-</ul>
-
-        </div>
       </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
+            <li>能把工具失败分成临时故障、终态故障、限流、权限失败、参数错误和业务冲突，不再看到“失败”就直接重试。</li>
+            <li>能为一个工具同时写出单次超时、整体超时、最大尝试次数和退避规则，并看出预算是否已经超了。</li>
+            <li>能从 trace、幂等键、外部请求号和错误类型里拼出一条排查链，判断该继续重试、熔断还是接管。</li>
+        </ul>
+      </div>
+    </div>
+  </header>
 
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">先把问题分清</a>
+      <a href="#overview">先看一条工具调用线</a>
+      <a href="#taxonomy">失败分类</a>
+      <a href="#timers">超时边界</a>
+      <a href="#policy">重试策略</a>
+      <a href="#case">案例：客户资料同步工具</a>
+      <a href="#trace">追踪字段</a>
+      <a href="#bridge">落地顺序</a>
+      <a href="#limits">限流与熔断</a>
+      <a href="#bridge2">一条分流链</a>
+      <a href="#mistakes">常见错误</a>
+      <a href="#handoff">接管台账</a>
+      <a href="#boundary">边界与去向</a>
+      <a href="#practice">练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
-  <div class="head">
-    <h2>先把问题分清</h2>
-    <span class="tag">goal</span>
-  </div>
-  <p>这一页处理的是工具失败后的四个问题：它是临时故障还是终态故障，是单次执行慢了还是整体预算超了，是可以退避重试还是应该直接停下。只要这四件事还混在一起，重试就只会把错误放大。</p>
-  <div class="table-wrap">
-    <table data-export-context="失败分流顺序" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>看到什么</th>
-          <th>先问什么</th>
-          <th>这页给什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>接口超时</td>
-          <td>这是单次慢了，还是总预算已经见底</td>
-          <td>单次超时、整体超时、退避序列</td>
-        </tr>
-        <tr>
-          <td>429 限流</td>
-          <td>是临时拥堵，还是系统已经不该继续撞上去</td>
-          <td>限流窗口、退避、熔断</td>
-        </tr>
-        <tr>
-          <td>权限不足或参数非法</td>
-          <td>再试会不会还是同一个错</td>
-          <td>不可重试错误边界和人工接管条件</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <p>这一页读完后，你应该能做三件事：给工具选一个合理超时，给失败类型选下一步动作，给一次失败尝试补上可排查的证据字段。</p>
-</section>
-
-<section id="overview">
-  <div class="head">
-    <h2>先看一条工具调用线</h2>
-    <span class="tag">main line</span>
-  </div>
-  <p>把工具调用想成一条窄管道：请求先进入执行器，再进入外部工具，最后把结果和错误带回来。问题通常不在“工具会不会失败”，而在“失败之后系统怎么分流”。如果把所有错误都当成可重试，系统会把参数错误、权限问题和业务冲突一遍遍打给同一个依赖。</p>
-  <div class="table-wrap">
-    <table data-export-context="工具调用读写矩阵" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>对象</th>
-          <th>读什么</th>
-          <th>写什么</th>
-          <th>为什么要分开</th>
-          <th>错了会怎样</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>执行器 / Workflow</td>
-          <td>历史、当前目标、剩余预算</td>
-          <td>下一步调度、停止或接管</td>
-          <td>它要做决定，不直接碰现实世界</td>
-          <td>重放或重复调用时，决策和执行会缠在一起</td>
-        </tr>
-        <tr>
-          <td>工具 / Activity</td>
-          <td>参数、幂等键、超时、错误策略</td>
-          <td>外部请求、结果、错误类型、请求号</td>
-          <td>它可以失败，但要把副作用关在边界里</td>
-          <td>重试把真实副作用放大</td>
-        </tr>
-        <tr>
-          <td>追踪 / Trace</td>
-          <td>每次尝试、错误类型、耗时、外部请求号</td>
-          <td>证据链</td>
-          <td>它负责解释发生了什么，不负责决定要不要再试</td>
-          <td>最后只剩一个失败结果，看不见中间过程</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <p>这张表的意思很直接：工具失败会沿着一串读写关系展开。先把关系分清，再谈策略。</p>
-</section>
-
-<section id="taxonomy">
-  <div class="head">
-    <h2>失败分类</h2>
-    <span class="tag">taxonomy</span>
-  </div>
-  <p>先把失败拆成六类：临时网络故障、服务不可用、限流、权限失败、参数非法和业务冲突。它们看起来都像“没成功”，但后续动作完全不同。</p>
-  <div class="shape-tracer" data-shape-tracer>
-    <div class="trace-lines">
-      <button class="trace-line active" data-trace-step="step-1"><code>网络抖动</code><span>短暂失败，信息一般可重放</span></button>
-      <button class="trace-line" data-trace-step="step-2"><code>权限不足</code><span>终态失败，不能靠重复撞开</span></button>
-      <button class="trace-line" data-trace-step="step-3"><code>参数非法</code><span>终态失败，要回到输入修正</span></button>
-      <button class="trace-line" data-trace-step="step-4"><code>业务冲突</code><span>状态不一致，要查记录或请求决策</span></button>
-    </div>
-    <div class="trace-canvas">
-      <div class="tensor-card active" data-trace-target="step-1">
-        <b>临时故障</b>
-        <span>可重试，但要有限度</span>
-        <p>服务短暂抖动、连接超时、偶发 503 这类问题，通常先退避再试。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-2">
-        <b>权限失败</b>
-        <span>不重试，先补权限或人工处理</span>
-        <p>再试也不会变好。继续重试只会浪费时间，还会污染日志。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-3">
-        <b>参数非法</b>
-        <span>回到输入修正</span>
-        <p>这里要让模型重新构造参数，或先过结构化校验，避免继续撞同一个错误。</p>
-      </div>
-      <div class="tensor-card" data-trace-target="step-4">
-        <b>业务冲突</b>
-        <span>查状态，必要时请求用户决策</span>
-        <p>例如重复创建、状态已变、资源已不存在。这里要先确认现实世界的当前状态。</p>
-      </div>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="失败分类与动作表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>错误类型</th>
-          <th>是不是可重试</th>
-          <th>更合适的动作</th>
-          <th>必须记录什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>网络抖动</td><td>可以</td><td>短间隔退避后再试</td><td>工具名、尝试次数、延迟</td></tr>
-        <tr><td>服务不可用</td><td>有限重试</td><td>退避、熔断、降级</td><td>错误类型、持续时间、影响范围</td></tr>
-        <tr><td>限流</td><td>按窗口重试</td><td>等待可用窗口或降频</td><td>限流键、等待时间、调用方</td></tr>
-        <tr><td>权限不足</td><td>不重试</td><td>重新授权或人工接管</td><td>权限范围、用户、资源</td></tr>
-        <tr><td>参数非法</td><td>不重试当前参数</td><td>修正参数或过校验</td><td>被拒字段、schema 版本</td></tr>
-        <tr><td>业务冲突</td><td>通常不重试</td><td>查询状态、解释冲突、请求决策</td><td>冲突对象、当前状态、期望状态</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>这张表的作用是让你先看类别，再看动作。先分流，再处理，顺序不能反。</p>
-</section>
-
-<section id="timers">
-  <div class="head">
-    <h2>超时边界</h2>
-    <span class="tag">timers</span>
-  </div>
-  <p>超时是一个预算集合。单次执行上限、整体完成上限、排队上限和心跳上限，约束的是不同阶段。Temporal 里的 Start-To-Close、Schedule-To-Close、Schedule-To-Start 和 Heartbeat Timeout，分别对应执行时长、总时长、排队时长和长任务进度信号。</p>
-  <div class="table-wrap">
-    <table data-export-context="超时边界矩阵" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>时间边界</th>
-          <th>它限制什么</th>
-          <th>适合发现什么问题</th>
-          <th>智能体工具里的类比</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>单次执行上限</td><td>工具真正运行多久</td><td>内部卡住、慢查询、外部服务无响应</td><td>一次网页抓取最多 20 秒</td></tr>
-        <tr><td>整体完成上限</td><td>从调度到最终完成的总时间</td><td>排队、重试和执行总耗时过长</td><td>整个搜索工具最多 60 秒</td></tr>
-        <tr><td>排队上限</td><td>任务等 worker 接手多久</td><td>worker 不足、队列拥堵、路由错误</td><td>浏览器工具 10 秒没人接手就失败</td></tr>
-        <tr><td>心跳上限</td><td>长任务多久要报一次还活着</td><td>长任务中途挂死或失联</td><td>导出文件每 30 秒报告进度</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="超时检查台账" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>检查项</th>
-          <th>读什么</th>
-          <th>写什么</th>
-          <th>症状</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>单次执行</td><td>开始时间、结束时间、当前 attempt</td><td>timeout_ms、实际耗时</td><td>工具内部慢，但整体预算还没用完</td></tr>
-        <tr><td>整体预算</td><td>用户请求总预算、剩余时间</td><td>是否继续重试</td><td>单次没爆，重试加起来先爆了</td></tr>
-        <tr><td>心跳</td><td>长任务最新进度</td><td>last_heartbeat_at</td><td>任务卡住，外层还以为在跑</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>如果只设置单次超时，重试可能把总时间拖到用户已经不能接受的区间。这里要看所有尝试加起来还剩多少预算。</p>
-</section>
-
-<section id="policy">
-  <div class="head">
-    <h2>重试策略</h2>
-    <span class="tag">policy</span>
-  </div>
-  <p>一个可控的重试策略至少要回答五件事：第一次失败后等多久、下一次等待如何增长、最长能等到多大、最多试几次、哪些错误绝不重试。Temporal Retry Policy 正是围绕这五件事组织的。</p>
-  <div class="math-block" data-export-context="重试等待公式" data-export-lang="math">
-    $$delay_n = \min(initial\_interval \times backoff\_coefficient^{n-1}, maximum\_interval)$$
-    <p>这里的 <code>initial_interval</code> 是第一次重试前的等待，<code>backoff_coefficient</code> 是增长倍率，<code>maximum_interval</code> 是封顶值，<code>n</code> 是第几次重试。</p>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="重试策略参数表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>参数</th>
-          <th>回答什么问题</th>
-          <th>写错会怎样</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>initial_interval</td><td>第一次失败后等多久</td><td>太短会把故障窗撞满，太长会让用户等太久</td></tr>
-        <tr><td>backoff_coefficient</td><td>等待如何增长</td><td>增长太慢会继续压依赖，太快会浪费可恢复机会</td></tr>
-        <tr><td>maximum_interval</td><td>等待上限是多少</td><td>没有封顶会把总时长拖成失控长尾</td></tr>
-        <tr><td>maximum_attempts</td><td>最多试几次</td><td>没有次数上限，策略就会一直拖</td></tr>
-        <tr><td>non_retryable_error_types</td><td>哪些错误不该重试</td><td>权限失败、参数错误、业务冲突会被重复放大</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar"><span>重试预算示意</span><button class="copy" data-copy="retry-budget">复制</button></div>
-  <pre id="retry-budget" data-export-context="重试预算示意" data-export-lang="text"><code>attempts = 4
+        <div class="head">
+          <h2>先把问题分清</h2>
+          <span class="tag">goal</span>
+        </div>
+<p>这一页处理的是工具失败后的四个问题：它是临时故障还是终态故障，是单次执行慢了还是整体预算超了，是可以退避重试还是应该直接停下。只要这四件事还混在一起，重试就只会把错误放大。</p>
+      </section>
+      <section id="overview">
+        <div class="head">
+          <h2>先看一条工具调用线</h2>
+          <span class="tag">main</span>
+        </div>
+<p>把工具调用想成一条窄管道：请求先进入执行器，再进入外部工具，最后把结果和错误带回来。问题通常不在“工具会不会失败”，而在“失败之后系统怎么分流”。如果把所有错误都当成可重试，系统会把参数错误、权限问题和业务冲突一遍遍打给同一个依赖。</p>
+      </section>
+      <section id="taxonomy">
+        <div class="head">
+          <h2>失败分类</h2>
+          <span class="tag">taxonomy</span>
+        </div>
+<p>先把失败拆成六类：临时网络故障、服务不可用、限流、权限失败、参数非法和业务冲突。它们看起来都像“没成功”，但后续动作完全不同。</p>
+<p>网络抖动可以短间隔退避后再试工具名、尝试次数、延迟</p>
+<p>服务不可用有限重试退避、熔断、降级错误类型、持续时间、影响范围</p>
+<p>限流按窗口重试等待可用窗口或降频限流键、等待时间、调用方</p>
+<p>权限不足不重试重新授权或人工接管权限范围、用户、资源</p>
+<p>参数非法不重试当前参数修正参数或过校验被拒字段、schema 版本</p>
+<p>业务冲突通常不重试查询状态、解释冲突、请求决策冲突对象、当前状态、期望状态</p>
+      </section>
+      <section id="timers">
+        <div class="head">
+          <h2>超时边界</h2>
+          <span class="tag">timers</span>
+        </div>
+<p>超时是一个预算集合。单次执行上限、整体完成上限、排队上限和心跳上限，约束的是不同阶段。Temporal 里的 Start-To-Close、Schedule-To-Close、Schedule-To-Start 和 Heartbeat Timeout，分别对应执行时长、总时长、排队时长和长任务进度信号。</p>
+<p>如果只设置单次超时，重试可能把总时间拖到用户已经不能接受的区间。这里要看所有尝试加起来还剩多少预算。</p>
+      </section>
+      <section id="policy">
+        <div class="head">
+          <h2>重试策略</h2>
+          <span class="tag">policy</span>
+        </div>
+<p>一个可控的重试策略至少要回答五件事：第一次失败后等多久、下一次等待如何增长、最长能等到多大、最多试几次、哪些错误绝不重试。Temporal Retry Policy 正是围绕这五件事组织的。</p>
+<p>这里的 <code>initial_interval</code> 是第一次重试前的等待，<code>backoff_coefficient</code> 是增长倍率，<code>maximum_interval</code> 是封顶值，<code>n</code> 是第几次重试。</p>
+<p>initial_interval第一次失败后等多久太短会把故障窗撞满，太长会让用户等太久</p>
+<p>backoff_coefficient等待如何增长增长太慢会继续压依赖，太快会浪费可恢复机会</p>
+<p>maximum_interval等待上限是多少没有封顶会把总时长拖成失控长尾</p>
+<p>maximum_attempts最多试几次没有次数上限，策略就会一直拖</p>
+<p>non_retryable_error_types哪些错误不该重试权限失败、参数错误、业务冲突会被重复放大</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-policy-1">复制</button></div>
+        <pre id="code-policy-1" data-export-context="代码" data-export-lang="text"><code class="language-text">attempts = 4
 single_timeout = 5s
 delays = [1s, 2s, 4s]
 worst_case = attempts * single_timeout + sum(delays)
-            = 4*5 + 1 + 2 + 4
-            = 27s</code></pre>
-  <p>这个公式的意义很朴素：重试会消耗预算。每加一次尝试，就要把单次超时和等待都算进去。做策略时，先看最坏情况能不能被用户预算接受，再看是否需要降级。</p>
-</section>
-
-<section id="case">
-  <div class="head">
-    <h2>案例：客户资料同步工具</h2>
-    <span class="tag">case</span>
-  </div>
-  <p>下面用“客户资料同步工具”演示怎么从错误类型、幂等性和时间预算推导策略。这个工具会写外部系统，所以不能把“失败”简单等同为“再试一次”。</p>
-  <div class="codebar"><span>工具失败处理契约示例</span><button class="copy" data-copy="policy-contract">复制</button></div>
-  <pre id="policy-contract" data-export-context="工具失败处理契约示例" data-export-lang="python"><code class="language-python">tool: sync_customer_status
+ = 4*5 + 1 + 2 + 4
+ = 27s</code></pre>
+<p>这个公式的意义很朴素：重试会消耗预算。每加一次尝试，就要把单次超时和等待都算进去。做策略时，先看最坏情况能不能被用户预算接受，再看是否需要降级。</p>
+        </div>
+      </section>
+      <section id="case">
+        <div class="head">
+          <h2>案例：客户资料同步工具</h2>
+          <span class="tag">case</span>
+        </div>
+<p>下面用“客户资料同步工具”演示怎么从错误类型、幂等性和时间预算推导策略。这个工具会写外部系统，所以不能把“失败”简单等同为“再试一次”。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-case-1">复制</button></div>
+        <pre id="code-case-1" data-export-context="代码" data-export-lang="python"><code class="language-python">tool: sync_customer_status
 idempotent: true, by sync_request_id
 single_attempt_timeout: 8s
 overall_timeout: 35s
 retry:
-  max_attempts: 3
-  initial_interval: 2s
-  backoff_coefficient: 2
-  maximum_interval: 8s
-  retryable_errors:
-    - network_error
-    - service_unavailable
-    - rate_limit_after_wait
-  non_retryable_errors:
-    - invalid_customer_id
-    - permission_denied
-    - business_conflict
+ max_attempts: 3
+ initial_interval: 2s
+ backoff_coefficient: 2
+ maximum_interval: 8s
+ retryable_errors:
+ - network_error
+ - service_unavailable
+ - rate_limit_after_wait
+ non_retryable_errors:
+ - invalid_customer_id
+ - permission_denied
+ - business_conflict
 handoff:
-  required_when:
-    - non_retryable write error
-    - unknown error after first write attempt
-    - overall_timeout exceeded
+ required_when:
+ - non_retryable write error
+ - unknown error after first write attempt
+ - overall_timeout exceeded
 trace:
-  record:
-    - trace_id
-    - span_id
-    - tool.name
-    - tool.attempt
-    - error.type
-    - timeout.ms
-    - idempotency_key
-    - handoff.required</code></pre>
-  <div class="table-wrap">
-    <table data-export-context="案例判断表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>场景</th>
-          <th>先看什么</th>
-          <th>下一步</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>网络超时，但工具本身还没返回</td><td>是不是临时失败，整体预算还剩多少</td><td>有限重试，继续看 trace</td></tr>
-        <tr><td>同一 sync_request_id 再次出现</td><td>幂等记录是否已成功，fingerprint 是否一致</td><td>复用结果或冲突退出</td></tr>
-        <tr><td>权限不足或参数非法</td><td>错误类型是不是终态</td><td>修正参数、重新授权或人工接管</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="terminal-lab" data-terminal-lab>
-    <div class="terminal-controls">
-      <button class="ghost active" data-terminal-case="case-1">网络抖动</button>
-      <button class="ghost" data-terminal-case="case-2">同 key 但参数变了</button>
-      <button class="ghost" data-terminal-case="case-3">权限不足</button>
-    </div>
-    <pre class="terminal-output" aria-live="polite">症状：客户资料同步失败，但没有明确错误类别。
-先看：error.type、attempt、timeout.ms、overall_timeout。</pre>
-    <template data-terminal-output="case-1">症状：客户资料同步时出现短暂网络失败。
-处理：退避后再试，但要先确认总体预算还够。
-先看：attempt、delay、trace_id。</template>
-    <template data-terminal-output="case-2">症状：同一个 sync_request_id，但客户状态和原始请求摘要不一致。
-处理：返回冲突，不复用旧结果。
-先看：request_fingerprint、idempotency_key。</template>
-    <template data-terminal-output="case-3">症状：同步时返回 permission_denied。
-处理：停止自动重试，改为重新授权或人工接管。
-先看：scope、resource、error.type。</template>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="案例落地顺序" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>顺序</th>
-          <th>要做什么</th>
-          <th>目的</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>1</td><td>先写 `sync_request_id`</td><td>把同一业务意图先识别出来</td></tr>
-        <tr><td>2</td><td>补 `request_fingerprint`</td><td>区分同 key 但参数变了的情况</td></tr>
-        <tr><td>3</td><td>拆出 Activity</td><td>把外部写操作关进可重试边界</td></tr>
-        <tr><td>4</td><td>补 trace 字段</td><td>让一次尝试的过程可回看</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="trace">
-  <div class="head">
-    <h2>追踪字段</h2>
-    <span class="tag">evidence</span>
-  </div>
-  <p>trace 的作用是留证据，不能代替策略。OpenAI Agents SDK 的 tracing 会把一次运行里的 generation、tool、handoff 和自定义事件串成 trace；OpenTelemetry 的 GenAI 语义则把这些调用放进统一命名里。没有这些字段，你就很难看出是第一次失败、第二次限流，还是第三次才撞到参数错误。</p>
-  <div class="table-wrap">
-    <table data-export-context="追踪字段表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>字段</th>
-          <th>回答什么问题</th>
-          <th>缺了会怎样</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>trace_id</td><td>这是哪一条端到端流程</td><td>只能看见零散日志，串不成链</td></tr>
-        <tr><td>span_id / parent_id</td><td>哪一步是谁调用的</td><td>看不清上下游关系</td></tr>
-        <tr><td>tool.name / activity_type</td><td>这一步到底在做什么</td><td>只有通用事件，没法分层</td></tr>
-        <tr><td>attempt</td><td>这是第几次重试</td><td>分不清第一次超时和第四次重试</td></tr>
-        <tr><td>idempotency_key</td><td>是不是同一件事</td><td>重复和复用分不清</td></tr>
-        <tr><td>request_fingerprint</td><td>同 key 但参数是否变了</td><td>冲突看不见，只会误复用旧结果</td></tr>
-        <tr><td>provider_request_id / external_request_id</td><td>本地请求和外部系统是否对上</td><td>本地超时后不知道外部到底成功没有</td></tr>
-        <tr><td>error.type / result_status</td><td>这次是成功、冲突还是可重试失败</td><td>错误全混在一起，没法分流</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar"><span>一条可读的 trace 摘要</span><button class="copy" data-copy="trace-excerpt">复制</button></div>
-  <pre id="trace-excerpt" data-export-context="一条可读的 trace 摘要" data-export-lang="json"><code class="language-json">{
-  "trace_id": "trace_2f6f1d...",
-  "activity_type": "sync_customer_status",
-  "attempt": 2,
-  "idempotency_key": "sync:customer_123:v1",
-  "request_fingerprint": "customer_123|active|crm",
-  "provider_request_id": "crm_8891",
-  "result_status": "success"
+ record:
+ - trace_id
+ - span_id
+ - tool.name
+ - tool.attempt
+ - error.type
+ - timeout.ms
+ - idempotency_key
+ - handoff.required</code></pre>
+        </div>
+<p>顺序</p>
+<p>要做什么</p>
+<p>目的</p>
+      </section>
+      <section id="trace">
+        <div class="head">
+          <h2>追踪字段</h2>
+          <span class="tag">evidence</span>
+        </div>
+<p>trace 的作用是留证据，不能代替策略。OpenAI Agents SDK 的 tracing 会把一次运行里的 generation、tool、handoff 和自定义事件串成 trace；OpenTelemetry 的 GenAI 语义则把这些调用放进统一命名里。没有这些字段，你就很难看出是第一次失败、第二次限流，还是第三次才撞到参数错误。</p>
+<p>trace_id这是哪一条端到端流程只能看见零散日志，串不成链</p>
+<p>span_id / parent_id哪一步是谁调用的看不清上下游关系</p>
+<p>tool.name / activity_type这一步到底在做什么只有通用事件，没法分层</p>
+<p>attempt这是第几次重试分不清第一次超时和第四次重试</p>
+<p>idempotency_key是不是同一件事重复和复用分不清</p>
+<p>request_fingerprint同 key 但参数是否变了冲突看不见，只会误复用旧结果</p>
+<p>provider_request_id / external_request_id本地请求和外部系统是否对上本地超时后不知道外部到底成功没有</p>
+<p>error.type / result_status这次是成功、冲突还是可重试失败错误全混在一起，没法分流</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-trace-1">复制</button></div>
+        <pre id="code-trace-1" data-export-context="代码" data-export-lang="json"><code class="language-json">{
+ "trace_id": "trace_2f6f1d...",
+ "activity_type": "sync_customer_status",
+ "attempt": 2,
+ "idempotency_key": "sync:customer_123:v1",
+ "request_fingerprint": "customer_123|active|crm",
+ "provider_request_id": "crm_8891",
+ "result_status": "success"
 }</code></pre>
-  <p>这段摘要已经足够回答三件事：同一条意图有没有重试，外部请求有没有对上，最终结果是复用还是冲突退出。它比一大串原始日志更适合做回看。</p>
-</section>
+<p>这段摘要已经足够回答三件事：同一条意图有没有重试，外部请求有没有对上，最终结果是复用还是冲突退出。它比一大串原始日志更适合做回看。</p>
+        </div>
+      </section>
+      <section id="bridge">
+        <div class="head">
+          <h2>落地顺序</h2>
+          <span class="tag">bridge</span>
+        </div>
+<p>把这一页的思路落到真实系统时，顺序很重要：先定稳定的 <code>idempotency_key</code>，再补 <code>request_fingerprint</code>，然后把支付、发信、写库这类外部动作收进 Activity，最后把 <code>attempt</code>、<code>provider_request_id</code> 和 <code>result_status</code> 写进 trace。先做这四步，后面才知道自己是在复用旧结果、挡住重复副作用，还是在处理真正的新请求。</p>
+<p>定义 <code>idempotency_key</code>先把同一件事识别出来，后面才谈复用重复提交会不会命中同一条记录</p>
+<p>补 <code>request_fingerprint</code>同 key 但参数变了时，不能沿用旧结果不同金额、收款方或版本能不能触发冲突</p>
+<p>拆出 Activity把支付、发信、写库关进可重试边界里重放时会不会重复碰外部世界</p>
+<p>补 trace 字段让过程可回看，便于判断有没有被挡住能不能从 trace 找到 attempt 和外部请求号</p>
+      </section>
+      <section id="limits">
+        <div class="head">
+          <h2>限流与熔断</h2>
+          <span class="tag">limits</span>
+        </div>
+<p>限流、服务不可用和超时很容易被混成一类“工具不稳定”。实际处理时要再分两层：限流说明你撞上了对方的容量边界，熔断说明你已经不该继续把请求往同一个依赖上压。两者都允许系统降速，但不等于都应该立刻重试。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-limits-1">复制</button></div>
+        <pre id="code-limits-1" data-export-context="代码" data-export-lang="python"><code class="language-python">def decide_next_action(error, attempt, remaining_budget, breaker_state):
+ if error.type in {"invalid_argument", "permission_denied", "business_conflict"}:
+ return "stop"
 
-<section id="bridge">
-  <div class="head">
-    <h2>落地顺序</h2>
-    <span class="tag">bridge</span>
-  </div>
-  <p>把这一页的思路落到真实系统时，顺序很重要：先定稳定的 `idempotency_key`，再补 `request_fingerprint`，然后把支付、发信、写库这类外部动作收进 Activity，最后把 `attempt`、`provider_request_id` 和 `result_status` 写进 trace。先做这四步，后面才知道自己是在复用旧结果、挡住重复副作用，还是在处理真正的新请求。</p>
-  <div class="table-wrap">
-    <table data-export-context="落地顺序表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>先做什么</th>
-          <th>为什么先做它</th>
-          <th>做完后能检查什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>定义 `idempotency_key`</td><td>先把同一件事识别出来，后面才谈复用</td><td>重复提交会不会命中同一条记录</td></tr>
-        <tr><td>补 `request_fingerprint`</td><td>同 key 但参数变了时，不能沿用旧结果</td><td>不同金额、收款方或版本能不能触发冲突</td></tr>
-        <tr><td>拆出 Activity</td><td>把支付、发信、写库关进可重试边界里</td><td>重放时会不会重复碰外部世界</td></tr>
-        <tr><td>补 trace 字段</td><td>让过程可回看，便于判断有没有被挡住</td><td>能不能从 trace 找到 attempt 和外部请求号</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>如果你是在维护已有系统，先改 schema 和记录，再改执行边界，最后补观测字段。先改 prompt 往往最省事，也最容易留下回头补不上的缺口。</p>
-</section>
+ if breaker_state == "open":
+ return "handoff"
 
-<section id="limits">
-  <div class="head">
-    <h2>限流与熔断</h2>
-    <span class="tag">limits</span>
-  </div>
-  <p>限流、服务不可用和超时很容易被混成一类“工具不稳定”。实际处理时要再分两层：限流说明你撞上了对方的容量边界，熔断说明你已经不该继续把请求往同一个依赖上压。两者都允许系统降速，但不等于都应该立刻重试。</p>
-  <div class="table-wrap">
-    <table data-export-context="限流与熔断状态台账" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>状态</th>
-          <th>触发条件</th>
-          <th>读什么</th>
-          <th>写什么</th>
-          <th>症状</th>
-          <th>下一步</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>closed</td>
-          <td>错误率正常</td>
-          <td>最近失败率、延迟、attempt</td>
-          <td>正常调用和追踪</td>
-          <td>请求可以继续走</td>
-          <td>按既定重试策略执行</td>
-        </tr>
-        <tr>
-          <td>open</td>
-          <td>连续失败、限流窗口明显、依赖已经不健康</td>
-          <td>错误阈值、持续时间、剩余预算</td>
-          <td>暂停外部调用，记录熔断原因</td>
-          <td>继续撞只会放大失败</td>
-          <td>降级、排队或接管</td>
-        </tr>
-        <tr>
-          <td>half-open</td>
-          <td>等待一段时间后试探恢复</td>
-          <td>冷却时间、最新探测结果</td>
-          <td>少量探测请求</td>
-          <td>需要判断依赖是否恢复</td>
-          <td>成功则回到 closed，失败则回到 open</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar"><span>最小分流器伪代码</span><button class="copy" data-copy="retry-router">复制</button></div>
-  <pre id="retry-router" data-export-context="最小分流器伪代码" data-export-lang="python"><code class="language-python">def decide_next_action(error, attempt, remaining_budget, breaker_state):
-    if error.type in {"invalid_argument", "permission_denied", "business_conflict"}:
-        return "stop"
+ if error.type == "rate_limit":
+ wait = error.retry_after or min(2 ** attempt, 8)
+ if wait &gt;= remaining_budget:
+ return "handoff"
+ return "retry_after_wait"
 
-    if breaker_state == "open":
-        return "handoff"
+ if error.type in {"network_error", "service_unavailable"}:
+ if remaining_budget &lt;= 0:
+ return "handoff"
+ return "retry"
 
-    if error.type == "rate_limit":
-        wait = error.retry_after or min(2 ** attempt, 8)
-        if wait >= remaining_budget:
-            return "handoff"
-        return "retry_after_wait"
+ return "handoff"</code></pre>
+<p>这段代码里，读取的是错误类型、重试轮次、剩余预算和熔断状态；写出去的是下一步动作。它的目的在于稳定：让已经终态失败的请求早点停下，让还可能恢复的请求在预算内再试一轮。</p>
+        </div>
+<p>场景</p>
+<p>先看什么</p>
+<p>不要做什么</p>
+<p>更合适的动作</p>
+<p>限流和熔断最容易犯的错，是把“还没成功”误看成“应该继续冲”。如果依赖已经明显失稳，先保护总预算和下游系统，再决定是否转接管，通常比继续压请求更有效。</p>
+      </section>
+      <section id="bridge2">
+        <div class="head">
+          <h2>一条分流链</h2>
+          <span class="tag">decision</span>
+        </div>
+<p>把这些规则合在一起看，实际分流顺序只有一条：先看错误类别，再看依赖状态，再看剩余预算。这个顺序会先于“重试几次”决定结局。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>输入</th><th>先判什么</th><th>再判什么</th><th>最后动作</th><th>会留下什么证据</th></tr>
+<tr><td>permission_denied</td><td>这是终态错误</td><td>不用看重试窗口</td><td>停止或接管</td><td>error.type、resource、scope</td></tr>
+<tr><td>rate_limit</td><td>这是容量边界</td><td>看 retry_after 和预算</td><td>等窗口后再试或降频</td><td>retry_after、attempt、delay</td></tr>
+<tr><td>service_unavailable</td><td>依赖已经不稳</td><td>看错误持续时间和熔断状态</td><td>有限退避后熔断</td><td>breaker_state、duration、trace_id</td></tr>
+<tr><td>timeout</td><td>看是单次还是整体</td><td>看剩余预算和是否可异步接续</td><td>缩短单次等待、改异步或停止</td><td>timeout.ms、overall_timeout、attempt</td></tr>
+        </table></div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-bridge2-1">复制</button></div>
+        <pre id="code-bridge2-1" data-export-context="代码" data-export-lang="python"><code class="language-python">def next_action(error, remaining_budget, breaker_state):
+ terminal = {"invalid_argument", "permission_denied", "business_conflict"}
+ if error.type in terminal:
+ return "stop"
 
-    if error.type in {"network_error", "service_unavailable"}:
-        if remaining_budget <= 0:
-            return "handoff"
-        return "retry"
+ if breaker_state == "open":
+ return "handoff"
 
-    return "handoff"</code></pre>
-  <p>这段代码里，读取的是错误类型、重试轮次、剩余预算和熔断状态；写出去的是下一步动作。它的目的在于稳定：让已经终态失败的请求早点停下，让还可能恢复的请求在预算内再试一轮。</p>
-  <div class="table-wrap">
-    <table data-export-context="限流 / 服务不可用 / 超时的分流表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>场景</th>
-          <th>先看什么</th>
-          <th>不要做什么</th>
-          <th>更合适的动作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>429 限流</td><td>retry_after、调用方、限流键</td><td>立刻重复撞同一个窗口</td><td>等窗口、降频或转备用通道</td></tr>
-        <tr><td>503 / service unavailable</td><td>持续时间、错误率、剩余预算</td><td>无上限地继续重试</td><td>有限退避后熔断</td></tr>
-        <tr><td>单次超时</td><td>是不是已经接近整体预算</td><td>只盯着一次请求结果</td><td>缩短单次等待或改异步接续</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>限流和熔断最容易犯的错，是把“还没成功”误看成“应该继续冲”。如果依赖已经明显失稳，先保护总预算和下游系统，再决定是否转接管，通常比继续压请求更有效。</p>
-  <div class="table-wrap">
-    <table data-export-context="限流窗口示例" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>例子</th>
-          <th>先看什么</th>
-          <th>结论</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>retry_after=12s, remaining_budget=8s</td><td>窗口比预算长</td><td>直接转接管，不要等到预算耗光</td></tr>
-        <tr><td>retry_after=4s, remaining_budget=25s</td><td>窗口短于预算</td><td>可以退避后再试，但要继续看尝试次数</td></tr>
-        <tr><td>连续三次 503</td><td>依赖是否已明显失稳</td><td>进入 half-open 探测，不要把完整请求再压上去</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
+ if error.type == "rate_limit":
+ if error.retry_after and error.retry_after &lt; remaining_budget:
+ return "retry_after_wait"
+ return "handoff"
 
-<section id="bridge2">
-  <div class="head">
-    <h2>一条分流链</h2>
-    <span class="tag">decision</span>
-  </div>
-  <p>把这些规则合在一起看，实际分流顺序只有一条：先看错误类别，再看依赖状态，再看剩余预算。这个顺序会先于“重试几次”决定结局。</p>
-  <p>如果你只记一条经验，就记住这三个判断：终态错误直接停，容量边界先看窗口，依赖失稳先看熔断。只要这三个判断先走完，后面的重试次数才有意义。</p>
-  <div class="table-wrap">
-    <table data-export-context="错误到动作分流链" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>输入</th>
-          <th>先判什么</th>
-          <th>再判什么</th>
-          <th>最后动作</th>
-          <th>会留下什么证据</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>permission_denied</td>
-          <td>这是终态错误</td>
-          <td>不用看重试窗口</td>
-          <td>停止或接管</td>
-          <td>error.type、resource、scope</td>
-        </tr>
-        <tr>
-          <td>rate_limit</td>
-          <td>这是容量边界</td>
-          <td>看 retry_after 和预算</td>
-          <td>等窗口后再试或降频</td>
-          <td>retry_after、attempt、delay</td>
-        </tr>
-        <tr>
-          <td>service_unavailable</td>
-          <td>依赖已经不稳</td>
-          <td>看错误持续时间和熔断状态</td>
-          <td>有限退避后熔断</td>
-          <td>breaker_state、duration、trace_id</td>
-        </tr>
-        <tr>
-          <td>timeout</td>
-          <td>看是单次还是整体</td>
-          <td>看剩余预算和是否可异步接续</td>
-          <td>缩短单次等待、改异步或停止</td>
-          <td>timeout.ms、overall_timeout、attempt</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="codebar"><span>从错误到动作的最短决策器</span><button class="copy" data-copy="decision-chain">复制</button></div>
-  <pre id="decision-chain" data-export-context="从错误到动作的最短决策器" data-export-lang="python"><code class="language-python">def next_action(error, remaining_budget, breaker_state):
-    terminal = {"invalid_argument", "permission_denied", "business_conflict"}
-    if error.type in terminal:
-        return "stop"
+ if error.type == "service_unavailable":
+ return "retry" if remaining_budget &gt; 0 else "handoff"
 
-    if breaker_state == "open":
-        return "handoff"
+ if error.type == "timeout":
+ return "retry" if error.single_attempt and remaining_budget &gt; error.single_attempt else "handoff"
 
-    if error.type == "rate_limit":
-        if error.retry_after and error.retry_after < remaining_budget:
-            return "retry_after_wait"
-        return "handoff"
-
-    if error.type == "service_unavailable":
-        return "retry" if remaining_budget > 0 else "handoff"
-
-    if error.type == "timeout":
-        return "retry" if error.single_attempt and remaining_budget > error.single_attempt else "handoff"
-
-    return "handoff"</code></pre>
-  <p>这段分流器有意写得很短。它给执行器划硬边界：能不能再试，先看错误类型；该不该停，先看熔断状态；能不能再等，先看剩余预算。</p>
-  <div class="terminal-lab" data-terminal-lab>
-    <div class="terminal-controls">
-      <button class="ghost active" data-terminal-case="case-1">权限失败</button>
-      <button class="ghost" data-terminal-case="case-2">限流窗口</button>
-      <button class="ghost" data-terminal-case="case-3">服务不可用</button>
-    </div>
-    <pre class="terminal-output" aria-live="polite">症状：权限失败但系统还在继续重试。\n先看：error.type、scope、resource、breaker_state。\n动作：停止并转接管。</pre>
-    <template data-terminal-output="case-1">症状：权限失败但系统还在继续重试。\n先看：error.type、scope、resource、breaker_state。\n动作：停止并转接管。</template>
-    <template data-terminal-output="case-2">症状：接口返回 rate_limit，retry_after 还有 12 秒，但剩余预算只有 8 秒。\n先看：retry_after、remaining_budget、attempt。\n动作：不要盲目等待，直接转接管或降级。</template>
-    <template data-terminal-output="case-3">症状：服务不可用持续多轮，依赖开始抖动。\n先看：duration、breaker_state、trace_id。\n动作：有限退避后熔断，给下游留空间。</template>
-  </div>
-</section>
-
-<section id="mistakes">
-  <div class="head">
-    <h2>常见错误</h2>
-    <span class="tag">mistakes</span>
-  </div>
-  <div class="table-wrap">
-    <table data-export-context="常见错误与修法表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>错误</th>
-          <th>为什么会出事</th>
-          <th>应该怎么改</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>只设单次超时，不设整体预算</td><td>重试会把总时间拖成失控长尾</td><td>同时设置单次超时和整体完成上限</td></tr>
-        <tr><td>写操作没有幂等就自动重试</td><td>重复副作用会直接放大</td><td>先做幂等键和状态查询，再谈重试</td></tr>
-        <tr><td>把所有错误都当成暂时性故障</td><td>权限失败、参数非法、业务冲突会被重复放大</td><td>按错误类别设置 retryable 和 non-retryable</td></tr>
-        <tr><td>trace 里只留最终结果</td><td>看不见尝试次数、耗时和外部请求号</td><td>每次尝试都生成可关联 span</td></tr>
-        <tr><td>429 后立刻重试</td><td>会把限流窗口撞得更满</td><td>读取限流等待时间，或执行更保守的退避</td></tr>
-        <tr><td>把人工接管当成失败</td><td>资金、权限、删除类动作会被硬挤回自动流</td><td>把接管条件写进契约，保留上下文给人判断</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section id="handoff">
-  <div class="head">
-    <h2>接管台账</h2>
-    <span class="tag">handoff</span>
-  </div>
-  <p>当错误已经不是“再等一轮就可能好”，系统就该从自动分流转到接管。接管不是失败收尾，而是把风险、证据和下一步动作整理成一个人能立刻接手的包。最常见的误区是只把错误扔给人工，没有留下足够的上下文，结果人工接手后还是得重新查一遍。</p>
-  <div class="table-wrap">
-    <table data-export-context="接管台账表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>要接管的情形</th>
-          <th>先看什么</th>
-          <th>接管时写什么</th>
-          <th>谁来处理</th>
-          <th>接管后先做什么</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>终态错误</td>
-          <td>error.type、resource、scope</td>
-          <td>停止原因、可疑输入、上一次有效状态</td>
-          <td>业务负责人或值班人</td>
-          <td>补权限、修参数、或确认业务冲突</td>
-        </tr>
-        <tr>
-          <td>预算耗尽</td>
-          <td>remaining_budget、attempt、delay</td>
-          <td>已经用掉的时间、下一步建议</td>
-          <td>值班人或上游系统</td>
-          <td>降级、排队或转异步</td>
-        </tr>
-        <tr>
-          <td>外部系统不稳</td>
-          <td>breaker_state、error.type、duration</td>
-          <td>熔断时间、恢复探测条件</td>
-          <td>平台或基础设施值班人</td>
-          <td>等待恢复或切换备用通道</td>
-        </tr>
-        <tr>
-          <td>写操作不确定成功</td>
-          <td>idempotency_key、provider_request_id、result_status</td>
-          <td>是否可能重复副作用、现有证据链</td>
-          <td>业务负责人和必要的人审</td>
-          <td>查外部结果，再决定复用、冲突退出或补偿</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="terminal-lab" data-terminal-lab>
-    <div class="terminal-controls">
-      <button class="ghost active" data-terminal-case="case-1">终态错误</button>
-      <button class="ghost" data-terminal-case="case-2">预算耗尽</button>
-      <button class="ghost" data-terminal-case="case-3">写入不明</button>
-    </div>
-    <pre class="terminal-output" aria-live="polite">症状：系统已经连续重试多次，但错误没有变短。\n先看：error.type、remaining_budget、breaker_state。\n动作：接管并留下证据链。</pre>
-    <template data-terminal-output="case-1">症状：工具返回 invalid_argument，但流程仍在继续重试。\n处理：停止，保留输入摘要和 schema 版本。\n先看：error.type、request_fingerprint、schema_version。</template>
-    <template data-terminal-output="case-2">症状：剩余预算只够最后一次等待，不够再试一轮。\n处理：转接管或改异步，不要把预算烧完。\n先看：remaining_budget、attempt、delay。</template>
-    <template data-terminal-output="case-3">症状：支付接口超时，供应商结果暂时不明。\n处理：先查幂等记录和 provider_request_id，再决定复用或冲突退出。\n先看：idempotency_key、provider_request_id、result_status。</template>
-  </div>
-  <p>这张台账的作用，是把“要停”具体化。你不是在决定系统该不该努力，而是在决定它继续努力的代价会不会比收益更高。</p>
-</section>
-
-<section id="boundary">
-  <div class="head">
-    <h2>边界与去向</h2>
-    <span class="tag">next</span>
-  </div>
-  <p>这一页到这里就够了。你现在应该已经能把“重试”从“失败分类”里拆开，也能在支付、发信和写库这类动作上先定超时和错误边界，再决定 Activity 怎么执行。剩下的几个相邻问题先别一起追：结构化输出和字段漂移去 05，过程看不见和字段语义去 06，回放和回归测试去 07，历史太长要收口再回 02 的 Continue-As-New。</p>
-  <div class="table-wrap">
-    <table data-export-context="下一步分流表" data-export-lang="table">
-      <thead>
-        <tr>
-          <th>你看到的症状</th>
-          <th>先去哪里</th>
-          <th>这页留下了什么线索</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>输出字段漂移，下游开始读不动</td><td>05 结构化输出与防漂移边界</td><td>先确认失败分类没有把输入修正和输出格式混在一起</td></tr>
-        <tr><td>只能看到最终回答，看不见过程</td><td>06 追踪指标与事件语义</td><td>这页已经把 trace_id、attempt 和外部请求号列出来</td></tr>
-        <tr><td>跑完一轮还想验证回归</td><td>07 评测回放与回归测试</td><td>先把错误类型和策略保留成可测用例</td></tr>
-        <tr><td>历史越来越长，恢复越来越慢</td><td>02 持久执行与检查点</td><td>用 checkpoint 和 Continue-As-New 收口，再回来处理工具失败</td></tr>
-      </tbody>
-    </table>
-  </div>
-</section>
-
-
+ return "handoff"</code></pre>
+<p>这段分流器有意写得很短。它给执行器划硬边界：能不能再试，先看错误类型；该不该停，先看熔断状态；能不能再等，先看剩余预算。</p>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见错误</h2>
+          <span class="tag">mistakes</span>
+        </div>
+<p>错误</p>
+<p>为什么会出事</p>
+<p>应该怎么改</p>
+      </section>
+      <section id="handoff">
+        <div class="head">
+          <h2>接管台账</h2>
+          <span class="tag">handoff</span>
+        </div>
+<p>当错误已经不是“再等一轮就可能好”，系统就该从自动分流转到接管。接管把风险、证据和下一步动作整理成一个人能立刻接手的包。最常见的误区是只把错误扔给人工，没有留下足够的上下文，结果人工接手后还是得重新查一遍。</p>
+<p>这张台账的作用，是把“要停”具体化。你在决定它继续努力的代价会不会比收益更高。</p>
+      </section>
+      <section id="boundary">
+        <div class="head">
+          <h2>边界与去向</h2>
+          <span class="tag">next</span>
+        </div>
+<p>这一页到这里就够了。你现在应该已经能把“重试”从“失败分类”里拆开，也能在支付、发信和写库这类动作上先定超时和错误边界，再决定 Activity 怎么执行。剩下的几个相邻问题先别一起追：结构化输出和字段漂移去 05，过程看不见和字段语义去 06，回放和回归测试去 07，历史太长要收尾再回 02 的 Continue-As-New。</p>
+<p>输出字段漂移，下游开始读不动05 结构化输出与防漂移边界先确认失败分类没有把输入修正和输出格式混在一起</p>
+<p>只能看到最终回答，看不见过程06 追踪指标与事件语义这页已经把 trace_id、attempt 和外部请求号列出来</p>
+<p>跑完一轮还想验证回归07 评测回放与回归测试先把错误类型和策略保留成可测用例</p>
+<p>历史越来越长，恢复越来越慢02 持久执行与检查点用 checkpoint 和 Continue-As-New 收尾，再回来处理工具失败</p>
+      </section>
       <section id="practice">
         <div class="head">
           <h2>练习</h2>
           <span class="tag">diagnostic</span>
         </div>
-        <div class="practice-intro">
-  <div class="review-card">
-    <strong>作答目标</strong>
-    <p>每题都尽量说出它属于哪一类失败、应该看什么字段、下一步为什么这样选。先把错误分成可重试、不可重试和需要接管三类，再回答具体参数。</p>
-  </div>
-  <div class="review-card">
-    <strong>检查重点</strong>
-    <p>先看你能不能把可重试和不可重试分开，再看你能不能把单次超时和整体预算分开，最后才看 trace 字段和接管信息是否完整。</p>
-  </div>
-</div>
+      <div class="practice-intro">
 
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>第一组：先分失败类型</h3>
-      <p>这组只看错误分类，不急着谈具体参数。</p>
-    </div>
-    <div class="quick-review">
-      <b>复习句</b>
-      <span>临时故障可以有限重试，权限失败和参数非法要先停下来。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q1" data-group="第一组：先分失败类型" data-title="哪一项最适合先做有限重试？" data-answer="B" data-explain="网络抖动通常是短暂故障，先退避再试更合理。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">failure class</span></div>
-      <h3>哪一项最适合先做有限重试？</h3>
-      <label><input type="radio" name="q1" value="A"> 参数缺少必填字段，工具返回 invalid_argument。</label>
-      <label><input type="radio" name="q1" value="B"> 读接口遇到短暂网络错误，尚未产生外部副作用。</label>
-      <label><input type="radio" name="q1" value="C"> 用户没有目标资源权限，工具返回 permission_denied。</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">先看这是不是“短暂故障”。</p>
-    </div>
-
-    <div class="q" data-question="q2" data-group="第一组：先分失败类型" data-title="判断：只要设置了最大重试次数，就不需要整体超时。" data-answer="false" data-explain="最大次数只管次数，不管每次等待和排队加起来是否已经超预算。">
-      <div class="q-meta"><span class="pill">true/false</span><span class="pill">budget</span></div>
-      <h3>判断：只要设置了最大重试次数，就不需要整体超时。</h3>
-      <label><input type="radio" name="q2" value="true"> 对</label>
-      <label><input type="radio" name="q2" value="false"> 错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">次数有限，不等于时间有限。</p>
-    </div>
-
-    <div class="q" data-question="q3" data-group="第一组：先分失败类型" data-title="权限不足、参数非法和业务冲突都属于哪一类错误？" data-answer="B" data-explain="这些错误通常不是再试一次就会变好的。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">terminal</span></div>
-      <h3>权限不足、参数非法和业务冲突都属于哪一类错误？</h3>
-      <label><input type="radio" name="q3" value="A"> 临时故障，可以先短退避重试</label>
-      <label><input type="radio" name="q3" value="B"> 终态错误，通常不该直接重试当前参数</label>
-      <label><input type="radio" name="q3" value="C"> 只要等久一点就会自动恢复</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">先看是不是“再试也不会自然变好”的那类错误。</p>
-    </div>
-
-    <div class="q" data-question="q4" data-group="第一组：先分失败类型" data-title="排序：一次工具失败后，合理的处理顺序是什么？">
-      <div class="q-meta"><span class="pill">ordering</span><span class="pill">debug</span></div>
-      <h3>排序：一次工具失败后，合理的处理顺序是什么？</h3>
-      <p>把下列动作按顺序写出来：判断错误类别、检查幂等和副作用、计算剩余时间预算、决定重试 / 停止 / 接管、记录尝试。</p>
-      <textarea name="q4"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>推荐顺序是：先记录尝试，再判断错误类别，再检查幂等和副作用，接着计算剩余时间预算，最后决定重试、停止还是接管。只要顺序错了，后面的判断就容易建立在假设上。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>第二组：看参数</h3>
-      <p>这组看超时和重试参数是否成套。</p>
-    </div>
-    <div class="quick-review">
-      <b>复习句</b>
-      <span>单次超时、整体预算、退避序列、最大次数和错误边界要一起看。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q5" data-group="第二组：看参数" data-title="重试策略里，判断‘第一次失败后等多久’的参数是哪个？" data-answer="A" data-explain="initial_interval 定义第一次重试前的等待。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">policy</span></div>
-      <h3>重试策略里，判断“第一次失败后等多久”的参数是哪个？</h3>
-      <label><input type="radio" name="q5" value="A"> initial_interval</label>
-      <label><input type="radio" name="q5" value="B"> maximum_attempts</label>
-      <label><input type="radio" name="q5" value="C"> non_retryable_error_types</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">先看等待起点，不要先看次数。</p>
-    </div>
-
-    <div class="q" data-question="q6" data-group="第二组：看参数" data-title="判断：backoff_coefficient 只影响单次等待，不影响总预算。" data-answer="false" data-explain="backoff_coefficient 会影响每次等待的增长，也会影响总耗时。">
-      <div class="q-meta"><span class="pill">true/false</span><span class="pill">backoff</span></div>
-      <h3>判断：backoff_coefficient 只影响单次等待，不影响总预算。</h3>
-      <label><input type="radio" name="q6" value="true"> 对</label>
-      <label><input type="radio" name="q6" value="false"> 错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">每次等待变长，总耗时也跟着变。</p>
-    </div>
-
-    <div class="q" data-question="q7" data-group="第二组：看参数" data-title="填空：一个基础重试策略至少要包含哪五类信息？">
-      <div class="q-meta"><span class="pill">fill</span><span class="pill">policy</span></div>
-      <h3>填空：一个基础重试策略至少要包含哪五类信息？</h3>
-      <div class="mini-fields">
-        <label>1 <input type="text" data-answer="initial_interval,初始间隔" /></label>
-        <label>2 <input type="text" data-answer="backoff_coefficient,增长系数" /></label>
-        <label>3 <input type="text" data-answer="maximum_interval,最大间隔" /></label>
-        <label>4 <input type="text" data-answer="maximum_attempts,最大次数" /></label>
-        <label>5 <input type="text" data-answer="non_retryable_error_types,不可重试错误" /></label>
       </div>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">把“等待、增长、封顶、次数、错误边界”都写上。</p>
-    </div>
-
-    <div class="q full" data-question="q8" data-group="第二组：看参数" data-title="用一句话说明为什么整体预算要和最大重试次数一起看。">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">budget</span></div>
-      <h3>用一句话说明为什么整体预算要和最大重试次数一起看。</h3>
-      <p class="solve-note">答题时至少说出“次数有限不等于时间有限”这一层，再补上等待和排队会叠加。</p>
-      <textarea name="q8" placeholder="写 2-4 句，说明为什么只看次数会误判。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>高分答案要说明：最大重试次数只限制尝试轮数，整体预算还会被每次单次超时、退避等待和排队时间一起消耗。如果不同时看整体预算，策略可能在次数没到之前就已经把用户能接受的时间耗光了。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>第三组：看证据和案例</h3>
-      <p>这组检查你是否能把 trace、幂等键和外部请求号串起来。</p>
-    </div>
-    <div class="quick-review">
-      <b>复习句</b>
-      <span>幂等记录决定结果能不能复用，trace 决定过程能不能看见。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q9" data-group="第三组：看证据和案例" data-title="要判断一次退款是否已经真实发过，最关键的两个字段组合是什么？" data-answer="B" data-explain="idempotency_key 和 external_request_id / provider_request_id 配合起来，才能把本地记录和外部系统对上。">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">trace</span></div>
-      <h3>要判断一次退款是否已经真实发过，最关键的两个字段组合是什么？</h3>
-      <label><input type="radio" name="q9" value="A"> trace_id + workflow_name</label>
-      <label><input type="radio" name="q9" value="B"> idempotency_key + external_request_id</label>
-      <label><input type="radio" name="q9" value="C"> span_id + prompt</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">一个负责找同一意图，一个负责对外部系统。</p>
-    </div>
-
-    <div class="q" data-question="q10" data-group="第三组：看证据和案例" data-title="判断：trace 可以代替幂等记录，因为它也保存了调用过程。" data-answer="false" data-explain="trace 只提供证据，不能替你决定是否复用旧结果。">
-      <div class="q-meta"><span class="pill">true/false</span><span class="pill">evidence</span></div>
-      <h3>判断：trace 可以代替幂等记录，因为它也保存了调用过程。</h3>
-      <label><input type="radio" name="q10" value="true"> 对</label>
-      <label><input type="radio" name="q10" value="false"> 错</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">证据和决策不是一回事。</p>
-    </div>
-
-    <div class="q full" data-question="q11" data-group="第三组：看证据和案例" data-title="写出最小证据链：从用户重复提交到你确认是否重复副作用，按顺序列 4 个点。">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">diagnosis</span></div>
-      <h3>写出最小证据链：从用户重复提交到你确认是否重复副作用，按顺序列 4 个点。</h3>
-      <p class="solve-note">建议按“请求进入系统 - 幂等记录 - 外部请求号 - trace”来答。不要把结果和证据混在一起。</p>
-      <textarea name="q11" placeholder="例如：request_id -> idempotency_key -> provider_request_id -> trace_id / attempt / status"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>高分答案应按顺序写出：用户请求或任务进入系统、幂等键和请求摘要、外部请求号或结果引用、trace 里的 attempt / error.type / result_status。只写“看日志”不够，因为日志没有明确分层；只写“看 trace”也不够，因为 trace 还要对上幂等记录和外部请求号。</p>
-      </details>
-    </div>
-  </div>
-</div>
-
-<div class="practice-group">
-  <div class="group-head">
-    <div>
-      <h3>第四组：迁移到真实系统</h3>
-      <p>把同一套边界规则迁移到写库、发信和同步场景里。</p>
-    </div>
-    <div class="quick-review">
-      <b>复习句</b>
-      <span>先查幂等，再查外部请求号，再决定重试还是冲突。</span>
-    </div>
-  </div>
-  <div class="drill-grid">
-    <div class="q" data-question="q12" data-group="第四组：迁移到真实系统" data-title="支付接口超时，但供应商后来确认已经扣款。下一步先做什么？" data-answer="B" data-explain="先查幂等记录和供应商请求号，确认是不是同一笔业务已经成功，不要盲目再打一次。">
-      <div class="q-meta"><span class="pill">scenario</span><span class="pill">transfer</span></div>
-      <h3>支付接口超时，但供应商后来确认已经扣款。下一步先做什么？</h3>
-      <label><input type="radio" name="q12" value="A"> 直接重试一次，反正有重试就行</label>
-      <label><input type="radio" name="q12" value="B"> 查幂等记录和供应商请求号</label>
-      <label><input type="radio" name="q12" value="C"> 先改 prompt，再观察一轮</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">超时不等于失败，先确认现实世界有没有已经发生。</p>
-    </div>
-
-    <div class="q full" data-question="q13" data-group="第四组：迁移到真实系统" data-title="把本页讲给只写普通 API 的工程师：Workflow、Activity、重试策略、trace 四者分别负责什么。">
-      <div class="q-meta"><span class="pill">synthesis</span><span class="pill">explain</span></div>
-      <h3>把本页讲给只写普通 API 的工程师：Workflow、Activity、重试策略、trace 四者分别负责什么。</h3>
-      <p class="solve-note">答题时要同时说出“谁决定下一步、谁碰外部世界、谁限制重复、谁留证据”。</p>
-      <textarea name="q13" placeholder="用 4 句话，分别说清四者的职责和边界。"></textarea>
-      <button class="reveal" type="button">展开反馈</button>
-      <details>
-        <summary>参考答案 / 评分要点</summary>
-        <p>好答案要包含四层：Workflow 负责编排和重放；Activity 负责外部写操作和可重试执行；重试策略负责限制等待、次数和错误边界；trace 负责留下能回看的证据链。只要有一层被说成“也负责其他所有事情”，就说明边界还没分清。</p>
-      </details>
-    </div>
-
-    <div class="q full" data-question="q14" data-group="第四组：迁移到真实系统" data-title="接管台账里，遇到写操作不确定成功时应该先保留哪三个字段？">
-      <div class="q-meta"><span class="pill">choice</span><span class="pill">handoff</span></div>
-      <h3>接管台账里，遇到写操作不确定成功时应该先保留哪三个字段？</h3>
-      <p>下面三项里，哪一组最适合先保留给人工或后续排查？</p>
-      <label><input type="radio" name="q14" value="A"> idempotency_key、provider_request_id、result_status</label>
-      <label><input type="radio" name="q14" value="B"> prompt、temperature、model_name</label>
-      <label><input type="radio" name="q14" value="C"> trace_id、ui_theme、locale</label>
-      <button class="check" type="button">检查</button>
-      <div class="feedback"></div>
-      <p class="hint">先看能不能把本地意图和外部请求对上，再看最终状态。</p>
-    </div>
-  </div>
-</div>
-
-      </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>第一组：先分失败类型</h3></div>
+          <div class="quick-review">复习句 临时故障可以有限重试，权限失败和参数非法要先停下来。 --></div>
         </div>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
+        <div class="drill-grid">
+      <article class="q" data-question="q1" data-group="" data-title="" data-answer="读接口遇到短暂网络错误，尚未产生外部副作用。">
+        <div class="q-meta"><span class="pill">1</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 哪一项最适合先做有限重试？</h3>
 
-      <section id="sources">
+      <div class="choices">
+      <label><input type="radio" name="q1" value="参数缺少必填字段，工具返回 invalid_argument。">参数缺少必填字段，工具返回 invalid_argument。</label>
+      <label><input type="radio" name="q1" value="读接口遇到短暂网络错误，尚未产生外部副作用。">读接口遇到短暂网络错误，尚未产生外部副作用。</label>
+      <label><input type="radio" name="q1" value="用户没有目标资源权限，工具返回 permission_denied。">用户没有目标资源权限，工具返回 permission_denied。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>读接口遇到短暂网络错误，尚未产生外部副作用。。网络抖动通常是短暂故障，先退避再试更合理。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2" data-group="" data-title="" data-answer="false">
+        <div class="q-meta"><span class="pill">2</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> 判断：只要设置了最大重试次数，就不需要整体超时。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q2" value="对">对</label>
+      <label><input type="radio" name="q2" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>false。最大次数只管次数，不管每次等待和排队加起来是否已经超预算。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3" data-group="" data-title="" data-answer="终态错误，通常不该直接重试当前参数">
+        <div class="q-meta"><span class="pill">3</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 权限不足、参数非法和业务冲突都属于哪一类错误？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q3" value="临时故障，可以先短退避重试">临时故障，可以先短退避重试</label>
+      <label><input type="radio" name="q3" value="终态错误，通常不该直接重试当前参数">终态错误，通常不该直接重试当前参数</label>
+      <label><input type="radio" name="q3" value="只要等久一点就会自动恢复">只要等久一点就会自动恢复</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>终态错误，通常不该直接重试当前参数。这些错误通常不是再试一次就会变好的。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q4" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">4</span><span class="pill">ordering</span></div>
+        <h3><b>Q:</b> 排序：一次工具失败后，合理的处理顺序是什么？</h3>
+
+
+      <textarea name="q4"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。推荐顺序是：先记录尝试，再判断错误类别，再检查幂等和副作用，接着计算剩余时间预算，最后决定重试、停止还是接管。只要顺序错了，后面的判断就容易建立在假设上。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>第二组：看参数</h3></div>
+          <div class="quick-review">复习句 单次超时、整体预算、退避序列、最大次数和错误边界要一起看。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5" data-group="" data-title="" data-answer="initial_interval">
+        <div class="q-meta"><span class="pill">5</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 重试策略里，判断“第一次失败后等多久”的参数是哪个？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q5" value="initial_interval">initial_interval</label>
+      <label><input type="radio" name="q5" value="maximum_attempts">maximum_attempts</label>
+      <label><input type="radio" name="q5" value="non_retryable_error_types">non_retryable_error_types</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>initial_interval。initial_interval 定义第一次重试前的等待。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6" data-group="" data-title="" data-answer="false">
+        <div class="q-meta"><span class="pill">6</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> 判断：backoff_coefficient 只影响单次等待，不影响总预算。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q6" value="对">对</label>
+      <label><input type="radio" name="q6" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>false。backoff_coefficient 会影响每次等待的增长，也会影响总耗时。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q7" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">7</span><span class="pill">fill</span></div>
+        <h3><b>Q:</b> 填空：一个基础重试策略至少要包含哪五类信息？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q7" value="1">1</label>
+      <label><input type="radio" name="q7" value="2">2</label>
+      <label><input type="radio" name="q7" value="3">3</label>
+      <label><input type="radio" name="q7" value="4">4</label>
+      <label><input type="radio" name="q7" value="5">5</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q8" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">8</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 用一句话说明为什么整体预算要和最大重试次数一起看。</h3>
+
+
+      <textarea name="q8"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。高分答案要说明：最大重试次数只限制尝试轮数，整体预算还会被每次单次超时、退避等待和排队时间一起消耗。如果不同时看整体预算，策略可能在次数没到之前就已经把用户能接受的时间耗光了。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>第三组：看证据和案例</h3></div>
+          <div class="quick-review">复习句 幂等记录决定结果能不能复用，trace 决定过程能不能看见。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q9" data-group="" data-title="" data-answer="idempotency_key + external_request_id">
+        <div class="q-meta"><span class="pill">9</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 要判断一次退款是否已经真实发过，最关键的两个字段组合是什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q9" value="trace_id + workflow_name">trace_id + workflow_name</label>
+      <label><input type="radio" name="q9" value="idempotency_key + external_request_id">idempotency_key + external_request_id</label>
+      <label><input type="radio" name="q9" value="span_id + prompt">span_id + prompt</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>idempotency_key + external_request_id。idempotency_key 和 external_request_id / provider_request_id 配合起来，才能把本地记录和外部系统对上。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q10" data-group="" data-title="" data-answer="false">
+        <div class="q-meta"><span class="pill">10</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> 判断：trace 可以代替幂等记录，因为它也保存了调用过程。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q10" value="对">对</label>
+      <label><input type="radio" name="q10" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>false。trace 只提供证据，不能替你决定是否复用旧结果。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">11</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 写出最小证据链：从用户重复提交到你确认是否重复副作用，按顺序列 4 个点。</h3>
+
+
+      <textarea name="q11"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。高分答案应按顺序写出：用户请求或任务进入系统、幂等键和请求摘要、外部请求号或结果引用、trace 里的 attempt / error.type / result_status。只写“看日志”不够，因为日志没有明确分层；只写“看 trace”也不够，因为 trace 还要对上幂等记录和外部请求号。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>第四组：迁移到真实系统</h3></div>
+          <div class="quick-review">复习句 先查幂等，再查外部请求号，再决定重试还是冲突。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q12" data-group="" data-title="" data-answer="查幂等记录和供应商请求号">
+        <div class="q-meta"><span class="pill">12</span><span class="pill">scenario transfer</span></div>
+        <h3><b>Q:</b> 支付接口超时，但供应商后来确认已经扣款。下一步先做什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q12" value="直接重试一次，反正有重试就行">直接重试一次，反正有重试就行</label>
+      <label><input type="radio" name="q12" value="查幂等记录和供应商请求号">查幂等记录和供应商请求号</label>
+      <label><input type="radio" name="q12" value="先改 prompt，再观察一轮">先改 prompt，再观察一轮</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>查幂等记录和供应商请求号。先查幂等记录和供应商请求号，确认是不是同一笔业务已经成功，不要盲目再打一次。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q13" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">13</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 把本页讲给只写普通 API 的工程师：Workflow、Activity、重试策略、trace 四者分别负责什么。</h3>
+
+
+      <textarea name="q13"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。好答案要包含四层：Workflow 负责编排和重放；Activity 负责外部写操作和可重试执行；重试策略负责限制等待、次数和错误边界；trace 负责留下能回看的证据链。只要有一层被说成“也负责其他所有事情”，就说明边界还没分清。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q14" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">14</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 接管台账里，遇到写操作不确定成功时应该先保留哪三个字段？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q14" value="idempotency_key、provider_request_id、result_status">idempotency_key、provider_request_id、result_status</label>
+      <label><input type="radio" name="q14" value="prompt、temperature、model_name">prompt、temperature、model_name</label>
+      <label><input type="radio" name="q14" value="trace_id、ui_theme、locale">trace_id、ui_theme、locale</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <div class="source-list">
-  <div class="box">
-    <h3>课程地图</h3>
-    <p>这门课的单元顺序和前后关系以课程地图为准。本页承接 03 的幂等边界，往 05 的结构化输出继续走。阅读这页时，先看它如何把失败分成“能再试”和“该停下”两条线。</p>
-    <p><a href="../index.html">课程地图</a></p>
-  </div>
-  <div class="box">
-    <h3>上一单元：确定性、幂等与副作用隔离</h3>
-    <p>上一单元讲 Workflow / Activity 边界、幂等键和 trace 证据链。本页沿着那个边界继续讨论“失败之后怎么分流”，尤其是写操作、限流窗口和接管条件。</p>
-    <p><a href="../03_确定性幂等与副作用隔离/学习页.html">确定性幂等与副作用隔离</a></p>
-  </div>
-  <div class="box">
-    <h3>Temporal 官方文档</h3>
-    <p>Temporal 的 Failure Detection、Activity Timeouts 和 Retry Policies 说明了超时、重试和不可重试错误的边界。本页用它来解释单次超时、整体预算、退避规则和心跳信号。</p>
-    <p><a href="https://docs.temporal.io/">Temporal docs</a></p>
-  </div>
-  <div class="box">
-    <h3>OpenAI Agents SDK Tracing</h3>
-    <p>Tracing 文档说明 trace、span、tool 和 handoff 怎么记录一次运行。本页用它来说明为什么每次工具尝试都要留下可回看的证据，也为什么接管时不能只留下一个最终报错。</p>
-    <p><a href="https://openai.github.io/openai-agents-python/tracing/">Tracing</a></p>
-  </div>
-  <div class="box">
-    <h3>OpenTelemetry GenAI 语义约定</h3>
-    <p>OpenTelemetry 的 GenAI 语义约定为模型调用、工具调用和事件字段提供统一命名。本页用它来组织 trace 字段、错误类型、工具尝试信息和恢复后的排查链。</p>
-    <p><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">GenAI semantic conventions</a></p>
-  </div>
-  <div class="box">
-    <h3>下一步</h3>
-    <p>如果你已经能分清失败类型和重试边界，下一页就去看结构化输出与防漂移边界，把输入和输出格式也收紧，避免“重试策略写对了，参数却漂了”。</p>
-    <p><a href="../05_结构化输出与防漂移边界/学习页.html">结构化输出与防漂移边界</a></p>
-  </div>
-</div>
 
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

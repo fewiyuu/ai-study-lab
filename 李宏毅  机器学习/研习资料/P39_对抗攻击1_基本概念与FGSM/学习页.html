@@ -4,504 +4,551 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P39｜对抗攻击 1：基本概念与 FGSM</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="adversarial attack,benign image,attack image,untargeted attack,targeted attack,L2 norm,L infinity norm,FGSM,iterative FGSM,projected gradient">
-<div class="progress" id="readProgress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>基本概念与 FGSM</strong><span>P39。把输入当成优化变量，找肉眼难察觉但能骗过模型的扰动。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#why"><span class="dot"></span>为什么攻击</a>
-      <a href="#types"><span class="dot"></span>攻击类型</a>
-      <a href="#loss"><span class="dot"></span>目标函数</a>
-      <a href="#distance"><span class="dot"></span>距离限制</a>
-      <a href="#optimize"><span class="dot"></span>优化输入</a>
-      <a href="#projection"><span class="dot"></span>投影交互</a>
-      <a href="#fgsm"><span class="dot"></span>FGSM</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">本节判断句：攻击时模型参数固定，优化对象从 weights 变成 input image。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P39</div>
-        <h1>高准确率不够，还要经得起恶意输入</h1>
-        <p>把神经网络放到真实应用里，不能只看一般测试集 accuracy。真实世界有人会故意骗模型：垃圾邮件发送者会改写邮件绕过过滤器，攻击者会给图像分类器加上肉眼难察觉的扰动，让模型把猫判成海星或键盘。</p>
-        <p>P39 从图像 adversarial attack 的基本概念讲起：benign image、attack image、untargeted/targeted attack、扰动距离、把输入当成优化变量、投影回限制集合，以及最简单的一步攻击 FGSM。核心思想是：模型参数固定，攻击者调整输入，让模型输出错，同时保持输入和原图足够接近。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释为什么准确率高不代表模型安全。</li>
-          <li>区分 untargeted 与 targeted attack。</li>
-          <li>写出攻击的 loss 和距离限制。</li>
-          <li>说明 L2 与 L∞ 对人类感知的差异。</li>
-          <li>解释 FGSM 与 iterative FGSM 的基本步骤。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">MAP</span></div>
-      <p>对抗攻击把机器学习从“自然测试集表现好不好”推进到“有人故意找漏洞时会不会崩”。图像分类器在普通噪声下可能仍然认出猫，但某些专门优化出来的小扰动，却能让它以极高信心输出完全错误的类别。</p>
-      <p>这一节的数学主线是一个受限制优化问题：找一张新图片 <code>x</code>，让模型输出满足攻击目标，同时 <code>x</code> 和原图 <code>x0</code> 的距离小于阈值 <code>epsilon</code>。求解方法和训练模型很像，只是优化对象变成输入。</p>
-      <div class="map">
-        <span class="node">恶意输入</span>
-        <span class="node">攻击目标</span>
-        <span class="node">距离限制</span>
-        <span class="node">优化输入</span>
-        <span class="node">FGSM/迭代</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P39</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把 adversarial attack 概括为：在不明显改变输入的前提下，优化输入让固定模型预测错误。</p></div>
-    </section>
-
-    <section id="why">
-      <div class="head"><h2>为什么要研究攻击：真实应用里有人会故意骗你</h2><span class="tag">WHY</span></div>
-      <p>模型如果只在善意数据上准确，仍然可能无法上线。邮件过滤器会面对想绕过检测的垃圾邮件发送者；图像识别系统可能面对故意贴贴纸、加扰动、改变外观的人；安全系统更是天然处在对抗环境中。模型必须能应付来自人类的恶意。</p>
-      <p>课程用一个直观比喻：强不等于安全，因为人类可能不按常规方式正面对抗。对应到神经网络，普通测试准确率像是在常规条件下比强弱；对抗攻击则是有人专门研究你的弱点，再构造输入击穿你。</p>
-      <p><strong>现在你应该能做什么：</strong>说明为什么 adversarial robustness 是部署模型时的安全需求，而不是学术玩具。</p>
-    </section>
-
-    <section id="types">
-      <div class="head"><h2>Untargeted 与 Targeted：只要不是猫，还是必须变海星</h2><span class="tag">TYPES</span></div>
-      <p>benign image 是没有被攻击的原图，attack image 是加了扰动后的图片。对于一张原本被模型判为猫的图片，untargeted attack 的目标很宽：只要模型输出不是猫就成功。targeted attack 更难：攻击者指定目标类别，例如必须让模型输出海星，才算成功。</p>
-      <p>targeted attack 通常更难，因为它不仅要降低正确类别分数，还要把特定错误类别分数推高。课程中猫图可以被变成海星、键盘等，说明现代网络的决策边界可能对精心构造的微小扰动非常敏感。</p>
-      <table class="metric-table">
-        <tr><th>类型</th><th>成功条件</th><th>例子</th></tr>
-        <tr><td>Untargeted</td><td>输出不是原正确类别。</td><td>猫变成任意非猫类别。</td></tr>
-        <tr><td>Targeted</td><td>输出为攻击者指定类别。</td><td>猫必须变成海星。</td></tr>
-      </table>
-      <p><strong>现在你应该能做什么：</strong>给定原类别和攻击后输出，判断攻击是 untargeted 成功、targeted 成功还是失败。</p>
-    </section>
-
-    <section id="loss">
-      <div class="head"><h2>攻击目标函数：让正确答案远，或让目标答案近</h2><span class="tag">LOSS</span></div>
-      <p>设模型是固定函数 <code>f</code>，输入图片是 <code>x</code>，输出分布是 <code>y = f(x)</code>。对于 untargeted attack，我们希望输出和正确标签 <code>y_hat</code> 差距越大越好。如果用 cross entropy 衡量差距，就可以最大化 cross entropy，或者等价地最小化负的 cross entropy。</p>
-      <div class="formula">
-        <div class="big">L_untargeted(x) = - CE(f(x), y_hat)</div>
-        <small>最小化这个 L，就等于让 CE(f(x), y_hat) 变大，让模型远离正确答案。</small>
+      <h1 class="hero-title">P39｜对抗攻击 1：基本概念与 FGSM</h1>
+      <p class="hero-desc">把神经网络放到真实应用里，不能只看一般测试集 accuracy。真实世界有人会故意骗模型：垃圾邮件发送者会改写邮件绕过过滤器，攻击者会给图像分类器加上肉眼难察觉的扰动，让模型把猫判成海星或键盘。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P38_NLP对抗攻击1_离散输入与样本生成/学习页.html">上一节</a>
+            <a href="../P40_对抗攻击2_黑箱攻击与防御/学习页.html">下一节</a>
       </div>
-      <p>targeted attack 还要靠近指定目标 <code>y_target</code>。一种写法是同时让正确类远、目标类近：</p>
-      <div class="formula">
-        <div class="big">L_targeted(x) = - CE(f(x), y_hat) + CE(f(x), y_target)</div>
-        <small>第一项鼓励远离正确类，第二项鼓励靠近目标类。</small>
-      </div>
-      <p>不同文献的符号和正负号可能不同，关键是看优化方向：到底是在最大化正确类 loss，还是最小化目标类 loss。写代码时一定要确认 loss 的方向，否则可能在帮模型变得更正确。</p>
-      <p><strong>现在你应该能做什么：</strong>根据 untargeted/targeted 目标，解释 loss 中每一项想推高或压低什么。</p>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="distance">
-      <div class="head"><h2>距离限制：扰动要小到人不容易察觉</h2><span class="tag">DISTANCE</span></div>
-      <p>只优化攻击目标不够，因为我们希望 attack image 和 benign image 看起来几乎一样。于是加入限制：</p>
-      <div class="formula">
-        <div class="big">d(x, x0) ≤ epsilon</div>
-        <small>x0 是原图，x 是攻击图；epsilon 是允许扰动大小。</small>
+        </ul>
       </div>
-      <p>常见距离包括 L2 norm 和 L∞ norm。L2 看整体平方和，许多像素都改一点时可能不大；L∞ 只看所有像素中最大改变量。课程用四像素例子说明：如果每个像素都小改，人可能看不出来；如果只有一个像素改很大，人可能更容易察觉。此时 L∞ 更能限制单个像素的最大变化。</p>
-      <table class="metric-table">
-        <tr><th>距离</th><th>看什么</th><th>直觉</th></tr>
-        <tr><td>L2</td><td>整体扰动能量。</td><td>关心总变化量，适合整体大小比较。</td></tr>
-        <tr><td>L∞</td><td>单一维度最大变化。</td><td>限制每个像素最多改多少，图像攻击常用。</td></tr>
-        <tr><td>领域距离</td><td>按人类感知定义。</td><td>语音等任务可能需要听觉模型，而不只是 Lp norm。</td></tr>
-      </table>
-      <p><strong>现在你应该能做什么：</strong>解释为什么图像作业常用 L∞，以及为什么距离定义需要 domain knowledge。</p>
-    </section>
+    </div>
+  </header>
 
-    <section id="optimize">
-      <div class="head"><h2>优化输入：像训练模型一样训练一张图</h2><span class="tag">OPTIMIZE</span></div>
-      <p>如果暂时拿掉距离限制，攻击优化和训练模型非常像。训练模型时，我们固定输入，更新 network parameters；攻击时，我们固定 network parameters，更新输入图片 <code>x</code>。初始化通常设为原图 <code>x0</code>，因为我们希望最终图片和原图接近。</p>
-      <p>每一步计算 loss 对输入 <code>x</code> 的 gradient，然后更新 <code>x</code>。如果更新后超出限制集合，就把它拉回允许范围。这种“更新后投影回去”的思想，就是 projected gradient 的基本直觉。</p>
-      <div class="formula">
-        <div class="big">x ← x - η ∇<sub>x</sub>L(x)</div>
-        <small>η 是步长；对 untargeted loss 的具体正负号要按定义确认。</small>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>说清楚攻击中的 gradient 是 loss 对输入的 gradient，而不是 loss 对模型参数的 gradient。</p>
-    </section>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#why">为什么要研究攻击：真实应用里有人会故意骗你</a>
+      <a href="#types">Untargeted 与 Targeted：只要不是猫，还是必须变海星</a>
+      <a href="#loss">攻击目标函数：让正确答案远，或让目标答案近</a>
+      <a href="#distance">距离限制：扰动要小到人不容易察觉</a>
+      <a href="#optimize">优化输入：像训练模型一样训练一张图</a>
+      <a href="#projection">动手观察：L∞ 方框与投影</a>
+      <a href="#fgsm">FGSM：一拳超人的一步攻击</a>
+      <a href="#code">最小代码：FGSM 与迭代版本</a>
+      <a href="#mistakes">常见误区与修法</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
 
-    <section id="projection">
-      <div class="head"><h2>动手观察：L∞ 方框与投影</h2><span class="tag">INTERACTIVE</span></div>
-      <p>在二维简化图中，原图 <code>x0</code> 是黑点。L∞ 限制形成一个方框：攻击点必须留在方框内。若 gradient 更新跑出方框，就投影回离它最近的方框边界。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <div class="plane" id="plane">
-              <div class="boxlimit" id="boxlimit"></div>
-              <div class="pt" id="basePt"></div>
-              <div class="pt new" id="newPt"></div>
-              <div class="arrow" id="arrow"></div>
-            </div>
-            <p class="viz-note" id="projNote">调节步长，观察更新点何时超出 L∞ 方框，以及投影如何把它拉回限制内。</p>
-          </div>
-          <div>
-            <div class="slider-row"><label for="eps">epsilon</label><input id="eps" type="range" min="0.08" max="0.32" step="0.01" value="0.20"><span id="epsVal">0.20</span></div>
-            <div class="slider-row"><label for="step">更新步长</label><input id="step" type="range" min="0.04" max="0.5" step="0.01" value="0.28"><span id="stepVal">0.28</span></div>
-            <div class="barrow"><span>是否出界</span><div class="bar"><div class="fill red" id="outBar"></div></div><span id="outVal">是</span></div>
-            <button type="button" class="ghost" onclick="resetProj()">重置</button>
-          </div>
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">MAP</span>
         </div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>把 iterative FGSM/PGD 想成“沿攻击方向走一步，再夹回 epsilon 方框”。</p>
-    </section>
-
-    <section id="fgsm">
-      <div class="head"><h2>FGSM：一拳超人的一步攻击</h2><span class="tag">FGSM</span></div>
-      <p>FGSM 是 Fast Gradient Sign Method。它不做很多次迭代，而是只更新一次。做法是取 loss 对输入的 gradient，再只保留每个维度的正负号。这样每个像素都沿着最能改变 loss 的方向移动 <code>epsilon</code>。</p>
-      <div class="formula">
-        <div class="big">x_adv = x0 + epsilon · sign(∇<sub>x</sub> loss)</div>
-        <small>不同目标和 loss 定义会影响加号/减号；重点是使用 gradient sign，并让扰动落在 L∞ 边界内。</small>
-      </div>
-      <p>为什么取 sign？在 L∞ 限制下，每个维度最多能改 <code>epsilon</code>，那最直接的做法就是每个维度都走到允许范围的边界，方向由 gradient 正负决定。课程中说它像“一拳超人”：只攻击一次，很多时候就能让模型错。</p>
-      <p>iterative FGSM 则把一步改成多步。每一步走小一点，走完后投影回 <code>x0</code> 周围的 L∞ 方框。多步通常更强，但也更需要注意不要超出扰动限制。</p>
-      <div class="grid2">
-        <div class="box info"><h3>FGSM</h3><p>一步到位，速度快，适合作为 baseline。</p></div>
-        <div class="box warn"><h3>Iterative FGSM</h3><p>多次小步更新加投影，攻击更强，但计算成本更高。</p></div>
-      </div>
-      <p><strong>现在你应该能做什么：</strong>解释 FGSM 的公式，以及为什么 iterative 版本通常比一步版本更强。</p>
-    </section>
-
-    <section id="code">
-      <div class="head"><h2>最小代码：FGSM 与迭代版本</h2><span class="tag">CODE</span></div>
-      <p>下面是 PyTorch 风格的 untargeted FGSM。为了让模型犯错，我们最大化正确标签的 cross entropy，所以代码里直接沿着 gradient sign 增大 loss。具体符号要和你的 loss 定义保持一致。</p>
-      <div class="codebar"><span class="label">正确示例：untargeted FGSM</span><span class="kind">PyTorch</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">fgsm</span>(model, x0, y, epsilon):
-    x = x0.clone().detach().requires_grad_(<span class="kw">True</span>)
-    logits = model(x)
-    loss = torch.nn.functional.cross_entropy(logits, y)
-    model.zero_grad()
-    loss.backward()
-    x_adv = x + epsilon * x.grad.sign()
-    x_adv = torch.clamp(x_adv, <span class="num">0</span>, <span class="num">1</span>)
-    <span class="kw">return</span> x_adv.detach()</code></pre>
-      <div class="codebar"><span class="label">正确示例：iterative FGSM with projection</span><span class="kind">PyTorch</span></div>
-      <pre><code><span class="kw">def</span> <span class="fn">iter_fgsm</span>(model, x0, y, epsilon, alpha, steps):
-    x_adv = x0.clone().detach()
-    <span class="kw">for</span> _ <span class="kw">in</span> range(steps):
-        x_adv.requires_grad_(<span class="kw">True</span>)
-        loss = torch.nn.functional.cross_entropy(model(x_adv), y)
-        model.zero_grad()
-        loss.backward()
-        x_adv = x_adv + alpha * x_adv.grad.sign()
-        delta = torch.clamp(x_adv - x0, min=-epsilon, max=epsilon)
-        x_adv = torch.clamp(x0 + delta, <span class="num">0</span>, <span class="num">1</span>).detach()
-    <span class="kw">return</span> x_adv</code></pre>
-      <div class="codebar error"><span class="label">错误示例：更新模型参数</span><span class="kind">Wrong target</span></div>
-      <pre><code><span class="cmt"># 错误示例：攻击时不该训练 model.parameters()。</span>
-optimizer = torch.optim.Adam(model.parameters(), lr=<span class="num">1e-3</span>)
+<p>对抗攻击把机器学习从“自然测试集表现好不好”推进到“有人故意找漏洞时会不会崩”。图像分类器在普通噪声下可能仍然认出猫，但某些专门优化出来的小扰动，却能让它以极高信心输出完全错误的类别。</p>
+<p>恶意输入</p>
+<p>攻击目标</p>
+<p>距离限制</p>
+<p>优化输入</p>
+<p>FGSM/迭代</p>
+      </section>
+      <section id="why">
+        <div class="head">
+          <h2>为什么要研究攻击：真实应用里有人会故意骗你</h2>
+          <span class="tag">WHY</span>
+        </div>
+<p>模型如果只在善意数据上准确，仍然可能无法上线。邮件过滤器会面对想绕过检测的垃圾邮件发送者；图像识别系统可能面对故意贴贴纸、加扰动、改变外观的人；安全系统更是天然处在对抗环境中。模型必须能应付来自人类的恶意。</p>
+<p><b>现在你应该能做什么：</b>说明为什么 adversarial robustness 是部署模型时的安全需求，而不是学术玩具。</p>
+      </section>
+      <section id="types">
+        <div class="head">
+          <h2>Untargeted 与 Targeted：只要不是猫，还是必须变海星</h2>
+          <span class="tag">TYPES</span>
+        </div>
+<p>benign image 是没有被攻击的原图，attack image 是加了扰动后的图片。对于一张原本被模型判为猫的图片，untargeted attack 的目标很宽：只要模型输出不是猫就成功。targeted attack 更难：攻击者指定目标类别，例如必须让模型输出海星，才算成功。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>类型</th><th>成功条件</th><th>例子</th></tr>
+<tr><td>Untargeted</td><td>输出不是原正确类别。</td><td>猫变成任意非猫类别。</td></tr><tr><td>Targeted</td><td>输出为攻击者指定类别。</td><td>猫必须变成海星。</td></tr>
+        </table></div>
+<p><b>现在你应该能做什么：</b>给定原类别和攻击后输出，判断攻击是 untargeted 成功、targeted 成功还是失败。</p>
+      </section>
+      <section id="loss">
+        <div class="head">
+          <h2>攻击目标函数：让正确答案远，或让目标答案近</h2>
+          <span class="tag">LOSS</span>
+        </div>
+<p>设模型是固定函数 <code>f</code>，输入图片是 <code>x</code>，输出分布是 <code>y = f(x)</code>。对于 untargeted attack，我们希望输出和正确标签 <code>y_hat</code> 差距越大越好。如果用 cross entropy 衡量差距，就可以最大化 cross entropy，或者等价地最小化负的 cross entropy。</p>
+<p>targeted attack 还要靠近指定目标 <code>y_target</code>。一种写法是同时让正确类远、目标类近：</p>
+<p>不同文献的符号和正负号可能不同，关键是看优化方向：到底是在最大化正确类 loss，还是最小化目标类 loss。写代码时一定要确认 loss 的方向，否则可能在帮模型变得更正确。</p>
+      </section>
+      <section id="distance">
+        <div class="head">
+          <h2>距离限制：扰动要小到人不容易察觉</h2>
+          <span class="tag">DISTANCE</span>
+        </div>
+<p>只优化攻击目标不够，因为我们希望 attack image 和 benign image 看起来几乎一样。于是加入限制：</p>
+<p>常见距离包括 L2 norm 和 L∞ norm。L2 看整体平方和，许多像素都改一点时可能不大；L∞ 只看所有像素中最大改变量。课程用四像素例子说明：如果每个像素都小改，人可能看不出来；如果只有一个像素改很大，人可能更容易察觉。此时 L∞ 更能限制单个像素的最大变化。</p>
+<p><b>现在你应该能做什么：</b>解释为什么图像作业常用 L∞，以及为什么距离定义需要 domain knowledge。</p>
+      </section>
+      <section id="optimize">
+        <div class="head">
+          <h2>优化输入：像训练模型一样训练一张图</h2>
+          <span class="tag">OPTIMIZE</span>
+        </div>
+<p>如果暂时拿掉距离限制，攻击优化和训练模型非常像。训练模型时，我们固定输入，更新 network parameters；攻击时，我们固定 network parameters，更新输入图片 <code>x</code>。初始化通常设为原图 <code>x0</code>，因为我们希望最终图片和原图接近。</p>
+        <div class="formula" data-export-context="公式" data-export-lang="math">
+$$
+x ← x - η ∇xL(x)
+η 是步长；对 untargeted loss 的具体正负号要按定义确认。
+$$
+        </div>
+<p><b>现在你应该能做什么：</b>说清楚攻击中的 gradient 是 loss 对输入的 gradient，而不是 loss 对模型参数的 gradient。</p>
+      </section>
+      <section id="projection">
+        <div class="head">
+          <h2>动手观察：L∞ 方框与投影</h2>
+          <span class="tag">INTERACTIVE</span>
+        </div>
+<p>在二维简化图中，原图 <code>x0</code> 是黑点。L∞ 限制形成一个方框：攻击点必须留在方框内。若 gradient 更新跑出方框，就投影回离它最近的方框边界。</p>
+<p>epsilon0.20</p>
+<p>更新步长0.28</p>
+<p>是否出界是</p>
+<p>重置</p>
+      </section>
+      <section id="fgsm">
+        <div class="head">
+          <h2>FGSM：一拳超人的一步攻击</h2>
+          <span class="tag">FGSM</span>
+        </div>
+<p>FGSM 是 Fast Gradient Sign Method。它不做很多次迭代，而是只更新一次。做法是取 loss 对输入的 gradient，再只保留每个维度的正负号。这样每个像素都沿着最能改变 loss 的方向移动 <code>epsilon</code>。</p>
+<p>为什么取 sign？在 L∞ 限制下，每个维度最多能改 <code>epsilon</code>，那最直接的做法就是每个维度都走到允许范围的边界，方向由 gradient 正负决定。课程中说它像“一拳超人”：只攻击一次，很多时候就能让模型错。</p>
+        <div class="box info">
+<h3>FGSM</h3>
+<p>一步到位，速度快，适合作为 baseline。</p>
+        </div>
+        <div class="box warn">
+<h3>Iterative FGSM</h3>
+<p>多次小步更新加投影，攻击更强，但计算成本更高。</p>
+<p><b>现在你应该能做什么：</b>解释 FGSM 的公式，以及为什么 iterative 版本通常比一步版本更强。</p>
+        </div>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：FGSM 与迭代版本</h2>
+          <span class="tag">CODE</span>
+        </div>
+<p>下面是 PyTorch 风格的 untargeted FGSM。为了让模型犯错，我们最大化正确标签的 cross entropy，所以代码里直接沿着 gradient sign 增大 loss。具体符号要和你的 loss 定义保持一致。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">def fgsm(model, x0, y, epsilon):
+ x = x0.clone().detach().requires_grad_(True)
+ logits = model(x)
+ loss = torch.nn.functional.cross_entropy(logits, y)
+ model.zero_grad()
+ loss.backward()
+ x_adv = x + epsilon * x.grad.sign()
+ x_adv = torch.clamp(x_adv, 0, 1)
+ return x_adv.detach()</code></pre>
+<p>正确示例：iterative FGSM with projectionPyTorch</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text">def iter_fgsm(model, x0, y, epsilon, alpha, steps):
+ x_adv = x0.clone().detach()
+ for _ in range(steps):
+ x_adv.requires_grad_(True)
+ loss = torch.nn.functional.cross_entropy(model(x_adv), y)
+ model.zero_grad()
+ loss.backward()
+ x_adv = x_adv + alpha * x_adv.grad.sign()
+ delta = torch.clamp(x_adv - x0, min=-epsilon, max=epsilon)
+ x_adv = torch.clamp(x0 + delta, 0, 1).detach()
+ return x_adv</code></pre>
+<p>错误示例：更新模型参数Wrong target</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-3">复制</button></div>
+        <pre id="code-code-3" data-export-context="代码" data-export-lang="text"><code class="language-text"># 错误示例：攻击时不该训练 model.parameters()。
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 loss.backward()
 optimizer.step()</code></pre>
-      <p>攻击时模型参数固定。你要得到的是一张会骗过当前模型的输入，不是把模型训练坏或训练好。</p>
-      <p><strong>现在你应该能做什么：</strong>读懂 FGSM 代码，并能指出投影步骤如何保证扰动不超过 <code>epsilon</code>。</p>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区与修法</h2><span class="tag">DIAGNOSIS</span></div>
+<p>攻击时模型参数固定。你要得到的是一张会骗过当前模型的输入，不是把模型训练坏或训练好。</p>
+        </div>
+<p><b>现在你应该能做什么：</b>读懂 FGSM 代码，并能指出投影步骤如何保证扰动不超过 <code>epsilon</code>。</p>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区与修法</h2>
+          <span class="tag">DIAGNOSIS</span>
+        </div>
       <div class="grid2">
-        <div class="box redsoft"><h3>误区 1：普通噪声有效，所以攻击只是加噪声</h3><p>普通大噪声让模型错不奇怪；对抗扰动是专门优化的小扰动。修法是比较随机噪声和 gradient-based 扰动。</p></div>
-        <div class="box redsoft"><h3>误区 2：targeted 和 untargeted 混用</h3><p>只要错和错到指定类别是不同目标。修法是先写清成功条件。</p></div>
-        <div class="box redsoft"><h3>误区 3：忘记距离限制</h3><p>没有限制时可以把图改成任何东西。修法是明确 L2/L∞ 或感知距离阈值。</p></div>
-        <div class="box redsoft"><h3>误区 4：loss 符号写反</h3><p>untargeted 要让正确类 loss 变大，targeted 要让目标类 loss 变小。修法是检查优化方向。</p></div>
-        <div class="box redsoft"><h3>误区 5：迭代后不投影</h3><p>多步更新容易跑出 epsilon 限制。修法是每步 clamp delta。</p></div>
-        <div class="box redsoft"><h3>误区 6：所有领域都用同一种 norm</h3><p>语音、人脸、文本的感知差异不同。修法是根据 domain knowledge 设计距离。</p></div>
+        <div class="box redsoft">
+<h3>误区 1：普通噪声有效，所以攻击只是加噪声</h3>
+<p>普通大噪声让模型错不奇怪；对抗扰动是专门优化的小扰动。修法是比较随机噪声和 gradient-based 扰动。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 2：targeted 和 untargeted 混用</h3>
+<p>只要错和错到指定类别是不同目标。修法是先写清成功条件。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 3：忘记距离限制</h3>
+<p>没有限制时可以把图改成任何东西。修法是明确 L2/L∞ 或感知距离阈值。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 4：loss 符号写反</h3>
+<p>untargeted 要让正确类 loss 变大，targeted 要让目标类 loss 变小。修法是检查优化方向。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 5：迭代后不投影</h3>
+<p>多步更新容易跑出 epsilon 限制。修法是每步 clamp delta。</p>
+        </div>
+        <div class="box redsoft">
+<h3>误区 6：所有领域都用同一种 norm</h3>
+<p>语音、人脸、文本的感知差异不同。修法是根据 domain knowledge 设计距离。</p>
+<p><b>现在你应该能做什么：</b>检查一个攻击实现时，逐项确认目标、loss 方向、距离限制、投影和模型参数是否固定。</p>
+        </div>
       </div>
-      <p><strong>现在你应该能做什么：</strong>检查一个攻击实现时，逐项确认目标、loss 方向、距离限制、投影和模型参数是否固定。</p>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 QUESTIONS</span></div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答建议</strong><p>本节题目都围绕一个优化问题：固定模型，改输入，既要攻击成功，又要扰动小。</p></div>
-        <div class="review-card"><strong>自检标准</strong><p>你能从 loss、norm、projection 三件事解释 FGSM，就抓住了本节主线。</p></div>
-      </div>
 
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>一、攻击定义</h3><p>先确认基本术语。</p></div>
-          <div class="quick-review"><b>快速回顾</b>benign image 是原图，attack image 是加扰动后的图。</div>
+          <div><h3>一、攻击定义</h3></div>
+          <div class="quick-review">快速回顾 benign image 是原图，attack image 是加扰动后的图。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q01" data-title="恶意输入">
-            <div class="q-meta"><span class="pill">Q01</span><span class="pill">解释</span></div>
-            <h3>为什么模型普通测试准确率高，不代表它能应付来自人类的恶意？</h3>
-            <textarea placeholder="从垃圾邮件、专门构造输入、真实部署回答。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q02" data-title="benign attack">
-            <div class="q-meta"><span class="pill">Q02</span><span class="pill">定义</span></div>
-            <h3>区分 benign image 和 attack image。</h3>
-            <textarea placeholder="说明是否被加了攻击扰动，以及模型输出变化。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q03" data-title="untargeted">
-            <div class="q-meta"><span class="pill">Q03</span><span class="pill">判断</span></div>
-            <h3>原图是猫，攻击后模型输出键盘。对于 untargeted attack 是否成功？为什么？</h3>
-            <div class="choices">
-              <label><input type="radio" name="p39q03" value="成功。untargeted 只要求离开正确类别，不要求错到指定类别。">成功。untargeted 只要求离开正确类别，不要求错到指定类别。</label>
-              <label><input type="radio" name="p39q03" value="不成功。必须输出攻击者指定的类别才算成功。">不成功。必须输出攻击者指定的类别才算成功。</label>
-            </div>
-          </div>
-          <div class="q" data-role="homework" data-qid="q04" data-title="targeted">
-            <div class="q-meta"><span class="pill">Q04</span><span class="pill">判断</span></div>
-            <h3>目标是让猫变海星，但攻击后输出键盘。对于 targeted attack 是否成功？为什么？</h3>
-            <div class="choices">
-              <label><input type="radio" name="p39q04" value="成功。只要不是猫就可以。">成功。只要不是猫就可以。</label>
-              <label><input type="radio" name="p39q04" value="不成功。targeted attack 必须输出指定目标海星。">不成功。targeted attack 必须输出指定目标海星。</label>
-            </div>
-          </div>
-        </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q01</span></div>
+        <h3><b>Q:</b> 为什么模型普通测试准确率高，不代表它能应付来自人类的恶意？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q02</span></div>
+        <h3><b>Q:</b> 区分 benign image 和 attack image。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q03</span></div>
+        <h3><b>Q:</b> 原图是猫，攻击后模型输出键盘。对于 untargeted attack 是否成功？为什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="成功。untargeted 只要求离开正确类别，不要求错到指定类别。">成功。untargeted 只要求离开正确类别，不要求错到指定类别。</label>
+      <label><input type="radio" name="q?" value="不成功。必须输出攻击者指定的类别才算成功。">不成功。必须输出攻击者指定的类别才算成功。</label>
       </div>
 
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q04</span></div>
+        <h3><b>Q:</b> 目标是让猫变海星，但攻击后输出键盘。对于 targeted attack 是否成功？为什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="成功。只要不是猫就可以。">成功。只要不是猫就可以。</label>
+      <label><input type="radio" name="q?" value="不成功。targeted attack 必须输出指定目标海星。">不成功。targeted attack 必须输出指定目标海星。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>二、Loss 与距离</h3><p>把攻击写成受限制优化问题。</p></div>
-          <div class="quick-review"><b>快速回顾</b>目标负责骗模型，距离负责不让人看出来。</div>
+          <div><h3>二、Loss 与距离</h3></div>
+          <div class="quick-review">快速回顾 目标负责骗模型，距离负责不让人看出来。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q05" data-title="untargeted loss">
-            <div class="q-meta"><span class="pill">Q05</span><span class="pill">公式</span></div>
-            <h3>为什么 untargeted attack 可以最大化正确标签的 cross entropy？</h3>
-            <textarea placeholder="让模型输出远离正确答案。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q06" data-title="targeted loss">
-            <div class="q-meta"><span class="pill">Q06</span><span class="pill">解释</span></div>
-            <h3>targeted attack 的 loss 为什么既要远离正确类，又要靠近目标类？</h3>
-            <textarea placeholder="两项目标分别解释。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q07" data-title="距离限制">
-            <div class="q-meta"><span class="pill">Q07</span><span class="pill">概念</span></div>
-            <h3>攻击优化中为什么必须加 <code>d(x, x0) ≤ epsilon</code>？</h3>
-            <textarea placeholder="否则可以把图改得很明显，不再是小扰动。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q08" data-title="L2 L∞">
-            <div class="q-meta"><span class="pill">Q08</span><span class="pill">对照</span></div>
-            <h3>用四像素例子解释 L2 和 L∞ 的差异，以及为什么 L∞ 可能更贴近图像攻击的需求。</h3>
-            <textarea placeholder="整体能量 vs 单像素最大变化。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q05</span></div>
+        <h3><b>Q:</b> 为什么 untargeted attack 可以最大化正确标签的 cross entropy？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q06</span></div>
+        <h3><b>Q:</b> targeted attack 的 loss 为什么既要远离正确类，又要靠近目标类？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q07</span></div>
+        <h3><b>Q:</b> 攻击优化中为什么必须加 <code>d(x, x0) ≤ epsilon</code>？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q08</span></div>
+        <h3><b>Q:</b> 用四像素例子解释 L2 和 L∞ 的差异，以及为什么 L∞ 可能更贴近图像攻击的需求。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>三、优化与 FGSM</h3><p>理解从训练参数到训练输入的切换。</p></div>
-          <div class="quick-review"><b>快速回顾</b>模型固定，输入初始化为原图，沿 gradient 更新，再投影。</div>
+          <div><h3>三、优化与 FGSM</h3></div>
+          <div class="quick-review">快速回顾 模型固定，输入初始化为原图，沿 gradient 更新，再投影。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q09" data-title="优化对象">
-            <div class="q-meta"><span class="pill">Q09</span><span class="pill">辨析</span></div>
-            <h3>攻击时为什么说“优化对象是输入图片，而不是 network parameters”？</h3>
-            <textarea placeholder="模型固定，更新 x。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q10" data-title="初始化">
-            <div class="q-meta"><span class="pill">Q10</span><span class="pill">推理</span></div>
-            <h3>为什么 adversarial image 的优化通常从原图 <code>x0</code> 初始化，而不是随机图片？</h3>
-            <textarea placeholder="希望最终和原图接近。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q11" data-title="projection">
-            <div class="q-meta"><span class="pill">Q11</span><span class="pill">解释</span></div>
-            <h3>什么是“更新后投影回限制集合”？用 L∞ 方框解释。</h3>
-            <textarea placeholder="跑出方框就拉回最近边界。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q12" data-title="FGSM">
-            <div class="q-meta"><span class="pill">Q12</span><span class="pill">公式</span></div>
-            <h3>写出 FGSM 的核心公式，并解释 <code>sign(gradient)</code> 的作用。</h3>
-            <input type="text" data-label="FGSM 公式" placeholder="x' = x + epsilon * sign(gradient)">
-            <input type="text" data-label="sign 作用" placeholder="只取每个维度的方向，让扰动贴近 L∞ 约束边界。">
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q09</span></div>
+        <h3><b>Q:</b> 攻击时为什么说“优化对象是输入图片，而不是 network parameters”？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q10</span></div>
+        <h3><b>Q:</b> 为什么 adversarial image 的优化通常从原图 <code>x0</code> 初始化，而不是随机图片？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q11</span></div>
+        <h3><b>Q:</b> 什么是“更新后投影回限制集合”？用 L∞ 方框解释。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q12</span></div>
+        <h3><b>Q:</b> 写出 FGSM 的核心公式，并解释 <code>sign(gradient)</code> 的作用。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
         <div class="group-head">
-          <div><h3>四、实现与诊断</h3><p>避免攻击代码里最常见的错误。</p></div>
-          <div class="quick-review"><b>快速回顾</b>iterative FGSM 多步更新，每一步都要投影。</div>
+          <div><h3>四、实现与诊断</h3></div>
+          <div class="quick-review">快速回顾 iterative FGSM 多步更新，每一步都要投影。 --></div>
         </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-qid="q13" data-title="iterative FGSM">
-            <div class="q-meta"><span class="pill">Q13</span><span class="pill">解释</span></div>
-            <h3>iterative FGSM 为什么通常比 FGSM 更强？它多了什么风险？</h3>
-            <textarea placeholder="多步搜索更充分；风险是出界，需要投影。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q14" data-title="错误示例">
-            <div class="q-meta"><span class="pill">Q14</span><span class="pill">错误示例</span></div>
-            <h3>诊断错误：攻击代码里更新了 <code>model.parameters()</code>。错因、后果、修法是什么？</h3>
-            <textarea placeholder="攻击应固定模型，只更新输入。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q15" data-title="loss 符号">
-            <div class="q-meta"><span class="pill">Q15</span><span class="pill">诊断</span></div>
-            <h3>如果 untargeted attack 的 loss 符号写反，可能发生什么？你如何检查？</h3>
-            <textarea placeholder="可能让模型更正确；看正确类概率是否下降。"></textarea>
-          </div>
-          <div class="q" data-role="homework" data-qid="q16" data-title="domain knowledge">
-            <div class="q-meta"><span class="pill">Q16</span><span class="pill">迁移</span></div>
-            <h3>如果攻击语音系统，为什么不能直接照搬图像里的 L∞ 距离？</h3>
-            <textarea placeholder="人类听觉对频率和响度敏感方式不同。"></textarea>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q17" data-title="费曼题">
-            <div class="q-meta"><span class="pill">Q17</span><span class="pill">费曼题</span></div>
-            <h3>请用 8-12 句话向同学讲清楚：FGSM 如何用一次 gradient 更新生成对抗图片？</h3>
-            <textarea placeholder="要求串起：固定模型、原图初始化、loss、gradient sign、epsilon、L∞ 限制。"></textarea>
-            <div class="solve-note">提示：可以把它讲成“一步走到允许扰动方框边界”。</div>
-          </div>
-          <div class="q full" data-role="homework" data-qid="q18" data-title="完整攻击方案">
-            <div class="q-meta"><span class="pill">Q18</span><span class="pill">综合</span></div>
-            <h3>设计一个 targeted attack，把猫图攻击成海星。请写出目标、loss 方向、距离限制、初始化、更新步骤和成功判定。</h3>
-            <textarea placeholder="写成可执行流程。"></textarea>
-          </div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q13</span></div>
+        <h3><b>Q:</b> iterative FGSM 为什么通常比 FGSM 更强？它多了什么风险？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q14</span></div>
+        <h3><b>Q:</b> 诊断错误：攻击代码里更新了 <code>model.parameters()</code>。错因、后果、修法是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q15</span></div>
+        <h3><b>Q:</b> 如果 untargeted attack 的 loss 符号写反，可能发生什么？你如何检查？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q16</span></div>
+        <h3><b>Q:</b> 如果攻击语音系统，为什么不能直接照搬图像里的 L∞ 距离？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q17</span></div>
+        <h3><b>Q:</b> 请用 8-12 句话向同学讲清楚：FGSM 如何用一次 gradient 更新生成对抗图片？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">Q18</span></div>
+        <h3><b>Q:</b> 设计一个 targeted attack，把猫图攻击成海星。请写出目标、loss 方向、距离限制、初始化、更新步骤和成功判定。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
-
+      </section>
     <section id="export">
-      <div class="head"><h2>练习记录</h2><span class="tag">RECORD</span></div>
-      <p>完成练习后，生成一份 Markdown 记录。它会保留完整题干和你的回答，方便自学检查或分享给读者参考。</p>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
       <div class="actions">
-        <button type="button" onclick="generateRecord()">生成记录</button>
-        <button type="button" class="ghost" onclick="copyRecord()">复制记录</button>
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
       </div>
-      <div class="quality" id="qualityBox"></div>
-      <pre class="answer" id="recordOutput">还没有生成记录。</pre>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-  const $ = (id) => document.getElementById(id);
+      </ul>
+    </section>
+  </article>
 
-  function updateProgress(){
-    const doc = document.documentElement;
-    const max = doc.scrollHeight - doc.clientHeight;
-    const pct = max > 0 ? (doc.scrollTop / max) * 100 : 0;
-    $('readProgress').style.width = pct + '%';
-  }
-  document.addEventListener('scroll', updateProgress);
-  updateProgress();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-  const navLinks = Array.from(document.querySelectorAll('nav a'));
-  const sections = navLinks.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
-  const observer = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if(entry.isIntersecting){
-        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id));
-      }
-    });
-  }, {rootMargin:'-30% 0px -65% 0px'});
-  sections.forEach(sec => observer.observe(sec));
-
-  function updateProj(){
-    const eps = parseFloat($('eps').value);
-    const step = parseFloat($('step').value);
-    $('epsVal').textContent = eps.toFixed(2);
-    $('stepVal').textContent = step.toFixed(2);
-    const cx = 0.5, cy = 0.5;
-    const rawX = cx + step * 0.86;
-    const rawY = cy - step * 0.52;
-    const projX = Math.max(cx - eps, Math.min(cx + eps, rawX));
-    const projY = Math.max(cy - eps, Math.min(cy + eps, rawY));
-    const out = rawX !== projX || rawY !== projY;
-    const plane = $('plane').getBoundingClientRect();
-    const box = $('boxlimit');
-    box.style.left = ((cx - eps) * 100) + '%';
-    box.style.top = ((cy - eps) * 100) + '%';
-    box.style.width = (eps * 2 * 100) + '%';
-    box.style.height = (eps * 2 * 100) + '%';
-    $('basePt').style.left = (cx * 100) + '%';
-    $('basePt').style.top = (cy * 100) + '%';
-    $('newPt').style.left = (projX * 100) + '%';
-    $('newPt').style.top = (projY * 100) + '%';
-    const arrow = $('arrow');
-    const ax = cx * plane.width, ay = cy * plane.height;
-    const bx = projX * plane.width, by = projY * plane.height;
-    const len = Math.hypot(bx - ax, by - ay);
-    const angle = Math.atan2(by - ay, bx - ax) * 180 / Math.PI;
-    arrow.style.left = ax + 'px';
-    arrow.style.top = ay + 'px';
-    arrow.style.width = len + 'px';
-    arrow.style.transform = 'rotate(' + angle + 'deg)';
-    $('outVal').textContent = out ? '是' : '否';
-    $('outBar').style.width = out ? '100%' : '35%';
-    $('outBar').className = out ? 'fill red' : 'fill green';
-    $('projNote').textContent = out
-      ? '原始更新会跑出方框，所以红点显示的是投影回 L∞ 限制后的结果。'
-      : '更新仍在 L∞ 方框内，不需要投影修正。';
-  }
-  function resetProj(){
-    $('eps').value = '0.20';
-    $('step').value = '0.28';
-    updateProj();
-  }
-  ['eps','step'].forEach(id => $(id).addEventListener('input', updateProj));
-  updateProj();
-
-  function collectAnswer(card){
-    const parts = [];
-    const checked = Array.from(card.querySelectorAll('input[type="radio"]:checked,input[type="checkbox"]:checked')).map(input => {
-      const label = input.closest('label');
-      return label ? label.innerText.trim() : input.value;
-    });
-    if(checked.length) parts.push('选择：' + checked.join('；'));
-    const selects = Array.from(card.querySelectorAll('select')).map(select => {
-      const option = select.options[select.selectedIndex];
-      const value = option && option.value ? option.textContent.trim() : '';
-      const label = select.dataset.label || select.getAttribute('aria-label') || '下拉选择';
-      return value ? label + '：' + value : '';
-    }).filter(Boolean);
-    if(selects.length) parts.push(selects.join('\n'));
-    const texts = Array.from(card.querySelectorAll('textarea,input[type="text"]')).map(el => {
-      const value = el.value.trim();
-      const label = el.dataset.label || el.getAttribute('aria-label') || '';
-      return value ? (label ? label + '：' + value : value) : '';
-    }).filter(Boolean);
-    if(texts.length) parts.push(texts.join('\n'));
-    return parts.join('\n').trim();
-  }
-
-  function generateRecord(){
-    const cards = Array.from(document.querySelectorAll(".q[data-role='homework']"));
-    const lines = [];
-    let answered = 0;
-    lines.push('# P39 对抗攻击 1：基本概念与 FGSM - 练习记录');
-    lines.push('');
-    lines.push('## 完成情况');
-    cards.forEach((card, idx) => {
-      const title = card.dataset.title || ('题目 ' + (idx + 1));
-      const question = card.querySelector('h3')?.innerText.trim() || title;
-      const answer = collectAnswer(card);
-      if(answer) answered += 1;
-      lines.push('');
-      lines.push('### Q' + String(idx + 1).padStart(2, '0') + ' ' + title);
-      lines.push('');
-      lines.push('题目：' + question);
-      lines.push('');
-      lines.push(answer ? answer : '（未作答）');
-    });
-    const missing = cards.length - answered;
-    const quality = [];
-    quality.push('已作答：' + answered + ' / ' + cards.length);
-    if(missing > 0) quality.push('还有 ' + missing + ' 题未作答。');
-    if(!$('qualityBox').style.display || $('qualityBox').style.display === 'none') $('qualityBox').style.display = 'block';
-    $('qualityBox').textContent = quality.join('\n');
-    $('recordOutput').textContent = lines.join('\n');
-  }
-
-  async function copyRecord(){
-    const text = $('recordOutput').textContent;
-    if(!text || text === '还没有生成记录。') generateRecord();
-    try{
-      await navigator.clipboard.writeText($('recordOutput').textContent);
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '已复制练习记录。';
-    }catch(err){
-      $('qualityBox').style.display = 'block';
-      $('qualityBox').textContent = '复制失败，请手动选中下方记录。';
-    }
-  }
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-

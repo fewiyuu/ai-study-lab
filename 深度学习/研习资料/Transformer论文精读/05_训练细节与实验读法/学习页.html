@@ -4,821 +4,684 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Transformer 论文精读 05｜训练细节与实验读法</title>
-  <link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-tomorrow.min.css">
-  <link rel="stylesheet" href="../assets/vendor/prism/prism-line-numbers.min.css">
-  <link rel="stylesheet" href="../assets/study-page.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../../assets/study-page-v2.css">
 </head>
 <body data-course="Transformer 论文精读" data-unit="05 训练细节与实验读法">
-  <div class="progress" id="progress"></div>
-  <div class="layout">
-    <aside>
-      <div class="brand">
-        <strong>Transformer 论文精读</strong>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">Transformer 论文精读</a>
+        <span class="sep">/</span>
         <span>05 训练细节与实验读法</span>
       </div>
-      <nav>
-        <!-- learning-kit:nav:start -->
-        <a href="../index.html"><span class="dot"></span>返回课程地图</a>
-        <a href="#goals"><span class="dot"></span>学习目标</a>
-        <a href="#setup"><span class="dot"></span>训练设置</a>
-        <a href="#schedule"><span class="dot"></span>warmup</a>
-        <a href="#targets"><span class="dot"></span>目标与正则</a>
-        <a href="#metrics"><span class="dot"></span>指标读法</a>
-        <a href="#results"><span class="dot"></span>实验结果</a>
-        <a href="#ablation"><span class="dot"></span>消融读法</a>
-        <a href="#implementation"><span class="dot"></span>最小实现</a>
-        <a href="#pitfalls"><span class="dot"></span>常见误区</a>
-        <a href="#bridge"><span class="dot"></span>下一步</a>
-        <a href="#practice"><span class="dot"></span>练习</a>
-        <a href="#export"><span class="dot"></span>导出</a>
-        <a href="#sources"><span class="dot"></span>参考资料</a>
-        <!-- learning-kit:nav:end -->
-      </nav>
-      <div class="side-note">这页把论文最后一段读成证据链：训练配方怎样稳定模型，评价指标到底测什么，实验表又怎样支持架构贡献。</div>
-    </aside>
+      <div class="top-nav-right">
+        <a href="../../../../search.html" class="nav-pill">🔍 搜索</a>
+      </div>
+    </div>
+  </nav>
 
-    <main>
-      <div class="hero">
-        <div>
-          <div class="kicker">Attention Is All You Need · training and experiments</div>
-          <h1>训练细节与实验读法：把 28.4 BLEU 读成证据链</h1>
-          <p>Transformer 原论文的实验部分容易被读成几串数字：<code>28.4 BLEU</code>、<code>41.8 BLEU</code>、<code>8 GPUs</code>、<code>3.5 days</code>。这一页把数字放回训练设置里：模型用什么配方训出来，指标在测什么，对比对象是谁，消融表能支撑哪一级结论。</p>
-          <p>读完后，你应该能把“用了 attention”这句话拆成更可检查的说法：结构假设、优化器和学习率、正则化目标、数据与指标、模型规模、消融变量分别提供了什么证据。</p>
-          <div class="course-links">
-            <a href="../index.html">课程地图</a><a href="../04_位置编码/学习页.html">上一节</a>
-          </div>
-        </div>
-        <div class="box soft">
-          <h3>读完本页应该能做什么</h3>
-          <ul>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Attention Is All You Need · training and experiments</div>
+      <div class="hero-meta">
+        <span class="hero-badge">05 训练细节与实验读法</span>
+      </div>
+      <h1 class="hero-title">Transformer 论文精读 05｜训练细节与实验读法</h1>
+      <p class="hero-desc">Transformer 原论文的实验部分容易被读成几串数字： 28.4 BLEU 、 41.8 BLEU 、 8 GPUs 、 3.5 days 。这一页把数字放回训练设置里：模型用什么配方训出来，指标在测什么，对比对象是谁，消融表能支撑哪一级结论。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../04_位置编码/学习页.html">上一节</a>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
             <li>解释 Noam learning rate 为什么前期升、后期降。</li>
             <li>说清 Adam 参数、dropout、label smoothing 各自影响训练的哪一层。</li>
             <li>读实验结果时同时检查任务、指标、单模型/集成、模型规模和训练成本。</li>
             <li>拿一行消融结果说出变量、现象、可能解释和边界。</li>
-          </ul>
-        </div>
+        </ul>
       </div>
+    </div>
+  </header>
 
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">学习目标</a>
+      <a href="#setup">训练设置先分层看</a>
+      <a href="#schedule">Noam warmup 学习率</a>
+      <a href="#targets">目标分布与正则化</a>
+      <a href="#metrics">指标读法</a>
+      <a href="#results">实验结果怎么读</a>
+      <a href="#ablation">消融表读法</a>
+      <a href="#implementation">训练配方最小实现</a>
+      <a href="#pitfalls">常见误区和修法</a>
+      <a href="#bridge">下一步怎么读</a>
+      <a href="#practice">综合练习</a>
+      <a href="#section-sources">参考资料</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
+
+  <!-- Content -->
+  <article class="content">
       <section id="goals">
         <div class="head">
           <h2>学习目标</h2>
           <span class="tag">goal</span>
         </div>
-        <p>这一页对应原论文第 5 节训练设置和第 6 节实验结果。前四页已经把 attention、multi-head、encoder/decoder、位置编码拆开；现在要回答另一个问题：这些结构放到真实机器翻译训练里，论文是怎样把“效果强、训练快、可替代循环结构”这件事讲成证据的。</p>
-        <div class="grid2">
-          <div class="box">
-            <h3>先分清三条线</h3>
-            <p>第一条线是训练配方，包括 Adam、Noam 学习率、dropout、label smoothing 和 batching。第二条线是结果读法，包括 BLEU、perplexity、训练成本、base/big 模型规模。第三条线是证据边界，包括消融实验回答了什么、没有回答什么。</p>
-            <p>读论文时把这三条线拆开，会避免一个常见误读：看到 BLEU 提升，就把所有提升都归到某个单点技巧上。原论文想展示的是一套架构在当时机器翻译任务上的整体能力，训练配方和实验条件是这个结论的一部分。</p>
-          </div>
-          <div class="box info">
-            <h3>本页的验收标准</h3>
-            <p>你不需要手背每个表格数字，但要能做三种动作：给定训练代码，检查它是否接近论文配方；给定结果表，解释每个指标在支持什么；给定一行消融，判断它改变的是结构、规模、正则强度还是优化条件。</p>
-            <p>换句话说，这页训练的是论文阅读能力，不只是 Transformer 记忆点。后面读新模型论文时，同样可以按“设置、指标、对照、消融、边界”这五项验收。</p>
-          </div>
+<p>这一页对应原论文第 5 节训练设置和第 6 节实验结果。前四页已经把 attention、multi-head、encoder/decoder、位置编码拆开；现在要回答另一个问题：这些结构放到真实机器翻译训练里，论文是怎样把“效果强、训练快、可替代循环结构”这件事讲成证据的。</p>
+        <div class="box info">
+<h3>本页的验收标准</h3>
+<p>你不需要手背每个表格数字，但要能做三种动作：给定训练代码，检查它是否接近论文配方；给定结果表，解释每个指标在支持什么；给定一行消融，判断它改变的是结构、规模、正则强度还是优化条件。</p>
+<p>换句话说，这页训练的是论文阅读能力，不只是 Transformer 记忆点。后面读新模型论文时，同样可以按“设置、指标、对照、消融、边界”这五项验收。</p>
+<p>你现在应该能做什么：打开实验部分时，先画出训练配方和结果证据两列，不要直接摘最高分。</p>
         </div>
-        <p>你现在应该能做什么：打开实验部分时，先画出训练配方和结果证据两列，不要直接摘最高分。</p>
       </section>
-
       <section id="setup">
         <div class="head">
           <h2>训练设置先分层看</h2>
           <span class="tag">setup</span>
         </div>
-        <p>原论文训练的是机器翻译模型，主要报告 WMT 2014 English-German 和 English-French 任务。它的训练设置不能压缩成一句“用 Adam 训练”：优化器参数、学习率曲线、batch 组织、正则化、模型规模都会改变结果。复现或读表时，应该把它们写成一张配方表。</p>
-        <div class="table-wrap">
-          <table data-export-context="训练设置分层表" data-export-lang="table">
-            <thead>
-              <tr><th>层级</th><th>论文中的具体设置</th><th>读论文时要问的问题</th><th>容易误读的点</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>模型规模</td><td>Transformer base 与 Transformer big 两档配置。</td><td>当前结果来自 base 还是 big？参数量和训练成本是否一起变了？</td><td>把 big 的效果和 base 的成本混在一起讲。</td></tr>
-              <tr><td>优化器</td><td>Adam，<code>β1=0.9</code>、<code>β2=0.98</code>、<code>ε=10^-9</code>。</td><td>代码是否只用了默认 Adam？学习率是否由外部 schedule 控制？</td><td>以为优化器名字相同就等于训练配方相同。</td></tr>
-              <tr><td>学习率</td><td>Noam schedule，<code>warmup_steps=4000</code>。</td><td>前期为什么升高，过 warmup 后为什么衰减？</td><td>把 warmup 理解成一直加大学习率。</td></tr>
-              <tr><td>正则化</td><td>dropout 和 label smoothing。</td><td>dropout 作用在哪些张量？label smoothing 改的是训练目标还是评价指标？</td><td>只记一个 <code>0.1</code>，不看它放在哪里。</td></tr>
-              <tr><td>训练输入</td><td>decoder 训练使用右移目标序列，仍保留 causal mask。</td><td>teacher forcing 是否造成未来泄漏？padding 是否从 attention 和 loss 中排除？</td><td>以为用了真实前缀就不需要 mask。</td></tr>
-              <tr><td>评价</td><td>主要报告 BLEU，也讨论 perplexity 和训练成本。</td><td>指标测的是概率、生成文本，还是硬件时间？</td><td>把 BLEU 当作所有语言质量的完整评价。</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="shape-tracer" data-shape-tracer>
-          <div class="trace-lines">
-            <button class="trace-line active" type="button" data-trace-step="recipe">训练配方 <span>optimizer + schedule</span></button>
-            <button class="trace-line" type="button" data-trace-step="batch">训练 batch <span>source / shifted target / masks</span></button>
-            <button class="trace-line" type="button" data-trace-step="loss">训练目标 <span>label smoothing + padding ignore</span></button>
-            <button class="trace-line" type="button" data-trace-step="metrics">结果证据 <span>BLEU / PPL / cost</span></button>
-            <button class="trace-line" type="button" data-trace-step="ablation">结论边界 <span>one variable at a time</span></button>
-          </div>
-          <div class="trace-canvas">
-            <div class="trace-card active" data-trace-target="recipe">
-              <b>配方层</b>
-              <code>Adam + Noam</code>
-              <p>先确认优化器参数和学习率曲线，否则训练行为已经变了。</p>
-            </div>
-            <div class="trace-card" data-trace-target="batch">
-              <b>输入层</b>
-              <code>x / y_in / y_out</code>
-              <p>目标序列右移后输入 decoder，监督目标保持下一个 token。</p>
-            </div>
-            <div class="trace-card" data-trace-target="loss">
-              <b>目标层</b>
-              <code>soft targets</code>
-              <p>label smoothing 改目标分布，padding 位置不应进入损失。</p>
-            </div>
-            <div class="trace-card" data-trace-target="metrics">
-              <b>指标层</b>
-              <code>BLEU / PPL</code>
-              <p>BLEU 看生成文本重叠，PPL 看概率模型困惑度。</p>
-            </div>
-            <div class="trace-card" data-trace-target="ablation">
-              <b>证据层</b>
-              <code>controlled change</code>
-              <p>消融要说明变量、现象和边界，不能只找最高分。</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="shift-demo" data-shift-demo>
-          <label>右移目标序列
-            <input type="text" value="&lt;BOS&gt; J'aime les chats &lt;EOS&gt;" aria-label="右移目标序列示例">
-          </label>
-          <div class="shift-rows"></div>
-          <p class="muted">这个 demo 只展示 teacher forcing 的输入/目标错位。真实训练还要加 causal mask：位置 <code>i</code> 只能读到不晚于 <code>i</code> 的目标端 token。</p>
-        </div>
-        <p>你现在应该能做什么：看到训练代码时，先检查目标右移、causal mask、padding mask、loss ignore 这四项是否同时成立。</p>
+<p>原论文训练的是机器翻译模型，主要报告 WMT 2014 English-German 和 English-French 任务。它的训练设置不能压缩成一句“用 Adam 训练”：优化器参数、学习率曲线、batch 组织、正则化、模型规模都会改变结果。复现或读表时，应该把它们写成一张配方表。</p>
+<p>模型规模Transformer base 与 Transformer big 两档配置。当前结果来自 base 还是 big？参数量和训练成本是否一起变了？把 big 的效果和 base 的成本混在一起讲。</p>
+<p>优化器Adam，<code>β1=0.9</code>、<code>β2=0.98</code>、<code>ε=10^-9</code>。代码是否只用了默认 Adam？学习率是否由外部 schedule 控制？以为优化器名字相同就等于训练配方相同。</p>
+<p>学习率Noam schedule，<code>warmup_steps=4000</code>。前期为什么升高，过 warmup 后为什么衰减？把 warmup 理解成一直加大学习率。</p>
+<p>正则化dropout 和 label smoothing。dropout 作用在哪些张量？label smoothing 改的是训练目标还是评价指标？只记一个 <code>0.1</code>，不看它放在哪里。</p>
+<p>训练输入decoder 训练使用右移目标序列，仍保留 causal mask。teacher forcing 是否造成未来泄漏？padding 是否从 attention 和 loss 中排除？以为用了真实前缀就不需要 mask。</p>
+<p>评价主要报告 BLEU，也讨论 perplexity 和训练成本。指标测的是概率、生成文本，还是硬件时间？把 BLEU 当作所有语言质量的完整评价。</p>
       </section>
-
       <section id="schedule">
         <div class="head">
           <h2>Noam warmup 学习率</h2>
           <span class="tag">schedule</span>
         </div>
-        <p>论文的学习率会随训练步数变化。公式看起来像一个技巧，但它的直觉很清楚：训练初期模型表示还不稳，先用较小步子逐渐放大；过了 warmup 之后，学习率按步数平方根衰减，让后期更新更细。</p>
-        <div class="math-block" data-export-context="Noam 学习率公式" data-export-lang="math">
-          $$
-          lrate = d_{model}^{-0.5} \cdot \min(step\_num^{-0.5},\ step\_num \cdot warmup\_steps^{-1.5})
-          $$
-          <p>原论文使用 <code>warmup_steps=4000</code>。当 <code>step_num</code> 很小时，线性 warmup 项更小，学习率随 step 上升；当 step 过大后，<code>step_num^{-0.5}</code> 更小，学习率开始衰减。</p>
+<p>论文的学习率会随训练步数变化。公式看起来像一个技巧，但它的直觉很清楚：训练初期模型表示还不稳，先用较小步子逐渐放大；过了 warmup 之后，学习率按步数平方根衰减，让后期更新更细。</p>
+<p>原论文使用 <code>warmup_steps=4000</code>。当 <code>step_num</code> 很小时，线性 warmup 项更小，学习率随 step 上升；当 step 过大后，<code>step_num^{-0.5}</code> 更小，学习率开始衰减。</p>
+        <div class="box warn">
+<h3>为什么不直接用默认 Adam</h3>
+<p>Adam 本身会根据梯度一阶、二阶矩调整每个参数的步长，但它仍需要一个全局学习率。原论文把 optimizer 的 <code>lr</code> 当成外部 schedule 的载体，每一步重写参数组里的学习率。只写 <code>torch.optim.Adam(model.parameters())</code>，没有复现这条曲线。</p>
+<p>这件事在复现实验时很实际：相同架构、相同数据，如果学习率计划不同，训练速度、稳定性和最终 BLEU 都可能变。论文读法里，训练配方就是证据的一部分。</p>
+<p>阶段较小项学习率趋势训练含义</p>
+<p>训练刚开始<code>step_num * warmup_steps^{-1.5}</code>随 step 线性升高让早期更新从小步开始，减少震荡。</p>
+<p>warmup 附近两项接近达到峰值附近模型已经积累了一段稳定梯度历史。</p>
+<p>warmup 之后<code>step_num^{-0.5}</code>按平方根衰减后期逐渐收小步长，细化参数。</p>
+<p>改变 <code>d_model</code>整体乘 <code>d_model^{-0.5}</code>曲线整体缩放模型宽度进入学习率尺度。</p>
+<p>你现在应该能做什么：不用画图，也能靠 <code>min</code> 的两个项解释学习率为什么先升后降。</p>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>分段读公式</h3>
-            <p>这个公式的关键是 <code>min</code>。优化器真正使用的是两个候选学习率里较小的那个。warmup 前，<code>step_num * warmup_steps^{-1.5}</code> 这项随 step 线性增加；warmup 后，<code>step_num^{-0.5}</code> 这项变成较小项，于是曲线缓慢下降。</p>
-            <p><code>d_model^{-0.5}</code> 是尺度因子。模型维度越大，初始学习率规模会被压低。这样读公式时，你会发现它把模型宽度、训练步数和 warmup 长度绑在一起。</p>
-          </div>
-          <div class="box warn">
-            <h3>为什么不直接用默认 Adam</h3>
-            <p>Adam 本身会根据梯度一阶、二阶矩调整每个参数的步长，但它仍需要一个全局学习率。原论文把 optimizer 的 <code>lr</code> 当成外部 schedule 的载体，每一步重写参数组里的学习率。只写 <code>torch.optim.Adam(model.parameters())</code>，没有复现这条曲线。</p>
-            <p>这件事在复现实验时很实际：相同架构、相同数据，如果学习率计划不同，训练速度、稳定性和最终 BLEU 都可能变。论文读法里，训练配方就是证据的一部分。</p>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table data-export-context="Noam 公式分段读法" data-export-lang="table">
-            <thead>
-              <tr><th>阶段</th><th>较小项</th><th>学习率趋势</th><th>训练含义</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>训练刚开始</td><td><code>step_num * warmup_steps^{-1.5}</code></td><td>随 step 线性升高</td><td>让早期更新从小步开始，减少震荡。</td></tr>
-              <tr><td>warmup 附近</td><td>两项接近</td><td>达到峰值附近</td><td>模型已经积累了一段稳定梯度历史。</td></tr>
-              <tr><td>warmup 之后</td><td><code>step_num^{-0.5}</code></td><td>按平方根衰减</td><td>后期逐渐收小步长，细化参数。</td></tr>
-              <tr><td>改变 <code>d_model</code></td><td>整体乘 <code>d_model^{-0.5}</code></td><td>曲线整体缩放</td><td>模型宽度进入学习率尺度。</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p>你现在应该能做什么：不用画图，也能靠 <code>min</code> 的两个项解释学习率为什么先升后降。</p>
       </section>
-
       <section id="targets">
         <div class="head">
           <h2>目标分布与正则化</h2>
           <span class="tag">targets</span>
         </div>
-        <p>训练配方里最容易被粗读的是 dropout 和 label smoothing，因为它们都常被概括成“防过拟合”。更好的读法是分清它们作用的对象：dropout 在中间表示或 attention 权重上制造扰动；label smoothing 改的是监督目标分布，让模型不要把训练标签当成绝对概率 1。</p>
-        <div class="math-block" data-export-context="Label smoothing 目标分布" data-export-lang="math">
-          $$
-          q(k) =
-          \begin{cases}
-          1-\epsilon_{ls}, & k = y \\
-          \epsilon_{ls}/(V-2), & k \ne y,\ k \ne \langle pad \rangle \\
-          0, & k = \langle pad \rangle
-          \end{cases}
-          $$
-          <p>这里用的是训练时常见的实现读法：正确类保留主要概率，非 padding 的其他类分到少量概率，padding 类不参与目标分布。原论文使用 <code>ε_ls=0.1</code>。</p>
+<p>训练配方里最容易被粗读的是 dropout 和 label smoothing，因为它们都常被概括成“防过拟合”。更好的读法是分清它们作用的对象：dropout 在中间表示或 attention 权重上制造扰动；label smoothing 改的是监督目标分布，让模型不要把训练标签当成绝对概率 1。</p>
+<p>这里用的是训练时常见的实现读法：正确类保留主要概率，非 padding 的其他类分到少量概率，padding 类不参与目标分布。原论文使用 <code>ε_ls=0.1</code>。</p>
+        <div class="box soft">
+<h3>dropout 要问“放在哪里”</h3>
+<p>原论文在多个位置使用 dropout，包括每个子层输出后、attention 权重上，以及 embedding 与 positional encoding 相加后。读实现时应检查 dropout 是否作用在这些路径上，并确认训练/评估模式切换是否正确。</p>
+<p>如果只在结果表里看到 dropout 比例，不看它落在哪些张量上，你只能得到很粗的结论。训练复现时，这些位置差异会变成行为差异。</p>
+<p>组件作用对象训练后果读代码时先查</p>
+<p>dropout子层输出、attention 权重、输入表示。减少对某些通道或连接的过度依赖。<code>model.train()</code> 下是否启用，位置是否贴近论文。</p>
+<p>label smoothing交叉熵目标分布。降低过度自信，可能改善 BLEU。正确类概率、非 padding 类分配、padding 是否排除。</p>
+<p>padding ignoreloss 中的无效位置。避免模型学习预测补齐 token。<code>ignore_index</code> 或手动 mask 是否生效。</p>
+<p>causal maskdecoder self-attention 的未来位置。避免训练时偷看答案。mask 是否加在 softmax 前，方向是否正确。</p>
+<p>你现在应该能做什么：看到 “label smoothing=0.1” 时，能说出它改的是目标分布，并解释为什么它和 BLEU/PPL 的关系不能简单等同。</p>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>label smoothing 为什么可能让 PPL 变差</h3>
-            <p>perplexity 来自模型给真实 token 的概率。label smoothing 把训练目标从 one-hot 改成软分布，会主动降低模型对正确类的极端置信度。于是它可能让 perplexity 看起来不如没有 smoothing 时漂亮，但生成译文的 BLEU 更好。</p>
-            <p>这类现象通常来自测量对象不同。PPL 更贴近概率校准和似然，BLEU 看生成结果与参考译文的 n-gram 匹配。论文里这类现象提醒你：不要把一个指标当成全部结论。</p>
-          </div>
-          <div class="box soft">
-            <h3>dropout 要问“放在哪里”</h3>
-            <p>原论文在多个位置使用 dropout，包括每个子层输出后、attention 权重上，以及 embedding 与 positional encoding 相加后。读实现时应检查 dropout 是否作用在这些路径上，并确认训练/评估模式切换是否正确。</p>
-            <p>如果只在结果表里看到 dropout 比例，不看它落在哪些张量上，你只能得到很粗的结论。训练复现时，这些位置差异会变成行为差异。</p>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table data-export-context="正则化组件对照表" data-export-lang="table">
-            <thead>
-              <tr><th>组件</th><th>作用对象</th><th>训练后果</th><th>读代码时先查</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>dropout</td><td>子层输出、attention 权重、输入表示。</td><td>减少对某些通道或连接的过度依赖。</td><td><code>model.train()</code> 下是否启用，位置是否贴近论文。</td></tr>
-              <tr><td>label smoothing</td><td>交叉熵目标分布。</td><td>降低过度自信，可能改善 BLEU。</td><td>正确类概率、非 padding 类分配、padding 是否排除。</td></tr>
-              <tr><td>padding ignore</td><td>loss 中的无效位置。</td><td>避免模型学习预测补齐 token。</td><td><code>ignore_index</code> 或手动 mask 是否生效。</td></tr>
-              <tr><td>causal mask</td><td>decoder self-attention 的未来位置。</td><td>避免训练时偷看答案。</td><td>mask 是否加在 softmax 前，方向是否正确。</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p>你现在应该能做什么：看到 “label smoothing=0.1” 时，能说出它改的是目标分布，并解释为什么它和 BLEU/PPL 的关系不能简单等同。</p>
       </section>
-
       <section id="metrics">
         <div class="head">
           <h2>指标读法</h2>
           <span class="tag">metrics</span>
         </div>
-        <p>实验表要按测量对象读。BLEU 近似衡量译文与参考译文的 n-gram 重叠，perplexity 衡量概率模型对真实序列的困惑程度，训练成本衡量达到结果所花的硬件与时间。只看最高分，会把这些对象混成一个“好”字。</p>
-        <div class="grid2">
-          <div class="box">
-            <h3>BLEU 读成“翻译基准上的自动指标”</h3>
-            <p>BLEU 在机器翻译论文里常用，但它不能完整替代人类评价。它奖励和参考译文重叠的 n-gram，并带有长度惩罚。原论文报告 WMT 2014 En-De 和 En-Fr 上的 BLEU，是为了和当时机器翻译系统在同一基准上比较。</p>
-            <p>因此，读到 <code>28.4 BLEU</code> 时，合格表达应包括任务、数据、模型是否单模型、对比对象和训练成本。只说“BLEU 高，所以模型全面更好”太粗。</p>
-          </div>
-          <div class="box info">
-            <h3>PPL 读成“概率模型困惑度”</h3>
-            <p>perplexity 越低，通常表示模型给真实序列更高概率。但 label smoothing 改了目标分布，所以 PPL 与 BLEU 可能方向不同。读这种差异时先问：指标测的是概率、译文重叠，还是训练成本。</p>
-            <p>这条经验可以迁移到其他论文：当两个指标方向不一致，不要急着说实验矛盾，先拆开测量对象。</p>
-          </div>
+<p>实验表要按测量对象读。BLEU 近似衡量译文与参考译文的 n-gram 重叠，perplexity 衡量概率模型对真实序列的困惑程度，训练成本衡量达到结果所花的硬件与时间。只看最高分，会把这些对象混成一个“好”字。</p>
+        <div class="box info">
+<h3>PPL 读成“概率模型困惑度”</h3>
+<p>perplexity 越低，通常表示模型给真实序列更高概率。但 label smoothing 改了目标分布，所以 PPL 与 BLEU 可能方向不同。读这种差异时先问：指标测的是概率、译文重叠，还是训练成本。</p>
+<p>这条经验可以迁移到其他论文：当两个指标方向不一致，不要急着说实验矛盾，先拆开测量对象。</p>
+<p>指标或条件它在测什么能支持的结论不能直接支持的结论</p>
+<p>BLEU生成译文与参考译文的 n-gram 重叠。在该翻译基准上输出质量强。所有语义、事实性、风格都无问题。</p>
+<p>perplexity概率模型对真实序列的困惑度。模型给真实 token 的概率情况。生成文本一定更符合人类偏好。</p>
+<p>single model是否不用模型集成。单个模型本身就能达到该分数。完全排除训练技巧或数据处理影响。</p>
+<p>training cost硬件数量和训练时间。并行训练效率是贡献之一。任何硬件和实现都能复现同样时间。</p>
+<p>base / big模型规模和容量。规模增加是否带来更好结果。架构变化和规模变化可以自动分离。</p>
+<p>你现在应该能做什么：读实验表时至少说出“指标测量对象 + 对比条件 + 结论边界”三件事。</p>
         </div>
-        <div class="table-wrap">
-          <table data-export-context="指标读法表" data-export-lang="table">
-            <thead>
-              <tr><th>指标或条件</th><th>它在测什么</th><th>能支持的结论</th><th>不能直接支持的结论</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>BLEU</td><td>生成译文与参考译文的 n-gram 重叠。</td><td>在该翻译基准上输出质量强。</td><td>所有语义、事实性、风格都无问题。</td></tr>
-              <tr><td>perplexity</td><td>概率模型对真实序列的困惑度。</td><td>模型给真实 token 的概率情况。</td><td>生成文本一定更符合人类偏好。</td></tr>
-              <tr><td>single model</td><td>是否不用模型集成。</td><td>单个模型本身就能达到该分数。</td><td>完全排除训练技巧或数据处理影响。</td></tr>
-              <tr><td>training cost</td><td>硬件数量和训练时间。</td><td>并行训练效率是贡献之一。</td><td>任何硬件和实现都能复现同样时间。</td></tr>
-              <tr><td>base / big</td><td>模型规模和容量。</td><td>规模增加是否带来更好结果。</td><td>架构变化和规模变化可以自动分离。</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p>你现在应该能做什么：读实验表时至少说出“指标测量对象 + 对比条件 + 结论边界”三件事。</p>
       </section>
-
       <section id="results">
         <div class="head">
           <h2>实验结果怎么读</h2>
           <span class="tag">results</span>
         </div>
-        <p>原论文摘要里的关键结果很有辨识度：Transformer 在 WMT 2014 English-to-German 上达到 <code>28.4 BLEU</code>，比当时已有最好结果包括 ensembles 高出 2 BLEU 以上；在 WMT 2014 English-to-French 上，单模型达到 <code>41.8 BLEU</code>，并用 8 块 GPU 训练约 3.5 天。要把这几句话一起读，不要拆成孤立口号。</p>
-        <div class="table-wrap">
-          <table data-export-context="论文摘要关键结果读法" data-export-lang="table">
-            <thead>
-              <tr><th>结果点</th><th>应该读成什么</th><th>需要同时检查什么</th><th>不要读成什么</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>WMT14 En-De <code>28.4 BLEU</code></td><td>在该翻译基准上超过当时强基线。</td><td>对比对象、是否 ensemble、数据处理。</td><td>所有语言任务都已被证明最优。</td></tr>
-              <tr><td>WMT14 En-Fr <code>41.8 BLEU</code></td><td>单模型在该任务上达到很强结果。</td><td>模型规模、训练设置、解码设置。</td><td>靠多个模型集成堆出的数字。</td></tr>
-              <tr><td>8 GPUs，约 3.5 天</td><td>并行训练效率是论文贡献的一部分。</td><td>硬件、实现、batching、模型大小。</td><td>任何环境都能复现同样时间。</td></tr>
-              <tr><td>base 和 big</td><td>两档模型展示容量与效果关系。</td><td>参数量、训练成本、表格行是否对应同一设置。</td><td>big 的分数可以代表所有 Transformer。</td></tr>
-            </tbody>
-          </table>
+<p>原论文摘要里的关键结果很有辨识度：Transformer 在 WMT 2014 English-to-German 上达到 <code>28.4 BLEU</code>，比当时已有最好结果包括 ensembles 高出 2 BLEU 以上；在 WMT 2014 English-to-French 上，单模型达到 <code>41.8 BLEU</code>，并用 8 块 GPU 训练约 3.5 天。要把这几句话一起读，不要拆成孤立口号。</p>
+<p>WMT14 En-De <code>28.4 BLEU</code>在该翻译基准上超过当时强基线。对比对象、是否 ensemble、数据处理。所有语言任务都已被证明最优。</p>
+<p>WMT14 En-Fr <code>41.8 BLEU</code>单模型在该任务上达到很强结果。模型规模、训练设置、解码设置。靠多个模型集成堆出的数字。</p>
+<p>8 GPUs，约 3.5 天并行训练效率是论文贡献的一部分。硬件、实现、batching、模型大小。任何环境都能复现同样时间。</p>
+<p>base 和 big两档模型展示容量与效果关系。参数量、训练成本、表格行是否对应同一设置。big 的分数可以代表所有 Transformer。</p>
+        <div class="box warn">
+<h3>历史位置要说清</h3>
+<p>这篇论文的实验背景是 2017 年前后的机器翻译和解析任务，不包含后来大规模预训练、长上下文推理、KV cache、RoPE、FlashAttention 等生态。经典论文可以提供机制和读法，但不能把后来所有进展都反向塞回原文。</p>
+<p>迁移到新任务时，结论需要重新验证。比如在长上下文模型里，标准 attention 的 <code>N^2</code> 成本会重新成为问题；在生成式大模型里，解码成本和缓存机制又会成为新主线。</p>
+<p>你现在应该能做什么：复述 Transformer 实验贡献时，同时说质量、成本、对比对象和历史边界。</p>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>“效果强”之外还有“训练快”</h3>
-            <p>论文标题强调 attention，但实验叙述还强调并行训练。RNN 类模型按时间步递推，训练并行度受序列顺序限制；Transformer 用 attention 和前馈网络堆叠，更容易把训练工作摊到矩阵计算上。BLEU 和训练成本一起出现，是为了说明架构在质量和效率上都占优势。</p>
-            <p>所以，当你复述贡献时，最好不要只说“分数高”。更准确的说法是：在当时机器翻译基准上，Transformer 用较低训练成本达到或超过强基线，并通过消融支持了 attention-only 架构的设计选择。</p>
-          </div>
-          <div class="box warn">
-            <h3>历史位置要说清</h3>
-            <p>这篇论文的实验背景是 2017 年前后的机器翻译和解析任务，不包含后来大规模预训练、长上下文推理、KV cache、RoPE、FlashAttention 等生态。经典论文可以提供机制和读法，但不能把后来所有进展都反向塞回原文。</p>
-            <p>迁移到新任务时，结论需要重新验证。比如在长上下文模型里，标准 attention 的 <code>N^2</code> 成本会重新成为问题；在生成式大模型里，解码成本和缓存机制又会成为新主线。</p>
-          </div>
-        </div>
-        <p>你现在应该能做什么：复述 Transformer 实验贡献时，同时说质量、成本、对比对象和历史边界。</p>
       </section>
-
       <section id="ablation">
         <div class="head">
           <h2>消融表读法</h2>
           <span class="tag">ablation</span>
         </div>
-        <p>消融实验的任务是回答设计变量是否有用。原论文的消融表改变 head 数、key/value 维度、模型宽度、FFN 维度、dropout、attention 类型、位置表示等设置。每一行都应该读成一个小问题：改了什么，指标怎么变，变化能归因到哪里，边界是什么。</p>
-        <div class="table-wrap">
-          <table data-export-context="消融实验阅读模板" data-export-lang="table">
-            <thead>
-              <tr><th>变量</th><th>它在问什么</th><th>读表时看什么</th><th>结论边界</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>head 数</td><td>多头是否比少头或单头更有效。</td><td>BLEU/PPL 是否随 head 数变化，参数量是否同步变化。</td><td>head 模式来自训练，不由人工固定语法功能。</td></tr>
-              <tr><td><code>d_k</code> / <code>d_v</code></td><td>每个 head 的子空间维度是否足够。</td><td>点积维度、输出容量、计算成本。</td><td>维度变化可能同时影响参数量和优化。</td></tr>
-              <tr><td><code>d_model</code> / <code>d_ff</code></td><td>模型宽度和 FFN 容量是否限制效果。</td><td>效果提升是否伴随明显成本增加。</td><td>容量提升不等于结构贡献本身。</td></tr>
-              <tr><td>dropout</td><td>正则强度是否影响泛化。</td><td>训练/验证指标是否出现过拟合迹象。</td><td>最佳比例和数据规模、模型大小相关。</td></tr>
-              <tr><td>attention 类型</td><td>替换 attention 机制后表现如何。</td><td>是否控制其他条件，复杂度是否改变。</td><td>单个任务上的结果不能覆盖所有场景。</td></tr>
-              <tr><td>位置表示</td><td>固定正弦与可学习位置表示差别如何。</td><td>长度外推、训练长度、指标变化。</td><td>不等于后来所有位置机制的最终结论。</td></tr>
-            </tbody>
-          </table>
+<p>消融实验的任务是回答设计变量是否有用。原论文的消融表改变 head 数、key/value 维度、模型宽度、FFN 维度、dropout、attention 类型、位置表示等设置。每一行都应该读成一个小问题：改了什么，指标怎么变，变化能归因到哪里，边界是什么。</p>
+<p>head 数多头是否比少头或单头更有效。BLEU/PPL 是否随 head 数变化，参数量是否同步变化。head 模式来自训练，不由人工固定语法功能。</p>
+<p><code>d_k</code> / <code>d_v</code>每个 head 的子空间维度是否足够。点积维度、输出容量、计算成本。维度变化可能同时影响参数量和优化。</p>
+<p><code>d_model</code> / <code>d_ff</code>模型宽度和 FFN 容量是否限制效果。效果提升是否伴随明显成本增加。容量提升不等于结构贡献本身。</p>
+<p>dropout正则强度是否影响泛化。训练/验证指标是否出现过拟合迹象。最佳比例和数据规模、模型大小相关。</p>
+<p>attention 类型替换 attention 机制后表现如何。是否控制其他条件，复杂度是否改变。单个任务上的结果不能覆盖所有场景。</p>
+<p>位置表示固定正弦与可学习位置表示差别如何。长度外推、训练长度、指标变化。不等于后来所有位置机制的最终结论。</p>
+        <div class="box soft">
+<h3>消融和复现的关系</h3>
+<p>消融表能告诉你哪个设计值得优先保留。复现训练时，先保住 optimizer、schedule、mask、loss、模型规模这些基础项，再讨论是否改 head 数或 dropout。否则你看到的指标变化可能来自训练配方漂移，未必来自结构变量。</p>
+<p>你现在应该能做什么：拿任意一行消融结果，写出变量、对照、指标变化和不能外推的范围。</p>
         </div>
-        <div class="terminal-lab" data-terminal-lab>
-          <div class="terminal-controls">
-            <button class="ghost" type="button" data-terminal-case="good">消融读法合格</button>
-            <button class="ghost" type="button" data-terminal-case="confound">变量混在一起</button>
-            <button class="ghost" type="button" data-terminal-case="metric">只看最高 BLEU</button>
-          </div>
-          <pre class="terminal-output"></pre>
-          <template data-terminal-output="good">case: change number of heads only
-read: variable=head count; observation=BLEU/PPL change; boundary=same task and training recipe
-status: <span class="ok">usable ablation sentence</span></template>
-          <template data-terminal-output="confound">case: bigger d_model and more heads together
-read: effect may come from capacity, head count, or optimization interaction
-status: <span class="err">do not attribute result to a single variable</span></template>
-          <template data-terminal-output="metric">case: one row has highest BLEU
-missing: cost, PPL, parameter count, changed variable, comparison target
-status: <span class="err">ranking is not interpretation</span></template>
-        </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>一行消融的合格表达</h3>
-            <p>合格表达一般长这样：作者改变了某个变量，在同一任务和相近训练设置下观察到某个指标变化，因此这个变量可能贡献了某种效果；但如果参数量、计算成本或训练稳定性也改变了，结论要保留边界。</p>
-            <p>这个句式很实用。它迫使你把“变量、现象、解释、边界”都说出来，也避免把整张表读成“作者调了很多参数”。</p>
-          </div>
-          <div class="box soft">
-            <h3>消融和复现的关系</h3>
-            <p>消融表能告诉你哪个设计值得优先保留。复现训练时，先保住 optimizer、schedule、mask、loss、模型规模这些基础项，再讨论是否改 head 数或 dropout。否则你看到的指标变化可能来自训练配方漂移，未必来自结构变量。</p>
-          </div>
-        </div>
-        <p>你现在应该能做什么：拿任意一行消融结果，写出变量、对照、指标变化和不能外推的范围。</p>
       </section>
-
       <section id="implementation">
         <div class="head">
           <h2>训练配方最小实现</h2>
           <span class="tag">code</span>
         </div>
-        <p>下面只保留本页关心的训练骨架：Noam schedule、Adam 参数、label smoothing、padding 排除、一次训练 step。它的目的在于把“训练配方”落成可以检查的代码对象。</p>
-        <div class="codebar"><span>Noam schedule 与 Adam 参数</span><button class="copy" type="button" data-copy="code-noam">复制</button></div>
-        <pre id="code-noam" data-export-context="Noam schedule 最小代码" data-export-lang="python"><code class="language-python">import math
+<p>下面只保留本页关心的训练骨架：Noam schedule、Adam 参数、label smoothing、padding 排除、一次训练 step。它的目的在于把“训练配方”落成可以检查的代码对象。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-implementation-1">复制</button></div>
+        <pre id="code-implementation-1" data-export-context="代码" data-export-lang="python"><code class="language-python">import math
 import torch
 
 
-def noam_lr(step: int, d_model: int = 512, warmup: int = 4000) -> float:
-    step = max(step, 1)
-    scale = d_model ** -0.5
-    warm = step * (warmup ** -1.5)
-    decay = step ** -0.5
-    return scale * min(decay, warm)
+def noam_lr(step: int, d_model: int = 512, warmup: int = 4000) -&gt; float:
+ step = max(step, 1)
+ scale = d_model ** -0.5
+ warm = step * (warmup ** -1.5)
+ decay = step ** -0.5
+ return scale * min(decay, warm)
 
 
 optimizer = torch.optim.Adam(
-    model.parameters(),
-    lr=1.0,
-    betas=(0.9, 0.98),
-    eps=1e-9,
+ model.parameters(),
+ lr=1.0,
+ betas=(0.9, 0.98),
+ eps=1e-9,
 )
 
 for step, batch in enumerate(loader, start=1):
-    lr = noam_lr(step, d_model=512, warmup=4000)
-    for group in optimizer.param_groups:
-        group["lr"] = lr
+ lr = noam_lr(step, d_model=512, warmup=4000)
+ for group in optimizer.param_groups:
+ group["lr"] = lr
 
-    loss = compute_smoothed_loss(model, batch)
-    loss.backward()
-    optimizer.step()
-    optimizer.zero_grad(set_to_none=True)</code></pre>
-
-        <div class="codebar"><span>Label smoothing 与 padding 排除</span><button class="copy" type="button" data-copy="code-smoothing">复制</button></div>
-        <pre id="code-smoothing" data-export-context="Label smoothing 最小代码" data-export-lang="python"><code class="language-python">import torch
+ loss = compute_smoothed_loss(model, batch)
+ loss.backward()
+ optimizer.step()
+ optimizer.zero_grad(set_to_none=True)</code></pre>
+<p>Label smoothing 与 padding 排除复制</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-implementation-2">复制</button></div>
+        <pre id="code-implementation-2" data-export-context="代码" data-export-lang="python"><code class="language-python">import torch
 import torch.nn.functional as F
 
 
 def smooth_targets(target, vocab_size: int, smoothing: float = 0.1, pad_id: int = 0):
-    confidence = 1.0 - smoothing
-    low = smoothing / (vocab_size - 2)
-    flat = target.reshape(-1)
+ confidence = 1.0 - smoothing
+ low = smoothing / (vocab_size - 2)
+ flat = target.reshape(-1)
 
-    dist = torch.full((flat.numel(), vocab_size), low, device=target.device)
-    dist.scatter_(1, flat[:, None], confidence)
-    dist[:, pad_id] = 0.0
-    dist[flat == pad_id] = 0.0
-    return dist
+ dist = torch.full((flat.numel(), vocab_size), low, device=target.device)
+ dist.scatter_(1, flat[:, None], confidence)
+ dist[:, pad_id] = 0.0
+ dist[flat == pad_id] = 0.0
+ return dist
 
 
 def smoothed_kl_loss(logits, target, pad_id: int = 0, smoothing: float = 0.1):
-    vocab_size = logits.size(-1)
-    log_probs = F.log_softmax(logits.reshape(-1, vocab_size), dim=-1)
-    gold = smooth_targets(target, vocab_size, smoothing, pad_id)
-    token_loss = F.kl_div(log_probs, gold, reduction="none").sum(dim=-1)
-    valid = target.reshape(-1).ne(pad_id)
-    return token_loss[valid].mean()</code></pre>
-
-        <div class="grid2">
-          <div class="box">
-            <h3>代码验收顺序</h3>
-            <p>先看 <code>noam_lr</code> 是否真的每一步更新参数组学习率，再看 Adam 的 <code>betas</code> 和 <code>eps</code> 是否贴近论文。接着检查 decoder 输入是否右移，target 是否是下一个 token，最后看 padding 是否同时从 attention 和 loss 中排除。</p>
-            <p>label smoothing 里最容易漏的是 padding。padding 类不应该分到概率，padding 位置也不应该贡献 loss。否则模型会被训练去解释补齐 token，指标看起来还能跑，但学习目标已经偏了。</p>
-          </div>
-          <div class="box warn">
-            <h3>错误示例</h3>
-            <div class="codebar"><span>固定学习率与 padding 漏处理</span><button class="copy" type="button" data-copy="code-wrong">复制</button></div>
-            <pre id="code-wrong"><code class="language-python">optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+ vocab_size = logits.size(-1)
+ log_probs = F.log_softmax(logits.reshape(-1, vocab_size), dim=-1)
+ gold = smooth_targets(target, vocab_size, smoothing, pad_id)
+ token_loss = F.kl_div(log_probs, gold, reduction="none").sum(dim=-1)
+ valid = target.reshape(-1).ne(pad_id)
+ return token_loss[valid].mean()</code></pre>
+        </div>
+        <div class="box warn">
+<h3>错误示例</h3>
+<p>固定学习率与 padding 漏处理复制</p>
+<pre><code class="language-python">optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 dist = torch.full((target.numel(), vocab_size), smoothing / vocab_size)
 dist.scatter_(1, target.reshape(-1, 1), 1.0 - smoothing)
 loss = F.kl_div(log_probs, dist, reduction="batchmean")</code></pre>
-            <p>这段代码可能仍能训练，但它不能声称复现了论文配方：学习率没有使用 Noam schedule，Adam 参数也偏离论文设置；padding 类和 padding 位置都被放进了目标和损失。</p>
-          </div>
+<p>这段代码可能仍能训练，但它不能声称复现了论文配方：学习率没有使用 Noam schedule，Adam 参数也偏离论文设置；padding 类和 padding 位置都被放进了目标和损失。</p>
+<p>你现在应该能做什么：用一张检查表判断训练 loop 是否接近原论文，别只看模型类名是不是 Transformer。</p>
         </div>
-        <p>你现在应该能做什么：用一张检查表判断训练 loop 是否接近原论文，别只看模型类名是不是 Transformer。</p>
       </section>
-
       <section id="pitfalls">
         <div class="head">
           <h2>常见误区和修法</h2>
           <span class="tag">pitfalls</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>只记 BLEU，不看条件</h3>
-            <p>BLEU 必须和任务、数据、单模型/集成、模型规模、训练成本一起读。修法：复述结果时至少补上 WMT14、En-De/En-Fr、single model 或 ensemble、硬件时间。</p>
-          </div>
-          <div class="box">
-            <h3>把 warmup 当成一直升高</h3>
-            <p>Noam schedule 是先升后降。修法：用公式里的 <code>min</code> 解释两个阶段，不要只背 <code>warmup_steps=4000</code>。</p>
-          </div>
-          <div class="box">
-            <h3>忽略 Adam 参数</h3>
-            <p>原论文使用 <code>β2=0.98</code>、<code>ε=1e-9</code>，和许多默认设置不同。修法：复现时把 optimizer、schedule、warmup、batching 一起列出。</p>
-          </div>
-          <div class="box">
-            <h3>把 label smoothing 当成随机改标签</h3>
-            <p>label smoothing 改的是目标概率分布，并不会随便把正确标签换掉。修法：写出正确类、其他类、padding 类的概率分配。</p>
-          </div>
-          <div class="box">
-            <h3>把 teacher forcing 当成答案泄漏</h3>
-            <p>训练用真实前缀，但 decoder self-attention 仍要 causal mask。修法：检查右移目标和 causal mask 同时存在。</p>
-          </div>
-          <div class="box">
-            <h3>把消融表读成调参记录</h3>
-            <p>消融是为了回答变量作用。修法：每一行按“变量、对照、指标、边界”写一句解释。</p>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>只记 BLEU，不看条件</h3>
+<p>BLEU 必须和任务、数据、单模型/集成、模型规模、训练成本一起读。修法：复述结果时至少补上 WMT14、En-De/En-Fr、single model 或 ensemble、硬件时间。</p>
         </div>
+        <div class="box">
+<h3>把 warmup 当成一直升高</h3>
+<p>Noam schedule 是先升后降。修法：用公式里的 <code>min</code> 解释两个阶段，不要只背 <code>warmup_steps=4000</code>。</p>
+        </div>
+        <div class="box">
+<h3>忽略 Adam 参数</h3>
+<p>原论文使用 <code>β2=0.98</code>、<code>ε=1e-9</code>，和许多默认设置不同。修法：复现时把 optimizer、schedule、warmup、batching 一起列出。</p>
+        </div>
+        <div class="box">
+<h3>把 label smoothing 当成随机改标签</h3>
+<p>label smoothing 改的是目标概率分布，并不会随便把正确标签换掉。修法：写出正确类、其他类、padding 类的概率分配。</p>
+        </div>
+        <div class="box">
+<h3>把 teacher forcing 当成答案泄漏</h3>
+<p>训练用真实前缀，但 decoder self-attention 仍要 causal mask。修法：检查右移目标和 causal mask 同时存在。</p>
+        </div>
+        <div class="box">
+<h3>把消融表读成调参记录</h3>
+<p>消融是为了回答变量作用。修法：每一行按“变量、对照、指标、边界”写一句解释。</p>
+        </div>
+      </div>
       </section>
-
       <section id="bridge">
         <div class="head">
           <h2>下一步怎么读</h2>
           <span class="tag">bridge</span>
         </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>回到整篇论文</h3>
-            <p>到这里，五个单元已经覆盖了原论文的核心阅读路径：self-attention 解释如何读全句，多头解释如何分投影空间，encoder/decoder 解释结构信息流，位置编码补回顺序，训练与实验页解释证据如何成立。</p>
-            <p>复盘时可以从最后一页倒推：实验结果为什么可信？因为有训练配方、指标对照、模型规模和消融；训练配方为什么能落地？因为前面四页的结构和形状都已经能对上代码。</p>
-          </div>
-          <div class="box soft">
-            <h3>以后读模型论文的通用清单</h3>
-            <ol>
-              <li>先分清结构贡献和训练配方。</li>
-              <li>把关键公式转成一条可检查的数据流。</li>
-              <li>读结果时同时看指标、数据、对比对象和成本。</li>
-              <li>读消融时只问一个变量的作用。</li>
-              <li>最后写出结论边界：在哪些任务、规模和条件下成立。</li>
-            </ol>
-          </div>
+      <div class="grid2">
+        <div class="box">
+<h3>回到整篇论文</h3>
+<p>到这里，五个单元已经覆盖了原论文的核心阅读路径：self-attention 解释如何读全句，多头解释如何分投影空间，encoder/decoder 解释结构信息流，位置编码补回顺序，训练与实验页解释证据如何成立。</p>
+<p>复盘时可以从最后一页倒推：实验结果为什么可信？因为有训练配方、指标对照、模型规模和消融；训练配方为什么能落地？因为前面四页的结构和形状都已经能对上代码。</p>
         </div>
+        <div class="box soft">
+<h3>以后读模型论文的通用清单</h3>
+<ol>
+<li>先分清结构贡献和训练配方。</li>
+<li>把关键公式转成一条可检查的数据流。</li>
+<li>读结果时同时看指标、数据、对比对象和成本。</li>
+<li>读消融时只问一个变量的作用。</li>
+<li>最后写出结论边界：在哪些任务、规模和条件下成立。</li>
+</ol>
+        </div>
+      </div>
       </section>
-
       <section id="practice">
         <div class="head">
           <h2>综合练习</h2>
           <span class="tag">practice</span>
         </div>
-        <div class="practice-intro">
-          <div class="box">
-            <h3>答题目标</h3>
-            <p>练习区按训练配方、目标与指标、结果表、消融和综合表达分组。诊断题按“错因 / 后果 / 修法”写；综合题要把训练设置和实验证据连起来。</p>
-          </div>
-          <div class="box soft">
-            <h3>复盘抓手</h3>
-            <p>如果答案写散了，就回到五个词：<code>optimizer</code>、<code>schedule</code>、<code>regularization</code>、<code>metric</code>、<code>ablation</code>。每个词都要落到一个可检查对象。</p>
-          </div>
+      <div class="practice-intro">
+      <div class="box">
+<h3>答题目标</h3>
+<p>练习区按训练配方、目标与指标、结果表、消融和综合表达分组。诊断题按“错因 / 后果 / 修法”写；综合题要把训练设置和实验证据连起来。</p>
+      </div>
+      <div class="box soft">
+<h3>复盘抓手</h3>
+<p>如果答案写散了，就回到五个词：<code>optimizer</code>、<code>schedule</code>、<code>regularization</code>、<code>metric</code>、<code>ablation</code>。每个词都要落到一个可检查对象。</p>
+      </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、训练配方</h3></div>
+          <div class="quick-review">复盘提示：优化器名字、超参数、学习率曲线和 batch 构造要一起看。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q1_warmup_role" data-group="" data-title="" data-answer="训练初期逐步增大学习率，过 warmup 后再衰减。">
+        <div class="q-meta"><span class="pill">1_warmup_role</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> warmup 的作用</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>一、训练配方</h3>
-              <p>先确认 optimizer、learning rate、teacher forcing 和 mask 没混。</p>
-            </div>
-            <div class="quick-review">复盘提示：优化器名字、超参数、学习率曲线和 batch 构造要一起看。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q1_warmup_role" data-group="训练配方" data-title="warmup 的作用" data-answer="A" data-explain="Noam schedule 在 warmup 前逐步升高，之后按 step 的平方根衰减。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">schedule</span></div>
-              <h3>warmup 的作用</h3>
-              <p>下面哪一句最准确？</p>
-              <label><input type="radio" name="q1_warmup_role" value="A"> 训练初期逐步增大学习率，过 warmup 后再衰减。</label>
-              <label><input type="radio" name="q1_warmup_role" value="B"> 让学习率在整个训练过程中一直增大。</label>
-              <label><input type="radio" name="q1_warmup_role" value="C"> 替代 Adam 的一阶、二阶矩统计。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q1_warmup_role" value="训练初期逐步增大学习率，过 warmup 后再衰减。">训练初期逐步增大学习率，过 warmup 后再衰减。</label>
+      <label><input type="radio" name="q1_warmup_role" value="让学习率在整个训练过程中一直增大。">让学习率在整个训练过程中一直增大。</label>
+      <label><input type="radio" name="q1_warmup_role" value="替代 Adam 的一阶、二阶矩统计。">替代 Adam 的一阶、二阶矩统计。</label>
+      </div>
 
-            <div class="q" data-question="q2_adam_params" data-group="训练配方" data-title="Adam 参数" data-answer="B" data-explain="原论文给出了 betas 和 eps；默认 Adam 参数不等于论文配方。">
-              <div class="q-meta"><span class="pill">true/false</span><span class="pill">optimizer</span></div>
-              <h3>Adam 参数</h3>
-              <p>复现论文时，只要写 <code>Adam</code>，不需要检查 <code>β1</code>、<code>β2</code> 和 <code>ε</code>。</p>
-              <label><input type="radio" name="q2_adam_params" value="A"> 对</label>
-              <label><input type="radio" name="q2_adam_params" value="B"> 错</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>训练初期逐步增大学习率，过 warmup 后再衰减。。Noam schedule 在 warmup 前逐步升高，之后按 step 的平方根衰减。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q2_adam_params" data-group="" data-title="" data-answer="错">
+        <div class="q-meta"><span class="pill">2_adam_params</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> Adam 参数</h3>
 
-            <div class="q" data-question="q3_warmup_steps" data-group="训练配方" data-title="warmup_steps 数值" data-answer="A" data-explain="原论文学习率计划使用 warmup_steps=4000。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">fact</span></div>
-              <h3>warmup_steps 数值</h3>
-              <p>原论文的 Noam 学习率计划使用的 <code>warmup_steps</code> 是多少？</p>
-              <label><input type="radio" name="q3_warmup_steps" value="A"> 4000</label>
-              <label><input type="radio" name="q3_warmup_steps" value="B"> 512</label>
-              <label><input type="radio" name="q3_warmup_steps" value="C"> 0.98</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q2_adam_params" value="对">对</label>
+      <label><input type="radio" name="q2_adam_params" value="错">错</label>
+      </div>
 
-            <div class="q" data-question="q4_teacher_mask" data-group="训练配方" data-title="teacher forcing 和 mask">
-              <div class="q-meta"><span class="pill">short answer</span><span class="pill">mask</span></div>
-              <h3>teacher forcing 和 mask</h3>
-              <p>训练时用了真实目标前缀，为什么 decoder self-attention 仍然必须有 causal mask？</p>
-              <p class="solve-note">答题目标：说清右移输入不等于允许当前位置看未来 token。</p>
-              <textarea name="q4_teacher_mask" placeholder="因为……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>合格答案要包含：teacher forcing 只是把真实前缀作为 decoder 输入；每个位置仍只能利用之前位置预测下一个 token；如果没有 causal mask，当前位置可以直接读取未来答案，训练指标会虚高，推理时会崩。</p>
-              </details>
-            </div>
-          </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>错。原论文给出了 betas 和 eps；默认 Adam 参数不等于论文配方。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q3_warmup_steps" data-group="" data-title="" data-answer="4000">
+        <div class="q-meta"><span class="pill">3_warmup_steps</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> warmup_steps 数值</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q3_warmup_steps" value="4000">4000</label>
+      <label><input type="radio" name="q3_warmup_steps" value="512">512</label>
+      <label><input type="radio" name="q3_warmup_steps" value="0.98">0.98</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>4000。原论文学习率计划使用 warmup_steps=4000。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q4_teacher_mask" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">4_teacher_mask</span><span class="pill">short answer</span></div>
+        <h3><b>Q:</b> teacher forcing 和 mask</h3>
+
+
+      <textarea name="q4_teacher_mask"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。合格答案要包含：teacher forcing 只是把真实前缀作为 decoder 输入；每个位置仍只能利用之前位置预测下一个 token；如果没有 causal mask，当前位置可以直接读取未来答案，训练指标会虚高，推理时会崩。</p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>二、目标分布和指标</h3>
-              <p>这一组检查你能不能把训练目标和评价指标拆开。</p>
-            </div>
-            <div class="quick-review">复盘提示：label smoothing 改目标分布；BLEU 看译文重叠；PPL 看概率困惑度。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q5_smoothing" data-group="目标分布和指标" data-title="label smoothing 作用" data-answer="C" data-explain="它把 one-hot 目标变成软分布，降低模型过度自信。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">regularization</span></div>
-              <h3>label smoothing 作用</h3>
-              <p>label smoothing 最准确的说法是什么？</p>
-              <label><input type="radio" name="q5_smoothing" value="A"> 随机把正确标签改成错误标签。</label>
-              <label><input type="radio" name="q5_smoothing" value="B"> 只改变 BLEU 的计算公式。</label>
-              <label><input type="radio" name="q5_smoothing" value="C"> 把 one-hot 目标改成较软的概率分布。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-
-            <div class="q" data-question="q6_bleu_ppl" data-group="目标分布和指标" data-title="PPL 与 BLEU">
-              <div class="q-meta"><span class="pill">short answer</span><span class="pill">metric</span></div>
-              <h3>PPL 与 BLEU</h3>
-              <p>为什么 label smoothing 可能让 perplexity 不那么好看，但 BLEU 变好？</p>
-              <p class="solve-note">答题目标：分别说出 PPL 和 BLEU 的测量对象。</p>
-              <textarea name="q6_bleu_ppl" placeholder="PPL……；BLEU……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>PPL 来自模型给真实 token 的概率，label smoothing 会降低模型对正确类的极端置信度；BLEU 看生成译文与参考译文的 n-gram 重叠，较好的泛化或置信度控制可能提升生成质量。两者测量对象不同，所以方向可以不一致。</p>
-              </details>
-            </div>
-
-            <div class="q" data-question="q7_padding_loss" data-group="目标分布和指标" data-title="padding 处理">
-              <div class="q-meta"><span class="pill">diagnosis</span><span class="pill">loss</span></div>
-              <h3>padding 处理</h3>
-              <p>做 label smoothing 时，padding 类和 padding 位置为什么要特殊处理？</p>
-              <p class="solve-note">答题目标：写出不处理的后果和修法。</p>
-              <textarea name="q7_padding_loss" placeholder="错因……后果……修法……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>padding 是无效占位。若 padding 类分到概率，或 padding 位置进入 loss，模型会被训练去解释补齐 token，损失和梯度都会偏。修法是把 padding 类概率置 0，并用 mask 或 <code>ignore_index</code> 排除 padding 位置。</p>
-              </details>
-            </div>
-
-            <div class="q" data-question="q8_bleu_boundary" data-group="目标分布和指标" data-title="BLEU 边界" data-answer="B" data-explain="BLEU 是自动翻译指标，不覆盖所有语义、事实性和人类偏好。">
-              <div class="q-meta"><span class="pill">true/false</span><span class="pill">boundary</span></div>
-              <h3>BLEU 边界</h3>
-              <p>BLEU 高就能证明译文在所有语义、事实性和风格维度上都没有问题。</p>
-              <label><input type="radio" name="q8_bleu_boundary" value="A"> 对</label>
-              <label><input type="radio" name="q8_bleu_boundary" value="B"> 错</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>二、目标分布和指标</h3></div>
+          <div class="quick-review">复盘提示：label smoothing 改目标分布；BLEU 看译文重叠；PPL 看概率困惑度。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q5_smoothing" data-group="" data-title="" data-answer="把 one-hot 目标改成较软的概率分布。">
+        <div class="q-meta"><span class="pill">5_smoothing</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> label smoothing 作用</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>三、结果表读法</h3>
-              <p>这一组把摘要里的数字读成实验条件。</p>
-            </div>
-            <div class="quick-review">复盘提示：结果数字必须带上任务、模型、是否集成、训练成本和对比对象。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q9_ende_bleu" data-group="结果表读法" data-title="En-De 结果" data-answer="A" data-explain="论文摘要报告 WMT14 English-to-German 28.4 BLEU。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">fact</span></div>
-              <h3>En-De 结果</h3>
-              <p>论文摘要里的 WMT 2014 English-to-German 结果是哪一个？</p>
-              <label><input type="radio" name="q9_ende_bleu" value="A"> 28.4 BLEU</label>
-              <label><input type="radio" name="q9_ende_bleu" value="B"> 41.8 BLEU</label>
-              <label><input type="radio" name="q9_ende_bleu" value="C"> 4000 BLEU</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q5_smoothing" value="随机把正确标签改成错误标签。">随机把正确标签改成错误标签。</label>
+      <label><input type="radio" name="q5_smoothing" value="只改变 BLEU 的计算公式。">只改变 BLEU 的计算公式。</label>
+      <label><input type="radio" name="q5_smoothing" value="把 one-hot 目标改成较软的概率分布。">把 one-hot 目标改成较软的概率分布。</label>
+      </div>
 
-            <div class="q" data-question="q10_enfr_cost" data-group="结果表读法" data-title="En-Fr 结果与成本" data-answer="C" data-explain="摘要强调 En-Fr 单模型 41.8 BLEU，并用 8 块 GPU 训练约 3.5 天。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">fact</span></div>
-              <h3>En-Fr 结果与成本</h3>
-              <p>关于 WMT 2014 English-to-French，下面哪句贴近论文摘要？</p>
-              <label><input type="radio" name="q10_enfr_cost" value="A"> 只靠集成模型达到 28.4 BLEU。</label>
-              <label><input type="radio" name="q10_enfr_cost" value="B"> 单模型达到 4000 BLEU。</label>
-              <label><input type="radio" name="q10_enfr_cost" value="C"> 单模型达到 41.8 BLEU，并用 8 块 GPU 训练约 3.5 天。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>把 one-hot 目标改成较软的概率分布。。它把 one-hot 目标变成软分布，降低模型过度自信。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q6_bleu_ppl" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">6_bleu_ppl</span><span class="pill">short answer</span></div>
+        <h3><b>Q:</b> PPL 与 BLEU</h3>
 
-            <div class="q" data-question="q11_base_big" data-group="结果表读法" data-title="base 与 big">
-              <div class="q-meta"><span class="pill">short answer</span><span class="pill">scale</span></div>
-              <h3>base 与 big</h3>
-              <p>为什么读结果表时要区分 Transformer base 和 Transformer big？</p>
-              <p class="solve-note">答题目标：说出模型规模、效果和成本的关系。</p>
-              <textarea name="q11_base_big" placeholder="因为……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>base 和 big 是不同规模模型。big 往往效果更强，但参数量、训练成本和优化行为也不同。读表时不能拿 big 的分数代表所有 Transformer，也不能用 base 的成本解释 big 的结果。</p>
-              </details>
-            </div>
 
-            <div class="q" data-question="q12_result_sentence" data-group="结果表读法" data-title="结果复述">
-              <div class="q-meta"><span class="pill">short answer</span><span class="pill">writing</span></div>
-              <h3>结果复述</h3>
-              <p>用 2 句话复述原论文实验贡献，必须包含质量、训练成本和对比对象。</p>
-              <p class="solve-note">答题目标：避免只写“BLEU 高”。</p>
-              <textarea name="q12_result_sentence" placeholder="在……任务上……；同时……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>可以写成：Transformer 在 WMT14 En-De 和 En-Fr 机器翻译基准上达到强 BLEU，且 En-Fr 单模型在 8 块 GPU 约 3.5 天训练后达到 41.8 BLEU。这个结果要和当时强基线、是否单模型、训练成本一起读，说明论文强调质量和并行训练效率。</p>
-              </details>
-            </div>
-          </div>
+      <textarea name="q6_bleu_ppl"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。PPL 来自模型给真实 token 的概率，label smoothing 会降低模型对正确类的极端置信度；BLEU 看生成译文与参考译文的 n-gram 重叠，较好的泛化或置信度控制可能提升生成质量。两者测量对象不同，所以方向可以不一致。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q7_padding_loss" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">7_padding_loss</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> padding 处理</h3>
+
+
+      <textarea name="q7_padding_loss"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。padding 是无效占位。若 padding 类分到概率，或 padding 位置进入 loss，模型会被训练去解释补齐 token，损失和梯度都会偏。修法是把 padding 类概率置 0，并用 mask 或 ignore_index 排除 padding 位置。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q8_bleu_boundary" data-group="" data-title="" data-answer="错">
+        <div class="q-meta"><span class="pill">8_bleu_boundary</span><span class="pill">true/false</span></div>
+        <h3><b>Q:</b> BLEU 边界</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q8_bleu_boundary" value="对">对</label>
+      <label><input type="radio" name="q8_bleu_boundary" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>错。BLEU 是自动翻译指标，不覆盖所有语义、事实性和人类偏好。</p>
+        </details>
+      </article>
         </div>
-
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>四、消融与错误诊断</h3>
-              <p>这一组要求你判断变量、边界和修法。</p>
-            </div>
-            <div class="quick-review">复盘提示：消融句式是“变量 / 现象 / 解释 / 边界”。诊断句式是“错因 / 后果 / 修法”。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q" data-question="q13_ablation_items" data-group="消融与错误诊断" data-title="消融三件事" data-answer="A" data-explain="读一行消融至少要说变量、指标变化和结论边界。">
-              <div class="q-meta"><span class="pill">choice</span><span class="pill">ablation</span></div>
-              <h3>消融三件事</h3>
-              <p>读一行消融结果，至少要说清哪三件事？</p>
-              <label><input type="radio" name="q13_ablation_items" value="A"> 变量、指标变化、结论边界。</label>
-              <label><input type="radio" name="q13_ablation_items" value="B"> 作者名字、论文标题、排版风格。</label>
-              <label><input type="radio" name="q13_ablation_items" value="C"> 只说哪一行最高。</label>
-              <button class="check" type="button">检查</button>
-              <div class="feedback"></div>
-            </div>
-
-            <div class="q" data-question="q14_fixed_lr" data-group="消融与错误诊断" data-title="固定学习率诊断">
-              <div class="q-meta"><span class="pill">diagnosis</span><span class="pill">schedule</span></div>
-              <h3>固定学习率诊断</h3>
-              <p>有人用固定 <code>lr=1e-3</code> 加默认 Adam，说复现了 Transformer 原论文训练配方。哪里不稳？</p>
-              <p class="solve-note">答题目标：写出错因、后果和修法。</p>
-              <textarea name="q14_fixed_lr" placeholder="错因……后果……修法……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>错因：没有使用论文的 Adam 参数，也没有 Noam schedule 和 warmup。后果：训练早期稳定性、收敛速度和最终指标都可能变，不能说复现论文配方。修法：设置 <code>betas=(0.9,0.98)</code>、<code>eps=1e-9</code>，并逐步更新 Noam 学习率。</p>
-              </details>
-            </div>
-
-            <div class="q" data-question="q15_only_bleu" data-group="消融与错误诊断" data-title="只看 BLEU 诊断">
-              <div class="q-meta"><span class="pill">diagnosis</span><span class="pill">metric</span></div>
-              <h3>只看 BLEU 诊断</h3>
-              <p>只说“BLEU 高，所以模型全面更好”哪里不稳？怎么改成合格表述？</p>
-              <p class="solve-note">答题目标：补上任务、指标边界、成本和对比对象。</p>
-              <textarea name="q15_only_bleu" placeholder="问题……改成……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>BLEU 只是在特定翻译基准上的自动指标，不能覆盖所有语言质量。合格表述要包含 WMT14 任务、BLEU 分数、是否单模型或 ensemble、训练成本和当时基线，并说明结论只在这些实验条件内成立。</p>
-              </details>
-            </div>
-
-            <div class="q" data-question="q16_confound" data-group="消融与错误诊断" data-title="消融混杂诊断">
-              <div class="q-meta"><span class="pill">diagnosis</span><span class="pill">ablation</span></div>
-              <h3>消融混杂诊断</h3>
-              <p>某一行同时增加 <code>d_model</code>、<code>d_ff</code> 和 head 数，结果变好。为什么不能只说“head 数增加带来提升”？</p>
-              <p class="solve-note">答题目标：指出变量混杂。</p>
-              <textarea name="q16_confound" placeholder="因为……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>因为多个变量同时改变，效果可能来自模型容量、FFN 宽度、head 数、优化稳定性或它们的交互。要归因给 head 数，最好控制其他条件，只改变 head 数，或至少在结论里保留“变量混杂”的边界。</p>
-              </details>
-            </div>
-          </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>三、结果表读法</h3></div>
+          <div class="quick-review">复盘提示：结果数字必须带上任务、模型、是否集成、训练成本和对比对象。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q9_ende_bleu" data-group="" data-title="" data-answer="28.4 BLEU">
+        <div class="q-meta"><span class="pill">9_ende_bleu</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> En-De 结果</h3>
 
-        <div class="practice-group">
-          <div class="group-head">
-            <div>
-              <h3>五、完整讲清楚</h3>
-              <p>最后把训练配方和实验读法串成完整解释。</p>
-            </div>
-            <div class="quick-review">复盘提示：费曼解释至少包含 Adam、Noam、dropout、label smoothing、BLEU、成本、base/big、消融边界。</div>
-          </div>
-          <div class="drill-grid">
-            <div class="q full" data-question="q17_feynman" data-group="完整讲清楚" data-title="费曼解释">
-              <div class="q-meta"><span class="pill">synthesis</span><span class="pill">long answer</span></div>
-              <h3>费曼解释</h3>
-              <p>用 6-9 句话解释：Transformer 原论文的训练配方和实验结果应该怎么读。</p>
-              <p class="solve-note">至少包含 teacher forcing 和 mask、Adam 参数、Noam 学习率、dropout、label smoothing、PPL 与 BLEU、base/big、消融和训练成本。</p>
-              <textarea name="q17_feynman" placeholder="先说训练配方，再说指标和结果，最后说边界。"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>合格答案应覆盖：训练时目标右移并保留 causal mask；Adam 使用论文给定参数；Noam 学习率先 warmup 后衰减；dropout 和 label smoothing 控制泛化与置信度；PPL 与 BLEU 测量对象不同；WMT14 En-De/En-Fr 结果要和单模型、训练成本、对比对象一起读；base/big 不能混讲；消融表用于判断变量贡献，但结论只在实验设置内成立。</p>
-              </details>
-            </div>
+      <div class="choices">
+      <label><input type="radio" name="q9_ende_bleu" value="28.4 BLEU">28.4 BLEU</label>
+      <label><input type="radio" name="q9_ende_bleu" value="41.8 BLEU">41.8 BLEU</label>
+      <label><input type="radio" name="q9_ende_bleu" value="4000 BLEU">4000 BLEU</label>
+      </div>
 
-            <div class="q full" data-question="q18_paper_checklist" data-group="完整讲清楚" data-title="论文实验验收清单">
-              <div class="q-meta"><span class="pill">checklist</span><span class="pill">transfer</span></div>
-              <h3>论文实验验收清单</h3>
-              <p>写一份 6 条清单，用来阅读一篇模型论文的实验部分。</p>
-              <p class="solve-note">可以覆盖数据、指标、训练配方、模型规模、对比对象、消融、成本、边界。</p>
-              <textarea name="q18_paper_checklist" placeholder="1. …… 2. ……"></textarea>
-              <button class="reveal" type="button">展开反馈</button>
-              <details>
-                <summary>参考答案 / 评分要点</summary>
-                <p>清单至少应包含：任务和数据集是什么；指标测量对象是什么；训练配方和默认值是否写清；模型规模是否可比；对比对象是否公平；是否有消融支持关键设计；训练成本是否报告；结论边界是否明确。</p>
-              </details>
-            </div>
-          </div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>28.4 BLEU。论文摘要报告 WMT14 English-to-German 28.4 BLEU。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q10_enfr_cost" data-group="" data-title="" data-answer="单模型达到 41.8 BLEU，并用 8 块 GPU 训练约 3.5 天。">
+        <div class="q-meta"><span class="pill">10_enfr_cost</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> En-Fr 结果与成本</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q10_enfr_cost" value="只靠集成模型达到 28.4 BLEU。">只靠集成模型达到 28.4 BLEU。</label>
+      <label><input type="radio" name="q10_enfr_cost" value="单模型达到 4000 BLEU。">单模型达到 4000 BLEU。</label>
+      <label><input type="radio" name="q10_enfr_cost" value="单模型达到 41.8 BLEU，并用 8 块 GPU 训练约 3.5 天。">单模型达到 41.8 BLEU，并用 8 块 GPU 训练约 3.5 天。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>单模型达到 41.8 BLEU，并用 8 块 GPU 训练约 3.5 天。。摘要强调 En-Fr 单模型 41.8 BLEU，并用 8 块 GPU 训练约 3.5 天。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q11_base_big" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">11_base_big</span><span class="pill">short answer</span></div>
+        <h3><b>Q:</b> base 与 big</h3>
+
+
+      <textarea name="q11_base_big"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。base 和 big 是不同规模模型。big 往往效果更强，但参数量、训练成本和优化行为也不同。读表时不能拿 big 的分数代表所有 Transformer，也不能用 base 的成本解释 big 的结果。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q12_result_sentence" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">12_result_sentence</span><span class="pill">short answer</span></div>
+        <h3><b>Q:</b> 结果复述</h3>
+
+
+      <textarea name="q12_result_sentence"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。可以写成：Transformer 在 WMT14 En-De 和 En-Fr 机器翻译基准上达到强 BLEU，且 En-Fr 单模型在 8 块 GPU 约 3.5 天训练后达到 41.8 BLEU。这个结果要和当时强基线、是否单模型、训练成本一起读，说明论文强调质量和并行训练效率。</p>
+        </details>
+      </article>
         </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>四、消融与错误诊断</h3></div>
+          <div class="quick-review">复盘提示：消融句式是“变量 / 现象 / 解释 / 边界”。诊断句式是“错因 / 后果 / 修法”。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q13_ablation_items" data-group="" data-title="" data-answer="变量、指标变化、结论边界。">
+        <div class="q-meta"><span class="pill">13_ablation_items</span><span class="pill">choice</span></div>
+        <h3><b>Q:</b> 消融三件事</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q13_ablation_items" value="变量、指标变化、结论边界。">变量、指标变化、结论边界。</label>
+      <label><input type="radio" name="q13_ablation_items" value="作者名字、论文标题、排版风格。">作者名字、论文标题、排版风格。</label>
+      <label><input type="radio" name="q13_ablation_items" value="只说哪一行最高。">只说哪一行最高。</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>变量、指标变化、结论边界。。读一行消融至少要说变量、指标变化和结论边界。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q14_fixed_lr" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">14_fixed_lr</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> 固定学习率诊断</h3>
+
+
+      <textarea name="q14_fixed_lr"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。错因：没有使用论文的 Adam 参数，也没有 Noam schedule 和 warmup。后果：训练早期稳定性、收敛速度和最终指标都可能变，不能说复现论文配方。修法：设置 betas=(0.9,0.98) 、 eps=1e-9 ，并逐步更新 Noam 学习率。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q15_only_bleu" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">15_only_bleu</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> 只看 BLEU 诊断</h3>
+
+
+      <textarea name="q15_only_bleu"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。BLEU 只是在特定翻译基准上的自动指标，不能覆盖所有语言质量。合格表述要包含 WMT14 任务、BLEU 分数、是否单模型或 ensemble、训练成本和当时基线，并说明结论只在这些实验条件内成立。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q16_confound" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">16_confound</span><span class="pill">error diagnosis</span></div>
+        <h3><b>Q:</b> 消融混杂诊断</h3>
+
+
+      <textarea name="q16_confound"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。因为多个变量同时改变，效果可能来自模型容量、FFN 宽度、head 数、优化稳定性或它们的交互。要归因给 head 数，最好控制其他条件，只改变 head 数，或至少在结论里保留“变量混杂”的边界。</p>
+        </details>
+      </article>
+        </div>
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、完整讲清楚</h3></div>
+          <div class="quick-review">复盘提示：费曼解释至少包含 Adam、Noam、dropout、label smoothing、BLEU、成本、base/big、消融边界。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q17_feynman" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">17_feynman</span><span class="pill">synthesis</span></div>
+        <h3><b>Q:</b> 费曼解释</h3>
+
+
+      <textarea name="q17_feynman"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。合格答案应覆盖：训练时目标右移并保留 causal mask；Adam 使用论文给定参数；Noam 学习率先 warmup 后衰减；dropout 和 label smoothing 控制泛化与置信度；PPL 与 BLEU 测量对象不同；WMT14 En-De/En-Fr 结果要和单模型、训练成本、对比对象一起读；base/big 不能混讲；消融表用于判断变量贡献，但结论只在实验设置内成立。</p>
+        </details>
+      </article>
+      <article class="q" data-question="q18_paper_checklist" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">18_paper_checklist</span><span class="pill">checklist</span></div>
+        <h3><b>Q:</b> 论文实验验收清单</h3>
+
+
+      <textarea name="q18_paper_checklist"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p>。清单至少应包含：任务和数据集是什么；指标测量对象是什么；训练配方和默认值是否写清；模型规模是否可比；对比对象是否公平；是否有消融支持关键设计；训练成本是否报告；结论边界是否明确。</p>
+        </details>
+      </article>
+        </div>
+      </div>
       </section>
-
-      <section id="export">
-        <div class="head">
-          <h2>导出练习记录</h2>
-          <span class="tag">markdown</span>
-        </div>
-        <p class="muted">填写后可以生成一份练习记录，里面会保留题目、分组、作答状态和核心复盘上下文。</p>
-        <div id="quality" class="quality"></div>
-        <div id="record" class="export">还没有生成练习记录。</div>
-        <div class="actions">
-          <button class="action" type="button" onclick="generateRecord()">生成记录</button>
-          <button class="ghost" type="button" onclick="copyRecord()">复制 Markdown</button>
-        </div>
-      </section>
-
-      <section id="sources">
+      <section id="section-sources">
         <div class="head">
           <h2>参考资料</h2>
           <span class="tag">source</span>
         </div>
-        <ul class="source-list">
-          <li><a href="https://arxiv.org/abs/1706.03762" target="_blank" rel="noreferrer">Vaswani et al., <em>Attention Is All You Need</em></a>。本页的训练设置、Noam 学习率、label smoothing、WMT14 BLEU、训练成本和消融读法以原论文为主。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.pytorch.org/docs/stable/generated/torch.optim.Adam.html" target="_blank" rel="noreferrer">PyTorch <code>torch.optim.Adam</code> 文档</a>。用于确认 Adam 参数接口和参数组学习率更新。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.log_softmax.html" target="_blank" rel="noreferrer">PyTorch <code>torch.nn.functional.log_softmax</code> 文档</a>与<a href="https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.kl_div.html" target="_blank" rel="noreferrer"><code>torch.nn.functional.kl_div</code></a>。用于最小 label smoothing 损失实现。访问日期：2026-06-21。</li>
-          <li><a href="https://docs.pytorch.org/docs/stable/generated/torch.Tensor.scatter_.html" target="_blank" rel="noreferrer">PyTorch <code>Tensor.scatter_</code> 文档</a>。用于把正确类概率写入平滑后的目标分布。访问日期：2026-06-21。</li>
-        </ul>
-        <p class="muted">本页只讲原论文训练和实验读法；后来的大规模预训练、长上下文优化、KV cache、FlashAttention 与位置机制变体不放进本页结论。</p>
+<ul>
+<li><a href="https://arxiv.org/abs/1706.03762">Vaswani et al., <i>Attention Is All You Need</i></a>。本页的训练设置、Noam 学习率、label smoothing、WMT14 BLEU、训练成本和消融读法以原论文为主。访问日期：2026-06-21。</li>
+<li><a href="https://docs.pytorch.org/docs/stable/generated/torch.optim.Adam.html">PyTorch <code>torch.optim.Adam</code> 文档</a>。用于确认 Adam 参数接口和参数组学习率更新。访问日期：2026-06-21。</li>
+<li><a href="https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.log_softmax.html">PyTorch <code>torch.nn.functional.log_softmax</code> 文档</a>与<a href="https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.kl_div.html"><code>torch.nn.functional.kl_div</code></a>。用于最小 label smoothing 损失实现。访问日期：2026-06-21。</li>
+<li><a href="https://docs.pytorch.org/docs/stable/generated/torch.Tensor.scatter_.html">PyTorch <code>Tensor.scatter_</code> 文档</a>。用于把正确类概率写入平滑后的目标分布。访问日期：2026-06-21。</li>
+</ul>
       </section>
-    </main>
+    <section id="export">
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
+    </section>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
+
+      </ul>
+    </section>
+  </article>
+
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
   </div>
 
-  <script src="../assets/vendor/katex/katex.min.js"></script>
-  <script src="../assets/vendor/katex/auto-render.min.js"></script>
-  <script src="../assets/vendor/prism/prism-core.min.js"></script>
-  <script src="../assets/vendor/prism/prism-clike.min.js"></script>
-  <script src="../assets/vendor/prism/prism-python.min.js"></script>
-  <script src="../assets/vendor/prism/prism-bash.min.js"></script>
-  <script src="../assets/vendor/prism/prism-json.min.js"></script>
-  <script src="../assets/vendor/prism/prism-line-numbers.min.js"></script>
-  <script src="../assets/study-page.js"></script>
+  <script src="../../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../../assets/study-page-v2.js"></script>
 </body>
 </html>

@@ -4,391 +4,554 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P06｜自动调整学习率</title>
-  <link rel="stylesheet" href="../../../assets/study-page.css">
+  <link rel="stylesheet" href="../../../assets/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="../../../assets/vendor/prism/prism-line-numbers.min.css">
+  <link rel="stylesheet" href="../../../assets/study-page-v2.css">
 </head>
-<body data-feynman-keywords="learning rate,gradient norm,adaptive learning rate,AdaGrad,RMSProp,Adam,momentum,sigma,learning rate decay,warm up">
-<div class="progress" id="progress"></div>
-<div class="layout">
-  <aside>
-    <div class="brand"><strong>自动调整学习率</strong><span>P06。loss 停住不一定是 critical point；很多时候是固定 learning rate 在崎岖地形里走不好。</span></div>
-    <nav>
-      <a href="#goals"><span class="dot"></span>目标与地图</a>
-      <a href="#share"><span class="dot"></span>速读自测</a>
-      <a href="#notcritical"><span class="dot"></span>不一定是临界点</a>
-      <a href="#ravine"><span class="dot"></span>狭长谷地</a>
-      <a href="#adaptive"><span class="dot"></span>参数级学习率</a>
-      <a href="#adagrad"><span class="dot"></span>AdaGrad</a>
-      <a href="#rmsprop"><span class="dot"></span>RMSProp 与 Adam</a>
-      <a href="#schedule"><span class="dot"></span>Decay 与 Warm Up</a>
-      <a href="#code"><span class="dot"></span>最小代码</a>
-      <a href="#mistakes"><span class="dot"></span>常见误区</a>
-      <a href="#practice"><span class="dot"></span>综合练习</a>
-      <a href="#export"><span class="dot"></span>练习记录</a>
-    </nav>
-    <div class="side-note">这一节的判断句：loss 不降时，先看 gradient norm；如果 gradient 仍大，问题可能是步伐尺度，而不是已经没有方向。</div>
-  </aside>
+<body data-course="李宏毅机器学习" data-unit="">
 
-  <main>
-    <div class="hero" id="top">
-      <div>
-        <div class="kicker">Lee ML 2025 / P06</div>
-        <h1>类神经网络训练不起来怎么办：自动调整学习率</h1>
-        <p>P04 说 loss 停住时要小心 critical point 的分类，P05 说 batch 和 momentum 可以改变优化路径。P06 继续往前追问：有时 loss 停住，gradient norm 其实还很大，这说明参数并不是“没有方向可走”，而是当前的 learning rate 让它走不好。</p>
-        <p>最典型的画面是狭长谷地：一个方向很陡，另一个方向很平。Learning rate 太大，会在陡峭方向两壁震荡；learning rate 太小，又会在平缓方向几乎走不动。Adaptive learning rate 的核心，就是给不同参数、不同时间的更新步伐做自动缩放。</p>
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="top-nav-inner">
+      <div class="top-nav-left">
+        <a href="../index.html">李宏毅机器学习</a>
+        <span class="sep">/</span>
+        <span></span>
       </div>
-      <div class="route">
-        <h3>学完你应该能做什么</h3>
-        <ol>
-          <li>解释为什么 loss 停住不一定表示 gradient 接近零。</li>
-          <li>说明固定 learning rate 在狭长谷地里的两难。</li>
-          <li>读懂 <code>η / σ</code> 这种参数级 learning rate 的直觉。</li>
-          <li>区分 AdaGrad、RMSProp、Adam 的核心差异。</li>
-          <li>解释 learning rate decay 和 warm up 各自想解决什么。</li>
-        </ol>
+      <div class="top-nav-right">
+        <a href="../../../search.html" class="nav-pill">🔍 搜索</a>
       </div>
     </div>
+  </nav>
 
-    <section id="goals">
-      <div class="head"><h2>本节的概念地图</h2><span class="tag">map</span></div>
-      <p>训练卡住时，很多人第一反应是“卡在 local minima 或 saddle point”。但这个判断需要证据。Critical point 的特征是 gradient 很小；如果 loss 不降但 gradient norm 仍然很大，那就说明问题不是没有梯度，而是更新方向和步伐让 loss 没能有效下降。</p>
-      <p>Adaptive learning rate 的大原则是：某个参数方向如果长期 gradient 大，说明这个方向陡，步伐应该小一点；某个参数方向如果长期 gradient 小，说明这个方向平，步伐应该大一点。于是原本统一的 learning rate 被改成每个参数、每个 iteration 都可能不同的有效学习率。</p>
-      <p>这条线最后会汇合到常用 optimizer。AdaGrad 用过去所有 gradient 的 root mean square 作为分母；RMSProp 让最近 gradient 更有影响力；Adam 可以粗略理解为 RMSProp 加上 momentum；learning rate schedule 则让整体 learning rate 随训练时间变化。</p>
-      <div class="map">
-        <span class="node">loss 卡住</span><span class="arrow">→</span>
-        <span class="node">检查 gradient norm</span><span class="arrow">→</span>
-        <span class="node">步伐尺度问题</span><span class="arrow">→</span>
-        <span class="node">η / σ</span><span class="arrow">→</span>
-        <span class="node">AdaGrad / RMSProp / Adam</span><span class="arrow">→</span>
-        <span class="node">schedule</span>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-main">
+      <div class="kicker">Lee ML 2025 / P06</div>
+      <div class="hero-meta">
+        <span class="hero-badge"></span>
       </div>
-      <div class="grid3">
-        <div class="box soft"><h3>直觉</h3><p>同一双鞋不适合所有地形；同一个 learning rate 也不适合所有参数方向。</p></div>
-        <div class="box info"><h3>正式说法</h3><p>Adaptive optimizer 根据历史 gradient 统计量，对每个参数的更新量做归一化。</p></div>
-        <div class="box warn"><h3>关键边界</h3><p>自动调整不等于不用调参；初始 learning rate、α、β、schedule 仍是 hyperparameter。</p></div>
+      <h1 class="hero-title">P06｜自动调整学习率</h1>
+      <p class="hero-desc">P04 说 loss 停住时要小心 critical point 的分类，P05 说 batch 和 momentum 可以改变优化路径。P06 继续往前追问：有时 loss 停住，gradient norm 其实还很大，这说明参数并不是“没有方向可走”，而是当前的 learning rate 让它走不好。</p>
+      <div class="course-links">
+            <a href="../index.html">课程地图</a>
+            <a href="../P05_批次与动量/学习页.html">上一节</a>
+            <a href="../P07_损失函数也可能有影响/学习页.html">下一节</a>
       </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把 P06 的主线概括为：先诊断是不是 critical point，再处理 learning rate 的尺度问题。</p></div>
-    </section>
+    </div>
+    <div class="hero-side">
+      <div class="can-do">
+        <h3>读完本页应该能做什么</h3>
+        <ul>
 
-    <section id="share">
-      <div class="head"><h2>公开速读与即时自测</h2><span class="tag">quick check</span></div>
-      <div class="grid3">
-        <div class="box soft"><h3>核心直觉</h3><p>固定 learning rate 像统一鞋码：陡峭方向需要小步，平坦方向需要大步，同一尺度很难两边都合适。</p></div>
-        <div class="box info"><h3>术语速查</h3><p><code>gradient norm</code> 判断是否真没方向；<code>σ</code> 表示历史 gradient 尺度；<code>schedule</code> 控制整体 learning rate 随时间变化。</p></div>
-        <div class="box warn"><h3>易混点</h3><p>Adaptive optimizer 不等于不用调参。Adam、RMSProp 仍需要初始 learning rate、β 或 α，以及可能的 decay / warm up。</p></div>
+        </ul>
       </div>
-      <div class="viz-panel">
-        <h3>Worked example：有效步伐</h3>
-        <p>如果基础 <code>η = 0.1</code>，某参数方向的 <code>σ = 2</code>，有效步伐约是 <code>η/σ = 0.05</code>；若另一个方向 <code>σ = 0.2</code>，有效步伐约是 <code>0.5</code>。这正是“陡峭方向小步、平坦方向大步”的直觉。</p>
-        <button type="button" onclick="showMiniAnswer('p06MiniCheck','参考判断：loss plateau 但 gradient norm 仍大，不能说已经到 critical point；更可能是 learning rate 尺度、震荡或优化器状态不合适。先看梯度长度，再调步伐。')">检查迁移题</button>
-        <div id="p06MiniCheck" class="answer" style="display:none;margin-top:10px"></div>
-      </div>
-    </section>
+    </div>
+  </header>
 
-    <section id="notcritical">
-      <div class="head"><h2>Loss 不降，不一定是 critical point</h2><span class="tag">gradient norm</span></div>
-      <p>Critical point 的定义来自 gradient：当 gradient 接近零，参数更新量也会接近零。可是训练曲线上的 loss 不再下降，只是一个表面现象。它可能来自 gradient 很小，也可能来自更新方向在地形里来回震荡，还可能来自 learning rate 让每一步都越过合适的位置。</p>
-      <p>因此，看到 loss plateau 时，第一个动作不是命名它，而是测量它。你可以记录 gradient norm，也就是把所有参数的 gradient 当成一个大向量，计算它的长度。如果 gradient norm 仍然很大，就不能说“没有方向了”。这时更合理的诊断是：有方向，但步伐和地形配合不好。</p>
-      <p>这也是本节与 P04 的衔接。P04 教你 gradient 为零后如何分类 critical point；P06 提醒你，很多训练停滞甚至还没到 gradient 为零那一步。真正的障碍可能在更前面：优化器没有把参数带到一个可以顺利下降的路径上。</p>
-      <div class="formula">
-        若 loss 不降但 ||∇L(θ)|| 仍大：<br>
-        问题更可能是 update step 的尺度与方向，而不是已经到达 critical point。
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>把“loss 停住”拆成两个问题：loss 现象是什么，gradient norm 证据是什么。</p></div>
-    </section>
+  <!-- learning-kit:nav:start -->
+  <div class="quick-toc">
+    <div class="quick-toc-inner">
+      <a href="#goals">本节的概念地图</a>
+      <a href="#share">公开速读与即时自测</a>
+      <a href="#notcritical">Loss 不降，不一定是 critical point</a>
+      <a href="#ravine">狭长谷地：固定 learning rate 的两难</a>
+      <a href="#adaptive">Adaptive learning rate：给每个参数自己的步伐</a>
+      <a href="#adagrad">AdaGrad：用过去所有 gradient 的 RMS 当分母</a>
+      <a href="#rmsprop">RMSProp 与 Adam：最近的 gradient 也要有话语权</a>
+      <a href="#schedule">Learning rate schedule：整体步伐也随时间变</a>
+      <a href="#code">最小代码：从 SGD 到 Adam 的参数更新</a>
+      <a href="#mistakes">常见误区和修法</a>
+      <a href="#practice">综合练习</a>
+    </div>
+  </div>
+  <!-- learning-kit:nav:end -->
 
-    <section id="ravine">
-      <div class="head"><h2>狭长谷地：固定 learning rate 的两难</h2><span class="tag">ravine</span></div>
-      <p>想象一个只有两个参数的 error surface。它是凸的，理论上没有 local minima 陷阱，最低点清清楚楚就在谷底。但这个谷地很狭长：横向很平，纵向很陡。这样的地形会让普通 gradient descent 很痛苦。</p>
-      <p>如果 learning rate 太大，参数在陡峭方向会从一侧山壁跳到另一侧山壁，loss 不会稳定下降，gradient norm 可能还很大。如果 learning rate 调得很小，震荡是少了，但横向平缓方向几乎走不动，训练会慢到像停住。</p>
-      <p>这说明问题不是“只要把 learning rate 调小就好”。一个方向需要小步防止震荡，另一个方向需要大步加速前进。单一 learning rate 同时服务所有参数方向，本来就不够细。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：固定 learning rate 在谷地里的表现</h3>
-            <div class="slider-row"><label for="lrSlider">learning rate</label><input id="lrSlider" type="range" min="5" max="100" step="5" value="55"><strong id="lrOut">0.55</strong></div>
-            <svg viewBox="0 0 620 300">
-              <ellipse class="contour" cx="310" cy="150" rx="250" ry="105"/>
-              <ellipse class="contour" cx="310" cy="150" rx="190" ry="78"/>
-              <ellipse class="contour" cx="310" cy="150" rx="120" ry="48"/>
-              <ellipse class="contour" cx="310" cy="150" rx="55" ry="20"/>
-              <circle cx="310" cy="150" r="5" fill="#216d5d"/><text x="320" y="145" font-size="13">minimum</text>
-              <polyline id="lrPath" class="pathline" points="90,48 150,240 210,62 255,230 300,83 330,210 356,108 371,185 386,132"/>
-              <circle id="lrDot" class="stepdot" cx="386" cy="132" r="6"/>
-            </svg>
-          </div>
-          <div class="viz-note">
-            <b id="lrTitle">步伐偏大：容易震荡</b>
-            <p id="lrText">在陡峭方向上，每一步都可能跨过谷底，从一侧山壁跳到另一侧山壁。</p>
-            <p>观察重点：太大和太小都不好，原因不一样。</p>
-          </div>
+  <!-- Content -->
+  <article class="content">
+      <section id="goals">
+        <div class="head">
+          <h2>本节的概念地图</h2>
+          <span class="tag">map</span>
         </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释为什么一个固定 learning rate 无法同时满足陡峭方向和平坦方向。</p></div>
-    </section>
-
-    <section id="adaptive">
-      <div class="head"><h2>Adaptive learning rate：给每个参数自己的步伐</h2><span class="tag">η / σ</span></div>
-      <p>普通 gradient descent 对所有参数使用同一个 learning rate：<code>θ_i ← θ_i - η g_i</code>。Adaptive learning rate 把这个步伐改成 <code>η / σ_i^t</code>，也就是每个参数 <code>i</code>、每个时间 <code>t</code> 都可能有自己的分母。</p>
-      <p><code>σ_i^t</code> 的直觉是“这个参数方向过去的 gradient 通常有多大”。如果某个方向的 gradient 长期很大，说明这个方向陡，<code>σ</code> 大，于是有效 learning rate <code>η / σ</code> 小；如果某个方向的 gradient 长期很小，说明这个方向平，<code>σ</code> 小，于是有效 learning rate 大。</p>
-      <p>注意这里的调整不是简单地“gradient 大就走大步”。恰好相反，gradient 本身已经乘在更新式里，adaptive 方法额外用 <code>σ</code> 去归一化它，避免陡峭方向走太猛，同时放大平坦方向的前进能力。</p>
-      <div class="formula">
-        θ<sub>i</sub><sup>t+1</sup> = θ<sub>i</sub><sup>t</sup> - <span class="frac"><span>η</span><span>σ<sub>i</sub><sup>t</sup></span></span> g<sub>i</sub><sup>t</sup><br>
-        σ 越大，有效 learning rate 越小；σ 越小，有效 learning rate 越大。
-      </div>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：σ 如何缩放有效 learning rate</h3>
-            <div class="slider-row"><label for="sigmaSlider">σ</label><input id="sigmaSlider" type="range" min="10" max="200" step="5" value="50"><strong id="sigmaOut">0.50</strong></div>
-            <div class="slider-row"><label for="baseEta">base η</label><input id="baseEta" type="range" min="1" max="100" step="1" value="10"><strong id="etaOut">0.10</strong></div>
-            <div class="barrow"><span>有效 η/σ</span><div class="bar"><div class="fill" id="effectiveBar" style="width:20%"></div></div><span id="effectiveOut">0.20</span></div>
-          </div>
-          <div class="viz-note">
-            <b id="sigmaTitle">σ 小：放大步伐</b>
-            <p id="sigmaText">当某个方向过去 gradient 小，分母小，有效 learning rate 会变大，帮助平坦方向前进。</p>
-            <p>观察重点：σ 是用历史 gradient 统计出来的尺度。</p>
-          </div>
+<p>训练卡住时，很多人第一反应是“卡在 local minima 或 saddle point”。但这个判断需要证据。Critical point 的特征是 gradient 很小；如果 loss 不降但 gradient norm 仍然很大，那就说明问题更新方向和步伐让 loss 没能有效下降。</p>
+<p>这条线最后会汇合到常用 optimizer。AdaGrad 用过去所有 gradient 的 root mean square 作为分母；RMSProp 让最近 gradient 更有影响力；Adam 可以粗略理解为 RMSProp 加上 momentum；learning rate schedule 则让整体 learning rate 随训练时间变化。</p>
+<p>直觉同一双鞋不适合所有地形；同一个 learning rate 也不适合所有参数方向。</p>
+<p>正式说法Adaptive optimizer 根据历史 gradient 统计量，对每个参数的更新量做归一化。</p>
+<p>关键边界自动调整不等于不用调参；初始 learning rate、α、β、schedule 仍是 hyperparameter。</p>
+      </section>
+      <section id="share">
+        <div class="head">
+          <h2>公开速读与即时自测</h2>
+          <span class="tag">quick</span>
         </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>用 <code>η / σ</code> 解释 adaptive learning rate 的基本设计，而不是只背 optimizer 名字。</p></div>
-    </section>
-
-    <section id="adagrad">
-      <div class="head"><h2>AdaGrad：用过去所有 gradient 的 RMS 当分母</h2><span class="tag">AdaGrad</span></div>
-      <p>AdaGrad 的思路是用过去所有 gradient 的平方平均再开根号，作为 <code>σ</code>。这个量叫 root mean square，直译是均方根。它只看 gradient 的大小，不看正负方向，因为平方会把正负号去掉。</p>
-      <p>如果某个参数方向过去的 gradient 都比较小，RMS 就小，更新时分母小，有效 learning rate 大。反过来，如果某个方向过去的 gradient 都很大，RMS 就大，更新时分母大，有效 learning rate 小。这正好对应狭长谷地里的需求。</p>
-      <p>但 AdaGrad 也有问题。它把过去所有 gradient 都放进统计里，而且越积越多。某个方向如果长时间看到小 gradient，分母可能变得很小，导致后来在突然变陡的区域步伐过大；某些任务里也可能因为累计分母越来越大，使有效 learning rate 过早变小。</p>
-      <div class="formula">
-        σ<sub>i</sub><sup>t</sup> = sqrt( <span class="frac"><span>1</span><span>t+1</span></span> Σ<sub>k=0</sub><sup>t</sup> (g<sub>i</sub><sup>k</sup>)² )<br>
-        θ<sub>i</sub><sup>t+1</sup> = θ<sub>i</sub><sup>t</sup> - <span class="frac"><span>η</span><span>σ<sub>i</sub><sup>t</sup> + ε</span></span> g<sub>i</sub><sup>t</sup>
-        <div class="smallmath">ε 是一个很小的数，防止分母为 0。</div>
-      </div>
-      <table class="metric-table">
-        <thead><tr><th>点</th><th>解释</th><th>训练含义</th></tr></thead>
-        <tbody>
-          <tr><td>平方</td><td>去掉方向，只保留大小</td><td>σ 衡量尺度，不决定往左还是往右</td></tr>
-          <tr><td>平均</td><td>把历史 gradient 汇总</td><td>让每个参数有自己的历史尺度</td></tr>
-          <tr><td>开根号</td><td>回到与 gradient 相近的单位</td><td>避免平方尺度直接进入分母过大</td></tr>
-        </tbody>
-      </table>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>解释 AdaGrad 的 σ 从哪里来，以及为什么它能让平坦方向走大步、陡峭方向走小步。</p></div>
-    </section>
-
-    <section id="rmsprop">
-      <div class="head"><h2>RMSProp 与 Adam：最近的 gradient 也要有话语权</h2><span class="tag">RMSProp / Adam</span></div>
-      <p>AdaGrad 默认过去所有 gradient 同等重要。但同一个参数方向在训练早期和后期可能处在完全不同的地形里：前面平，后面陡；或者前面陡，后面平。此时旧统计如果影响太重，σ 的反应会变慢。</p>
-      <p>RMSProp 用指数移动平均解决这个问题。它用一个系数 <code>α</code> 保留过去统计，再用 <code>1-α</code> 加入当前 gradient 的平方。<code>α</code> 越小，当前 gradient 影响越大，σ 反应越快；<code>α</code> 越大，历史统计影响越大，σ 更平滑。</p>
-      <p>Adam 则可以作为本节的合体版理解：它一边像 momentum 那样累计 gradient 方向，用来决定往哪里走；一边像 RMSProp 那样累计 gradient 平方，用来决定步子多大。方向和尺度不是互相抵消，因为 momentum 看正负方向，RMS 分母只看大小。</p>
-      <div class="formula">
-        RMSProp: s<sub>t</sub> = α s<sub>t-1</sub> + (1-α) g<sub>t</sub>²，σ<sub>t</sub> = sqrt(s<sub>t</sub>)<br>
-        Adam ≈ momentum 的方向估计 + RMSProp 的尺度估计
-      </div>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小交互：α 决定 RMSProp 对新梯度多敏感</h3>
-            <div class="slider-row"><label for="alphaSlider">α</label><input id="alphaSlider" type="range" min="0" max="99" step="1" value="90"><strong id="alphaOut">0.90</strong></div>
-            <div class="barrow"><span>历史统计</span><div class="bar"><div class="fill blue" id="historyBar" style="width:90%"></div></div><span id="historyOut">90%</span></div>
-            <div class="barrow"><span>当前梯度</span><div class="bar"><div class="fill red" id="currentBar" style="width:10%"></div></div><span id="currentOut">10%</span></div>
-          </div>
-          <div class="viz-note">
-            <b id="alphaTitle">更平滑，反应较慢</b>
-            <p id="alphaText">α 高时，旧统计影响大，σ 不容易被一次新的大 gradient 改变。</p>
-            <p>观察重点：RMSProp 的“动态”来自最近梯度能更新统计量。</p>
-          </div>
+<p>核心直觉固定 learning rate 像统一鞋码：陡峭方向需要小步，平坦方向需要大步，同一尺度很难两边都合适。</p>
+<p>术语速查<code>gradient norm</code> 判断是否真没方向；<code>σ</code> 表示历史 gradient 尺度；<code>schedule</code> 控制整体 learning rate 随时间变化。</p>
+<p>易混点Adaptive optimizer 不等于不用调参。Adam、RMSProp 仍需要初始 learning rate、β 或 α，以及可能的 decay / warm up。</p>
+      </section>
+      <section id="notcritical">
+        <div class="head">
+          <h2>Loss 不降，不一定是 critical point</h2>
+          <span class="tag">gradient</span>
         </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>说清 RMSProp 相对 AdaGrad 的改进，以及 Adam 为什么不是把 momentum 和 σ 抵消掉。</p></div>
-    </section>
-
-    <section id="schedule">
-      <div class="head"><h2>Learning rate schedule：整体步伐也随时间变</h2><span class="tag">decay / warm up</span></div>
-      <p>前面的 <code>σ</code> 是每个参数自己的缩放因子，<code>η</code> 则是整体基准 learning rate。Learning rate schedule 指的是让 <code>η</code> 也随着时间变化，而不是永远固定。最常见的做法是 learning rate decay：训练早期离目标远，步子可以大；训练后期接近较好区域，步子逐渐变小，避免在附近乱跳。</p>
-      <p>另一个常见策略是 warm up：learning rate 先从小逐渐变大，再进入衰减。它听起来反直觉，因为大家常听到的是“学习率要越来越小”。但在 Adam、RMSProp 这类方法里，早期的 <code>σ</code> 统计还不稳定，直接用大步可能把参数带离合适区域。先小步走一段，相当于让优化器收集地形统计，之后再放大步伐。</p>
-      <p>Warm up 在 Transformer、BERT 相关训练里很常见，也并不是新模型时代才出现的技巧。它的理论解释仍然有讨论空间，但实作上很常用。你需要掌握的是操作意图：decay 是后期刹车，warm up 是前期先稳住统计，再逐渐加速。</p>
-      <div class="viz-panel">
-        <div class="viz-grid">
-          <div>
-            <h3>小图：三种 learning rate schedule</h3>
-            <svg viewBox="0 0 620 260">
-              <line class="axis" x1="45" y1="220" x2="580" y2="220"/><line class="axis" x1="45" y1="35" x2="45" y2="220"/>
-              <path class="curve" d="M55 55 C160 80 270 125 570 202"/><text x="430" y="190" font-size="13">decay</text>
-              <path class="curve-red" d="M55 204 L155 72 C270 92 410 150 570 205"/><text x="165" y="66" font-size="13">warm up + decay</text>
-              <path class="pathline" d="M55 112 L570 112" stroke="#a37122"/><text x="430" y="105" font-size="13">constant</text>
-            </svg>
-          </div>
-          <div class="viz-note">
-            <b>Schedule 改的是整体 η</b>
-            <p>Adaptive optimizer 的 σ 是参数级缩放；schedule 是全局基准步伐随时间变化。</p>
-            <p>两者可以同时存在，并不冲突。</p>
-          </div>
+<p>Critical point 的定义来自 gradient：当 gradient 接近零，参数更新量也会接近零。可是训练曲线上的 loss 不再下降，只是一个表面现象。它可能来自 gradient 很小，也可能来自更新方向在地形里来回震荡，还可能来自 learning rate 让每一步都越过合适的位置。</p>
+<p>这也是本节与 P04 的衔接。P04 教你 gradient 为零后如何分类 critical point；P06 提醒你，很多训练停滞甚至还没到 gradient 为零那一步。真正的障碍可能在更前面：优化器没有把参数带到一个可以顺利下降的路径上。</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>把“loss 停住”拆成两个问题：loss 现象是什么，gradient norm 证据是什么。</p>
         </div>
-      </div>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>区分 decay 和 warm up：前者是训练后期减速，后者是训练初期先小步稳定。</p></div>
-    </section>
+      </section>
+      <section id="ravine">
+        <div class="head">
+          <h2>狭长谷地：固定 learning rate 的两难</h2>
+          <span class="tag">ravine</span>
+        </div>
+<p>想象一个只有两个参数的 error surface。它是凸的，理论上没有 local minima 陷阱，最低点清清楚楚就在谷底。但这个谷地很狭长：横向很平，纵向很陡。这样的地形会让普通 gradient descent 很痛苦。</p>
+<p>这说明问题不是“只要把 learning rate 调小就好”。一个方向需要小步防止震荡，另一个方向需要大步加速前进。单一 learning rate 同时服务所有参数方向，本来就不够细。</p>
+<p>minimum</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释为什么一个固定 learning rate 无法同时满足陡峭方向和平坦方向。</p>
+        </div>
+      </section>
+      <section id="adaptive">
+        <div class="head">
+          <h2>Adaptive learning rate：给每个参数自己的步伐</h2>
+          <span class="tag">η</span>
+        </div>
+<p>普通 gradient descent 对所有参数使用同一个 learning rate：<code>θ_i ← θ_i - η g_i</code>。Adaptive learning rate 把这个步伐改成 <code>η / σ_i^t</code>，也就是每个参数 <code>i</code>、每个时间 <code>t</code> 都可能有自己的分母。</p>
+<p>注意这里的调整不是简单地“gradient 大就走大步”。恰好相反，gradient 本身已经乘在更新式里，adaptive 方法额外用 <code>σ</code> 去归一化它，避免陡峭方向走太猛，同时放大平坦方向的前进能力。</p>
+<p>小交互：σ 如何缩放有效 learning rate</p>
+<p>σ<b>0.50</b></p>
+<p>base η<b>0.10</b></p>
+<p>有效 η/σ0.20</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>用 <code>η / σ</code> 解释 adaptive learning rate 的基本设计，而不是只背 optimizer 名字。</p>
+        </div>
+      </section>
+      <section id="adagrad">
+        <div class="head">
+          <h2>AdaGrad：用过去所有 gradient 的 RMS 当分母</h2>
+          <span class="tag">AdaGrad</span>
+        </div>
+<p>AdaGrad 的思路是用过去所有 gradient 的平方平均再开根号，作为 <code>σ</code>。这个量叫 root mean square，直译是均方根。它只看 gradient 的大小，不看正负方向，因为平方会把正负号去掉。</p>
+<p>但 AdaGrad 也有问题。它把过去所有 gradient 都放进统计里，而且越积越多。某个方向如果长时间看到小 gradient，分母可能变得很小，导致后来在突然变陡的区域步伐过大；某些任务里也可能因为累计分母越来越大，使有效 learning rate 过早变小。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>点</th><th>解释</th><th>训练含义</th></tr>
+<tr><td>平方</td><td>去掉方向，只保留大小</td><td>σ 衡量尺度，不决定往左还是往右</td></tr><tr><td>平均</td><td>把历史 gradient 汇总</td><td>让每个参数有自己的历史尺度</td></tr><tr><td>开根号</td><td>回到与 gradient 相近的单位</td><td>避免平方尺度直接进入分母过大</td></tr>
+        </table></div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>解释 AdaGrad 的 σ 从哪里来，以及为什么它能让平坦方向走大步、陡峭方向走小步。</p>
+        </div>
+      </section>
+      <section id="rmsprop">
+        <div class="head">
+          <h2>RMSProp 与 Adam：最近的 gradient 也要有话语权</h2>
+          <span class="tag">RMSProp</span>
+        </div>
+<p>AdaGrad 默认过去所有 gradient 同等重要。但同一个参数方向在训练早期和后期可能处在完全不同的地形里：前面平，后面陡；或者前面陡，后面平。此时旧统计如果影响太重，σ 的反应会变慢。</p>
+<p>Adam 则可以作为本节的合体版理解：它一边像 momentum 那样累计 gradient 方向，用来决定往哪里走；一边像 RMSProp 那样累计 gradient 平方，用来决定步子多大。方向和尺度不是互相抵消，因为 momentum 看正负方向，RMS 分母只看大小。</p>
+<p>小交互：α 决定 RMSProp 对新梯度多敏感</p>
+<p>α<b>0.90</b></p>
+<p>历史统计90%</p>
+<p>当前梯度10%</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>说清 RMSProp 相对 AdaGrad 的改进，以及 Adam 为什么不是把 momentum 和 σ 抵消掉。</p>
+        </div>
+      </section>
+      <section id="schedule">
+        <div class="head">
+          <h2>Learning rate schedule：整体步伐也随时间变</h2>
+          <span class="tag">decay</span>
+        </div>
+<p>前面的 <code>σ</code> 是每个参数自己的缩放因子，<code>η</code> 则是整体基准 learning rate。Learning rate schedule 指的是让 <code>η</code> 也随着时间变化，而不是永远固定。最常见的做法是 learning rate decay：训练早期离目标远，步子可以大；训练后期接近较好区域，步子逐渐变小，避免在附近乱跳。</p>
+<p>Warm up 在 Transformer、BERT 相关训练里很常见，也并不是新模型时代才出现的技巧。它的理论解释仍然有讨论空间，但实作上很常用。你需要掌握的是操作意图：decay 是后期刹车，warm up 是前期先稳住统计，再逐渐加速。</p>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>decay</th><th>warm up + decay</th><th>constant</th></tr>
+<tr><td><b>Schedule 改的是整体 η</b></td><td>Adaptive optimizer 的 σ 是参数级缩放；schedule 是全局基准步伐随时间变化。</td><td>两者可以同时存在，并不冲突。</td></tr>
+        </table></div>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>区分 decay 和 warm up：前者是训练后期减速，后者是训练初期先小步稳定。</p>
+        </div>
+      </section>
+      <section id="code">
+        <div class="head">
+          <h2>最小代码：从 SGD 到 Adam 的参数更新</h2>
+          <span class="tag">code</span>
+        </div>
+<p>下面的代码用一维参数写更新逻辑，重点读懂状态变量。<code>grad</code> 决定当前方向，<code>v</code> 保存 momentum 的方向记忆，<code>s</code> 保存 gradient 平方的尺度统计，<code>lr_t</code> 是 schedule 后的整体 learning rate。</p>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-1">复制</button></div>
+        <pre id="code-code-1" data-export-context="代码" data-export-lang="text"><code class="language-text">eps = 1e-8
+s = 0.0
 
-    <section id="code">
-      <div class="head"><h2>最小代码：从 SGD 到 Adam 的参数更新</h2><span class="tag">code reading</span></div>
-      <p>下面的代码用一维参数写更新逻辑，重点不是复刻框架实现，而是读懂状态变量。<code>grad</code> 决定当前方向，<code>v</code> 保存 momentum 的方向记忆，<code>s</code> 保存 gradient 平方的尺度统计，<code>lr_t</code> 是 schedule 后的整体 learning rate。</p>
-      <div class="codebar"><span class="label">正确示例：AdaGrad 的核心更新</span><span class="kind">python</span></div>
-      <pre><code>eps = <span class="num">1e-8</span>
-s = <span class="num">0.0</span>
+for t in range(num_steps):
+ grad = compute_grad(theta)
+ s = s + grad * grad # 累计过去所有梯度平方
+ theta = theta - lr / (sqrt(s) + eps) * grad</code></pre>
+<p>正确示例：RMSProp + momentum 的骨架python</p>
+        </div>
+        <div class="code-example">
+        <div class="codebar"><span>代码</span><button class="copy" data-copy="code-code-2">复制</button></div>
+        <pre id="code-code-2" data-export-context="代码" data-export-lang="text"><code class="language-text">eps = 1e-8
+v = 0.0 # 方向记忆
+s = 0.0 # 尺度统计
 
-<span class="kw">for</span> t <span class="kw">in</span> range(num_steps):
-    grad = compute_grad(theta)
-    s = s + grad * grad                       <span class="cmt"># 累计过去所有梯度平方</span>
-    theta = theta - lr / (sqrt(s) + eps) * grad</code></pre>
-      <div class="codebar"><span class="label">正确示例：RMSProp + momentum 的骨架</span><span class="kind">python</span></div>
-      <pre><code>eps = <span class="num">1e-8</span>
-v = <span class="num">0.0</span>      <span class="cmt"># 方向记忆</span>
-s = <span class="num">0.0</span>      <span class="cmt"># 尺度统计</span>
+for t in range(num_steps):
+ grad = compute_grad(theta)
+ lr_t = schedule(base_lr, t)
 
-<span class="kw">for</span> t <span class="kw">in</span> range(num_steps):
-    grad = compute_grad(theta)
-    lr_t = schedule(base_lr, t)
-
-    v = beta * v + (1 - beta) * grad          <span class="cmt"># 考虑方向，有正负</span>
-    s = alpha * s + (1 - alpha) * grad * grad <span class="cmt"># 只考虑大小</span>
-    theta = theta - lr_t * v / (sqrt(s) + eps)</code></pre>
-      <p>Adam 的完整实现还有 bias correction 等细节，框架会帮你处理。这里先抓主线：分子负责方向，分母负责尺度，schedule 负责整体步伐随时间变化。</p>
-      <div class="codebar error"><span class="label">错误示例：把 σ 当成方向</span><span class="kind">python</span></div>
-      <pre><code><span class="cmt"># 错：sigma 由 grad^2 来，已经没有正负方向，不能替代 grad 决定往哪里走</span>
-theta = theta - lr * sigma</code></pre>
-      <div class="box soft"><h3>现在你应该能做什么</h3><p>读 optimizer 代码时，能区分方向状态、尺度状态和 learning rate schedule。</p></div>
-    </section>
-
-    <section id="mistakes">
-      <div class="head"><h2>常见误区和修法</h2><span class="tag">pitfalls</span></div>
-      <table class="metric-table">
-        <thead><tr><th>误区</th><th>错因</th><th>后果</th><th>修法</th></tr></thead>
-        <tbody>
-          <tr><td>loss 不降就是 critical point</td><td>没有检查 gradient norm。</td><td>误判训练停滞原因。</td><td>先测 ||gradient||，再判断是否接近 critical point。</td></tr>
-          <tr><td>learning rate 调小就一定解决震荡</td><td>只看到陡峭方向，忽略平坦方向。</td><td>训练可能慢到走不动。</td><td>考虑不同参数方向需要不同有效步伐。</td></tr>
-          <tr><td>gradient 大就该走更大步</td><td>混淆 gradient 本身和 adaptive 缩放。</td><td>在陡峭方向更容易爆炸。</td><td>用 σ 把陡峭方向的有效学习率压小。</td></tr>
-          <tr><td>AdaGrad 永远最好</td><td>忽略它对历史 gradient 同等对待。</td><td>统计反应慢，或有效学习率过早变小。</td><td>理解 RMSProp 为什么加入指数移动平均。</td></tr>
-          <tr><td>Adam 的 momentum 和 σ 会互相抵消</td><td>没区分方向和大小。</td><td>无法理解 Adam 的设计。</td><td>momentum 看正负方向，σ 看平方大小。</td></tr>
-          <tr><td>warm up 是随便的玄学</td><td>只看形式，没看早期统计不稳定。</td><td>遇到大模型训练时不知道为什么要小步开始。</td><td>把 warm up 理解成先稳定统计，再逐步加速。</td></tr>
-        </tbody>
-      </table>
-    </section>
-
-    <section id="practice">
-      <div class="head"><h2>综合练习</h2><span class="tag">18 questions</span></div>
+ v = beta * v + (1 - beta) * grad # 考虑方向，有正负
+ s = alpha * s + (1 - alpha) * grad * grad # 只考虑大小
+ theta = theta - lr_t * v / (sqrt(s) + eps)</code></pre>
+<p>Adam 的完整实现还有 bias correction 等细节，框架会帮你处理。这里先抓主线：分子负责方向，分母负责尺度，schedule 负责整体步伐随时间变化。</p>
+        </div>
+<p>错误示例：把 σ 当成方向python</p>
+        <div class="box soft">
+<h3>现在你应该能做什么</h3>
+<p>读 optimizer 代码时，能区分方向状态、尺度状态和 learning rate schedule。</p>
+        </div>
+      </section>
+      <section id="mistakes">
+        <div class="head">
+          <h2>常见误区和修法</h2>
+          <span class="tag">pitfalls</span>
+        </div>
+        <div class="table-wrap"><table class="metric-table">
+          <tr><th>误区</th><th>错因</th><th>后果</th><th>修法</th></tr>
+<tr><td>loss 不降就是 critical point</td><td>没有检查 gradient norm。</td><td>误判训练停滞原因。</td><td>先测</td><td></td><td>gradient</td><td></td><td>，再判断是否接近 critical point。</td></tr><tr><td>learning rate 调小就一定解决震荡</td><td>只看到陡峭方向，忽略平坦方向。</td><td>训练可能慢到走不动。</td><td>考虑不同参数方向需要不同有效步伐。</td></tr><tr><td>gradient 大就该走更大步</td><td>混淆 gradient 本身和 adaptive 缩放。</td><td>在陡峭方向更容易爆炸。</td><td>用 σ 把陡峭方向的有效学习率压小。</td></tr><tr><td>AdaGrad 永远最好</td><td>忽略它对历史 gradient 同等对待。</td><td>统计反应慢，或有效学习率过早变小。</td><td>理解 RMSProp 为什么加入指数移动平均。</td></tr><tr><td>Adam 的 momentum 和 σ 会互相抵消</td><td>没区分方向和大小。</td><td>无法理解 Adam 的设计。</td><td>momentum 看正负方向，σ 看平方大小。</td></tr><tr><td>warm up 是随便的玄学</td><td>只看形式，没看早期统计不稳定。</td><td>遇到大模型训练时不知道为什么要小步开始。</td><td>把 warm up 理解成先稳定统计，再逐步加速。</td></tr>
+        </table></div>
+      </section>
+      <section id="practice">
+        <div class="head">
+          <h2>综合练习</h2>
+          <span class="tag">18</span>
+        </div>
       <div class="practice-intro">
-        <div class="review-card"><strong>作答目标</strong><p>这组题检查你是否能诊断 learning rate 问题，并区分 AdaGrad、RMSProp、Adam、decay、warm up。</p></div>
-        <div class="review-card"><strong>答题提醒</strong><ul><li>错误诊断题按“错因 / 后果 / 修法”答。</li><li>费曼题要串起 gradient norm、σ、optimizer、schedule。</li></ul></div>
+
+      </div>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>一、停滞诊断</h3></div>
+          <div class="quick-review">抓手 loss 不降要看 gradient norm。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 1. 判断是否接近 critical point，应该优先检查什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="validation set 名字">validation set 名字</label>
+      <label><input type="radio" name="q?" value="gradient norm 是否很小">gradient norm 是否很小</label>
+      <label><input type="radio" name="q?" value="batch 编号">batch 编号</label>
+      <label><input type="radio" name="q?" value="模型文件大小">模型文件大小</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>一、停滞诊断</h3><p>先判断是不是 critical point。</p></div><div class="quick-review"><b>抓手</b><span>loss 不降要看 gradient norm。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="选择" data-title="1. 判断是否接近 critical point，应该检查什么？"><div class="q-meta"><span class="pill">选择</span></div><h3>1. 判断是否接近 critical point，应该优先检查什么？</h3><label><input type="radio" name="q1" value="A">A. validation set 名字</label><label><input type="radio" name="q1" value="B">B. gradient norm 是否很小</label><label><input type="radio" name="q1" value="C">C. batch 编号</label><label><input type="radio" name="q1" value="D">D. 模型文件大小</label></div>
-          <div class="q" data-role="homework" data-type="判断" data-title="2. loss 不再下降时，gradient norm 一定接近零。"><div class="q-meta"><span class="pill">判断</span></div><h3>2. loss 不再下降时，gradient norm 一定接近零。</h3><label><input type="radio" name="q2" value="对">对</label><label><input type="radio" name="q2" value="错">错</label></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="3. loss 停住但 gradient norm 仍大，说明什么？"><div class="q-meta"><span class="pill">短答</span></div><h3>3. loss 停住但 gradient norm 仍大，说明什么？</h3><textarea name="q3" placeholder="用 2-3 句话说明"></textarea></div>
-          <div class="q" data-role="homework" data-type="错误诊断" data-title="4. 训练卡住就是 local minima。"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>4. “训练卡住就是 local minima。”这句话哪里不严谨？</h3><textarea name="q4" placeholder="按错因 / 后果 / 修法回答"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">判断</span></div>
+        <h3><b>Q:</b> 2. loss 不再下降时，gradient norm 一定接近零。</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="对">对</label>
+      <label><input type="radio" name="q?" value="错">错</label>
+      </div>
+
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 3. loss 停住但 gradient norm 仍大，说明什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 4. “训练卡住就是 local minima。”这句话哪里不严谨？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>二、固定学习率的两难</h3><p>理解狭长谷地。</p></div><div class="quick-review"><b>规则</b><span>陡峭方向要小步，平坦方向要大步。</span></div></div>
+        <div class="group-head">
+          <div><h3>二、固定学习率的两难</h3></div>
+          <div class="quick-review">规则 陡峭方向要小步，平坦方向要大步。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="简答" data-title="5. 为什么 learning rate 太大时会在谷地两壁震荡？"><div class="q-meta"><span class="pill">短答</span></div><h3>5. 为什么 learning rate 太大时会在谷地两壁震荡？</h3><textarea name="q5" placeholder="从陡峭方向和跨过谷底回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="6. 为什么 learning rate 太小时又走不动？"><div class="q-meta"><span class="pill">短答</span></div><h3>6. 为什么 learning rate 太小时又走不动？</h3><textarea name="q6" placeholder="从平坦方向 gradient 小回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="填空" data-title="7. adaptive learning rate 希望给不同什么不同步伐？"><div class="q-meta"><span class="pill">填空</span></div><h3>7. Adaptive learning rate 希望给不同 ______ 不同步伐。</h3><input type="text" name="q7" placeholder="写出关键词"></div>
-          <div class="q" data-role="homework" data-type="错误诊断" data-title="8. 统一 learning rate 对所有参数总是足够。"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>8. “统一 learning rate 对所有参数总是足够。”这句话哪里错？</h3><textarea name="q8" placeholder="按错因 / 后果 / 修法回答"></textarea></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 5. 为什么 learning rate 太大时会在谷地两壁震荡？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 6. 为什么 learning rate 太小时又走不动？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">填空</span></div>
+        <h3><b>Q:</b> 7. Adaptive learning rate 希望给不同 ______ 不同步伐。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 8. “统一 learning rate 对所有参数总是足够。”这句话哪里错？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>三、AdaGrad 与 RMSProp</h3><p>理解 σ 的来源。</p></div><div class="quick-review"><b>关键词</b><span>RMS、平方、指数移动平均。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="选择" data-title="9. AdaGrad 的 σ 主要来自什么？"><div class="q-meta"><span class="pill">选择</span></div><h3>9. AdaGrad 的 σ 主要来自什么？</h3><label><input type="radio" name="q9" value="A">A. 过去 gradient 平方的均方根</label><label><input type="radio" name="q9" value="B">B. label 的平均值</label><label><input type="radio" name="q9" value="C">C. batch 的文件名</label><label><input type="radio" name="q9" value="D">D. validation accuracy</label></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="10. 为什么 gradient 小的方向有效 learning rate 会变大？"><div class="q-meta"><span class="pill">短答</span></div><h3>10. 为什么 gradient 小的方向有效 learning rate 会变大？</h3><textarea name="q10" placeholder="从 σ 小、η/σ 大回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="匹配" data-title="11. 匹配 AdaGrad 和 RMSProp 的差异。"><div class="q-meta"><span class="pill">匹配</span></div><h3>11. 匹配 AdaGrad / RMSProp 的差异。</h3><textarea name="q11" placeholder="AdaGrad→...；RMSProp→..."></textarea></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="12. RMSProp 中 α 越大意味着什么？"><div class="q-meta"><span class="pill">短答</span></div><h3>12. RMSProp 中 α 越大意味着什么？</h3><textarea name="q12" placeholder="从历史统计和当前 gradient 权重回答"></textarea></div>
+        <div class="group-head">
+          <div><h3>三、AdaGrad 与 RMSProp</h3></div>
+          <div class="quick-review">关键词 RMS、平方、指数移动平均。 --></div>
         </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">选择</span></div>
+        <h3><b>Q:</b> 9. AdaGrad 的 σ 主要来自什么？</h3>
+
+      <div class="choices">
+      <label><input type="radio" name="q?" value="过去 gradient 平方的均方根">过去 gradient 平方的均方根</label>
+      <label><input type="radio" name="q?" value="label 的平均值">label 的平均值</label>
+      <label><input type="radio" name="q?" value="batch 的文件名">batch 的文件名</label>
+      <label><input type="radio" name="q?" value="validation accuracy">validation accuracy</label>
       </div>
 
-      <div class="practice-group">
-        <div class="group-head"><div><h3>四、Adam 与 schedule</h3><p>区分方向、尺度和时间计划。</p></div><div class="quick-review"><b>主线</b><span>分子看方向，分母看大小，schedule 改整体 η。</span></div></div>
-        <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="简答" data-title="13. Adam 可以粗略理解成哪两类技巧的结合？"><div class="q-meta"><span class="pill">短答</span></div><h3>13. Adam 可以粗略理解成哪两类技巧的结合？</h3><textarea name="q13" placeholder="写出两个关键词"></textarea></div>
-          <div class="q" data-role="homework" data-type="错误诊断" data-title="14. momentum 和 sigma 都用过去 gradient，所以会抵消。"><div class="q-meta"><span class="pill">错误诊断</span></div><h3>14. “momentum 和 σ 都用过去 gradient，所以会互相抵消。”这句话哪里错？</h3><textarea name="q14" placeholder="按错因 / 后果 / 修法回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="15. learning rate decay 想解决什么？"><div class="q-meta"><span class="pill">短答</span></div><h3>15. Learning rate decay 想解决什么？</h3><textarea name="q15" placeholder="从训练后期靠近目标、需要刹车回答"></textarea></div>
-          <div class="q" data-role="homework" data-type="简答" data-title="16. warm up 的可能解释是什么？"><div class="q-meta"><span class="pill">短答</span></div><h3>16. Warm up 的一个可能解释是什么？</h3><textarea name="q16" placeholder="从早期 σ 统计不稳定、小步收集地形信息回答"></textarea></div>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 10. 为什么 gradient 小的方向有效 learning rate 会变大？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">匹配</span></div>
+        <h3><b>Q:</b> 11. 匹配 AdaGrad / RMSProp 的差异。</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 12. RMSProp 中 α 越大意味着什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-
       <div class="practice-group">
-        <div class="group-head"><div><h3>五、表达输出</h3><p>把这一节讲给别人听。</p></div><div class="quick-review"><b>关键词</b><span>gradient norm、AdaGrad、RMSProp、Adam、decay、warm up。</span></div></div>
+        <div class="group-head">
+          <div><h3>四、Adam 与 schedule</h3></div>
+          <div class="quick-review">主线 分子看方向，分母看大小，schedule 改整体 η。 --></div>
+        </div>
         <div class="drill-grid">
-          <div class="q" data-role="homework" data-type="代码阅读" data-title="17. 解释 s = alpha*s + (1-alpha)*grad*grad。"><div class="q-meta"><span class="pill">代码阅读</span></div><h3>17. 解释这行代码：<code>s = alpha*s + (1-alpha)*grad*grad</code></h3><textarea name="q17" placeholder="说明 s、alpha、grad*grad 各自含义"></textarea></div>
-          <div class="q full" data-role="homework" data-type="费曼解释" data-title="18. 费曼解释：自动调整学习率为什么能帮助训练？" data-keywords="learning rate,gradient norm,adaptive learning rate,AdaGrad,RMSProp,Adam,momentum,sigma,learning rate decay,warm up"><div class="q-meta"><span class="pill">费曼解释</span></div><h3>18. 用 7-10 句话讲清楚：自动调整学习率为什么能帮助训练？</h3><textarea name="q18" placeholder="必须串起：loss 停住、gradient norm、adaptive learning rate、σ、AdaGrad、RMSProp、Adam、decay、warm up"></textarea><div class="solve-note">提示：先讲固定 learning rate 的两难，再讲 σ 如何缩放，最后讲 Adam 与 schedule 的完整版本。</div></div>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 13. Adam 可以粗略理解成哪两类技巧的结合？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">错误诊断</span></div>
+        <h3><b>Q:</b> 14. “momentum 和 σ 都用过去 gradient，所以会互相抵消。”这句话哪里错？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 15. Learning rate decay 想解决什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">短答</span></div>
+        <h3><b>Q:</b> 16. Warm up 的一个可能解释是什么？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
         </div>
       </div>
-    </section>
+      <div class="practice-group">
+        <div class="group-head">
+          <div><h3>五、表达输出</h3></div>
+          <div class="quick-review">关键词 gradient norm、AdaGrad、RMSProp、Adam、decay、warm up。 --></div>
+        </div>
+        <div class="drill-grid">
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">代码阅读</span></div>
+        <h3><b>Q:</b> 17. 解释这行代码：<code>s = alpha<i>s + (1-alpha)</i>grad*grad</code></h3>
 
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+      <article class="q" data-question="q" data-group="" data-title="" data-answer="">
+        <div class="q-meta"><span class="pill">?</span><span class="pill">费曼解释</span></div>
+        <h3><b>Q:</b> 18. 用 7-10 句话讲清楚：自动调整学习率为什么能帮助训练？</h3>
+
+
+      <textarea name="q?"></textarea>
+        <button class="check" type="button">检查</button>
+        <div class="feedback"></div>
+        <details>
+          <summary>参考答案 / 评分要点</summary>
+          <p></p>
+        </details>
+      </article>
+        </div>
+      </div>
+      </section>
     <section id="export">
-      <div class="head"><h2>整理练习记录</h2><span class="tag">practice log</span></div>
-      <p class="muted">完成练习后整理一份本页记录。未填写题目、错误诊断缺少“错因 / 后果 / 修法”、费曼解释过短，都会在下方提示。</p>
-      <div class="actions"><button onclick="generateRecord()">整理记录</button><button class="ghost" onclick="copyRecord()">复制记录</button></div>
-      <div id="quality" class="quality"></div>
-      <div id="record" class="answer">练习记录会显示在这里。</div>
+      <h2>导出练习记录</h2>
+      <div class="quality" id="quality">完成 0 题</div>
+      <div class="export" id="record">还没有生成练习记录。</div>
+      <div class="actions">
+        <button class="action" onclick="generateRecord()">生成记录</button>
+        <button class="ghost" onclick="copyRecord()">复制 Markdown</button>
+      </div>
     </section>
-  </main>
-</div>
+    <section id="sources">
+      <h2>参考资料</h2>
+      <ul class="source-list">
 
-<script src="../../../assets/study-page.js"></script>
-<script>
-const navLinks=[...document.querySelectorAll("nav a[href^='#']")];
-const sections=navLinks.map(a=>document.querySelector(a.getAttribute("href"))).filter(Boolean);
-const progress=document.getElementById("progress");
-function updateReadingState(){const max=document.documentElement.scrollHeight-innerHeight;progress.style.width=max>0?`${Math.min(100,scrollY/max*100)}%`:"0";let current=sections[0]?.id;for(const s of sections){if(s.getBoundingClientRect().top<innerHeight*.36) current=s.id;}navLinks.forEach(a=>a.classList.toggle("active",a.getAttribute("href")===`#${current}`));}
-addEventListener("scroll",updateReadingState,{passive:true});addEventListener("resize",updateReadingState);updateReadingState();
-document.querySelectorAll(".codebar").forEach(bar=>{const btn=document.createElement("button");btn.type="button";btn.className="copy-code";btn.textContent="复制";btn.addEventListener("click",()=>{const code=bar.nextElementSibling?.innerText||"";navigator.clipboard.writeText(code).then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200);}).catch(()=>{btn.textContent="失败";setTimeout(()=>btn.textContent="复制",1200);});});bar.appendChild(btn);});
+      </ul>
+    </section>
+  </article>
 
-function renderLR(){
-  const lr=Number(lrSlider.value)/100;
-  lrOut.textContent=lr.toFixed(2);
-  if(lr<.25){lrPath.setAttribute("points","90,48 132,78 174,105 214,126 250,140 286,148 318,151 346,152 371,152");lrDot.setAttribute("cx","371");lrDot.setAttribute("cy","152");lrTitle.textContent="步伐偏小：走得很慢";lrText.textContent="震荡变少了，但在平坦方向前进很慢，看起来像训练停住。";}
-  else if(lr>.7){lrPath.setAttribute("points","90,48 165,258 240,35 315,250 390,45 470,240 548,58");lrDot.setAttribute("cx","548");lrDot.setAttribute("cy","58");lrTitle.textContent="步伐过大：可能暴走";lrText.textContent="在陡峭方向跨得太远，容易来回震荡甚至飞出稳定区域。";}
-  else{lrPath.setAttribute("points","90,48 150,240 210,62 255,230 300,83 330,210 356,108 371,185 386,132");lrDot.setAttribute("cx","386");lrDot.setAttribute("cy","132");lrTitle.textContent="步伐偏大：容易震荡";lrText.textContent="在陡峭方向上，每一步都可能跨过谷底，从一侧山壁跳到另一侧山壁。";}
-}
-lrSlider.addEventListener("input",renderLR);renderLR();
+  <div class="footer-nav">
+    <a href="../index.html">← 返回课程地图</a>
+  </div>
 
-function renderSigma(){
-  const sigma=Number(sigmaSlider.value)/100;
-  const eta=Number(baseEta.value)/100;
-  const eff=eta/sigma;
-  sigmaOut.textContent=sigma.toFixed(2);etaOut.textContent=eta.toFixed(2);effectiveOut.textContent=eff.toFixed(2);
-  effectiveBar.style.width=`${Math.min(100,eff*100)}%`;
-  if(sigma<.6){sigmaTitle.textContent="σ 小：放大步伐";sigmaText.textContent="当某个方向过去 gradient 小，分母小，有效 learning rate 会变大，帮助平坦方向前进。";}
-  else if(sigma>1.4){sigmaTitle.textContent="σ 大：压小步伐";sigmaText.textContent="当某个方向过去 gradient 大，分母大，有效 learning rate 会变小，减少陡峭方向震荡。";}
-  else{sigmaTitle.textContent="σ 中等：适度缩放";sigmaText.textContent="有效 learning rate 接近基准 η，说明这个方向的历史尺度不极端。";}
-}
-sigmaSlider.addEventListener("input",renderSigma);baseEta.addEventListener("input",renderSigma);renderSigma();
-
-function renderAlpha(){
-  const a=Number(alphaSlider.value)/100;
-  alphaOut.textContent=a.toFixed(2);historyOut.textContent=Math.round(a*100)+"%";currentOut.textContent=Math.round((1-a)*100)+"%";
-  historyBar.style.width=`${a*100}%`;currentBar.style.width=`${(1-a)*100}%`;
-  if(a>.8){alphaTitle.textContent="更平滑，反应较慢";alphaText.textContent="α 高时，旧统计影响大，σ 不容易被一次新的大 gradient 改变。";}
-  else if(a<.3){alphaTitle.textContent="更敏感，反应很快";alphaText.textContent="α 低时，当前 gradient 权重高，σ 会快速跟着新地形变化。";}
-  else{alphaTitle.textContent="平衡历史与当前";alphaText.textContent="α 处于中间时，σ 同时保留旧统计，也能对新 gradient 有一定反应。";}
-}
-alphaSlider.addEventListener("input",renderAlpha);renderAlpha();
-
-function valueOfQuestion(q){const checks=[...q.querySelectorAll('input[type=checkbox]:checked')].map(x=>x.value);if(checks.length) return checks.join('、');const radio=q.querySelector('input[type=radio]:checked');if(radio) return radio.value;const text=q.querySelector('textarea,input[type=text],select');return text ? text.value.trim() : '';}
-function questionGroup(q){const group=q.closest('.practice-group');return group?.querySelector('.group-head h3')?.innerText.trim() || '综合练习';}
-function showMiniAnswer(id, text){const el=document.getElementById(id);if(!el) return;el.style.display='block';el.textContent=text;}
-function generateRecord(){
-  const qs=[...document.querySelectorAll('[data-role="homework"]')];const groups={};const warnings=[];
-  qs.forEach((q,i)=>{const title=q.dataset.title || q.querySelector('h3')?.innerText.trim() || `第 ${i+1} 题`;const hint=q.querySelector('.solve-note')?.innerText.trim() || '';const answer=valueOfQuestion(q);if(!answer) warnings.push(`第 ${i+1} 题未填写：${title}`);const typeText=`${q.dataset.type||''} ${title}`;if(/诊断|错误/.test(typeText) && answer && !(/错因|原因/.test(answer)&&/后果|影响|风险/.test(answer)&&/修法|修正|解决|改/.test(answer))){warnings.push(`第 ${i+1} 题建议按“错因 / 后果 / 修法”补全。`);}if(/费曼/.test(typeText)){const keys=(q.dataset.keywords || document.body.dataset.feynmanKeywords || '').split(/[、,，\s]+/).filter(Boolean);if(answer && answer.length<140) warnings.push(`第 ${i+1} 题解释偏短，建议至少写 140 个中文字符。`);if(answer && keys.length){const lack=keys.filter(k=>!answer.toLowerCase().includes(k.toLowerCase()));if(lack.length) warnings.push(`第 ${i+1} 题可能缺少关键词：${lack.join('、')}。`);}}const group=questionGroup(q);(groups[group] ||= []).push({title, hint, answer: answer || '（未填写）'});});
-  const pageTitle=(document.querySelector('.brand strong,h1')?.innerText || document.title).replace(/\s+/g,' ').trim();let out=`# P06｜${pageTitle}｜练习记录\n\n`;Object.keys(groups).forEach(group=>{out+=`## ${group}\n\n`;groups[group].forEach(item=>{out+=`### ${item.title}\n`;if(item.hint) out+=`提示摘要：${item.hint}\n\n`;out+=`${item.answer}\n\n`;});});document.getElementById('record').textContent=out;const quality=document.getElementById('quality');quality.style.display='block';quality.textContent=warnings.length ? warnings.join('\n') : '练习记录完整，可以用于回看。';
-}
-function copyRecord(){const text=document.getElementById('record').textContent;navigator.clipboard.writeText(text).catch(()=>alert('复制失败，请手动复制页面中的记录。'));}
-</script>
+  <script src="../../../assets/vendor/katex/katex.min.js"></script>
+  <script src="../../../assets/vendor/katex/auto-render.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-core.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-clike.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-python.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-bash.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-json.min.js"></script>
+  <script src="../../../assets/vendor/prism/prism-line-numbers.min.js"></script>
+  <script src="../../../assets/study-page-v2.js"></script>
 </body>
 </html>
-
-
